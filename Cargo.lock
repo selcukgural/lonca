@@ -1929,6 +1929,13 @@ dependencies = [
 [[package]]
 name = "lonca-verify"
 version = "0.1.0"
+dependencies = [
+ "hex",
+ "lonca-core",
+ "lonca-policy",
+ "lonca-symbols",
+ "tempfile",
+]
 
 [[package]]
 name = "memchr"

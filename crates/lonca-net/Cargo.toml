@@ -2,7 +2,11 @@
 name = "lonca-net"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "A loopback HTTP CONNECT proxy that asks a gate about every connection"
 license = "Apache-2.0"
+repository = "https://github.com/selcukgural/lonca"
+keywords = ["proxy", "sandbox", "network", "agents"]
+categories = ["network-programming"]
 
 [dependencies]

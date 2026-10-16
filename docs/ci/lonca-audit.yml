@@ -20,6 +20,6 @@ jobs:
       - name: Fetch the Lonca refs (operation log, policy, proposals)
         run: git fetch --no-tags origin '+refs/lonca/*:refs/lonca/*'
       - name: Install lonca-audit
-        run: cargo install --locked --git https://github.com/lonca-dev/lonca --rev <REV> lonca-audit
+        run: cargo install --locked --git https://github.com/selcukgural/lonca --rev <REV> lonca-audit
       - name: Replay and verify every decision
         run: lonca-audit verify .git

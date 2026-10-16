@@ -103,3 +103,55 @@ fn the_gate_decides_and_hears_how_it_ended() {
 fn only_loopback_can_be_bound() {
     assert!(lonca_net::bind("0.0.0.0:0").is_err());
 }
+
+/// An upstream that keeps every connection open and silent.
+fn silent_upstream() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for s in l.incoming() {
+            held.push(s.unwrap());
+        }
+    });
+    port
+}
+
+fn spawn_proxy() -> lonca_net::Server {
+    let gate = Arc::new(Recorder {
+        allowed: "127.0.0.1".into(),
+        outcomes: Mutex::new(Vec::new()),
+    });
+    lonca_net::spawn(lonca_net::bind("127.0.0.1:0").unwrap(), gate).unwrap()
+}
+
+#[test]
+fn stopping_cuts_open_tunnels_and_closes_the_port() {
+    let server = spawn_proxy();
+    let addr = server.local_addr();
+    let up = silent_upstream();
+
+    let mut s = TcpStream::connect(addr).unwrap();
+    write!(s, "CONNECT 127.0.0.1:{up} HTTP/1.1\r\n\r\n").unwrap();
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let mut status = String::new();
+    r.read_line(&mut status).unwrap();
+    assert!(status.contains("200"), "{status}");
+
+    server.stop();
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let mut rest = Vec::new();
+    // The tunnel ends instead of waiting on the silent upstream.
+    assert!(r.read_to_end(&mut rest).is_ok());
+    assert!(TcpStream::connect(addr).is_err());
+}
+
+#[test]
+fn dropping_the_server_stops_it() {
+    let server = spawn_proxy();
+    let addr = server.local_addr();
+    assert!(TcpStream::connect(addr).is_ok());
+    drop(server);
+    assert!(TcpStream::connect(addr).is_err());
+}

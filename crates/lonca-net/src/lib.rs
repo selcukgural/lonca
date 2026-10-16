@@ -10,11 +10,14 @@
 //! It has no dependencies and knows nothing about who uses it: the gate
 //! holds all the policy.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 const MAX_HEAD: usize = 16 * 1024;
@@ -96,11 +99,88 @@ pub fn bind(addr: &str) -> std::io::Result<TcpListener> {
 
 /// Serves connections until the listener fails, one thread each.
 pub fn serve<G: Gate>(listener: TcpListener, gate: Arc<G>) {
+    accept(listener, gate, &Arc::new(Shared::default()));
+}
+
+/// A proxy serving on its own thread until [`Server::stop`], or until it is
+/// dropped.
+pub struct Server {
+    addr: SocketAddr,
+    shared: Arc<Shared>,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct Shared {
+    stopping: AtomicBool,
+    /// The client side of every connection being handled, by number, so
+    /// stopping can cut tunnels that would otherwise stay open.
+    open: Mutex<HashMap<u64, TcpStream>>,
+    next: AtomicU64,
+}
+
+/// Starts serving `listener` on a new thread.
+pub fn spawn<G: Gate>(listener: TcpListener, gate: Arc<G>) -> std::io::Result<Server> {
+    let addr = listener.local_addr()?;
+    let shared = Arc::new(Shared::default());
+    let served = Arc::clone(&shared);
+    let thread = std::thread::spawn(move || accept(listener, gate, &served));
+    Ok(Server {
+        addr,
+        shared,
+        thread: Some(thread),
+    })
+}
+
+impl Server {
+    pub fn local_addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// Stops accepting, closes the listener and cuts every open connection;
+    /// returns once the listener is closed.
+    pub fn stop(mut self) {
+        self.shut();
+    }
+
+    fn shut(&mut self) {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        self.shared.stopping.store(true, Ordering::SeqCst);
+        // Wakes the accept loop, which sees the flag and returns.
+        let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
+        let _ = thread.join();
+        for stream in self.shared.open.lock().unwrap().values() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.shut();
+    }
+}
+
+fn accept<G: Gate>(listener: TcpListener, gate: Arc<G>, shared: &Arc<Shared>) {
     for conn in listener.incoming() {
+        if shared.stopping.load(Ordering::SeqCst) {
+            return;
+        }
         let Ok(stream) = conn else { continue };
-        let gate = gate.clone();
+        let Ok(tracked) = stream.try_clone() else {
+            continue;
+        };
+        let id = shared.next.fetch_add(1, Ordering::Relaxed);
+        shared.open.lock().unwrap().insert(id, tracked);
+        let (gate, shared) = (gate.clone(), Arc::clone(shared));
         std::thread::spawn(move || {
-            let _ = handle(stream, &*gate);
+            // Stopping may have come between the insert and now.
+            if !shared.stopping.load(Ordering::SeqCst) {
+                let _ = handle(stream, &*gate);
+            }
+            shared.open.lock().unwrap().remove(&id);
         });
     }
 }

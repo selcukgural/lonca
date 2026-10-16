@@ -18,7 +18,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_HEAD: usize = 16 * 1024;
 
@@ -113,10 +113,23 @@ pub struct Server {
 #[derive(Default)]
 struct Shared {
     stopping: AtomicBool,
-    /// The client side of every connection being handled, by number, so
-    /// stopping can cut tunnels that would otherwise stay open.
-    open: Mutex<HashMap<u64, TcpStream>>,
+    /// Both sides of every connection being handled, by number, so stopping
+    /// can cut tunnels that would otherwise stay open.
+    open: Mutex<HashMap<u64, Vec<TcpStream>>>,
     next: AtomicU64,
+}
+
+impl Shared {
+    /// Adds `stream` to connection `id`; cuts it at once when stopping has
+    /// begun, since nothing will cut it later.
+    fn track(&self, id: u64, stream: &TcpStream) {
+        let mut open = self.open.lock().unwrap();
+        if self.stopping.load(Ordering::SeqCst) {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        } else if let Ok(clone) = stream.try_clone() {
+            open.entry(id).or_default().push(clone);
+        }
+    }
 }
 
 /// Starts serving `listener` on a new thread.
@@ -138,7 +151,8 @@ impl Server {
     }
 
     /// Stops accepting, closes the listener and cuts every open connection;
-    /// returns once the listener is closed.
+    /// returns once each of them has ended and the gate has heard how
+    /// ([`Gate::finished`]), or after a few seconds at most.
     pub fn stop(mut self) {
         self.shut();
     }
@@ -147,12 +161,23 @@ impl Server {
         let Some(thread) = self.thread.take() else {
             return;
         };
-        self.shared.stopping.store(true, Ordering::SeqCst);
+        {
+            // Set under the lock: a stream tracked from here on sees the flag
+            // and is cut at once, any other is cut below.
+            let _open = self.shared.open.lock().unwrap();
+            self.shared.stopping.store(true, Ordering::SeqCst);
+        }
         // Wakes the accept loop, which sees the flag and returns.
         let _ = TcpStream::connect_timeout(&self.addr, Duration::from_secs(1));
         let _ = thread.join();
-        for stream in self.shared.open.lock().unwrap().values() {
+        for stream in self.shared.open.lock().unwrap().values().flatten() {
             let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        // Handlers leave the map once the gate has heard how they ended. One
+        // still connecting upstream (up to its 10 s timeout) is not waited for.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !self.shared.open.lock().unwrap().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 }
@@ -169,16 +194,13 @@ fn accept<G: Gate>(listener: TcpListener, gate: Arc<G>, shared: &Arc<Shared>) {
             return;
         }
         let Ok(stream) = conn else { continue };
-        let Ok(tracked) = stream.try_clone() else {
-            continue;
-        };
         let id = shared.next.fetch_add(1, Ordering::Relaxed);
-        shared.open.lock().unwrap().insert(id, tracked);
+        shared.track(id, &stream);
         let (gate, shared) = (gate.clone(), Arc::clone(shared));
         std::thread::spawn(move || {
-            // Stopping may have come between the insert and now.
+            // Stopping may have come between tracking and now.
             if !shared.stopping.load(Ordering::SeqCst) {
-                let _ = handle(stream, &*gate);
+                let _ = handle(stream, &*gate, &|upstream| shared.track(id, upstream));
             }
             shared.open.lock().unwrap().remove(&id);
         });
@@ -282,7 +304,9 @@ fn respond(mut s: &TcpStream, code: u16, reason: &str) {
     );
 }
 
-fn handle(client: TcpStream, gate: &dyn Gate) -> std::io::Result<()> {
+/// Serves one client; `track` is shown the upstream connection, if one is
+/// made, so it can be cut from outside.
+fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std::io::Result<()> {
     client.set_read_timeout(Some(Duration::from_secs(30)))?;
     let peer = client.peer_addr()?;
     let local = client.local_addr()?;
@@ -362,6 +386,7 @@ fn handle(client: TcpStream, gate: &dyn Gate) -> std::io::Result<()> {
             return Ok(());
         }
     };
+    track(&upstream);
     client.set_read_timeout(None)?;
     let mut up_w = upstream.try_clone()?;
     match rest_of_request {

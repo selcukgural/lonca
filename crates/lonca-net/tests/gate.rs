@@ -117,17 +117,19 @@ fn silent_upstream() -> u16 {
     port
 }
 
-fn spawn_proxy() -> lonca_net::Server {
+fn spawn_proxy() -> (lonca_net::Server, Arc<Recorder>) {
     let gate = Arc::new(Recorder {
         allowed: "127.0.0.1".into(),
         outcomes: Mutex::new(Vec::new()),
     });
-    lonca_net::spawn(lonca_net::bind("127.0.0.1:0").unwrap(), gate).unwrap()
+    let listener = lonca_net::bind("127.0.0.1:0").unwrap();
+    let server = lonca_net::spawn(listener, gate.clone()).unwrap();
+    (server, gate)
 }
 
 #[test]
 fn stopping_cuts_open_tunnels_and_closes_the_port() {
-    let server = spawn_proxy();
+    let (server, gate) = spawn_proxy();
     let addr = server.local_addr();
     let up = silent_upstream();
 
@@ -139,6 +141,11 @@ fn stopping_cuts_open_tunnels_and_closes_the_port() {
     assert!(status.contains("200"), "{status}");
 
     server.stop();
+    // Once stop returns, the gate has heard how the cut tunnel ended.
+    assert_eq!(
+        *gate.outcomes.lock().unwrap(),
+        [("127.0.0.1".to_owned(), Outcome::Tunneled)]
+    );
     s.set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .unwrap();
     let mut rest = Vec::new();
@@ -149,7 +156,7 @@ fn stopping_cuts_open_tunnels_and_closes_the_port() {
 
 #[test]
 fn dropping_the_server_stops_it() {
-    let server = spawn_proxy();
+    let (server, _) = spawn_proxy();
     let addr = server.local_addr();
     assert!(TcpStream::connect(addr).is_ok());
     drop(server);

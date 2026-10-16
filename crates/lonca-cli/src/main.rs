@@ -59,7 +59,7 @@ enum Cmd {
         #[arg(long = "allow-uid")]
         allow_uids: Vec<u32>,
     },
-    /// Human identities (development file keys).
+    /// Human identities: file keys or Secure Enclave keys.
     #[command(subcommand)]
     Human(HumanCmd),
     /// Create a repository, optionally importing an existing Git branch.
@@ -181,6 +181,7 @@ enum Cmd {
         #[arg(long = "as")]
         human: Option<String>,
     },
+    /// Resume work on a frozen repository.
     Unfreeze {
         reason: String,
         #[arg(long)]

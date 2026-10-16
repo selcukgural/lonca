@@ -112,9 +112,11 @@ pub fn peer_cwd(peer: SocketAddr, local: SocketAddr) -> Option<PathBuf> {
         if let Some(p) = line.strip_prefix('p') {
             cur = Some(p.to_string());
         } else if let Some(n) = line.strip_prefix('n')
-            && n == want && cur.as_deref() != Some(me.as_str()) {
-                pid = cur.clone();
-            }
+            && n == want
+            && cur.as_deref() != Some(me.as_str())
+        {
+            pid = cur.clone();
+        }
     }
     let pid = pid?;
     let out = Command::new("lsof")

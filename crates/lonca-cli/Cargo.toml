@@ -19,6 +19,8 @@ lonca-policy = { version = "0.1.0", path = "../lonca-policy" }
 lonca-symbols = { version = "0.1.0", path = "../lonca-symbols" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+similar = "3.2.0"
+ureq = { version = "3.4.2", features = ["json"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

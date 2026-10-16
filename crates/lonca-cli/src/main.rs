@@ -1,5 +1,6 @@
 //! `lonca`: the command line for humans and agents.
 
+mod advise;
 mod ctx;
 mod hook;
 mod mcp;
@@ -204,6 +205,14 @@ enum Cmd {
     Hook,
     /// MCP server for agents (stdio).
     Mcp,
+    /// AI advisory for a change: summary and risk flags (no authority).
+    Advise {
+        change: String,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// List the symbols of a file (lease ids).
     Symbols { path: PathBuf },
 }
@@ -1016,6 +1025,20 @@ fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Hook => unreachable!("handled in main"),
         Cmd::Mcp => mcp::run(),
+        Cmd::Advise {
+            change,
+            repo,
+            json: as_json,
+        } => {
+            let mut c = human_client(&repo_name(repo)?)?;
+            let advice = advise::advise(&mut c, &change)?;
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&advice)?);
+            } else {
+                advise::print(&advice);
+            }
+            Ok(())
+        }
         Cmd::Symbols { path } => {
             let text = std::fs::read_to_string(&path)?;
             let p = path.to_string_lossy().replace('\\', "/");

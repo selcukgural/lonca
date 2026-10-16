@@ -223,3 +223,75 @@ fn agent_workflow_through_the_cli() {
         "blocks when the daemon is unreachable"
     );
 }
+
+/// A one-shot fake Messages API that records the request it got.
+fn fake_claude(reply: &'static str) -> (u16, std::thread::JoinHandle<String>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let h = std::thread::spawn(move || {
+        let (s, _) = l.accept().unwrap();
+        let mut r = BufReader::new(s.try_clone().unwrap());
+        let mut head = String::new();
+        let mut len = 0usize;
+        loop {
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                len = v.trim().parse().unwrap();
+            }
+            head.push_str(&line);
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let mut body = vec![0u8; len];
+        r.read_exact(&mut body).unwrap();
+        let mut s = s;
+        write!(s, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}", reply.len()).unwrap();
+        format!("{head}{}", String::from_utf8_lossy(&body))
+    });
+    (port, h)
+}
+
+#[test]
+fn advisor_sends_the_diff_and_prints_structured_advice() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    e.run(r, &["init", "demo"]);
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo"]);
+    let hws = r.join("hws");
+    std::fs::write(
+        hws.join("lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n",
+    )
+    .unwrap();
+    e.run(&hws, &["propose", "-i", "double charge"]);
+    e.settle();
+    let s: serde_json::Value =
+        serde_json::from_str(&e.run(r, &["status", "--repo", "demo", "--json"])).unwrap();
+    let change = s["changes"][0]["change"].as_str().unwrap().to_string();
+
+    const REPLY: &str = r#"{"model":"claude-opus-5-5","stop_reason":"end_turn","content":[{"type":"text","text":"{\"summary\":\"Doubles charge.\",\"risk\":\"medium\",\"flags\":[{\"severity\":\"medium\",\"where\":\"lib.rs#charge\",\"issue\":\"Changes billing amounts.\"}],\"review_focus\":[\"callers of charge\"]}"}]}"#;
+    let (port, server) = fake_claude(REPLY);
+    let mut c = e.cmd(r, &["advise", &change, "--repo", "demo"]);
+    c.env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"))
+        .env("ANTHROPIC_API_KEY", "test-key")
+        .env("LONCA_ADVISOR_LEDGER", r.join("ledger.json"));
+    let out = c.output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let printed = text(&out.stdout);
+    assert!(
+        printed.contains("informational only")
+            && printed.contains("risk: medium")
+            && printed.contains("lib.rs#charge"),
+        "{printed}"
+    );
+    let request = server.join().unwrap().to_ascii_lowercase();
+    assert!(request.contains("x-api-key: test-key"));
+    assert!(request.contains("anthropic-version: 2023-06-01"));
+    assert!(request.contains("server-side-fallback-2026-07-01"));
+    assert!(request.contains("+    a * 2"), "the diff is sent");
+    assert!(request.contains("\"json_schema\""));
+}

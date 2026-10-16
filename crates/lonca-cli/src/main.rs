@@ -210,10 +210,29 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum HumanCmd {
-    /// Create a file key for a human and make it the default identity.
-    Keygen { name: String },
+    /// Create a key for a human and make it the default identity.
+    Keygen {
+        name: String,
+        /// Secure Enclave key: every signature needs Touch ID or the password.
+        #[arg(long)]
+        secure_enclave: bool,
+    },
     /// Print the default identity and public key.
     Whoami,
+    /// Enroll another human (signed by you).
+    Enroll {
+        name: String,
+        /// `ed25519` or `p256-se`.
+        #[arg(long)]
+        alg: String,
+        /// Public key (hex), as printed by their `lonca human whoami`.
+        #[arg(long)]
+        public: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -439,9 +458,22 @@ fn run(cmd: Cmd) -> Result<()> {
             lonca_daemon::server::serve_with(listener, svc, access);
             Ok(())
         }
-        Cmd::Human(HumanCmd::Keygen { name }) => {
+        Cmd::Human(HumanCmd::Keygen {
+            name,
+            secure_enclave,
+        }) => {
             if !lonca_policy::decide::valid_token(&name, 64) {
                 bail!("human names: letters, digits, '.', '_', '-'");
+            }
+            if secure_enclave {
+                if ctx::se_key_path(&name).exists() {
+                    bail!("{} already exists", ctx::se_key_path(&name).display());
+                }
+                let public = ctx::se_keygen(&name)?;
+                std::fs::write(ctx::humans_dir().join("default"), &name)?;
+                println!("{name}: p256-se {public}");
+                println!("every signature will ask for Touch ID or your password.");
+                return Ok(());
             }
             let p = ctx::human_key_path(&name);
             let k = KeyPair::load_or_create(&p)?;
@@ -454,7 +486,28 @@ fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Human(HumanCmd::Whoami) => {
             let name = ctx::default_human()?;
-            println!("{name}: ed25519 {}", ctx::human_key(&name)?.public_hex());
+            let k = ctx::human_public(&name)?;
+            println!("{name}: {} {}", k.alg, k.public);
+            Ok(())
+        }
+        Cmd::Human(HumanCmd::Enroll {
+            name,
+            alg,
+            public,
+            repo,
+            human,
+        }) => {
+            let human = human_name(human)?;
+            let mut c = human_client(&repo)?;
+            submit(
+                &mut c,
+                &human,
+                &repo,
+                Op::HumanEnroll {
+                    human: name,
+                    key: HumanKey { alg, public },
+                },
+            )?;
             Ok(())
         }
         Cmd::Init {
@@ -464,12 +517,12 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         } => {
             let human = human_name(human)?;
-            let key = ctx::human_key(&human)?;
+            let key = ctx::human_public(&human)?;
             let mut c = connect()?;
             let prep = call(
                 &mut c,
                 "repo.prepare_init",
-                json!({"repo": repo, "human": human, "human_key": HumanKey { alg: "ed25519".into(), public: key.public_hex() }, "import_from": import, "branch": branch}),
+                json!({"repo": repo, "human": human, "human_key": key, "import_from": import, "branch": branch}),
             )?;
             let op: Op = serde_json::from_value(prep["op"].clone())?;
             let sig = ctx::sign(&human, &repo, &op)?;

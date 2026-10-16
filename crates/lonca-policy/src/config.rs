@@ -63,6 +63,10 @@ allow_private_network = false
 # With fewer enrolled humans than a rule requires, require all of them.
 cap_to_enrolled_humans = true
 policy_updates = 1
+# Accept human signatures only from keys that prove presence (Secure
+# Enclave + Touch ID or password). File keys can be used by anything that
+# runs as the user, agents included. Recommended for hardened installs.
+require_presence = false
 
 [negotiation]
 max_rounds = 4
@@ -173,6 +177,7 @@ pub struct Observation {
 pub struct Approvals {
     pub cap_to_enrolled_humans: bool,
     pub policy_updates: u32,
+    pub require_presence: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -279,6 +284,7 @@ impl Default for Approvals {
         Self {
             cap_to_enrolled_humans: true,
             policy_updates: 1,
+            require_presence: false,
         }
     }
 }

@@ -78,3 +78,35 @@ pub mod p256 {
         vk.verify(msg, &sig).is_ok()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn p256_software_key_round_trip() {
+        use ::p256::ecdsa::signature::Signer;
+        use ::p256::ecdsa::{Signature, SigningKey};
+        let sk = SigningKey::from_slice(&[7u8; 32]).unwrap();
+        let pk = hex::encode(sk.verifying_key().to_sec1_point(false).as_bytes());
+        let msg = b"lonca";
+        let sig: Signature = sk.sign(msg);
+        let der = hex::encode(sig.to_der().as_bytes());
+        assert!(p256::verify(&pk, msg, &der));
+        assert!(!p256::verify(&pk, b"other", &der));
+    }
+
+    /// Cross-check with a signature made by a real Secure Enclave key
+    /// (`LONCA_SE_CHECK=<file with pub hex and DER sig hex lines>`).
+    #[test]
+    fn p256_secure_enclave_format() {
+        let Ok(path) = std::env::var("LONCA_SE_CHECK") else {
+            return;
+        };
+        let text = std::fs::read_to_string(path).unwrap();
+        let mut lines = text.lines();
+        let (pk, sig) = (lines.next().unwrap(), lines.next().unwrap());
+        assert!(p256::verify(pk, b"lonca secure enclave format check", sig));
+        assert!(!p256::verify(pk, b"tampered", sig));
+    }
+}

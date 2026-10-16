@@ -1080,3 +1080,48 @@ fn policy_without_permit_denies_everything_for_agents() {
     ));
     assert!(PolicyBundle::parse(DEFAULT_CONFIG, DEFAULT_POLICY).is_ok());
 }
+
+#[test]
+fn presence_can_be_required_for_human_signatures() {
+    let strict = PolicyBundle::parse(
+        &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
+        DEFAULT_POLICY,
+    )
+    .unwrap();
+    let mut h = H::new();
+    h.policy = strict;
+    let d = h.human("ayse", Op::Freeze { reason: "x".into() });
+    assert!(denied_with(&d, "presence_required"), "{d:?}");
+
+    // A Secure Enclave (P-256) key satisfies it.
+    use p256::ecdsa::signature::Signer;
+    let sk = p256::ecdsa::SigningKey::from_slice(&[9u8; 32]).unwrap();
+    let public = hex::encode(sk.verifying_key().to_sec1_point(false).as_bytes());
+    h.policy = PolicyBundle::default_bundle();
+    let enroll = Op::HumanEnroll {
+        human: "cem".into(),
+        key: HumanKey {
+            alg: "p256-se".into(),
+            public,
+        },
+    };
+    assert!(h.human("ayse", enroll).is_allow());
+    h.policy = PolicyBundle::parse(
+        &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
+        DEFAULT_POLICY,
+    )
+    .unwrap();
+    let op = Op::Freeze { reason: "y".into() };
+    let nonce = random_id("nonce");
+    let issued = h.now + 1;
+    let sig: p256::ecdsa::Signature = sk.sign(&intent_bytes(REPO, &op, &nonce, issued));
+    let mut sub = Submission::new(Actor::Human { name: "cem".into() }, op);
+    sub.human = Some(HumanSignature {
+        human: "cem".into(),
+        nonce,
+        issued_ms: issued,
+        sig: hex::encode(sig.to_der().as_bytes()),
+    });
+    let d = h.submit(sub);
+    assert!(d.is_allow(), "{d:?}");
+}

@@ -325,6 +325,9 @@ pub fn decide(
             if let Err(e) = crate::human::verify(key, &state.repo, op, sig, t) {
                 return Decision::deny(e);
             }
+            if cfg.approvals.require_presence && key.alg != "p256-se" {
+                return Decision::deny("presence_required");
+            }
             if !is_human_op(op) {
                 return Decision::deny(format!("not_a_human_op:{}", op.kind().as_str()));
             }

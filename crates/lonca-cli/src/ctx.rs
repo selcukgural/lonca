@@ -73,7 +73,109 @@ pub fn human_key(name: &str) -> Result<KeyPair> {
     KeyPair::load(&p).map_err(|e| anyhow!("human key {}: {e}", p.display()))
 }
 
+/// Secure Enclave key blob of a human, if they use one.
+pub fn se_key_path(name: &str) -> PathBuf {
+    humans_dir().join(format!("{name}.se"))
+}
+
+/// The `lonca-se` helper: `$LONCA_SE`, else next to this executable.
+pub fn se_helper() -> Result<PathBuf> {
+    if let Some(p) = std::env::var_os("LONCA_SE") {
+        return Ok(PathBuf::from(p));
+    }
+    let exe = std::env::current_exe()?;
+    let p = exe.with_file_name("lonca-se");
+    if p.exists() {
+        Ok(p)
+    } else {
+        bail!("lonca-se helper not found (build packaging/macos/build-lonca-se.sh or set LONCA_SE)")
+    }
+}
+
+fn run_helper(args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
+    use std::io::Write;
+    let mut child = std::process::Command::new(se_helper()?)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .expect("piped")
+        .write_all(stdin.unwrap_or_default())?;
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!("lonca-se: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+pub fn se_keygen(name: &str) -> Result<String> {
+    let p = se_key_path(name);
+    std::fs::create_dir_all(humans_dir())?;
+    run_helper(&["keygen", &p.to_string_lossy()], None)
+}
+
+/// The public key a human signs with.
+pub fn human_public(name: &str) -> Result<lonca_core::ops::HumanKey> {
+    let se = se_key_path(name);
+    if se.exists() {
+        let public = run_helper(&["public", &se.to_string_lossy()], None)?;
+        return Ok(lonca_core::ops::HumanKey {
+            alg: "p256-se".into(),
+            public,
+        });
+    }
+    Ok(lonca_core::ops::HumanKey {
+        alg: "ed25519".into(),
+        public: human_key(name)?.public_hex(),
+    })
+}
+
+/// What the Touch ID prompt says: generated from the operation being signed.
+pub fn describe(repo: &str, op: &Op) -> String {
+    let what = match op {
+        Op::RepoInit { .. } => "create the repository".to_string(),
+        Op::HumanEnroll { human, .. } => format!("enroll {human} as a human"),
+        Op::PolicyUpdate { .. } => "change the repository policy".to_string(),
+        Op::SessionStart { agent, scope, .. } => {
+            format!("start agent {agent} on {}", scope.paths.join(", "))
+        }
+        Op::SessionEnd { session, .. } => format!("end session {session}"),
+        Op::CapRevoke { session, .. } => format!("revoke session {session}"),
+        Op::LeaseRelease { set } => format!("release lease set {set}"),
+        Op::ChangePropose { change, .. } => format!("propose change {}", change.short()),
+        Op::ChangeWithdraw { change } => format!("withdraw change {}", change.short()),
+        Op::Approve { target_seq, .. } => format!("APPROVE operation #{target_seq}"),
+        Op::ImportExternal { remote, .. } => format!("import from {remote}"),
+        Op::BridgePush { remote, .. } => format!("push to {remote}"),
+        Op::Freeze { .. } => "freeze the repository".to_string(),
+        Op::Unfreeze { .. } => "unfreeze the repository".to_string(),
+        Op::Redact { blob, .. } => format!("redact {}", blob.short()),
+        other => other.kind().as_str().to_string(),
+    };
+    format!("Lonca ({repo}): {what}")
+}
+
 pub fn sign(human: &str, repo: &str, op: &Op) -> Result<HumanSignature> {
+    let se = se_key_path(human);
+    if se.exists() {
+        let nonce = lonca_core::canonical::random_id("nonce");
+        let issued_ms = now_ms();
+        let msg = lonca_policy::human::intent_bytes(repo, op, &nonce, issued_ms);
+        let sig = run_helper(
+            &["sign", &se.to_string_lossy(), &describe(repo, op)],
+            Some(&msg),
+        )?;
+        return Ok(HumanSignature {
+            human: human.to_string(),
+            nonce,
+            issued_ms,
+            sig,
+        });
+    }
     let key = human_key(human)?;
     Ok(lonca_policy::human::sign_ed25519(
         &key,

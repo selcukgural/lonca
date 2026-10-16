@@ -8,7 +8,19 @@ use std::sync::Arc;
 use crate::protocol::{MAX_LINE, Request, Response, read_line_limited, write_line};
 use crate::service::Service;
 
+/// Longest socket path that fits `sockaddr_un` on every supported platform.
+pub const MAX_SOCKET_PATH: usize = 100;
+
 pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
+    if path.as_os_str().len() > MAX_SOCKET_PATH {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "socket path {} is longer than {MAX_SOCKET_PATH} bytes; set LONCA_SOCKET to a shorter path",
+                path.display()
+            ),
+        ));
+    }
     if path.exists() {
         // A live daemon answers; a stale socket file does not.
         if UnixStream::connect(path).is_ok() {

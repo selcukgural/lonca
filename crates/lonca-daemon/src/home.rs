@@ -55,8 +55,12 @@ impl Home {
         Ok(())
     }
 
+    /// `$LONCA_SOCKET`, else `lonca.sock` in the home. Unix socket paths are
+    /// limited to about 100 bytes, so long homes need `LONCA_SOCKET`.
     pub fn socket(&self) -> PathBuf {
-        self.root.join("lonca.sock")
+        std::env::var_os("LONCA_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.root.join("lonca.sock"))
     }
 
     pub fn key_path(&self) -> PathBuf {

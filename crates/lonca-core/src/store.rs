@@ -36,6 +36,14 @@ impl GitId {
     pub fn short(&self) -> &str {
         &self.0[..self.0.len().min(10)]
     }
+
+    /// The id Git gives `bytes` as a blob (SHA-1 repositories), without
+    /// writing anything.
+    pub fn of_blob(bytes: &[u8]) -> Self {
+        let oid = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, bytes)
+            .expect("hashing a buffer can not fail");
+        Self(oid.to_string())
+    }
 }
 
 impl From<ObjectId> for GitId {
@@ -566,6 +574,30 @@ mod tests {
             fsck.status.success(),
             "{}",
             String::from_utf8_lossy(&fsck.stderr)
+        );
+    }
+}
+
+#[cfg(test)]
+mod blob_id_tests {
+    use super::*;
+
+    #[test]
+    fn of_blob_matches_git() {
+        let out = std::process::Command::new("git")
+            .args(["hash-object", "--stdin"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                use std::io::Write;
+                c.stdin.take().unwrap().write_all(b"hello\n")?;
+                c.wait_with_output()
+            })
+            .unwrap();
+        assert_eq!(
+            GitId::of_blob(b"hello\n").0,
+            String::from_utf8_lossy(&out.stdout).trim()
         );
     }
 }

@@ -8,6 +8,7 @@ base64 = "0.23.1"
 hex = "0.4.3"
 libc = "0.2.190"
 lonca-core = { version = "0.1.0", path = "../lonca-core" }
+lonca-net = { version = "0.1.0", path = "../lonca-net" }
 lonca-policy = { version = "0.1.0", path = "../lonca-policy" }
 lonca-symbols = { version = "0.1.0", path = "../lonca-symbols" }
 lonca-verify = { version = "0.1.0", path = "../lonca-verify" }

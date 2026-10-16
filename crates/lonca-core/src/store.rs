@@ -23,12 +23,14 @@ pub struct GitId(pub String);
 
 impl GitId {
     pub fn parse(s: &str) -> Result<Self> {
-        let oid = ObjectId::from_hex(s.as_bytes()).map_err(|e| Error::Invalid(format!("git id {s:?}: {e}")))?;
+        let oid = ObjectId::from_hex(s.as_bytes())
+            .map_err(|e| Error::Invalid(format!("git id {s:?}: {e}")))?;
         Ok(Self(oid.to_string()))
     }
 
     pub fn oid(&self) -> Result<ObjectId> {
-        ObjectId::from_hex(self.0.as_bytes()).map_err(|e| Error::Invalid(format!("git id {:?}: {e}", self.0)))
+        ObjectId::from_hex(self.0.as_bytes())
+            .map_err(|e| Error::Invalid(format!("git id {:?}: {e}", self.0)))
     }
 
     pub fn short(&self) -> &str {
@@ -98,7 +100,10 @@ pub struct CommitInfo {
 
 impl CommitInfo {
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        self.headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -204,7 +209,11 @@ impl Store {
                 offset: 0,
             },
         };
-        let parents = spec.parents.iter().map(|p| p.oid()).collect::<Result<Vec<_>>>()?;
+        let parents = spec
+            .parents
+            .iter()
+            .map(|p| p.oid())
+            .collect::<Result<Vec<_>>>()?;
         let commit = gix::objs::Commit {
             tree: spec.tree.oid()?,
             parents: parents.into_iter().collect(),
@@ -299,7 +308,12 @@ impl Store {
     }
 }
 
-fn insert(dir: &mut BTreeMap<String, Node>, comps: &[&str], entry: &FileEntry, full: &str) -> Result<()> {
+fn insert(
+    dir: &mut BTreeMap<String, Node>,
+    comps: &[&str],
+    entry: &FileEntry,
+    full: &str,
+) -> Result<()> {
     let clash = || Error::Invalid(format!("path {full:?} is both a file and a directory"));
     if comps.len() == 1 {
         if let Some(Node::Dir(_)) = dir.get(comps[0]) {
@@ -339,7 +353,9 @@ fn write_dir(repo: &gix::Repository, dir: &BTreeMap<String, Node>) -> Result<Obj
         });
     }
     entries.sort();
-    let id = repo.write_object(gix::objs::Tree { entries }).map_err(git)?;
+    let id = repo
+        .write_object(gix::objs::Tree { entries })
+        .map_err(git)?;
     Ok(id.detach())
 }
 
@@ -396,9 +412,27 @@ mod tests {
         let a = s.write_blob(b"fn a() {}\n").unwrap();
         let b = s.write_blob(b"#!/bin/sh\n").unwrap();
         let mut files = FileMap::new();
-        files.insert("src/a.rs".into(), FileEntry { mode: FileMode::Regular, blob: a.clone() });
-        files.insert("src/nested/deep/x.rs".into(), FileEntry { mode: FileMode::Regular, blob: a });
-        files.insert("run.sh".into(), FileEntry { mode: FileMode::Executable, blob: b });
+        files.insert(
+            "src/a.rs".into(),
+            FileEntry {
+                mode: FileMode::Regular,
+                blob: a.clone(),
+            },
+        );
+        files.insert(
+            "src/nested/deep/x.rs".into(),
+            FileEntry {
+                mode: FileMode::Regular,
+                blob: a,
+            },
+        );
+        files.insert(
+            "run.sh".into(),
+            FileEntry {
+                mode: FileMode::Executable,
+                blob: b,
+            },
+        );
         let tree = s.write_tree(&files).unwrap();
         assert_eq!(s.read_tree(&tree).unwrap(), files);
         // Same content, same id: trees are content addressed.
@@ -410,8 +444,20 @@ mod tests {
         let (_d, s) = store();
         let a = s.write_blob(b"x").unwrap();
         let mut files = FileMap::new();
-        files.insert("a".into(), FileEntry { mode: FileMode::Regular, blob: a.clone() });
-        files.insert("a/b".into(), FileEntry { mode: FileMode::Regular, blob: a });
+        files.insert(
+            "a".into(),
+            FileEntry {
+                mode: FileMode::Regular,
+                blob: a.clone(),
+            },
+        );
+        files.insert(
+            "a/b".into(),
+            FileEntry {
+                mode: FileMode::Regular,
+                blob: a,
+            },
+        );
         assert!(s.write_tree(&files).is_err());
     }
 
@@ -426,24 +472,43 @@ mod tests {
             author_email: "ayse@example.com".into(),
             time_ms: 1_760_000_000_000,
             message: "first\n".into(),
-            headers: vec![("change-id".into(), "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".into())],
+            headers: vec![(
+                "change-id".into(),
+                "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".into(),
+            )],
         };
         let c1 = s.write_commit(&spec).unwrap();
         let info = s.read_commit(&c1).unwrap();
         assert_eq!(info.tree, tree);
-        assert_eq!(info.header("change-id"), Some("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"));
+        assert_eq!(
+            info.header("change-id"),
+            Some("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+        );
         assert_eq!(info.author_name, "Ayşe");
 
         s.ref_cas("refs/heads/main", &c1, None).unwrap();
-        assert!(s.ref_cas("refs/heads/main", &c1, None).is_err(), "must not exist");
+        assert!(
+            s.ref_cas("refs/heads/main", &c1, None).is_err(),
+            "must not exist"
+        );
         let c2 = s
-            .write_commit(&CommitSpec { parents: vec![c1.clone()], message: "second\n".into(), ..spec })
+            .write_commit(&CommitSpec {
+                parents: vec![c1.clone()],
+                message: "second\n".into(),
+                ..spec
+            })
             .unwrap();
-        assert!(s.ref_cas("refs/heads/main", &c2, Some(&c2)).is_err(), "stale expectation");
+        assert!(
+            s.ref_cas("refs/heads/main", &c2, Some(&c2)).is_err(),
+            "stale expectation"
+        );
         s.ref_cas("refs/heads/main", &c2, Some(&c1)).unwrap();
         assert_eq!(s.ref_get("refs/heads/main").unwrap(), Some(c2.clone()));
         assert_eq!(s.read_commit(&c2).unwrap().parents, vec![c1]);
-        assert_eq!(s.refs_with_prefix("refs/heads/").unwrap(), vec![("refs/heads/main".to_string(), c2)]);
+        assert_eq!(
+            s.refs_with_prefix("refs/heads/").unwrap(),
+            vec![("refs/heads/main".to_string(), c2)]
+        );
     }
 
     #[test]
@@ -451,7 +516,13 @@ mod tests {
         let (_d, s) = store();
         let blob = s.write_blob(b"hello\n").unwrap();
         let mut files = FileMap::new();
-        files.insert("docs/readme.md".into(), FileEntry { mode: FileMode::Regular, blob });
+        files.insert(
+            "docs/readme.md".into(),
+            FileEntry {
+                mode: FileMode::Regular,
+                blob,
+            },
+        );
         let tree = s.write_tree(&files).unwrap();
         let c = s
             .write_commit(&CommitSpec {
@@ -461,19 +532,40 @@ mod tests {
                 author_email: "a@b".into(),
                 time_ms: 0,
                 message: "m\n".into(),
-                headers: vec![("change-id".into(), "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk".into())],
+                headers: vec![(
+                    "change-id".into(),
+                    "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk".into(),
+                )],
             })
             .unwrap();
         let out = std::process::Command::new("git")
-            .args(["--git-dir", s.path().to_str().unwrap(), "show", &format!("{c}:docs/readme.md")])
+            .args([
+                "--git-dir",
+                s.path().to_str().unwrap(),
+                "show",
+                &format!("{c}:docs/readme.md"),
+            ])
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert_eq!(out.stdout, b"hello\n");
         let fsck = std::process::Command::new("git")
-            .args(["--git-dir", s.path().to_str().unwrap(), "fsck", "--no-dangling"])
+            .args([
+                "--git-dir",
+                s.path().to_str().unwrap(),
+                "fsck",
+                "--no-dangling",
+            ])
             .output()
             .unwrap();
-        assert!(fsck.status.success(), "{}", String::from_utf8_lossy(&fsck.stderr));
+        assert!(
+            fsck.status.success(),
+            "{}",
+            String::from_utf8_lossy(&fsck.stderr)
+        );
     }
 }

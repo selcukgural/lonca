@@ -5,7 +5,8 @@
 use std::str::FromStr;
 
 use cedar_policy::{
-    Authorizer, Context, Entities, EntityId, EntityTypeName, EntityUid, PolicySet, Request, RestrictedExpression,
+    Authorizer, Context, Entities, EntityId, EntityTypeName, EntityUid, PolicySet, Request,
+    RestrictedExpression,
 };
 use lonca_core::canonical::sha256_hex;
 use lonca_core::ops::Actor;
@@ -190,19 +191,27 @@ pub struct Integrity {
 
 impl Default for Sessions {
     fn default() -> Self {
-        Self { max_ttl_minutes: 480 }
+        Self {
+            max_ttl_minutes: 480,
+        }
     }
 }
 
 impl Default for Leases {
     fn default() -> Self {
-        Self { max_ttl_minutes: 30, max_items: 64 }
+        Self {
+            max_ttl_minutes: 30,
+            max_items: 64,
+        }
     }
 }
 
 impl Default for Changes {
     fn default() -> Self {
-        Self { max_files: 200, max_file_bytes: 2_097_152 }
+        Self {
+            max_files: 200,
+            max_file_bytes: 2_097_152,
+        }
     }
 }
 
@@ -211,11 +220,24 @@ impl Default for Paths {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect();
         Self {
             critical: s(&[
-                ".github/**", ".gitlab-ci.yml", ".lonca/**",
-                "**/build.rs", "**/Cargo.toml", "**/Cargo.lock",
-                "**/package.json", "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml",
-                "**/Makefile", "**/*.csproj", "**/Directory.Build.props", "**/Directory.Build.targets",
-                "**/global.json", "**/NuGet.config", "**/pyproject.toml", "**/setup.py",
+                ".github/**",
+                ".gitlab-ci.yml",
+                ".lonca/**",
+                "**/build.rs",
+                "**/Cargo.toml",
+                "**/Cargo.lock",
+                "**/package.json",
+                "**/package-lock.json",
+                "**/yarn.lock",
+                "**/pnpm-lock.yaml",
+                "**/Makefile",
+                "**/*.csproj",
+                "**/Directory.Build.props",
+                "**/Directory.Build.targets",
+                "**/global.json",
+                "**/NuGet.config",
+                "**/pyproject.toml",
+                "**/setup.py",
             ]),
             untrusted: s(&["vendor/**", "third_party/**", "node_modules/**"]),
         }
@@ -224,19 +246,31 @@ impl Default for Paths {
 
 impl Default for Verification {
     fn default() -> Self {
-        Self { build: None, test: None, required: false, require_sandbox: false, timeout_seconds: 900, retries: 0 }
+        Self {
+            build: None,
+            test: None,
+            required: false,
+            require_sandbox: false,
+            timeout_seconds: 900,
+            retries: 0,
+        }
     }
 }
 
 impl Default for Observation {
     fn default() -> Self {
-        Self { unobserved_is_tainted: true }
+        Self {
+            unobserved_is_tainted: true,
+        }
     }
 }
 
 impl Default for Approvals {
     fn default() -> Self {
-        Self { cap_to_enrolled_humans: true, policy_updates: 1 }
+        Self {
+            cap_to_enrolled_humans: true,
+            policy_updates: 1,
+        }
     }
 }
 
@@ -254,7 +288,9 @@ impl Default for Reverts {
 
 impl Default for Integrity {
     fn default() -> Self {
-        Self { on_unmediated: "restore".into() }
+        Self {
+            on_unmediated: "restore".into(),
+        }
     }
 }
 
@@ -302,22 +338,33 @@ impl PolicyBundle {
     }
 
     pub fn parse(config_text: &str, policy_text: &str) -> Result<Self, String> {
-        let config: Config = toml::from_str(config_text).map_err(|e| format!("{CONFIG_FILE}: {e}"))?;
+        let config: Config =
+            toml::from_str(config_text).map_err(|e| format!("{CONFIG_FILE}: {e}"))?;
         for p in config.paths.critical.iter().chain(&config.paths.untrusted) {
             let ok = p.starts_with("**/") || lonca_core::paths::validate_path_pattern(p).is_ok();
             if !ok {
                 return Err(format!("{CONFIG_FILE}: bad path pattern {p:?}"));
             }
         }
-        if !matches!(config.integrity.on_unmediated.as_str(), "restore" | "freeze") {
-            return Err(format!("{CONFIG_FILE}: integrity.on_unmediated must be restore or freeze"));
+        if !matches!(
+            config.integrity.on_unmediated.as_str(),
+            "restore" | "freeze"
+        ) {
+            return Err(format!(
+                "{CONFIG_FILE}: integrity.on_unmediated must be restore or freeze"
+            ));
         }
         let cedar = PolicySet::from_str(policy_text).map_err(|e| format!("{POLICY_FILE}: {e}"))?;
         for p in cedar.policies() {
             if let Some(n) = p.annotation("approvals") {
                 match n.parse::<u32>() {
                     Ok(1..=9) => {}
-                    _ => return Err(format!("{POLICY_FILE}: policy {}: @approvals must be 1..9", p.id())),
+                    _ => {
+                        return Err(format!(
+                            "{POLICY_FILE}: policy {}: @approvals must be 1..9",
+                            p.id()
+                        ));
+                    }
                 }
             }
         }
@@ -332,30 +379,48 @@ impl PolicyBundle {
     }
 
     pub fn is_critical(&self, path: &str) -> bool {
-        self.config.paths.critical.iter().any(|p| config_pattern_matches(p, path))
+        self.config
+            .paths
+            .critical
+            .iter()
+            .any(|p| config_pattern_matches(p, path))
     }
 
     pub fn is_untrusted(&self, path: &str) -> bool {
-        self.config.paths.untrusted.iter().any(|p| config_pattern_matches(p, path))
+        self.config
+            .paths
+            .untrusted
+            .iter()
+            .any(|p| config_pattern_matches(p, path))
     }
 
     /// Evaluates one request. Any evaluation error counts as a denial: a
     /// forbid rule that fails to evaluate must not silently stop applying.
-    pub fn evaluate(&self, principal: &Actor, action: &str, context: Vec<(&str, CVal)>) -> CedarOutcome {
+    pub fn evaluate(
+        &self,
+        principal: &Actor,
+        action: &str,
+        context: Vec<(&str, CVal)>,
+    ) -> CedarOutcome {
         let (ptype, pid) = match principal {
             Actor::Human { name } => ("Lonca::Human", name.as_str()),
             Actor::Agent { name, .. } => ("Lonca::Agent", name.as_str()),
             Actor::Daemon => ("Lonca::Daemon", "daemon"),
         };
         let uid = |t: &str, id: &str| {
-            EntityUid::from_type_name_and_id(EntityTypeName::from_str(t).expect("valid type"), EntityId::new(id))
+            EntityUid::from_type_name_and_id(
+                EntityTypeName::from_str(t).expect("valid type"),
+                EntityId::new(id),
+            )
         };
         let pairs = context.into_iter().map(|(k, v)| {
             let expr = match v {
                 CVal::Str(s) => RestrictedExpression::new_string(s),
                 CVal::Long(n) => RestrictedExpression::new_long(n),
                 CVal::Bool(b) => RestrictedExpression::new_bool(b),
-                CVal::StrSet(v) => RestrictedExpression::new_set(v.into_iter().map(RestrictedExpression::new_string)),
+                CVal::StrSet(v) => RestrictedExpression::new_set(
+                    v.into_iter().map(RestrictedExpression::new_string),
+                ),
             };
             (k.to_string(), expr)
         });
@@ -376,7 +441,12 @@ impl PolicyBundle {
         let resp = Authorizer::new().is_authorized(&req, &self.cedar, &Entities::empty());
         let errors: Vec<String> = resp.diagnostics().errors().map(|e| e.to_string()).collect();
         if !errors.is_empty() {
-            return CedarOutcome::Deny(errors.into_iter().map(|e| format!("policy_error:{e}")).collect());
+            return CedarOutcome::Deny(
+                errors
+                    .into_iter()
+                    .map(|e| format!("policy_error:{e}"))
+                    .collect(),
+            );
         }
         if resp.decision() == cedar_policy::Decision::Allow {
             return CedarOutcome::Allow;
@@ -389,11 +459,20 @@ impl PolicyBundle {
         let mut approvals = 1u32;
         let mut all_escalate = true;
         for id in &reasons {
-            let policy = self.cedar.policy(id).expect("reason ids come from this set");
-            let name = policy.annotation("id").map(str::to_string).unwrap_or_else(|| id.to_string());
+            let policy = self
+                .cedar
+                .policy(id)
+                .expect("reason ids come from this set");
+            let name = policy
+                .annotation("id")
+                .map(str::to_string)
+                .unwrap_or_else(|| id.to_string());
             match policy.annotation("escalate") {
                 Some(_) => {
-                    let n = policy.annotation("approvals").and_then(|a| a.parse().ok()).unwrap_or(1);
+                    let n = policy
+                        .annotation("approvals")
+                        .and_then(|a| a.parse().ok())
+                        .unwrap_or(1);
                     approvals = approvals.max(n);
                 }
                 None => all_escalate = false,
@@ -414,7 +493,10 @@ mod tests {
     use super::*;
 
     fn agent() -> Actor {
-        Actor::Agent { name: "bot".into(), session: "ses_1".into() }
+        Actor::Agent {
+            name: "bot".into(),
+            session: "ses_1".into(),
+        }
     }
 
     #[test]
@@ -451,17 +533,28 @@ mod tests {
     fn forbid_and_escalate() {
         let b = PolicyBundle::default_bundle();
         let file = |p: &str| vec![("path", CVal::Str(p.into()))];
-        assert_eq!(b.evaluate(&agent(), "file.delete", file("src/a.rs")), CedarOutcome::Allow);
+        assert_eq!(
+            b.evaluate(&agent(), "file.delete", file("src/a.rs")),
+            CedarOutcome::Allow
+        );
         assert_eq!(
             b.evaluate(&agent(), "file.delete", file("migrations/001.sql")),
             CedarOutcome::Deny(vec!["policy:migrations-no-agent-delete".into()])
         );
         assert_eq!(
             b.evaluate(&agent(), "file.modify", file("auth/login.rs")),
-            CedarOutcome::Escalate { rules: vec!["policy:auth-needs-two-humans".into()], approvals: 2 }
+            CedarOutcome::Escalate {
+                rules: vec!["policy:auth-needs-two-humans".into()],
+                approvals: 2
+            }
         );
-        let human = Actor::Human { name: "ayse".into() };
-        assert_eq!(b.evaluate(&human, "file.delete", file("migrations/001.sql")), CedarOutcome::Allow);
+        let human = Actor::Human {
+            name: "ayse".into(),
+        };
+        assert_eq!(
+            b.evaluate(&human, "file.delete", file("migrations/001.sql")),
+            CedarOutcome::Allow
+        );
     }
 
     #[test]
@@ -469,16 +562,29 @@ mod tests {
         // The rule reads context.recent_reverts; leaving it out makes the
         // forbid rule error. That must deny, not silently allow.
         let b = PolicyBundle::default_bundle();
-        match b.evaluate(&agent(), "change.propose", vec![("files", CVal::Long(1)), ("lines", CVal::Long(1))]) {
-            CedarOutcome::Deny(r) => assert!(r.iter().all(|x| x.starts_with("policy_error:")), "{r:?}"),
+        match b.evaluate(
+            &agent(),
+            "change.propose",
+            vec![("files", CVal::Long(1)), ("lines", CVal::Long(1))],
+        ) {
+            CedarOutcome::Deny(r) => {
+                assert!(r.iter().all(|x| x.starts_with("policy_error:")), "{r:?}")
+            }
             other => panic!("expected deny, got {other:?}"),
         }
     }
 
     #[test]
     fn no_permit_means_default_deny() {
-        let b = PolicyBundle::parse(DEFAULT_CONFIG, "forbid(principal, action, resource) when { false };").unwrap();
-        assert!(matches!(b.evaluate(&agent(), "lease.acquire", vec![]), CedarOutcome::Deny(_)));
+        let b = PolicyBundle::parse(
+            DEFAULT_CONFIG,
+            "forbid(principal, action, resource) when { false };",
+        )
+        .unwrap();
+        assert!(matches!(
+            b.evaluate(&agent(), "lease.acquire", vec![]),
+            CedarOutcome::Deny(_)
+        ));
     }
 
     #[test]
@@ -488,6 +594,9 @@ mod tests {
         assert!(!config_pattern_matches("**/Cargo.lock", "a/b/Cargo.locks"));
         assert!(config_pattern_matches("**/*.csproj", "src/App/App.csproj"));
         assert!(!config_pattern_matches("**/*.csproj", ".csproj"));
-        assert!(config_pattern_matches(".github/**", ".github/workflows/x.yml"));
+        assert!(config_pattern_matches(
+            ".github/**",
+            ".github/workflows/x.yml"
+        ));
     }
 }

@@ -32,7 +32,11 @@ pub fn merge3(
 ) -> Result<MergeResult> {
     let mut files = FileMap::new();
     let mut conflicts = Vec::new();
-    let paths: BTreeSet<&String> = base.keys().chain(ours.keys()).chain(theirs.keys()).collect();
+    let paths: BTreeSet<&String> = base
+        .keys()
+        .chain(ours.keys())
+        .chain(theirs.keys())
+        .collect();
     for path in paths {
         let (b, o, t) = (base.get(path), ours.get(path), theirs.get(path));
         let pick = |e: Option<&FileEntry>, files: &mut FileMap| {
@@ -69,7 +73,11 @@ pub fn merge3(
                 let blob = if ob == tb {
                     o.blob.clone()
                 } else {
-                    let texts = (std::str::from_utf8(&base_text), std::str::from_utf8(&ob), std::str::from_utf8(&tb));
+                    let texts = (
+                        std::str::from_utf8(&base_text),
+                        std::str::from_utf8(&ob),
+                        std::str::from_utf8(&tb),
+                    );
                     let (Ok(bt), Ok(ot), Ok(tt)) = texts else {
                         conflicts.push(file_conflict);
                         pick(Some(o), &mut files);
@@ -99,7 +107,12 @@ pub fn merge3(
 }
 
 /// Merges one file's text. `Err` carries the conflicting symbols.
-pub fn merge_text(path: &str, b: &str, o: &str, t: &str) -> std::result::Result<String, Vec<String>> {
+pub fn merge_text(
+    path: &str,
+    b: &str,
+    o: &str,
+    t: &str,
+) -> std::result::Result<String, Vec<String>> {
     let file_conflict = || vec![format!("{path}#<file>")];
     let lang = Lang::detect(path);
     if let Some(lang) = lang {
@@ -111,9 +124,10 @@ pub fn merge_text(path: &str, b: &str, o: &str, t: &str) -> std::result::Result<
     }
     let merged = diffy::merge(b, o, t).map_err(|_| file_conflict())?;
     if let Some(lang) = lang
-        && parse(lang, &merged).has_error {
-            return Err(file_conflict());
-        }
+        && parse(lang, &merged).has_error
+    {
+        return Err(file_conflict());
+    }
     Ok(merged)
 }
 
@@ -162,12 +176,22 @@ impl Merger<'_> {
 
     fn insert(&mut self, pos: usize, text: String) {
         let seq = self.edits.len();
-        self.edits.push(Edit { start: pos, end: pos, text, seq });
+        self.edits.push(Edit {
+            start: pos,
+            end: pos,
+            text,
+            seq,
+        });
     }
 
     fn replace(&mut self, start: usize, end: usize, text: String) {
         let seq = self.edits.len();
-        self.edits.push(Edit { start, end, text, seq });
+        self.edits.push(Edit {
+            start,
+            end,
+            text,
+            seq,
+        });
     }
 
     fn level(&mut self, bs: &[Sym], os: &[Sym], ts: &[Sym], o_container: Option<&Sym>) {
@@ -231,7 +255,11 @@ impl Merger<'_> {
                     }
                     let all_containers = b_sym.container && o_sym.container && ts_sym.container;
                     if all_containers && ts_sym.own == b_sym.own {
-                        let (bc, oc, tc) = (b_sym.children.clone(), o_sym.children.clone(), ts_sym.children.clone());
+                        let (bc, oc, tc) = (
+                            b_sym.children.clone(),
+                            o_sym.children.clone(),
+                            ts_sym.children.clone(),
+                        );
                         let o_owned = (*o_sym).clone();
                         self.level(&bc, &oc, &tc, Some(&o_owned));
                     } else {
@@ -257,9 +285,16 @@ impl Merger<'_> {
 
     fn imports(&mut self, pb: &Parsed, po: &Parsed, pt: &Parsed) {
         let norm = |src: &str, spans: &[(usize, usize)]| -> Vec<(String, (usize, usize))> {
-            spans.iter().map(|&(s, e)| (normalize(&src[s..e]), (s, e))).collect()
+            spans
+                .iter()
+                .map(|&(s, e)| (normalize(&src[s..e]), (s, e)))
+                .collect()
         };
-        let (bi, oi, ti) = (norm(self.b, &pb.imports), norm(self.o, &po.imports), norm(self.t, &pt.imports));
+        let (bi, oi, ti) = (
+            norm(self.b, &pb.imports),
+            norm(self.o, &po.imports),
+            norm(self.t, &pt.imports),
+        );
         let bset: BTreeSet<&String> = bi.iter().map(|(n, _)| n).collect();
         let oset: BTreeSet<&String> = oi.iter().map(|(n, _)| n).collect();
         let tset: BTreeSet<&String> = ti.iter().map(|(n, _)| n).collect();
@@ -283,7 +318,12 @@ impl Merger<'_> {
     }
 
     fn apply(mut self) -> Option<String> {
-        self.edits.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)).then(a.seq.cmp(&b.seq)));
+        self.edits.sort_by(|a, b| {
+            a.start
+                .cmp(&b.start)
+                .then(a.end.cmp(&b.end))
+                .then(a.seq.cmp(&b.seq))
+        });
         for w in self.edits.windows(2) {
             if w[1].start < w[0].end {
                 return None;
@@ -312,7 +352,14 @@ fn symbol_merge(path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
         }
         return Sm::Conflict(vec![format!("{path}#<module>")]);
     }
-    let mut m = Merger { path, b, o, t, edits: Vec::new(), conflicts: Vec::new() };
+    let mut m = Merger {
+        path,
+        b,
+        o,
+        t,
+        edits: Vec::new(),
+        conflicts: Vec::new(),
+    };
     m.imports(&pb, &po, &pt);
     m.level(&pb.syms, &po.syms, &pt.syms, None);
     if !m.conflicts.is_empty() {
@@ -331,14 +378,18 @@ fn symbol_merge(path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
 mod tests {
     use super::*;
 
-    const RS: &str = "use std::io;\n\nfn a() {\n    1\n}\nfn b() {\n    2\n}\n\nfn c() {\n    3\n}\n";
+    const RS: &str =
+        "use std::io;\n\nfn a() {\n    1\n}\nfn b() {\n    2\n}\n\nfn c() {\n    3\n}\n";
 
     #[test]
     fn adjacent_functions_merge_where_lines_conflict() {
         let b = "fn a() -> u8 { 1 }\nfn b() -> u8 { 2 }\n";
         let o = b.replace("{ 1 }", "{ 10 }");
         let t = b.replace("{ 2 }", "{ 20 }");
-        assert!(diffy::merge(b, &o, &t).is_err(), "line merge conflicts on adjacent lines");
+        assert!(
+            diffy::merge(b, &o, &t).is_err(),
+            "line merge conflicts on adjacent lines"
+        );
         let m = merge_text("x.rs", b, &o, &t).unwrap();
         assert_eq!(m, "fn a() -> u8 { 10 }\nfn b() -> u8 { 20 }\n");
     }
@@ -348,7 +399,11 @@ mod tests {
         let o = RS.replace("    1\n", "    10\n");
         let t = RS.replace("    1\n", "    11\n");
         assert_eq!(merge_text("x.rs", RS, &o, &t), Err(vec!["x.rs#a".into()]));
-        assert_eq!(merge_text("x.rs", RS, &o, &o), Ok(o.clone()), "identical changes merge");
+        assert_eq!(
+            merge_text("x.rs", RS, &o, &o),
+            Ok(o.clone()),
+            "identical changes merge"
+        );
     }
 
     #[test]
@@ -378,7 +433,10 @@ mod tests {
         let o = RS.replace("use std::io;\n", "use std::io;\nuse std::fmt;\n");
         let t = RS.replace("use std::io;\n", "use std::io;\nuse std::fs;\n");
         let m = merge_text("x.rs", RS, &o, &t).unwrap();
-        assert!(m.contains("use std::fmt;") && m.contains("use std::fs;"), "{m}");
+        assert!(
+            m.contains("use std::fmt;") && m.contains("use std::fs;"),
+            "{m}"
+        );
         let both = merge_text("x.rs", RS, &o, &o.clone()).unwrap();
         assert_eq!(both.matches("use std::fmt;").count(), 1);
     }
@@ -403,9 +461,15 @@ mod tests {
 
         let b = "export class C {\n  a() { return 1; }\n  b() { return 2; }\n}\n";
         let o = b.replace("return 1;", "return 10;");
-        let t = b.replace("  b() { return 2; }\n", "  b() { return 2; }\n  c() { return 3; }\n");
+        let t = b.replace(
+            "  b() { return 2; }\n",
+            "  b() { return 2; }\n  c() { return 3; }\n",
+        );
         let m = merge_text("x.ts", b, &o, &t).unwrap();
-        assert!(m.contains("return 10;") && m.contains("c() { return 3; }"), "{m}");
+        assert!(
+            m.contains("return 10;") && m.contains("c() { return 3; }"),
+            "{m}"
+        );
     }
 
     #[test]
@@ -413,8 +477,14 @@ mod tests {
         let b = "a\nb\nc\nd\ne\n";
         let o = "A\nb\nc\nd\ne\n";
         let t = "a\nb\nc\nd\nE\n";
-        assert_eq!(merge_text("notes.txt", b, o, t), Ok("A\nb\nc\nd\nE\n".into()));
-        assert_eq!(merge_text("notes.txt", b, "X\nb\nc\nd\ne\n", "Y\nb\nc\nd\ne\n"), Err(vec!["notes.txt#<file>".into()]));
+        assert_eq!(
+            merge_text("notes.txt", b, o, t),
+            Ok("A\nb\nc\nd\nE\n".into())
+        );
+        assert_eq!(
+            merge_text("notes.txt", b, "X\nb\nc\nd\ne\n", "Y\nb\nc\nd\ne\n"),
+            Err(vec!["notes.txt#<file>".into()])
+        );
     }
 
     #[test]
@@ -429,7 +499,9 @@ mod tests {
     fn twenty_agents_one_file() {
         let mut base = String::new();
         for i in 0..20 {
-            base.push_str(&format!("pub fn f{i}(x: u64) -> u64 {{\n    x + {i}\n}}\n\n"));
+            base.push_str(&format!(
+                "pub fn f{i}(x: u64) -> u64 {{\n    x + {i}\n}}\n\n"
+            ));
         }
         let mut trunk = base.clone();
         for i in 0..20 {
@@ -437,13 +509,20 @@ mod tests {
                 "{}pub fn new{i}() -> u64 {{\n    {i}\n}}\n",
                 base.replace(&format!("    x + {i}\n"), &format!("    x * {i}\n"))
             );
-            trunk = merge_text("lib.rs", &base, &trunk, &theirs).unwrap_or_else(|c| panic!("agent {i}: {c:?}"));
+            trunk = merge_text("lib.rs", &base, &trunk, &theirs)
+                .unwrap_or_else(|c| panic!("agent {i}: {c:?}"));
         }
         let p = parse(Lang::Rust, &trunk);
         assert!(!p.has_error);
         for i in 0..20 {
-            assert!(trunk.contains(&format!("    x * {i}\n")), "edit {i} survived");
-            assert!(trunk.contains(&format!("pub fn new{i}()")), "add {i} survived");
+            assert!(
+                trunk.contains(&format!("    x * {i}\n")),
+                "edit {i} survived"
+            );
+            assert!(
+                trunk.contains(&format!("pub fn new{i}()")),
+                "add {i} survived"
+            );
         }
         assert_eq!(p.syms.len(), 40);
     }

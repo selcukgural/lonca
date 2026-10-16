@@ -29,7 +29,12 @@ use crate::repo::{HUMAN_HEADER, POLICY_REF, RepoHandle, SESSION_HEADER, TRUNK_RE
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 pub fn system_clock() -> Clock {
-    Arc::new(|| SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0))
+    Arc::new(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -43,7 +48,11 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { managed_settings: hooks::default_managed_settings(), require_root_settings: true, git: "git".into() }
+        Self {
+            managed_settings: hooks::default_managed_settings(),
+            require_root_settings: true,
+            git: "git".into(),
+        }
     }
 }
 
@@ -105,7 +114,11 @@ impl Service {
         let mut repos = BTreeMap::new();
         for entry in std::fs::read_dir(home.repos())? {
             let path = entry?.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".git")) else {
+            let Some(name) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".git"))
+            else {
                 continue;
             };
             let r = RepoHandle::open(name, &path, key.clone())?;
@@ -117,7 +130,11 @@ impl Service {
             key,
             clock,
             settings,
-            inner: Mutex::new(Inner { repos, tokens, prepared: BTreeMap::new() }),
+            inner: Mutex::new(Inner {
+                repos,
+                tokens,
+                prepared: BTreeMap::new(),
+            }),
             wake: (Mutex::new(0), Condvar::new()),
         });
         {
@@ -125,7 +142,8 @@ impl Service {
             let now = svc.now();
             for r in inner.repos.values_mut() {
                 if r.initialized() {
-                    Self::reconcile(r, now).map_err(|e| Error::Integrity(format!("{}: {}", e.0, e.1)))?;
+                    Self::reconcile(r, now)
+                        .map_err(|e| Error::Integrity(format!("{}: {}", e.0, e.1)))?;
                 }
             }
         }
@@ -160,7 +178,9 @@ impl Service {
     fn dispatch(&self, req: &Request) -> Hr {
         let p = &req.params;
         match req.method.as_str() {
-            "ping" => Ok(json!({"version": env!("CARGO_PKG_VERSION"), "daemon_key": self.public_key()})),
+            "ping" => {
+                Ok(json!({"version": env!("CARGO_PKG_VERSION"), "daemon_key": self.public_key()}))
+            }
             "repo.list" => Ok(json!(self.lock().repos.keys().collect::<Vec<_>>())),
             "repo.prepare_init" => self.prepare_init(params(p)?),
             "repo.init" => self.init(params(p)?),
@@ -182,7 +202,12 @@ impl Service {
             "lease.renew" => {
                 let s: SetRef = params(p)?;
                 let ttl = s.ttl_ms.unwrap_or(10 * 60_000);
-                self.agent_op(req, |_| Ok(Op::LeaseRenew { set: s.set.clone(), ttl_ms: ttl }))
+                self.agent_op(req, |_| {
+                    Ok(Op::LeaseRenew {
+                        set: s.set.clone(),
+                        ttl_ms: ttl,
+                    })
+                })
             }
             "change.propose" => self.propose(req, params(p)?),
             "change.withdraw" => {
@@ -193,7 +218,11 @@ impl Service {
             "negotiate" => {
                 let n: Negotiate = params(p)?;
                 self.agent_op(req, |_| {
-                    Ok(Op::Negotiate { thread: n.thread.clone(), to_session: n.to_session.clone(), message: n.message.clone() })
+                    Ok(Op::Negotiate {
+                        thread: n.thread.clone(),
+                        to_session: n.to_session.clone(),
+                        message: n.message.clone(),
+                    })
                 })
             }
             "cap.attenuate" => self.attenuate(req, params(p)?),
@@ -206,10 +235,15 @@ impl Service {
     }
 
     fn repo_name(req: &Request) -> std::result::Result<String, (String, String)> {
-        req.repo.clone().ok_or_else(|| ("invalid".into(), "missing repo".into()))
+        req.repo
+            .clone()
+            .ok_or_else(|| ("invalid".into(), "missing repo".into()))
     }
 
-    fn repo<'a>(inner: &'a mut Inner, name: &str) -> std::result::Result<&'a mut RepoHandle, (String, String)> {
+    fn repo<'a>(
+        inner: &'a mut Inner,
+        name: &str,
+    ) -> std::result::Result<&'a mut RepoHandle, (String, String)> {
         match inner.repos.get_mut(name) {
             Some(r) if r.initialized() => Ok(r),
             _ => fail("not_found", format!("no repository {name}")),
@@ -217,12 +251,29 @@ impl Service {
     }
 
     /// Resolves an agent token to (repo, actor).
-    fn agent(inner: &Inner, req: &Request) -> std::result::Result<(String, Actor), (String, String)> {
-        let Some(token) = req.token.as_deref() else { return fail("unauthenticated", "missing session token") };
-        let Some(e) = inner.tokens.lookup(token).cloned() else { return fail("unauthenticated", "unknown session token") };
-        let Some(r) = inner.repos.get(&e.repo) else { return fail("unauthenticated", "token for unknown repository") };
-        let Some(s) = r.chain.state.sessions.get(&e.session) else { return fail("unauthenticated", "unknown session") };
-        Ok((e.repo, Actor::Agent { name: s.agent.clone(), session: e.session }))
+    fn agent(
+        inner: &Inner,
+        req: &Request,
+    ) -> std::result::Result<(String, Actor), (String, String)> {
+        let Some(token) = req.token.as_deref() else {
+            return fail("unauthenticated", "missing session token");
+        };
+        let Some(e) = inner.tokens.lookup(token).cloned() else {
+            return fail("unauthenticated", "unknown session token");
+        };
+        let Some(r) = inner.repos.get(&e.repo) else {
+            return fail("unauthenticated", "token for unknown repository");
+        };
+        let Some(s) = r.chain.state.sessions.get(&e.session) else {
+            return fail("unauthenticated", "unknown session");
+        };
+        Ok((
+            e.repo,
+            Actor::Agent {
+                name: s.agent.clone(),
+                session: e.session,
+            },
+        ))
     }
 
     /// Repo name from the token if present, else from the request.
@@ -236,8 +287,13 @@ impl Service {
     // ---------------------------------------------------------------- init
 
     fn prepare_init(&self, p: PrepareInit) -> Hr {
-        if !lonca_policy::decide::valid_token(&p.repo, 64) || !lonca_policy::decide::valid_token(&p.human, 64) {
-            return fail("invalid", "repository and human names: letters, digits, '.', '_', '-'");
+        if !lonca_policy::decide::valid_token(&p.repo, 64)
+            || !lonca_policy::decide::valid_token(&p.human, 64)
+        {
+            return fail(
+                "invalid",
+                "repository and human names: letters, digits, '.', '_', '-'",
+            );
         }
         let mut inner = self.lock();
         if inner.repos.get(&p.repo).is_some_and(|r| r.initialized()) {
@@ -260,8 +316,21 @@ impl Service {
                 let branch = p.branch.clone().unwrap_or_else(|| "main".into());
                 validate_remote(src)?;
                 validate_branch(&branch)?;
-                git(&self.settings.git, r.store.path(), &["fetch", "--no-tags", "--", src, &format!("+{branch}:refs/lonca/import/initial")])?;
-                r.store.ref_get("refs/lonca/import/initial").or_fail()?.ok_or(("invalid".into(), "import fetched nothing".into()))?
+                git(
+                    &self.settings.git,
+                    r.store.path(),
+                    &[
+                        "fetch",
+                        "--no-tags",
+                        "--",
+                        src,
+                        &format!("+{branch}:refs/lonca/import/initial"),
+                    ],
+                )?;
+                r.store
+                    .ref_get("refs/lonca/import/initial")
+                    .or_fail()?
+                    .ok_or(("invalid".into(), "import fetched nothing".into()))?
             }
             None => {
                 let tree = r.store.empty_tree().or_fail()?;
@@ -292,14 +361,31 @@ impl Service {
     }
 
     fn init(&self, p: HumanSubmit) -> Hr {
-        let Op::RepoInit { repo, human, trunk, policy, .. } = &p.op else { return fail("invalid", "expected repo.init") };
+        let Op::RepoInit {
+            repo,
+            human,
+            trunk,
+            policy,
+            ..
+        } = &p.op
+        else {
+            return fail("invalid", "expected repo.init");
+        };
         let mut inner = self.lock();
         if inner.prepared.get(repo) != Some(&p.op) {
-            return fail("invalid", "this init was not prepared by this daemon; call repo.prepare_init");
+            return fail(
+                "invalid",
+                "this init was not prepared by this daemon; call repo.prepare_init",
+            );
         }
         let now = self.now();
         let r = inner.repos.get_mut(repo).expect("prepared repos exist");
-        let mut sub = Submission::new(Actor::Human { name: human.clone() }, p.op.clone());
+        let mut sub = Submission::new(
+            Actor::Human {
+                name: human.clone(),
+            },
+            p.op.clone(),
+        );
         sub.human = Some(p.sig);
         let dry = r.dry_run(sub.clone(), now).or_fail()?;
         if !dry.entry.decision.is_allow() {
@@ -374,15 +460,27 @@ impl Service {
         let mut out = Vec::new();
         for (path, e) in files {
             if let Some(only) = &q.paths
-                && !only.contains(&path) {
-                    continue;
-                }
-            let content_b64 = if q.with_content && e.mode != lonca_core::FileMode::Submodule && !redacted.contains(&e.blob) {
-                Some(base64::engine::general_purpose::STANDARD.encode(store.read_blob(&e.blob).or_fail()?))
+                && !only.contains(&path)
+            {
+                continue;
+            }
+            let content_b64 = if q.with_content
+                && e.mode != lonca_core::FileMode::Submodule
+                && !redacted.contains(&e.blob)
+            {
+                Some(
+                    base64::engine::general_purpose::STANDARD
+                        .encode(store.read_blob(&e.blob).or_fail()?),
+                )
             } else {
                 None
             };
-            out.push(TreeFile { path, mode: e.mode, blob: e.blob, content_b64 });
+            out.push(TreeFile {
+                path,
+                mode: e.mode,
+                blob: e.blob,
+                content_b64,
+            });
         }
         Ok(json!(out))
     }
@@ -401,7 +499,11 @@ impl Service {
         let inner = self.lock();
         let (repo, actor) = Self::agent(&inner, req)?;
         let r = inner.repos.get(&repo).expect("checked");
-        let s = r.chain.state.sessions.get(actor.session().unwrap_or_default());
+        let s = r
+            .chain
+            .state
+            .sessions
+            .get(actor.session().unwrap_or_default());
         Ok(json!({"repo": repo, "actor": actor.label(), "session": s}))
     }
 
@@ -439,7 +541,12 @@ impl Service {
             tests: f.tests.clone(),
             revert_of: p.revert_of,
         };
-        let op = Op::ChangePropose { change, commit, base: p.base, claim };
+        let op = Op::ChangePropose {
+            change,
+            commit,
+            base: p.base,
+            claim,
+        };
         Ok(json!({"op": op, "facts": a.facts, "syntax_errors": a.syntax_errors}))
     }
 
@@ -448,7 +555,9 @@ impl Service {
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
         let parent = r.chain.state.policy.clone();
-        let commit = r.write_policy(&p.config, &p.policy, parent.as_ref(), self.now()).or_fail()?;
+        let commit = r
+            .write_policy(&p.config, &p.policy, parent.as_ref(), self.now())
+            .or_fail()?;
         Ok(json!({"op": Op::PolicyUpdate { policy: commit }}))
     }
 
@@ -461,16 +570,33 @@ impl Service {
             let mut inner = self.lock();
             Self::repo(&mut inner, &name)?.store.clone()
         };
-        git(&self.settings.git, store.path(), &["fetch", "--no-tags", "--", &p.remote, &format!("+{branch}:refs/lonca/incoming")])?;
+        git(
+            &self.settings.git,
+            store.path(),
+            &[
+                "fetch",
+                "--no-tags",
+                "--",
+                &p.remote,
+                &format!("+{branch}:refs/lonca/incoming"),
+            ],
+        )?;
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
-        let commit = r.store.ref_get("refs/lonca/incoming").or_fail()?.ok_or(("invalid".into(), "nothing fetched".into()))?;
+        let commit = r
+            .store
+            .ref_get("refs/lonca/incoming")
+            .or_fail()?
+            .ok_or(("invalid".into(), "nothing fetched".into()))?;
         let trunk = r.chain.state.trunk.clone().expect("initialized");
         if commit == trunk {
             return fail("up_to_date", "trunk already contains the remote branch");
         }
         if !is_ancestor(&r.store, &trunk, &commit).or_fail()? {
-            return fail("not_fast_forward", "the remote branch does not contain trunk; diverged history is not imported");
+            return fail(
+                "not_fast_forward",
+                "the remote branch does not contain trunk; diverged history is not imported",
+            );
         }
         Ok(json!({"op": Op::ImportExternal { remote: p.remote, commit, trunk_before: trunk }}))
     }
@@ -481,7 +607,9 @@ impl Service {
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
         let s = &r.chain.state;
-        Ok(json!({"op": Op::BridgePush { remote: p.remote, oplog_seq: s.next_seq - 1, oplog_hash: s.head_hash.clone() }}))
+        Ok(
+            json!({"op": Op::BridgePush { remote: p.remote, oplog_seq: s.next_seq - 1, oplog_hash: s.head_hash.clone() }}),
+        )
     }
 
     fn human_submit(&self, req: &Request, p: HumanSubmit) -> Hr {
@@ -491,27 +619,42 @@ impl Service {
         let now = self.now();
         let r = Self::repo(inner, &name)?;
         Self::reconcile(r, now)?;
-        let mut sub = Submission::new(Actor::Human { name: p.sig.human.clone() }, p.op.clone());
+        let mut sub = Submission::new(
+            Actor::Human {
+                name: p.sig.human.clone(),
+            },
+            p.op.clone(),
+        );
         sub.human = Some(p.sig);
         match &p.op {
             Op::RepoInit { .. } => return fail("invalid", "use repo.init"),
-            Op::ChangePropose { change, commit, base, .. } => {
+            Op::ChangePropose {
+                change,
+                commit,
+                base,
+                ..
+            } => {
                 r.check_proposal(commit, base, *change).or_fail()?;
                 sub.facts = Some(facts_of(&r.store, base, commit).or_fail()?.facts);
             }
             Op::PolicyUpdate { policy } => {
                 RepoHandle::load_policy(&r.store, policy).or_fail()?;
             }
-            Op::ImportExternal { commit, trunk_before, .. }
-                if !is_ancestor(&r.store, trunk_before, commit).or_fail()? => {
-                    return fail("not_fast_forward", "import must contain trunk");
-                }
+            Op::ImportExternal {
+                commit,
+                trunk_before,
+                ..
+            } if !is_ancestor(&r.store, trunk_before, commit).or_fail()? => {
+                return fail("not_fast_forward", "import must contain trunk");
+            }
             _ => {}
         }
         let old_policy = r.chain.state.policy.clone();
         let seq = r.chain.state.next_seq;
         if let Op::ChangePropose { change, commit, .. } = &p.op {
-            r.store.ref_cas(&format!("refs/lonca/changes/{change}/{seq}"), commit, None).or_fail()?;
+            r.store
+                .ref_cas(&format!("refs/lonca/changes/{change}/{seq}"), commit, None)
+                .or_fail()?;
         }
         let op = r.submit(sub, now).or_fail()?;
         let mut out = logged(&op);
@@ -528,11 +671,19 @@ impl Service {
             }
             Op::PolicyUpdate { policy } => {
                 let r = Self::repo(inner, &name)?;
-                r.store.ref_cas(POLICY_REF, policy, old_policy.as_ref()).or_fail()?;
+                r.store
+                    .ref_cas(POLICY_REF, policy, old_policy.as_ref())
+                    .or_fail()?;
             }
-            Op::ImportExternal { commit, trunk_before, .. } => {
+            Op::ImportExternal {
+                commit,
+                trunk_before,
+                ..
+            } => {
                 let r = Self::repo(inner, &name)?;
-                r.store.ref_cas(TRUNK_REF, commit, Some(trunk_before)).or_fail()?;
+                r.store
+                    .ref_cas(TRUNK_REF, commit, Some(trunk_before))
+                    .or_fail()?;
             }
             Op::BridgePush { remote, .. } => {
                 let r = Self::repo(inner, &name)?;
@@ -540,7 +691,10 @@ impl Service {
                     &self.settings.git,
                     r.store.path(),
                     &[
-                        "push", "--porcelain", "--", remote,
+                        "push",
+                        "--porcelain",
+                        "--",
+                        remote,
                         "refs/heads/main:refs/heads/main",
                         "refs/lonca/oplog:refs/lonca/oplog",
                         "refs/lonca/policy:refs/lonca/policy",
@@ -558,7 +712,11 @@ impl Service {
         Ok(out)
     }
 
-    fn revoke_tokens(inner: &mut Inner, repo: &str, root: &str) -> std::result::Result<(), (String, String)> {
+    fn revoke_tokens(
+        inner: &mut Inner,
+        repo: &str,
+        root: &str,
+    ) -> std::result::Result<(), (String, String)> {
         let r = Self::repo(inner, repo)?;
         let ended: Vec<String> = r
             .chain
@@ -574,7 +732,11 @@ impl Service {
     // ---------------------------------------------------------------- agents
 
     /// Runs one agent operation built by `make`.
-    fn agent_op(&self, req: &Request, make: impl FnOnce(&Actor) -> std::result::Result<Op, (String, String)>) -> Hr {
+    fn agent_op(
+        &self,
+        req: &Request,
+        make: impl FnOnce(&Actor) -> std::result::Result<Op, (String, String)>,
+    ) -> Hr {
         let mut guard = self.lock();
         let (repo, actor) = Self::agent(&guard, req)?;
         let op = make(&actor)?;
@@ -588,7 +750,12 @@ impl Service {
     fn lease_acquire(&self, req: &Request, p: LeaseAcquire) -> Hr {
         let set = p.set.clone().unwrap_or_else(|| random_id("lse"));
         let mut out = self.agent_op(req, |_| {
-            Ok(Op::LeaseAcquire { set: set.clone(), items: p.items.clone(), intent: p.intent.clone(), ttl_ms: p.ttl_ms })
+            Ok(Op::LeaseAcquire {
+                set: set.clone(),
+                items: p.items.clone(),
+                intent: p.intent.clone(),
+                ttl_ms: p.ttl_ms,
+            })
         })?;
         out["set"] = json!(set);
         Ok(out)
@@ -618,13 +785,37 @@ impl Service {
             .or_fail()?;
         let analysis = facts_of(&r.store, &p.base, &commit).or_fail()?;
         let seq = r.chain.state.next_seq;
-        r.store.ref_cas(&format!("refs/lonca/changes/{change}/{seq}"), &commit, None).or_fail()?;
-        let mut sub = Submission::new(actor, Op::ChangePropose { change, commit: commit.clone(), base: p.base, claim: p.claim });
+        r.store
+            .ref_cas(&format!("refs/lonca/changes/{change}/{seq}"), &commit, None)
+            .or_fail()?;
+        let mut sub = Submission::new(
+            actor,
+            Op::ChangePropose {
+                change,
+                commit: commit.clone(),
+                base: p.base,
+                claim: p.claim,
+            },
+        );
         sub.facts = Some(analysis.facts.clone());
         let op = r.submit(sub, now).or_fail()?;
-        let unobserved = op.entry.decision.reasons.iter().any(|x| x.starts_with("unobserved_write:"));
-        if unobserved && r.chain.state.sessions.get(&session).is_some_and(|s| s.taint.is_none()) {
-            let t = Op::Taint { session: session.clone(), reason: "changed files that no observed tool wrote".into() };
+        let unobserved = op
+            .entry
+            .decision
+            .reasons
+            .iter()
+            .any(|x| x.starts_with("unobserved_write:"));
+        if unobserved
+            && r.chain
+                .state
+                .sessions
+                .get(&session)
+                .is_some_and(|s| s.taint.is_none())
+        {
+            let t = Op::Taint {
+                session: session.clone(),
+                reason: "changed files that no observed tool wrote".into(),
+            };
             r.submit(Submission::new(Actor::Daemon, t), now).or_fail()?;
         }
         if op.entry.decision.is_allow() {
@@ -645,7 +836,17 @@ impl Service {
         let max = r.policy().or_fail()?.config.changes.max_file_bytes;
         let change = ChangeId::random();
         let commit = r
-            .build_change_commit(&p.base, &p.files, change, &actor.label(), "preview@lonca.invalid", ("lonca-preview", "1"), "", self.now(), max)
+            .build_change_commit(
+                &p.base,
+                &p.files,
+                change,
+                &actor.label(),
+                "preview@lonca.invalid",
+                ("lonca-preview", "1"),
+                "",
+                self.now(),
+                max,
+            )
             .or_fail()?;
         let a = facts_of(&r.store, &p.base, &commit).or_fail()?;
         Ok(json!({"facts": a.facts, "syntax_errors": a.syntax_errors}))
@@ -659,7 +860,13 @@ impl Service {
         let now = self.now();
         let inner = &mut *guard;
         let r = Self::repo(inner, &repo)?;
-        let op = Op::CapAttenuate { parent, child: child.clone(), agent: p.agent, scope: p.scope, expires_ms: p.expires_ms };
+        let op = Op::CapAttenuate {
+            parent,
+            child: child.clone(),
+            agent: p.agent,
+            scope: p.scope,
+            expires_ms: p.expires_ms,
+        };
         let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
         let mut out = logged(&signed);
         if signed.entry.decision.is_allow() {
@@ -676,7 +883,10 @@ impl Service {
         let now = self.now();
         let inner = &mut *guard;
         let r = Self::repo(inner, &repo)?;
-        let op = Op::SessionEnd { session: session.clone(), reason: "ended by agent".into() };
+        let op = Op::SessionEnd {
+            session: session.clone(),
+            reason: "ended by agent".into(),
+        };
         let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
         if signed.entry.decision.is_allow() {
             Self::revoke_tokens(inner, &repo, &session)?;
@@ -698,7 +908,11 @@ impl Service {
         let policy = r.policy().or_fail()?;
         let (events, verdict) = hooks::translate(&ev, &policy);
         if !events.is_empty() {
-            r.submit(Submission::new(Actor::Daemon, Op::Observe { session, events }), now).or_fail()?;
+            r.submit(
+                Submission::new(Actor::Daemon, Op::Observe { session, events }),
+                now,
+            )
+            .or_fail()?;
         }
         Ok(json!(verdict))
     }
@@ -710,9 +924,15 @@ impl Service {
         let now = self.now();
         let r = Self::repo(&mut guard, &repo)?;
         let ins = if b.harness == "claude-code" {
-            hooks::inspect_claude_code(&self.settings.managed_settings, self.settings.require_root_settings)
+            hooks::inspect_claude_code(
+                &self.settings.managed_settings,
+                self.settings.require_root_settings,
+            )
         } else {
-            hooks::Inspection { notes: vec![format!("unknown harness {}", b.harness)], ..Default::default() }
+            hooks::Inspection {
+                notes: vec![format!("unknown harness {}", b.harness)],
+                ..Default::default()
+            }
         };
         let checks = BindChecks {
             harness: b.harness,
@@ -724,7 +944,19 @@ impl Service {
             hook_binary_protected: ins.hook_binary_protected,
         };
         let level = level_for(&checks);
-        let signed = r.submit(Submission::new(Actor::Daemon, Op::SessionBind { session, checks, level }), now).or_fail()?;
+        let signed = r
+            .submit(
+                Submission::new(
+                    Actor::Daemon,
+                    Op::SessionBind {
+                        session,
+                        checks,
+                        level,
+                    },
+                ),
+                now,
+            )
+            .or_fail()?;
         let mut out = logged(&signed);
         out["level"] = json!(level);
         out["notes"] = json!(ins.notes);
@@ -738,24 +970,33 @@ impl Service {
     /// anything else is recorded as `import.unmediated` and undone.
     fn reconcile(r: &mut RepoHandle, now: i64) -> std::result::Result<(), (String, String)> {
         let state = &r.chain.state;
-        let (Some(trunk), Some(policy)) = (state.trunk.clone(), state.policy.clone()) else { return Ok(()) };
+        let (Some(trunk), Some(policy)) = (state.trunk.clone(), state.policy.clone()) else {
+            return Ok(());
+        };
         let on = r.policy().or_fail()?.config.integrity.on_unmediated.clone();
-        for (refname, expected, history) in [
-            (TRUNK_REF, trunk, true),
-            (POLICY_REF, policy, false),
-        ] {
+        for (refname, expected, history) in [(TRUNK_REF, trunk, true), (POLICY_REF, policy, false)]
+        {
             let found = r.store.ref_get(refname).or_fail()?;
             if found.as_ref() == Some(&expected) {
                 continue;
             }
-            let recovering = history && found.as_ref().is_some_and(|f| r.chain.state.trunk_history.contains(f));
+            let recovering = history
+                && found
+                    .as_ref()
+                    .is_some_and(|f| r.chain.state.trunk_history.contains(f));
             if !recovering {
-                let op = Op::ImportUnmediated { refname: refname.into(), found: found.clone(), expected: Some(expected.clone()) };
-                r.submit(Submission::new(Actor::Daemon, op), now).or_fail()?;
+                let op = Op::ImportUnmediated {
+                    refname: refname.into(),
+                    found: found.clone(),
+                    expected: Some(expected.clone()),
+                };
+                r.submit(Submission::new(Actor::Daemon, op), now)
+                    .or_fail()?;
                 if on == "freeze" || refname == POLICY_REF {
                     let reason = format!("{refname} changed outside Lonca");
                     if r.chain.state.frozen.is_none() {
-                        r.submit(Submission::new(Actor::Daemon, Op::Freeze { reason }), now).or_fail()?;
+                        r.submit(Submission::new(Actor::Daemon, Op::Freeze { reason }), now)
+                            .or_fail()?;
                     }
                 }
             }
@@ -770,6 +1011,23 @@ impl Service {
         let mut inner = self.lock();
         for r in inner.repos.values_mut().filter(|r| r.initialized()) {
             let _ = Self::reconcile(r, now);
+            // The auditor's only write: a flag file asking for a freeze.
+            let flag = self.home.freeze_flag(&r.name);
+            if let Ok(text) = std::fs::read_to_string(&flag) {
+                let reason: String = text.chars().filter(|c| !c.is_control()).take(200).collect();
+                let reason = if reason.is_empty() {
+                    "auditor finding".to_string()
+                } else {
+                    reason
+                };
+                if r.chain.state.frozen.is_none()
+                    && r.submit(Submission::new(Actor::Daemon, Op::Freeze { reason }), now)
+                        .is_err()
+                {
+                    continue;
+                }
+                let _ = std::fs::remove_file(&flag);
+            }
         }
     }
 
@@ -781,11 +1039,15 @@ impl Service {
     pub fn process_one(&self, repo: &str) -> Result<Option<SignedOp>> {
         let (store, change, commit, base, trunk, vcfg) = {
             let mut inner = self.lock();
-            let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else { return Ok(None) };
+            let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
+                return Ok(None);
+            };
             if r.chain.state.frozen.is_some() {
                 return Ok(None);
             }
-            let Some(change) = r.chain.state.queue.first().copied() else { return Ok(None) };
+            let Some(change) = r.chain.state.queue.first().copied() else {
+                return Ok(None);
+            };
             let rec = &r.chain.state.changes[&change];
             let (commit, base) = (rec.commit.clone(), rec.base.clone());
             let trunk = r.chain.state.trunk.clone().expect("initialized");
@@ -796,22 +1058,33 @@ impl Service {
         let mut evidence = Vec::new();
         if let Some(m) = &integ.merged {
             let tree = store.read_commit(m)?.tree;
-            evidence.push(self.verifier.syntax(&store, &integ.files, &integ.touched, &tree)?);
+            evidence.push(
+                self.verifier
+                    .syntax(&store, &integ.files, &integ.touched, &tree)?,
+            );
             evidence.extend(self.verifier.run(&store, &integ.files, &tree, &vcfg)?);
         }
         let mut inner = self.lock();
         let r = inner.repos.get_mut(repo).expect("exists");
-        if r.chain.state.queue.first() != Some(&change) || r.chain.state.trunk.as_ref() != Some(&trunk) {
+        if r.chain.state.queue.first() != Some(&change)
+            || r.chain.state.trunk.as_ref() != Some(&trunk)
+        {
             return Ok(None);
         }
-        let op = Op::ChangeIntegrate { change, trunk_before: trunk.clone(), merged: integ.merged.clone(), conflicts: integ.conflicts };
+        let op = Op::ChangeIntegrate {
+            change,
+            trunk_before: trunk.clone(),
+            merged: integ.merged.clone(),
+            conflicts: integ.conflicts,
+        };
         let mut sub = Submission::new(Actor::Daemon, op);
         sub.evidence = evidence;
         let signed = r.submit(sub, self.now())?;
         if signed.entry.decision.is_allow()
-            && let Some(m) = &integ.merged {
-                r.store.ref_cas(TRUNK_REF, m, Some(&trunk))?;
-            }
+            && let Some(m) = &integ.merged
+        {
+            r.store.ref_cas(TRUNK_REF, m, Some(&trunk))?;
+        }
         Ok(Some(signed))
     }
 
@@ -844,7 +1117,9 @@ impl Service {
                 let (m, c) = &svc.wake;
                 let guard = m.lock().unwrap_or_else(|e| e.into_inner());
                 if *guard == seen {
-                    let (g, _) = c.wait_timeout(guard, Duration::from_secs(2)).unwrap_or_else(|e| e.into_inner());
+                    let (g, _) = c
+                        .wait_timeout(guard, Duration::from_secs(2))
+                        .unwrap_or_else(|e| e.into_inner());
                     seen = *g;
                 } else {
                     seen = *guard;
@@ -860,8 +1135,15 @@ impl Service {
 fn validate_remote(r: &str) -> std::result::Result<(), (String, String)> {
     let ok_scheme = r.starts_with("https://") || r.starts_with("ssh://") || r.starts_with('/');
     let scp_like = !r.contains("://") && r.contains('@') && r.contains(':') && !r.starts_with('/');
-    if r.starts_with('-') || r.contains("::") || r.chars().any(char::is_control) || !(ok_scheme || scp_like) {
-        return fail("invalid", "remote must be an absolute path, https://, ssh:// or user@host:path");
+    if r.starts_with('-')
+        || r.contains("::")
+        || r.chars().any(char::is_control)
+        || !(ok_scheme || scp_like)
+    {
+        return fail(
+            "invalid",
+            "remote must be an absolute path, https://, ssh:// or user@host:path",
+        );
     }
     Ok(())
 }
@@ -870,11 +1152,20 @@ fn validate_branch(b: &str) -> std::result::Result<(), (String, String)> {
     let ok = !b.is_empty()
         && !b.starts_with('-')
         && !b.contains("..")
-        && b.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'));
-    if ok { Ok(()) } else { fail("invalid", "invalid branch name") }
+        && b.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'));
+    if ok {
+        Ok(())
+    } else {
+        fail("invalid", "invalid branch name")
+    }
 }
 
-fn git(bin: &str, git_dir: &std::path::Path, args: &[&str]) -> std::result::Result<String, (String, String)> {
+fn git(
+    bin: &str,
+    git_dir: &std::path::Path,
+    args: &[&str],
+) -> std::result::Result<String, (String, String)> {
     let out = Command::new(bin)
         .arg("--git-dir")
         .arg(git_dir)
@@ -884,7 +1175,10 @@ fn git(bin: &str, git_dir: &std::path::Path, args: &[&str]) -> std::result::Resu
         .output()
         .map_err(|e| ("internal".to_string(), format!("git: {e}")))?;
     if !out.status.success() {
-        return fail("git", String::from_utf8_lossy(&out.stderr).trim().to_string());
+        return fail(
+            "git",
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }

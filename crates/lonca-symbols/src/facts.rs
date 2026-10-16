@@ -43,7 +43,11 @@ fn count_lines(s: &str) -> u32 {
     s.lines().count() as u32
 }
 
-pub fn analyze(base: &FileMap, new: &FileMap, read: &dyn Fn(&GitId) -> Result<Vec<u8>>) -> Result<Analysis> {
+pub fn analyze(
+    base: &FileMap,
+    new: &FileMap,
+    read: &dyn Fn(&GitId) -> Result<Vec<u8>>,
+) -> Result<Analysis> {
     let mut f = Facts::default();
     let mut syntax_errors = Vec::new();
     let paths: BTreeSet<&String> = base.keys().chain(new.keys()).collect();
@@ -86,7 +90,9 @@ pub fn analyze(base: &FileMap, new: &FileMap, read: &dyn Fn(&GitId) -> Result<Ve
                     continue;
                 }
                 let (old, new_bytes) = (read(&b.blob)?, read(&n.blob)?);
-                let (Ok(old), Ok(newt)) = (std::str::from_utf8(&old), std::str::from_utf8(&new_bytes)) else {
+                let (Ok(old), Ok(newt)) =
+                    (std::str::from_utf8(&old), std::str::from_utf8(&new_bytes))
+                else {
                     f.edits.push(sym_id(path, FILE));
                     continue;
                 };
@@ -124,7 +130,10 @@ pub fn analyze(base: &FileMap, new: &FileMap, read: &dyn Fn(&GitId) -> Result<Ve
         v.dedup();
     }
     syntax_errors.sort();
-    Ok(Analysis { facts: f, syntax_errors })
+    Ok(Analysis {
+        facts: f,
+        syntax_errors,
+    })
 }
 
 fn compare_file(path: &str, pb: &Parsed, old: &str, pn: &Parsed, new: &str, f: &mut Facts) {
@@ -182,9 +191,10 @@ fn diff_level(path: &str, bs: &[Sym], old: &str, ns: &[Sym], new: &str, f: &mut 
                     f.edits.push(sym_id(path, &n.name));
                 }
                 if let (Some(bs), Some(ns)) = (&b.signature, &n.signature)
-                    && bs != ns {
-                        f.signature_changes.push(sym_id(path, &n.name));
-                    }
+                    && bs != ns
+                {
+                    f.signature_changes.push(sym_id(path, &n.name));
+                }
             }
         }
     }
@@ -214,7 +224,15 @@ mod tests {
     fn tree(mem: &mut Mem, files: &[(&str, &str)]) -> FileMap {
         files
             .iter()
-            .map(|(p, t)| (p.to_string(), FileEntry { mode: FileMode::Regular, blob: mem.put(t) }))
+            .map(|(p, t)| {
+                (
+                    p.to_string(),
+                    FileEntry {
+                        mode: FileMode::Regular,
+                        blob: mem.put(t),
+                    },
+                )
+            })
             .collect()
     }
 
@@ -241,7 +259,10 @@ mod tests {
     fn signature_add_delete_and_imports() {
         let new = BASE
             .replace("charge(&self, a: u64)", "charge(&self, a: u64, b: u64)")
-            .replace("    pub fn refund(&self) {}\n", "    pub fn void(&self) {}\n")
+            .replace(
+                "    pub fn refund(&self) {}\n",
+                "    pub fn void(&self) {}\n",
+            )
             .replace("use std::io;\n", "use std::io;\nuse std::fmt;\n");
         let a = run(&[("src/a.rs", BASE)], &[("src/a.rs", &new)]);
         assert_eq!(a.facts.edits, vec!["src/a.rs#Client.charge"]);
@@ -253,7 +274,10 @@ mod tests {
 
     #[test]
     fn module_level_and_import_removal() {
-        let new = BASE.replace("use std::io;\n", "").replace("pub struct Client;", "pub struct Client;\nstatic X: u8 = 1;");
+        let new = BASE.replace("use std::io;\n", "").replace(
+            "pub struct Client;",
+            "pub struct Client;\nstatic X: u8 = 1;",
+        );
         let a = run(&[("src/a.rs", BASE)], &[("src/a.rs", &new)]);
         assert!(a.facts.edits.contains(&"src/a.rs#<imports>".to_string()));
         assert!(a.facts.adds.contains(&"src/a.rs#X".to_string()));
@@ -286,6 +310,9 @@ mod tests {
     #[test]
     fn deterministic() {
         let new = BASE.replace("        a\n", "        a * 2\n");
-        assert_eq!(run(&[("src/a.rs", BASE)], &[("src/a.rs", &new)]), run(&[("src/a.rs", BASE)], &[("src/a.rs", &new)]));
+        assert_eq!(
+            run(&[("src/a.rs", BASE)], &[("src/a.rs", &new)]),
+            run(&[("src/a.rs", BASE)], &[("src/a.rs", &new)])
+        );
     }
 }

@@ -290,14 +290,27 @@ pub enum Phase {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ObsKind {
-    Read { path: String },
-    Write { path: String },
+    Read {
+        path: String,
+    },
+    Write {
+        path: String,
+    },
     /// The program name and a digest of the full command; the command text
     /// itself is not logged because it may contain secrets.
-    Shell { program: String, digest: String },
-    Fetch { host: String },
-    Mcp { tool: String },
-    Other { tool: String },
+    Shell {
+        program: String,
+        digest: String,
+    },
+    Fetch {
+        host: String,
+    },
+    Mcp {
+        tool: String,
+    },
+    Other {
+        tool: String,
+    },
     Heartbeat,
 }
 
@@ -313,14 +326,26 @@ pub struct Observation {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NegotiationMsg {
     /// "I need these symbols for this reason."
-    Claim { symbols: Vec<String>, reason: String },
+    Claim {
+        symbols: Vec<String>,
+        reason: String,
+    },
     /// Offer to split work: the sender keeps `mine`, the receiver gets `yours`.
-    ProposeSplit { mine: Vec<String>, yours: Vec<String> },
+    ProposeSplit {
+        mine: Vec<String>,
+        yours: Vec<String>,
+    },
     /// Give up the named lease set in favour of the receiver.
-    Yield { set: String },
-    Counter { note: String },
+    Yield {
+        set: String,
+    },
+    Counter {
+        note: String,
+    },
     Accept,
-    Decline { note: String },
+    Decline {
+        note: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -357,7 +382,11 @@ pub enum Op {
         expires_ms: i64,
     },
     #[serde(rename = "session.bind")]
-    SessionBind { session: String, checks: BindChecks, level: ObservationLevel },
+    SessionBind {
+        session: String,
+        checks: BindChecks,
+        level: ObservationLevel,
+    },
     #[serde(rename = "session.end")]
     SessionEnd { session: String, reason: String },
     #[serde(rename = "cap.attenuate")]
@@ -401,11 +430,18 @@ pub enum Op {
     #[serde(rename = "approve")]
     Approve { target_seq: u64, note: String },
     #[serde(rename = "observe")]
-    Observe { session: String, events: Vec<Observation> },
+    Observe {
+        session: String,
+        events: Vec<Observation>,
+    },
     #[serde(rename = "taint")]
     Taint { session: String, reason: String },
     #[serde(rename = "import.external")]
-    ImportExternal { remote: String, commit: GitId, trunk_before: GitId },
+    ImportExternal {
+        remote: String,
+        commit: GitId,
+        trunk_before: GitId,
+    },
     #[serde(rename = "import.unmediated")]
     ImportUnmediated {
         refname: String,
@@ -413,13 +449,21 @@ pub enum Op {
         expected: Option<GitId>,
     },
     #[serde(rename = "bridge.push")]
-    BridgePush { remote: String, oplog_seq: u64, oplog_hash: String },
+    BridgePush {
+        remote: String,
+        oplog_seq: u64,
+        oplog_hash: String,
+    },
     #[serde(rename = "freeze")]
     Freeze { reason: String },
     #[serde(rename = "unfreeze")]
     Unfreeze { reason: String },
     #[serde(rename = "negotiate")]
-    Negotiate { thread: String, to_session: String, message: NegotiationMsg },
+    Negotiate {
+        thread: String,
+        to_session: String,
+        message: NegotiationMsg,
+    },
     #[serde(rename = "redact")]
     Redact { blob: GitId, reason: String },
 }
@@ -472,15 +516,24 @@ pub struct Decision {
 
 impl Decision {
     pub fn allow() -> Self {
-        Self { outcome: Outcome::Allow, reasons: vec![] }
+        Self {
+            outcome: Outcome::Allow,
+            reasons: vec![],
+        }
     }
 
     pub fn deny(reason: impl Into<String>) -> Self {
-        Self { outcome: Outcome::Deny, reasons: vec![reason.into()] }
+        Self {
+            outcome: Outcome::Deny,
+            reasons: vec![reason.into()],
+        }
     }
 
     pub fn escalate(reason: impl Into<String>) -> Self {
-        Self { outcome: Outcome::Escalate, reasons: vec![reason.into()] }
+        Self {
+            outcome: Outcome::Escalate,
+            reasons: vec![reason.into()],
+        }
     }
 
     pub fn is_allow(&self) -> bool {
@@ -509,7 +562,13 @@ pub struct HumanIntent<'a> {
 
 impl<'a> HumanIntent<'a> {
     pub fn new(repo: &'a str, op: &'a Op, nonce: &'a str, issued_ms: i64) -> Self {
-        Self { purpose: "lonca-human-intent-v1", repo, op, nonce, issued_ms }
+        Self {
+            purpose: "lonca-human-intent-v1",
+            repo,
+            op,
+            nonce,
+            issued_ms,
+        }
     }
 }
 
@@ -525,14 +584,31 @@ mod tests {
 
     #[test]
     fn op_kind_names_match_serde() {
-        for k in [OpKind::RepoInit, OpKind::ChangePropose, OpKind::LeaseAcquire, OpKind::Redact, OpKind::SessionBind] {
-            assert_eq!(serde_json::to_string(&k).unwrap(), format!("\"{}\"", k.as_str()));
+        for k in [
+            OpKind::RepoInit,
+            OpKind::ChangePropose,
+            OpKind::LeaseAcquire,
+            OpKind::Redact,
+            OpKind::SessionBind,
+        ] {
+            assert_eq!(
+                serde_json::to_string(&k).unwrap(),
+                format!("\"{}\"", k.as_str())
+            );
         }
     }
 
     #[test]
     fn reserved_ops_are_not_grantable() {
-        for k in [OpKind::PolicyUpdate, OpKind::Approve, OpKind::CapRevoke, OpKind::Redact, OpKind::HumanEnroll, OpKind::Freeze, OpKind::ImportExternal] {
+        for k in [
+            OpKind::PolicyUpdate,
+            OpKind::Approve,
+            OpKind::CapRevoke,
+            OpKind::Redact,
+            OpKind::HumanEnroll,
+            OpKind::Freeze,
+            OpKind::ImportExternal,
+        ] {
             assert!(!k.agent_grantable(), "{k:?}");
         }
     }

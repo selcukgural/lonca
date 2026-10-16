@@ -1869,6 +1869,14 @@ dependencies = [
 [[package]]
 name = "lonca-audit"
 version = "0.1.0"
+dependencies = [
+ "lonca-core",
+ "lonca-policy",
+ "lonca-symbols",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "lonca-cli"
@@ -1897,6 +1905,7 @@ dependencies = [
  "base64",
  "hex",
  "libc",
+ "lonca-audit",
  "lonca-core",
  "lonca-policy",
  "lonca-symbols",

@@ -22,7 +22,13 @@ pub struct Submission {
 
 impl Submission {
     pub fn new(actor: Actor, op: Op) -> Self {
-        Self { actor, op, human: None, facts: None, evidence: vec![] }
+        Self {
+            actor,
+            op,
+            human: None,
+            facts: None,
+            evidence: vec![],
+        }
     }
 }
 
@@ -33,11 +39,17 @@ pub struct Chain {
 
 impl Chain {
     pub fn new(key: KeyPair) -> Self {
-        Self { state: State::new(), key }
+        Self {
+            state: State::new(),
+            key,
+        }
     }
 
     pub fn from_ops(key: KeyPair, ops: &[SignedOp]) -> Self {
-        Self { state: State::replay(ops), key }
+        Self {
+            state: State::replay(ops),
+            key,
+        }
     }
 
     pub fn public_key(&self) -> String {
@@ -55,7 +67,12 @@ impl Chain {
             &sub.actor,
             &sub.op,
             sub.human.as_ref(),
-            &Ctx { time_ms, policy, facts: sub.facts.as_ref(), evidence: &sub.evidence },
+            &Ctx {
+                time_ms,
+                policy,
+                facts: sub.facts.as_ref(),
+                evidence: &sub.evidence,
+            },
         );
         let entry = OpEntry {
             seq: self.state.next_seq,

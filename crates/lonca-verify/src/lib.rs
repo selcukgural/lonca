@@ -33,7 +33,10 @@ impl Sandbox {
         let exists = |p: &str| Path::new(p).exists();
         if cfg!(target_os = "macos") && exists("/usr/bin/sandbox-exec") {
             Sandbox::Seatbelt
-        } else if ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"].iter().any(|p| exists(p)) {
+        } else if ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
+            .iter()
+            .any(|p| exists(p))
+        {
             Sandbox::Bubblewrap
         } else {
             Sandbox::None
@@ -52,11 +55,28 @@ impl Sandbox {
 /// Seatbelt profile: no network, writes only inside the work directory and
 /// the system temp directories, no reads of common credential stores.
 pub fn seatbelt_profile(workdir: &Path, home: Option<&Path>) -> String {
-    let q = |p: &Path| p.display().to_string().replace('\\', "\\\\").replace('"', "\\\"");
+    let q = |p: &Path| {
+        p.display()
+            .to_string()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    };
     let mut secrets = String::new();
     if let Some(h) = home {
-        for d in [".ssh", ".aws", ".gnupg", ".config/gh", ".docker", ".kube", ".netrc", ".lonca"] {
-            secrets.push_str(&format!("(deny file-read* (subpath \"{}\"))\n", q(&h.join(d))));
+        for d in [
+            ".ssh",
+            ".aws",
+            ".gnupg",
+            ".config/gh",
+            ".docker",
+            ".kube",
+            ".netrc",
+            ".lonca",
+        ] {
+            secrets.push_str(&format!(
+                "(deny file-read* (subpath \"{}\"))\n",
+                q(&h.join(d))
+            ));
         }
     }
     format!(
@@ -73,16 +93,29 @@ pub struct Verifier {
 
 impl Verifier {
     pub fn new(scratch: PathBuf) -> Self {
-        Self { sandbox: Sandbox::detect(), scratch }
+        Self {
+            sandbox: Sandbox::detect(),
+            scratch,
+        }
     }
 
     /// Static syntax check of every supported file that the change touched.
-    pub fn syntax(&self, store: &Store, files: &FileMap, touched: &[String], subject: &GitId) -> Result<Attestation> {
+    pub fn syntax(
+        &self,
+        store: &Store,
+        files: &FileMap,
+        touched: &[String],
+        subject: &GitId,
+    ) -> Result<Attestation> {
         let mut bad = Vec::new();
         for p in touched {
-            let (Some(lang), Some(e)) = (Lang::detect(p), files.get(p)) else { continue };
+            let (Some(lang), Some(e)) = (Lang::detect(p), files.get(p)) else {
+                continue;
+            };
             let bytes = store.read_blob(&e.blob)?;
-            let ok = std::str::from_utf8(&bytes).map(|t| !parse(lang, t).has_error).unwrap_or(false);
+            let ok = std::str::from_utf8(&bytes)
+                .map(|t| !parse(lang, t).has_error)
+                .unwrap_or(false);
             if !ok {
                 bad.push(p.clone());
             }
@@ -94,7 +127,11 @@ impl Verifier {
         }
         Ok(Attestation {
             check: CheckKind::Syntax,
-            result: if bad.is_empty() { CheckResult::Pass } else { CheckResult::Fail },
+            result: if bad.is_empty() {
+                CheckResult::Pass
+            } else {
+                CheckResult::Fail
+            },
             subject_tree: subject.clone(),
             details,
             env: "tree-sitter".into(),
@@ -104,23 +141,41 @@ impl Verifier {
     }
 
     /// Runs the configured build and test commands on `files`.
-    pub fn run(&self, store: &Store, files: &FileMap, subject: &GitId, cfg: &Verification) -> Result<Vec<Attestation>> {
+    pub fn run(
+        &self,
+        store: &Store,
+        files: &FileMap,
+        subject: &GitId,
+        cfg: &Verification,
+    ) -> Result<Vec<Attestation>> {
         let mut out = Vec::new();
-        let steps: Vec<(CheckKind, &String)> = [(CheckKind::Build, &cfg.build), (CheckKind::Tests, &cfg.test)]
-            .into_iter()
-            .filter_map(|(k, c)| c.as_ref().map(|c| (k, c)))
-            .collect();
+        let steps: Vec<(CheckKind, &String)> = [
+            (CheckKind::Build, &cfg.build),
+            (CheckKind::Tests, &cfg.test),
+        ]
+        .into_iter()
+        .filter_map(|(k, c)| c.as_ref().map(|c| (k, c)))
+        .collect();
         if steps.is_empty() {
             return Ok(out);
         }
         fs::create_dir_all(&self.scratch)?;
-        let work = tempfile::Builder::new().prefix("verify-").tempdir_in(&self.scratch)?;
+        let work = tempfile::Builder::new()
+            .prefix("verify-")
+            .tempdir_in(&self.scratch)?;
         let root = work.path().canonicalize()?;
         materialize(store, files, &root.join("tree"))?;
         let mut failed = false;
         for (kind, cmd) in steps {
             if failed {
-                out.push(attestation(kind, CheckResult::Skipped, subject, BTreeMap::new(), self.env(cmd), None));
+                out.push(attestation(
+                    kind,
+                    CheckResult::Skipped,
+                    subject,
+                    BTreeMap::new(),
+                    self.env(cmd),
+                    None,
+                ));
                 continue;
             }
             let mut attempts = 0;
@@ -137,7 +192,14 @@ impl Verifier {
             details.insert("sandbox".into(), self.sandbox.name().into());
             let log_id = store.write_blob(log.as_bytes())?;
             failed = result != CheckResult::Pass;
-            out.push(attestation(kind, result, subject, details, self.env(cmd), Some(log_id)));
+            out.push(attestation(
+                kind,
+                result,
+                subject,
+                details,
+                self.env(cmd),
+                Some(log_id),
+            ));
         }
         Ok(out)
     }
@@ -146,7 +208,12 @@ impl Verifier {
         sha256_hex(format!("{}\0{cmd}", self.sandbox.name()).as_bytes())
     }
 
-    fn exec(&self, cmd: &str, root: &Path, timeout: Duration) -> (CheckResult, BTreeMap<String, String>, String) {
+    fn exec(
+        &self,
+        cmd: &str,
+        root: &Path,
+        timeout: Duration,
+    ) -> (CheckResult, BTreeMap<String, String>, String) {
         let tree = root.join("tree");
         let home = root.join("home");
         let _ = fs::create_dir_all(&home);
@@ -154,16 +221,37 @@ impl Verifier {
         let mut command = match self.sandbox {
             Sandbox::Seatbelt => {
                 let mut c = Command::new("/usr/bin/sandbox-exec");
-                c.arg("-p").arg(seatbelt_profile(root, real_home.as_deref())).arg("/bin/sh").arg("-c").arg(cmd);
+                c.arg("-p")
+                    .arg(seatbelt_profile(root, real_home.as_deref()))
+                    .arg("/bin/sh")
+                    .arg("-c")
+                    .arg(cmd);
                 c
             }
             Sandbox::Bubblewrap => {
                 let mut c = Command::new("bwrap");
-                c.args(["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"])
-                    .arg("--bind")
-                    .arg(root)
-                    .arg(root)
-                    .args(["--unshare-net", "--die-with-parent", "--new-session", "/bin/sh", "-c", cmd]);
+                c.args([
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--tmpfs",
+                    "/tmp",
+                ])
+                .arg("--bind")
+                .arg(root)
+                .arg(root)
+                .args([
+                    "--unshare-net",
+                    "--die-with-parent",
+                    "--new-session",
+                    "/bin/sh",
+                    "-c",
+                    cmd,
+                ]);
                 c
             }
             Sandbox::None => {
@@ -175,7 +263,10 @@ impl Verifier {
         command
             .current_dir(&tree)
             .env_clear()
-            .env("PATH", std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()))
+            .env(
+                "PATH",
+                std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
+            )
             .env("HOME", &home)
             .env("LANG", "C.UTF-8")
             .env("LONCA_VERIFY", "1")
@@ -219,15 +310,27 @@ impl Verifier {
         log.extend(t_err.join().unwrap_or_default());
         let start = log.len().saturating_sub(OUTPUT_TAIL);
         let log = String::from_utf8_lossy(&log[start..]).into_owned();
-        details.insert("duration_ms".into(), started.elapsed().as_millis().to_string());
+        details.insert(
+            "duration_ms".into(),
+            started.elapsed().as_millis().to_string(),
+        );
         let result = match status {
             None => {
                 details.insert("error".into(), "timeout".into());
                 CheckResult::Error
             }
             Some(s) => {
-                details.insert("exit".into(), s.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into()));
-                if s.success() { CheckResult::Pass } else { CheckResult::Fail }
+                details.insert(
+                    "exit".into(),
+                    s.code()
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "signal".into()),
+                );
+                if s.success() {
+                    CheckResult::Pass
+                } else {
+                    CheckResult::Fail
+                }
             }
         };
         (result, details, log)
@@ -242,7 +345,15 @@ fn attestation(
     env: String,
     log: Option<GitId>,
 ) -> Attestation {
-    Attestation { check, result, subject_tree: subject.clone(), details, env, log, producer: "lonca-verify".into() }
+    Attestation {
+        check,
+        result,
+        subject_tree: subject.clone(),
+        details,
+        env,
+        log,
+        producer: "lonca-verify".into(),
+    }
 }
 
 /// Writes `files` below `dir`. Symlinks are written as plain files holding
@@ -278,7 +389,13 @@ mod tests {
         let store = Store::init_bare(&dir.path().join("s.git")).unwrap();
         let mut map = FileMap::new();
         for (p, t) in files {
-            map.insert(p.to_string(), FileEntry { mode: FileMode::Regular, blob: store.write_blob(t.as_bytes()).unwrap() });
+            map.insert(
+                p.to_string(),
+                FileEntry {
+                    mode: FileMode::Regular,
+                    blob: store.write_blob(t.as_bytes()).unwrap(),
+                },
+            );
         }
         let tree = store.write_tree(&map).unwrap();
         (dir, store, map, tree)
@@ -297,12 +414,24 @@ mod tests {
     fn pass_fail_and_skip_after_failure() {
         let (dir, store, files, tree) = setup(&[("ok.txt", "yes\n")]);
         let v = Verifier::new(dir.path().join("scratch"));
-        let r = v.run(&store, &files, &tree, &cfg(Some("test -f ok.txt"), Some("exit 3"))).unwrap();
+        let r = v
+            .run(
+                &store,
+                &files,
+                &tree,
+                &cfg(Some("test -f ok.txt"), Some("exit 3")),
+            )
+            .unwrap();
         assert_eq!(r[0].result, CheckResult::Pass);
         assert_eq!(r[1].result, CheckResult::Fail);
         assert_eq!(r[1].details["exit"], "3");
-        let r = v.run(&store, &files, &tree, &cfg(Some("false"), Some("true"))).unwrap();
-        assert_eq!((r[0].result, r[1].result), (CheckResult::Fail, CheckResult::Skipped));
+        let r = v
+            .run(&store, &files, &tree, &cfg(Some("false"), Some("true")))
+            .unwrap();
+        assert_eq!(
+            (r[0].result, r[1].result),
+            (CheckResult::Fail, CheckResult::Skipped)
+        );
     }
 
     #[test]
@@ -326,10 +455,23 @@ mod tests {
         }
         let outside = dirs_home().join(format!("lonca-sandbox-probe-{}", std::process::id()));
         let cmd = format!("touch '{}'", outside.display());
-        let r = v.run(&store, &files, &tree, &cfg(None, Some(&cmd))).unwrap();
-        assert_eq!(r[0].result, CheckResult::Fail, "write outside the work dir must fail");
+        let r = v
+            .run(&store, &files, &tree, &cfg(None, Some(&cmd)))
+            .unwrap();
+        assert_eq!(
+            r[0].result,
+            CheckResult::Fail,
+            "write outside the work dir must fail"
+        );
         assert!(!outside.exists());
-        let r = v.run(&store, &files, &tree, &cfg(None, Some("touch inside.txt && test -f inside.txt"))).unwrap();
+        let r = v
+            .run(
+                &store,
+                &files,
+                &tree,
+                &cfg(None, Some("touch inside.txt && test -f inside.txt")),
+            )
+            .unwrap();
         assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
         let net = "/usr/bin/curl -sS -m 3 https://example.com >/dev/null";
         let r = v.run(&store, &files, &tree, &cfg(None, Some(net))).unwrap();
@@ -343,11 +485,19 @@ mod tests {
 
     #[test]
     fn syntax_check() {
-        let (dir, store, files, tree) = setup(&[("a.rs", "fn ok() {}\n"), ("b.rs", "fn bad( {\n"), ("c.md", "x")]);
+        let (dir, store, files, tree) = setup(&[
+            ("a.rs", "fn ok() {}\n"),
+            ("b.rs", "fn bad( {\n"),
+            ("c.md", "x"),
+        ]);
         let v = Verifier::new(dir.path().join("scratch"));
-        let a = v.syntax(&store, &files, &["a.rs".into(), "c.md".into()], &tree).unwrap();
+        let a = v
+            .syntax(&store, &files, &["a.rs".into(), "c.md".into()], &tree)
+            .unwrap();
         assert_eq!(a.result, CheckResult::Pass);
-        let a = v.syntax(&store, &files, &["a.rs".into(), "b.rs".into()], &tree).unwrap();
+        let a = v
+            .syntax(&store, &files, &["a.rs".into(), "b.rs".into()], &tree)
+            .unwrap();
         assert_eq!(a.result, CheckResult::Fail);
         assert_eq!(a.details["errors"], "b.rs");
     }

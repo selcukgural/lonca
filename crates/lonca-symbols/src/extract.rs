@@ -53,7 +53,10 @@ pub struct Parsed {
 
 impl Parsed {
     pub fn import_texts(&self, src: &str) -> Vec<String> {
-        self.imports.iter().map(|(s, e)| normalize(&src[*s..*e])).collect()
+        self.imports
+            .iter()
+            .map(|(s, e)| normalize(&src[*s..*e]))
+            .collect()
     }
 
     /// Every test symbol (any depth): qualified name -> (text, skipped).
@@ -81,18 +84,44 @@ pub fn normalize(s: &str) -> String {
 
 pub fn parse(lang: Lang, src: &str) -> Parsed {
     let Some(tree) = lang.parse(src) else {
-        return Parsed { syms: vec![], imports: vec![], has_error: true, residual: normalize(src), js_tests: vec![] };
+        return Parsed {
+            syms: vec![],
+            imports: vec![],
+            has_error: true,
+            residual: normalize(src),
+            js_tests: vec![],
+        };
     };
     let root = tree.root_node();
     let ex = Extractor { lang, src };
     let mut imports = Vec::new();
     let mut syms = Vec::new();
-    ex.level(root, "", &mut syms, Some(&mut imports), &mut BTreeMap::new());
-    let mut cut: Vec<(usize, usize)> = syms.iter().map(|s| (s.start, s.end)).chain(imports.iter().copied()).collect();
+    ex.level(
+        root,
+        "",
+        &mut syms,
+        Some(&mut imports),
+        &mut BTreeMap::new(),
+    );
+    let mut cut: Vec<(usize, usize)> = syms
+        .iter()
+        .map(|s| (s.start, s.end))
+        .chain(imports.iter().copied())
+        .collect();
     cut.sort();
     let residual = normalize(&remove_spans(src, 0, src.len(), &cut));
-    let js_tests = if lang.is_js_family() { ex.js_tests(root) } else { vec![] };
-    Parsed { syms, imports, has_error: root.has_error(), residual, js_tests }
+    let js_tests = if lang.is_js_family() {
+        ex.js_tests(root)
+    } else {
+        vec![]
+    };
+    Parsed {
+        syms,
+        imports,
+        has_error: root.has_error(),
+        residual,
+        js_tests,
+    }
 }
 
 fn remove_spans(src: &str, from: usize, to: usize, spans: &[(usize, usize)]) -> String {
@@ -135,22 +164,32 @@ impl<'s> Extractor<'s> {
     }
 
     fn field_text(&self, n: Node, field: &str) -> Option<String> {
-        n.child_by_field_name(field).map(|c| self.text(c).to_string())
+        n.child_by_field_name(field)
+            .map(|c| self.text(c).to_string())
     }
 
     fn is_attachable(&self, n: Node) -> bool {
         match self.lang {
-            Lang::Rust => matches!(n.kind(), "attribute_item" | "line_comment" | "block_comment"),
-            Lang::Python | Lang::Go | Lang::TypeScript | Lang::Tsx | Lang::JavaScript | Lang::CSharp => {
-                n.kind() == "comment"
-            }
+            Lang::Rust => matches!(
+                n.kind(),
+                "attribute_item" | "line_comment" | "block_comment"
+            ),
+            Lang::Python
+            | Lang::Go
+            | Lang::TypeScript
+            | Lang::Tsx
+            | Lang::JavaScript
+            | Lang::CSharp => n.kind() == "comment",
         }
     }
 
     fn is_import(&self, n: Node) -> bool {
         match self.lang {
             Lang::Rust => matches!(n.kind(), "use_declaration" | "extern_crate_declaration"),
-            Lang::Python => matches!(n.kind(), "import_statement" | "import_from_statement" | "future_import_statement"),
+            Lang::Python => matches!(
+                n.kind(),
+                "import_statement" | "import_from_statement" | "future_import_statement"
+            ),
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => n.kind() == "import_statement",
             Lang::CSharp => n.kind() == "using_directive",
             Lang::Go => n.kind() == "import_declaration",
@@ -170,7 +209,9 @@ impl<'s> Extractor<'s> {
     /// Unwraps `export ...` and `@decorator def ...` to the definition.
     fn unwrap_def<'t>(&self, n: Node<'t>) -> Node<'t> {
         match (self.lang, n.kind()) {
-            (Lang::Python, "decorated_definition") => n.child_by_field_name("definition").unwrap_or(n),
+            (Lang::Python, "decorated_definition") => {
+                n.child_by_field_name("definition").unwrap_or(n)
+            }
             (Lang::TypeScript | Lang::Tsx | Lang::JavaScript, "export_statement") => {
                 n.child_by_field_name("declaration").unwrap_or(n)
             }
@@ -208,8 +249,15 @@ impl<'s> Extractor<'s> {
         };
         match self.lang {
             Lang::Rust => match kind {
-                "function_item" | "function_signature_item" | "struct_item" | "enum_item" | "union_item"
-                | "type_item" | "const_item" | "static_item" | "macro_definition" => leaf(name("name")),
+                "function_item"
+                | "function_signature_item"
+                | "struct_item"
+                | "enum_item"
+                | "union_item"
+                | "type_item"
+                | "const_item"
+                | "static_item"
+                | "macro_definition" => leaf(name("name")),
                 "trait_item" => container(name("name"), "body"),
                 "mod_item" => {
                     if n.child_by_field_name("body").is_some() {
@@ -236,15 +284,25 @@ impl<'s> Extractor<'s> {
                 _ => None,
             },
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => match kind {
-                "function_declaration" | "generator_function_declaration" | "function_signature"
-                | "method_definition" | "method_signature" | "abstract_method_signature" => leaf(name("name")),
-                "class_declaration" | "abstract_class_declaration" => container(name("name"), "body"),
-                "interface_declaration" | "type_alias_declaration" | "enum_declaration" => leaf(name("name")),
+                "function_declaration"
+                | "generator_function_declaration"
+                | "function_signature"
+                | "method_definition"
+                | "method_signature"
+                | "abstract_method_signature" => leaf(name("name")),
+                "class_declaration" | "abstract_class_declaration" => {
+                    container(name("name"), "body")
+                }
+                "interface_declaration" | "type_alias_declaration" | "enum_declaration" => {
+                    leaf(name("name"))
+                }
                 "internal_module" | "module" => container(name("name"), "body"),
                 "public_field_definition" => leaf(name("name")),
                 "field_definition" => leaf(name("property")),
                 "lexical_declaration" | "variable_declaration" => {
-                    let decl = n.named_children(&mut n.walk()).find(|c| c.kind() == "variable_declarator")?;
+                    let decl = n
+                        .named_children(&mut n.walk())
+                        .find(|c| c.kind() == "variable_declarator")?;
                     let id = decl.child_by_field_name("name")?;
                     if id.kind() != "identifier" {
                         return None;
@@ -260,22 +318,30 @@ impl<'s> Extractor<'s> {
                     .map(|c| c.start_byte())
                     .unwrap_or(n.start_byte());
                 let mut d = match kind {
-                    "class_declaration" | "struct_declaration" | "interface_declaration" | "record_declaration" => {
-                        container(name("name"), "body")
-                    }
-                    "enum_declaration" | "delegate_declaration" | "property_declaration" | "event_declaration" => {
-                        leaf(name("name"))
-                    }
-                    "method_declaration" | "constructor_declaration" | "destructor_declaration"
+                    "class_declaration"
+                    | "struct_declaration"
+                    | "interface_declaration"
+                    | "record_declaration" => container(name("name"), "body"),
+                    "enum_declaration"
+                    | "delegate_declaration"
+                    | "property_declaration"
+                    | "event_declaration" => leaf(name("name")),
+                    "method_declaration"
+                    | "constructor_declaration"
+                    | "destructor_declaration"
                     | "local_function_statement" => leaf(name("name")),
-                    "operator_declaration" => leaf(Some(format!("operator{}", name("operator").unwrap_or_default()))),
+                    "operator_declaration" => leaf(Some(format!(
+                        "operator{}",
+                        name("operator").unwrap_or_default()
+                    ))),
                     "conversion_operator_declaration" => leaf(Some("operator_conversion".into())),
                     "indexer_declaration" => leaf(Some("this".into())),
                     "field_declaration" | "event_field_declaration" => {
                         let decl = find_descendant(n, "variable_declarator")?;
-                        let id = decl
-                            .child_by_field_name("name")
-                            .or_else(|| decl.named_children(&mut decl.walk()).find(|c| c.kind() == "identifier"))?;
+                        let id = decl.child_by_field_name("name").or_else(|| {
+                            decl.named_children(&mut decl.walk())
+                                .find(|c| c.kind() == "identifier")
+                        })?;
                         leaf(Some(self.text(id).to_string()))
                     }
                     _ => None,
@@ -295,10 +361,20 @@ impl<'s> Extractor<'s> {
                     let spec = n
                         .named_children(&mut n.walk())
                         .find(|c| matches!(c.kind(), "type_spec" | "type_alias"))?;
-                    leaf(spec.child_by_field_name("name").map(|c| self.text(c).to_string()))
+                    leaf(
+                        spec.child_by_field_name("name")
+                            .map(|c| self.text(c).to_string()),
+                    )
                 }
                 "const_declaration" | "var_declaration" => {
-                    let spec = find_descendant(n, if kind == "const_declaration" { "const_spec" } else { "var_spec" })?;
+                    let spec = find_descendant(
+                        n,
+                        if kind == "const_declaration" {
+                            "const_spec"
+                        } else {
+                            "var_spec"
+                        },
+                    )?;
                     let id = spec.child_by_field_name("name")?;
                     leaf(Some(self.text(id).to_string()))
                 }
@@ -324,10 +400,14 @@ impl<'s> Extractor<'s> {
                 continue;
             }
             if let Some(imports) = imports.as_deref_mut()
-                && self.is_import(child) {
-                    imports.push((pending.take().unwrap_or(child.start_byte()), child.end_byte()));
-                    continue;
-                }
+                && self.is_import(child)
+            {
+                imports.push((
+                    pending.take().unwrap_or(child.start_byte()),
+                    child.end_byte(),
+                ));
+                continue;
+            }
             if let Some(members) = self.transparent_members(child) {
                 pending = None;
                 self.level(members, prefix, out, imports.as_deref_mut(), seen);
@@ -339,10 +419,18 @@ impl<'s> Extractor<'s> {
                 continue;
             };
             let start = pending.take().unwrap_or(child.start_byte());
-            let base = if prefix.is_empty() { def.name.clone() } else { format!("{prefix}.{}", def.name) };
+            let base = if prefix.is_empty() {
+                def.name.clone()
+            } else {
+                format!("{prefix}.{}", def.name)
+            };
             let count = seen.entry(base.clone()).or_insert(0);
             *count += 1;
-            let qualified = if *count == 1 { base } else { format!("{base}~{count}") };
+            let qualified = if *count == 1 {
+                base
+            } else {
+                format!("{base}~{count}")
+            };
             let mut children_syms = Vec::new();
             if let Some(m) = def.members {
                 let member_prefix = match &def.member_prefix {
@@ -354,12 +442,15 @@ impl<'s> Extractor<'s> {
             }
             let end = child.end_byte();
             let own = if def.members.is_some() {
-                let cut: Vec<(usize, usize)> = children_syms.iter().map(|s| (s.start, s.end)).collect();
+                let cut: Vec<(usize, usize)> =
+                    children_syms.iter().map(|s| (s.start, s.end)).collect();
                 normalize(&remove_spans(self.src, start, end, &cut))
             } else {
                 normalize(&self.src[start..end])
             };
-            let signature = def.body.map(|b| normalize(&self.src[def.header_start..b.start_byte()]));
+            let signature = def
+                .body
+                .map(|b| normalize(&self.src[def.header_start..b.start_byte()]));
             let attached = &self.src[start..def.header_start.max(start)];
             let (is_test, skipped) = self.test_markers(&def, def_node, &qualified, attached);
             out.push(Sym {
@@ -385,7 +476,10 @@ impl<'s> Extractor<'s> {
         match self.lang {
             Lang::Rust => {
                 let is_fn = n.kind() == "function_item";
-                let t = is_fn && (attached.contains("#[test") || attached.contains("::test") || attached.contains("#[rstest"));
+                let t = is_fn
+                    && (attached.contains("#[test")
+                        || attached.contains("::test")
+                        || attached.contains("#[rstest"));
                 (t, t && attached.contains("#[ignore"))
             }
             Lang::Python => {
@@ -393,15 +487,26 @@ impl<'s> Extractor<'s> {
                     Some((cls, _)) => cls.rsplit('.').next().unwrap_or(cls).starts_with("Test"),
                     None => true,
                 };
-                let t = n.kind() == "function_definition" && leaf_name.starts_with("test") && in_test_class;
+                let t = n.kind() == "function_definition"
+                    && leaf_name.starts_with("test")
+                    && in_test_class;
                 // Decorators live between the span start and the `def`.
                 (t, t && attached.contains("skip"))
             }
             Lang::CSharp => {
                 let attrs = &self.src[n.start_byte()..def.header_start];
-                let t = ["[Fact", "[Theory", "[Test", "[TestMethod", "[TestCase", "[DataTestMethod", ", Fact", ", Test"]
-                    .iter()
-                    .any(|m| attrs.contains(m));
+                let t = [
+                    "[Fact",
+                    "[Theory",
+                    "[Test",
+                    "[TestMethod",
+                    "[TestCase",
+                    "[DataTestMethod",
+                    ", Fact",
+                    ", Test",
+                ]
+                .iter()
+                .any(|m| attrs.contains(m));
                 (t, t && (attrs.contains("Skip") || attrs.contains("Ignore")))
             }
             Lang::Go => {
@@ -421,37 +526,43 @@ impl<'s> Extractor<'s> {
 
     fn walk_calls(&self, n: Node, path: &mut Vec<String>, skipped: bool, out: &mut Vec<JsTest>) {
         if n.kind() == "call_expression"
-            && let Some((callee, modifier)) = self.callee(n) {
-                let title = n
-                    .child_by_field_name("arguments")
-                    .and_then(|a| a.named_children(&mut a.walk()).next())
-                    .filter(|a| matches!(a.kind(), "string" | "template_string"))
-                    .map(|a| self.text(a).trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string());
-                let skip_here = callee.starts_with('x') || matches!(modifier.as_deref(), Some("skip") | Some("todo"));
-                if let Some(title) = title {
-                    match callee.trim_start_matches('x') {
-                        "describe" | "context" => {
-                            path.push(title);
-                            for c in n.named_children(&mut n.walk()) {
-                                self.walk_calls(c, path, skipped || skip_here, out);
-                            }
-                            path.pop();
-                            return;
+            && let Some((callee, modifier)) = self.callee(n)
+        {
+            let title = n
+                .child_by_field_name("arguments")
+                .and_then(|a| a.named_children(&mut a.walk()).next())
+                .filter(|a| matches!(a.kind(), "string" | "template_string"))
+                .map(|a| {
+                    self.text(a)
+                        .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+                        .to_string()
+                });
+            let skip_here = callee.starts_with('x')
+                || matches!(modifier.as_deref(), Some("skip") | Some("todo"));
+            if let Some(title) = title {
+                match callee.trim_start_matches('x') {
+                    "describe" | "context" => {
+                        path.push(title);
+                        for c in n.named_children(&mut n.walk()) {
+                            self.walk_calls(c, path, skipped || skip_here, out);
                         }
-                        "it" | "test" => {
-                            let mut name = path.clone();
-                            name.push(title);
-                            out.push(JsTest {
-                                name: name.join(" > "),
-                                text: normalize(self.text(n)),
-                                skipped: skipped || skip_here,
-                            });
-                            return;
-                        }
-                        _ => {}
+                        path.pop();
+                        return;
                     }
+                    "it" | "test" => {
+                        let mut name = path.clone();
+                        name.push(title);
+                        out.push(JsTest {
+                            name: name.join(" > "),
+                            text: normalize(self.text(n)),
+                            skipped: skipped || skip_here,
+                        });
+                        return;
+                    }
+                    _ => {}
                 }
             }
+        }
         for c in n.named_children(&mut n.walk()) {
             self.walk_calls(c, path, skipped, out);
         }
@@ -464,7 +575,12 @@ impl<'s> Extractor<'s> {
             "member_expression" => {
                 let obj = f.child_by_field_name("object")?;
                 let prop = f.child_by_field_name("property")?;
-                (obj.kind() == "identifier").then(|| (self.text(obj).to_string(), Some(self.text(prop).to_string())))
+                (obj.kind() == "identifier").then(|| {
+                    (
+                        self.text(obj).to_string(),
+                        Some(self.text(prop).to_string()),
+                    )
+                })
             }
             _ => None,
         }
@@ -530,13 +646,28 @@ mod tests {
         assert_eq!(
             names(&p),
             vec![
-                "charge", "Client", "impl:Client", "Client.refund", "Client.helper", "impl:Client.Display",
-                "Client.Display.fmt", "LIMIT", "tests", "tests.works", "tests.slow"
+                "charge",
+                "Client",
+                "impl:Client",
+                "Client.refund",
+                "Client.helper",
+                "impl:Client.Display",
+                "Client.Display.fmt",
+                "LIMIT",
+                "tests",
+                "tests.works",
+                "tests.slow"
             ]
         );
         let charge = &p.syms[0];
-        assert!(charge.text(src).starts_with("/// Charges money."), "doc comment and attribute attach");
-        assert_eq!(charge.signature.as_deref(), Some("pub fn charge(amount: u64) -> u64"));
+        assert!(
+            charge.text(src).starts_with("/// Charges money."),
+            "doc comment and attribute attach"
+        );
+        assert_eq!(
+            charge.signature.as_deref(),
+            Some("pub fn charge(amount: u64) -> u64")
+        );
         let tests = p.tests(src);
         assert_eq!(tests.len(), 2);
         assert!(!tests["tests.works"].1);
@@ -549,7 +680,16 @@ mod tests {
         let src = "import os\nfrom x import y\n\nCONST = 1\n\n@decorator\ndef top(a):\n    return a\n\nclass TestThing:\n    def test_one(self):\n        pass\n\n    @pytest.mark.skip\n    def test_two(self):\n        pass\n\n    def helper(self):\n        pass\n";
         let p = parse(Lang::Python, src);
         assert!(!p.has_error);
-        assert_eq!(names(&p), vec!["top", "TestThing", "TestThing.test_one", "TestThing.test_two", "TestThing.helper"]);
+        assert_eq!(
+            names(&p),
+            vec![
+                "top",
+                "TestThing",
+                "TestThing.test_one",
+                "TestThing.test_two",
+                "TestThing.helper"
+            ]
+        );
         assert!(p.syms[0].text(src).starts_with("@decorator"));
         let t = p.tests(src);
         assert_eq!(t.len(), 2);
@@ -565,7 +705,16 @@ mod tests {
         assert!(!p.has_error);
         assert_eq!(
             names(&p),
-            vec!["charge", "Client", "Client.id", "Client.refund", "Client.make", "helper", "Shape", "Id"]
+            vec![
+                "charge",
+                "Client",
+                "Client.id",
+                "Client.refund",
+                "Client.make",
+                "helper",
+                "Shape",
+                "Id"
+            ]
         );
         let t = p.tests(src);
         assert_eq!(t.len(), 2);
@@ -581,8 +730,15 @@ mod tests {
         assert_eq!(
             names(&p),
             vec![
-                "Client", "Client._id", "Client.Client", "Client.Charge", "Client.Charge~2", "Client.Name",
-                "ClientTests", "ClientTests.Works", "ClientTests.Slow"
+                "Client",
+                "Client._id",
+                "Client.Client",
+                "Client.Charge",
+                "Client.Charge~2",
+                "Client.Name",
+                "ClientTests",
+                "ClientTests.Works",
+                "ClientTests.Slow"
             ]
         );
         let t = p.tests(src);
@@ -590,7 +746,11 @@ mod tests {
         assert!(t["ClientTests.Slow"].1);
         assert_eq!(p.imports.len(), 2);
         let charge = &p.syms[0].children[2];
-        assert_eq!(charge.signature.as_deref(), Some("public int Charge(int a)"), "arrow bodies are cut too");
+        assert_eq!(
+            charge.signature.as_deref(),
+            Some("public int Charge(int a)"),
+            "arrow bodies are cut too"
+        );
     }
 
     #[test]
@@ -598,7 +758,10 @@ mod tests {
         let src = "package billing\n\nimport \"fmt\"\n\ntype Client struct{ id int }\n\nfunc (c *Client) Charge(a int) int { return a }\n\nfunc New() *Client { return &Client{} }\n\nfunc TestNew(t *testing.T) { t.Skip(\"x\") }\n\nconst Limit = 3\n";
         let p = parse(Lang::Go, src);
         assert!(!p.has_error);
-        assert_eq!(names(&p), vec!["Client", "Client.Charge", "New", "TestNew", "Limit"]);
+        assert_eq!(
+            names(&p),
+            vec!["Client", "Client.Charge", "New", "TestNew", "Limit"]
+        );
         let t = p.tests(src);
         assert!(t["TestNew"].1);
         assert_eq!(p.imports.len(), 1);

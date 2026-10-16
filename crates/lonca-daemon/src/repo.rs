@@ -11,7 +11,9 @@ use lonca_core::ops::Op;
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileEntry, FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::chain::{Chain, Submission};
-use lonca_policy::config::{CONFIG_FILE, DEFAULT_CONFIG, DEFAULT_POLICY, POLICY_FILE, PolicyBundle};
+use lonca_policy::config::{
+    CONFIG_FILE, DEFAULT_CONFIG, DEFAULT_POLICY, POLICY_FILE, PolicyBundle,
+};
 
 use crate::protocol::FileChange;
 
@@ -34,7 +36,13 @@ pub struct RepoHandle {
 impl RepoHandle {
     pub fn create(name: &str, path: &Path, key: KeyPair) -> Result<Self> {
         let store = Store::init_bare(path)?;
-        Ok(Self { name: name.into(), store: Arc::new(store), chain: Chain::new(key), head: None, policy: None })
+        Ok(Self {
+            name: name.into(),
+            store: Arc::new(store),
+            chain: Chain::new(key),
+            head: None,
+            policy: None,
+        })
     }
 
     /// Opens a store and replays its log. Refuses a log that does not
@@ -46,12 +54,21 @@ impl RepoHandle {
         if !ops.is_empty() {
             verify_chain(&ops)?;
             if let Op::RepoInit { daemon_key, .. } = &ops[0].entry.op
-                && *daemon_key != key.public_hex() {
-                    return Err(Error::Integrity(format!("repo {name} was created by another daemon key")));
-                }
+                && *daemon_key != key.public_hex()
+            {
+                return Err(Error::Integrity(format!(
+                    "repo {name} was created by another daemon key"
+                )));
+            }
         }
         let head = log.head()?;
-        Ok(Self { name: name.into(), store: Arc::new(store), chain: Chain::from_ops(key, &ops), head, policy: None })
+        Ok(Self {
+            name: name.into(),
+            store: Arc::new(store),
+            chain: Chain::from_ops(key, &ops),
+            head,
+            policy: None,
+        })
     }
 
     pub fn initialized(&self) -> bool {
@@ -60,9 +77,9 @@ impl RepoHandle {
 
     pub fn load_policy(store: &Store, commit: &GitId) -> Result<PolicyBundle> {
         let read = |f: &str| -> Result<String> {
-            let bytes = store
-                .read_file(commit, f)?
-                .ok_or_else(|| Error::Invalid(format!("policy commit {} has no {f}", commit.short())))?;
+            let bytes = store.read_file(commit, f)?.ok_or_else(|| {
+                Error::Invalid(format!("policy commit {} has no {f}", commit.short()))
+            })?;
             String::from_utf8(bytes).map_err(|_| Error::Invalid(format!("{f} is not UTF-8")))
         };
         PolicyBundle::parse(&read(CONFIG_FILE)?, &read(POLICY_FILE)?).map_err(Error::Invalid)
@@ -74,9 +91,10 @@ impl RepoHandle {
             return Ok(Arc::new(PolicyBundle::default_bundle()));
         };
         if let Some((cached, b)) = &self.policy
-            && *cached == id {
-                return Ok(b.clone());
-            }
+            && *cached == id
+        {
+            return Ok(b.clone());
+        }
         let b = Arc::new(Self::load_policy(&self.store, &id)?);
         self.policy = Some((id, b.clone()));
         Ok(b)
@@ -105,11 +123,23 @@ impl RepoHandle {
         self.write_policy(DEFAULT_CONFIG, DEFAULT_POLICY, None, time_ms)
     }
 
-    pub fn write_policy(&self, config: &str, policy: &str, parent: Option<&GitId>, time_ms: i64) -> Result<GitId> {
+    pub fn write_policy(
+        &self,
+        config: &str,
+        policy: &str,
+        parent: Option<&GitId>,
+        time_ms: i64,
+    ) -> Result<GitId> {
         PolicyBundle::parse(config, policy).map_err(Error::Invalid)?;
         let mut files = FileMap::new();
         for (name, text) in [(CONFIG_FILE, config), (POLICY_FILE, policy)] {
-            files.insert(name.into(), FileEntry { mode: FileMode::Regular, blob: self.store.write_blob(text.as_bytes())? });
+            files.insert(
+                name.into(),
+                FileEntry {
+                    mode: FileMode::Regular,
+                    blob: self.store.write_blob(text.as_bytes())?,
+                },
+            );
         }
         let tree = self.store.write_tree(&files)?;
         self.store.write_commit(&CommitSpec {
@@ -144,7 +174,9 @@ impl RepoHandle {
         for c in changes {
             lonca_core::paths::validate_repo_path(&c.path)?;
             if c.path == ".lonca" || c.path.starts_with(".lonca/") {
-                return Err(Error::Invalid(".lonca/ is workspace metadata, not repository content".into()));
+                return Err(Error::Invalid(
+                    ".lonca/ is workspace metadata, not repository content".into(),
+                ));
             }
             if !seen.insert(c.path.clone()) {
                 return Err(Error::Invalid(format!("{} listed twice", c.path)));
@@ -152,7 +184,10 @@ impl RepoHandle {
             match &c.content_b64 {
                 None => {
                     if files.remove(&c.path).is_none() {
-                        return Err(Error::Invalid(format!("cannot delete missing file {}", c.path)));
+                        return Err(Error::Invalid(format!(
+                            "cannot delete missing file {}",
+                            c.path
+                        )));
                     }
                 }
                 Some(b64) => {
@@ -160,17 +195,29 @@ impl RepoHandle {
                         .decode(b64)
                         .map_err(|e| Error::Invalid(format!("{}: {e}", c.path)))?;
                     if bytes.len() as u64 > max_file_bytes {
-                        return Err(Error::Invalid(format!("{} exceeds {max_file_bytes} bytes", c.path)));
+                        return Err(Error::Invalid(format!(
+                            "{} exceeds {max_file_bytes} bytes",
+                            c.path
+                        )));
                     }
                     total += bytes.len();
                     if total > MAX_PROPOSAL_BYTES {
                         return Err(Error::Invalid("proposal too large".into()));
                     }
-                    let mode = c.mode.or_else(|| files.get(&c.path).map(|e| e.mode)).unwrap_or(FileMode::Regular);
+                    let mode = c
+                        .mode
+                        .or_else(|| files.get(&c.path).map(|e| e.mode))
+                        .unwrap_or(FileMode::Regular);
                     if mode == FileMode::Submodule {
                         return Err(Error::Invalid("submodules can not be written".into()));
                     }
-                    files.insert(c.path.clone(), FileEntry { mode, blob: self.store.write_blob(&bytes)? });
+                    files.insert(
+                        c.path.clone(),
+                        FileEntry {
+                            mode,
+                            blob: self.store.write_blob(&bytes)?,
+                        },
+                    );
                 }
             }
         }
@@ -197,10 +244,14 @@ impl RepoHandle {
     pub fn check_proposal(&self, commit: &GitId, base: &GitId, change: ChangeId) -> Result<()> {
         let info = self.store.read_commit(commit)?;
         if info.parents != vec![base.clone()] {
-            return Err(Error::Invalid("proposal commit must have the base as its only parent".into()));
+            return Err(Error::Invalid(
+                "proposal commit must have the base as its only parent".into(),
+            ));
         }
         if info.header(CHANGE_ID_HEADER) != Some(change.to_reverse_hex().as_str()) {
-            return Err(Error::Invalid("proposal commit carries another change id".into()));
+            return Err(Error::Invalid(
+                "proposal commit carries another change id".into(),
+            ));
         }
         Ok(())
     }
@@ -217,6 +268,10 @@ pub fn commit_message(intent: &str, change: ChangeId) -> String {
         .take(200)
         .collect();
     let line = line.trim();
-    let title = if line.is_empty() { format!("lonca change {}", change.short()) } else { line.to_string() };
+    let title = if line.is_empty() {
+        format!("lonca change {}", change.short())
+    } else {
+        line.to_string()
+    };
     format!("{title}\n")
 }

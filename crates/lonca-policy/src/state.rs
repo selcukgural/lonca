@@ -10,7 +10,8 @@ use lonca_core::ChangeId;
 use lonca_core::GitId;
 use lonca_core::oplog::{GENESIS_PREV, SignedOp};
 use lonca_core::ops::{
-    Actor, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind, ObservationLevel, Op, Outcome, Scope,
+    Actor, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind, ObservationLevel, Op,
+    Outcome, Scope,
 };
 use serde::Serialize;
 
@@ -45,11 +46,19 @@ pub struct LeaseSet {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ChangeStatus {
     /// Waiting for human approval (escalated at `seq`).
-    Pending { seq: u64 },
+    Pending {
+        seq: u64,
+    },
     Queued,
-    Integrated { commit: GitId },
-    Conflicted { symbols: Vec<String> },
-    Rejected { reasons: Vec<String> },
+    Integrated {
+        commit: GitId,
+    },
+    Conflicted {
+        symbols: Vec<String>,
+    },
+    Rejected {
+        reasons: Vec<String>,
+    },
     Withdrawn,
 }
 
@@ -138,7 +147,11 @@ pub const RELEASED: &str = "released";
 
 impl State {
     pub fn new() -> Self {
-        Self { head_hash: GENESIS_PREV.into(), last_time_ms: i64::MIN, ..Default::default() }
+        Self {
+            head_hash: GENESIS_PREV.into(),
+            last_time_ms: i64::MIN,
+            ..Default::default()
+        }
     }
 
     pub fn replay(ops: &[SignedOp]) -> Self {
@@ -152,7 +165,9 @@ impl State {
     pub fn session_active(&self, id: &str, now_ms: i64) -> bool {
         let mut cur = Some(id);
         while let Some(sid) = cur {
-            let Some(s) = self.sessions.get(sid) else { return false };
+            let Some(s) = self.sessions.get(sid) else {
+                return false;
+            };
             if s.ended.is_some() || now_ms >= s.expires_ms {
                 return false;
             }
@@ -196,10 +211,34 @@ impl State {
             self.nonces.insert(h.nonce.clone());
         }
         match e.decision.outcome {
-            Outcome::Allow => self.effects(&e.actor, &e.op, e.facts.as_ref(), e.seq, e.time_ms, &e.decision.reasons, false),
+            Outcome::Allow => self.effects(
+                &e.actor,
+                &e.op,
+                e.facts.as_ref(),
+                e.seq,
+                e.time_ms,
+                &e.decision.reasons,
+                false,
+            ),
             Outcome::Escalate => {
-                if let Op::ChangePropose { change, commit, base, claim } = &e.op {
-                    self.record_change(&e.actor, *change, commit, base, claim, e.facts.clone().unwrap_or_default(), e.seq, ChangeStatus::Pending { seq: e.seq }, false);
+                if let Op::ChangePropose {
+                    change,
+                    commit,
+                    base,
+                    claim,
+                } = &e.op
+                {
+                    self.record_change(
+                        &e.actor,
+                        *change,
+                        commit,
+                        base,
+                        claim,
+                        e.facts.clone().unwrap_or_default(),
+                        e.seq,
+                        ChangeStatus::Pending { seq: e.seq },
+                        false,
+                    );
                 }
                 self.pending.insert(
                     e.seq,
@@ -216,12 +255,22 @@ impl State {
             }
             Outcome::Deny => {
                 // A failed integration still moves the change out of the queue.
-                if let Op::ChangeIntegrate { change, merged, conflicts, .. } = &e.op {
+                if let Op::ChangeIntegrate {
+                    change,
+                    merged,
+                    conflicts,
+                    ..
+                } = &e.op
+                {
                     if let Some(c) = self.changes.get_mut(change) {
                         c.status = if merged.is_none() {
-                            ChangeStatus::Conflicted { symbols: conflicts.clone() }
+                            ChangeStatus::Conflicted {
+                                symbols: conflicts.clone(),
+                            }
                         } else {
-                            ChangeStatus::Rejected { reasons: e.decision.reasons.clone() }
+                            ChangeStatus::Rejected {
+                                reasons: e.decision.reasons.clone(),
+                            }
                         };
                     }
                     self.queue.retain(|q| q != change);
@@ -253,7 +302,11 @@ impl State {
             },
             Actor::Daemon => Provenance::Clean,
         };
-        let version = self.changes.get(&change).map(|c| c.version + 1).unwrap_or(1);
+        let version = self
+            .changes
+            .get(&change)
+            .map(|c| c.version + 1)
+            .unwrap_or(1);
         self.changes.insert(
             change,
             ChangeRecord {
@@ -274,16 +327,22 @@ impl State {
     fn end_sessions(&mut self, root: &str, reason: &str, withdraw: bool) {
         for id in self.descendants(root) {
             if let Some(s) = self.sessions.get_mut(&id)
-                && s.ended.is_none() {
-                    s.ended = Some(reason.to_string());
-                }
+                && s.ended.is_none()
+            {
+                s.ended = Some(reason.to_string());
+            }
             self.leases.retain(|_, l| l.session != id);
             if withdraw {
                 let owned: Vec<ChangeId> = self
                     .changes
                     .values()
                     .filter(|c| c.actor.session() == Some(id.as_str()))
-                    .filter(|c| matches!(c.status, ChangeStatus::Queued | ChangeStatus::Pending { .. }))
+                    .filter(|c| {
+                        matches!(
+                            c.status,
+                            ChangeStatus::Queued | ChangeStatus::Pending { .. }
+                        )
+                    })
                     .map(|c| c.change)
                     .collect();
                 for ch in owned {
@@ -292,7 +351,8 @@ impl State {
                     }
                     self.queue.retain(|q| *q != ch);
                 }
-                self.pending.retain(|_, p| p.actor.session() != Some(id.as_str()));
+                self.pending
+                    .retain(|_, p| p.actor.session() != Some(id.as_str()));
             }
         }
     }
@@ -309,7 +369,14 @@ impl State {
         reviewed: bool,
     ) {
         match op {
-            Op::RepoInit { repo, daemon_key, human, human_key, policy, trunk } => {
+            Op::RepoInit {
+                repo,
+                daemon_key,
+                human,
+                human_key,
+                policy,
+                trunk,
+            } => {
                 self.repo = repo.clone();
                 self.daemon_key = daemon_key.clone();
                 self.humans.insert(human.clone(), human_key.clone());
@@ -321,7 +388,14 @@ impl State {
                 self.humans.insert(human.clone(), key.clone());
             }
             Op::PolicyUpdate { policy } => self.policy = Some(policy.clone()),
-            Op::SessionStart { session, agent, model, task, scope, expires_ms } => {
+            Op::SessionStart {
+                session,
+                agent,
+                model,
+                task,
+                scope,
+                expires_ms,
+            } => {
                 let root_human = match actor {
                     Actor::Human { name } => name.clone(),
                     _ => String::new(),
@@ -351,8 +425,16 @@ impl State {
                     s.level = *level;
                 }
             }
-            Op::SessionEnd { session, reason } => self.end_sessions(session, &format!("ended: {reason}"), false),
-            Op::CapAttenuate { parent, child, agent, scope, expires_ms } => {
+            Op::SessionEnd { session, reason } => {
+                self.end_sessions(session, &format!("ended: {reason}"), false)
+            }
+            Op::CapAttenuate {
+                parent,
+                child,
+                agent,
+                scope,
+                expires_ms,
+            } => {
                 if let Some(p) = self.sessions.get(parent).cloned() {
                     self.sessions.insert(
                         child.clone(),
@@ -375,8 +457,15 @@ impl State {
                     );
                 }
             }
-            Op::CapRevoke { session, reason } => self.end_sessions(session, &format!("revoked: {reason}"), true),
-            Op::LeaseAcquire { set, items, intent, ttl_ms } => {
+            Op::CapRevoke { session, reason } => {
+                self.end_sessions(session, &format!("revoked: {reason}"), true)
+            }
+            Op::LeaseAcquire {
+                set,
+                items,
+                intent,
+                ttl_ms,
+            } => {
                 if let Some(session) = actor.session() {
                     self.leases.insert(
                         set.clone(),
@@ -398,8 +487,23 @@ impl State {
                     l.expires_ms = time_ms + ttl_ms;
                 }
             }
-            Op::ChangePropose { change, commit, base, claim } => {
-                self.record_change(actor, *change, commit, base, claim, facts.cloned().unwrap_or_default(), seq, ChangeStatus::Queued, reviewed);
+            Op::ChangePropose {
+                change,
+                commit,
+                base,
+                claim,
+            } => {
+                self.record_change(
+                    actor,
+                    *change,
+                    commit,
+                    base,
+                    claim,
+                    facts.cloned().unwrap_or_default(),
+                    seq,
+                    ChangeStatus::Queued,
+                    reviewed,
+                );
                 self.queue.retain(|q| q != change);
                 self.queue.push(*change);
             }
@@ -417,7 +521,9 @@ impl State {
                 self.trunk = Some(merged.clone());
                 self.trunk_history.insert(merged.clone());
                 if let Some(c) = self.changes.get_mut(change) {
-                    c.status = ChangeStatus::Integrated { commit: merged.clone() };
+                    c.status = ChangeStatus::Integrated {
+                        commit: merged.clone(),
+                    };
                     if c.claim.revert_of.is_some() {
                         let mut syms = c.facts.edits.clone();
                         syms.extend(c.facts.deletes.iter().cloned());
@@ -429,7 +535,9 @@ impl State {
             }
             Op::Approve { target_seq, .. } => {
                 let Actor::Human { name } = actor else { return };
-                let Some(p) = self.pending.get_mut(target_seq) else { return };
+                let Some(p) = self.pending.get_mut(target_seq) else {
+                    return;
+                };
                 p.approvals.insert(name.clone());
                 if reasons.iter().any(|r| r == RELEASED) {
                     let p = self.pending.remove(target_seq).expect("present");
@@ -454,31 +562,49 @@ impl State {
             }
             Op::Taint { session, reason } => {
                 if let Some(s) = self.sessions.get_mut(session)
-                    && s.taint.is_none() {
-                        s.taint = Some(reason.clone());
-                    }
+                    && s.taint.is_none()
+                {
+                    s.taint = Some(reason.clone());
+                }
             }
             Op::ImportExternal { commit, .. } => {
                 self.trunk = Some(commit.clone());
                 self.trunk_history.insert(commit.clone());
             }
             Op::ImportUnmediated { .. } => {}
-            Op::BridgePush { remote, oplog_seq, oplog_hash } => {
-                self.anchors.push((remote.clone(), *oplog_seq, oplog_hash.clone()));
+            Op::BridgePush {
+                remote,
+                oplog_seq,
+                oplog_hash,
+            } => {
+                self.anchors
+                    .push((remote.clone(), *oplog_seq, oplog_hash.clone()));
             }
             Op::Freeze { reason } => self.frozen = Some(reason.clone()),
             Op::Unfreeze { .. } => self.frozen = None,
-            Op::Negotiate { thread, to_session, message } => {
-                let Some(from) = actor.session().map(str::to_string) else { return };
-                let t = self.threads.entry(thread.clone()).or_insert_with(|| Thread {
-                    id: thread.clone(),
-                    a: from.clone(),
-                    b: to_session.clone(),
-                    rounds: 0,
-                    closed: false,
-                });
+            Op::Negotiate {
+                thread,
+                to_session,
+                message,
+            } => {
+                let Some(from) = actor.session().map(str::to_string) else {
+                    return;
+                };
+                let t = self
+                    .threads
+                    .entry(thread.clone())
+                    .or_insert_with(|| Thread {
+                        id: thread.clone(),
+                        a: from.clone(),
+                        b: to_session.clone(),
+                        rounds: 0,
+                        closed: false,
+                    });
                 t.rounds += 1;
-                if matches!(message, NegotiationMsg::Accept | NegotiationMsg::Decline { .. }) {
+                if matches!(
+                    message,
+                    NegotiationMsg::Accept | NegotiationMsg::Decline { .. }
+                ) {
                     t.closed = true;
                 }
                 if let NegotiationMsg::Yield { set } = message {
@@ -486,9 +612,10 @@ impl State {
                 }
                 let sender_taint = self.sessions.get(&from).and_then(|s| s.taint.clone());
                 if let (Some(t), Some(r)) = (sender_taint, self.sessions.get_mut(to_session))
-                    && r.taint.is_none() {
-                        r.taint = Some(format!("negotiation from tainted session {from}: {t}"));
-                    }
+                    && r.taint.is_none()
+                {
+                    r.taint = Some(format!("negotiation from tainted session {from}: {t}"));
+                }
             }
             Op::Redact { blob, .. } => {
                 self.redacted.insert(blob.clone());

@@ -29,7 +29,13 @@ pub fn sign_ed25519(
     }
 }
 
-pub fn verify(key: &HumanKey, repo: &str, op: &Op, sig: &HumanSignature, now_ms: i64) -> Result<(), &'static str> {
+pub fn verify(
+    key: &HumanKey,
+    repo: &str,
+    op: &Op,
+    sig: &HumanSignature,
+    now_ms: i64,
+) -> Result<(), &'static str> {
     if sig.issued_ms > now_ms + MAX_SKEW_MS || sig.issued_ms < now_ms - MAX_AGE_MS {
         return Err("stale_human_signature");
     }
@@ -42,7 +48,11 @@ pub fn verify(key: &HumanKey, repo: &str, op: &Op, sig: &HumanSignature, now_ms:
         "p256-se" => crate::human::p256::verify(&key.public, &msg, &sig.sig),
         _ => false,
     };
-    if ok { Ok(()) } else { Err("bad_human_signature") }
+    if ok {
+        Ok(())
+    } else {
+        Err("bad_human_signature")
+    }
 }
 
 pub mod p256 {
@@ -53,10 +63,18 @@ pub mod p256 {
     pub fn verify(public_hex: &str, msg: &[u8], sig_hex: &str) -> bool {
         use ::p256::ecdsa::signature::Verifier;
         use ::p256::ecdsa::{Signature, VerifyingKey};
-        let Ok(pk) = hex::decode(public_hex) else { return false };
-        let Ok(vk) = VerifyingKey::from_sec1_bytes(&pk) else { return false };
-        let Ok(sig) = hex::decode(sig_hex) else { return false };
-        let Ok(sig) = Signature::from_der(&sig) else { return false };
+        let Ok(pk) = hex::decode(public_hex) else {
+            return false;
+        };
+        let Ok(vk) = VerifyingKey::from_sec1_bytes(&pk) else {
+            return false;
+        };
+        let Ok(sig) = hex::decode(sig_hex) else {
+            return false;
+        };
+        let Ok(sig) = Signature::from_der(&sig) else {
+            return false;
+        };
         vk.verify(msg, &sig).is_ok()
     }
 }

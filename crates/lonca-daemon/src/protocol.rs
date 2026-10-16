@@ -41,11 +41,24 @@ pub struct Response {
 
 impl Response {
     pub fn ok(id: u64, result: Value) -> Self {
-        Self { id, ok: true, result, error: None }
+        Self {
+            id,
+            ok: true,
+            result,
+            error: None,
+        }
     }
 
     pub fn err(id: u64, code: &str, message: impl Into<String>) -> Self {
-        Self { id, ok: false, result: Value::Null, error: Some(ErrorBody { code: code.into(), message: message.into() }) }
+        Self {
+            id,
+            ok: false,
+            result: Value::Null,
+            error: Some(ErrorBody {
+                code: code.into(),
+                message: message.into(),
+            }),
+        }
     }
 }
 
@@ -222,7 +235,11 @@ pub fn read_line_limited(r: &mut impl BufRead, max: usize) -> std::io::Result<Op
     loop {
         let chunk = r.fill_buf()?;
         if chunk.is_empty() {
-            return Ok(if buf.is_empty() { None } else { Some(String::from_utf8_lossy(&buf).into_owned()) });
+            return Ok(if buf.is_empty() {
+                None
+            } else {
+                Some(String::from_utf8_lossy(&buf).into_owned())
+            });
         }
         match chunk.iter().position(|&b| b == b'\n') {
             Some(i) => {
@@ -235,7 +252,10 @@ pub fn read_line_limited(r: &mut impl BufRead, max: usize) -> std::io::Result<Op
                 buf.extend_from_slice(chunk);
                 r.consume(n);
                 if buf.len() > max {
-                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "request too large"));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "request too large",
+                    ));
                 }
             }
         }

@@ -53,10 +53,16 @@ impl SignedOp {
 
     pub fn verify(&self, daemon_key: &str) -> Result<()> {
         if self.entry.digest() != self.hash {
-            return Err(Error::Integrity(format!("op {}: hash does not match content", self.entry.seq)));
+            return Err(Error::Integrity(format!(
+                "op {}: hash does not match content",
+                self.entry.seq
+            )));
         }
         if !verify_hex(daemon_key, self.hash.as_bytes(), &self.sig) {
-            return Err(Error::Integrity(format!("op {}: bad daemon signature", self.entry.seq)));
+            return Err(Error::Integrity(format!(
+                "op {}: bad daemon signature",
+                self.entry.seq
+            )));
         }
         Ok(())
     }
@@ -80,7 +86,13 @@ impl<'a> OpLog<'a> {
     pub fn append(&self, op: &SignedOp, expected_head: Option<&GitId>) -> Result<GitId> {
         let blob = self.store.write_blob(&canonical_bytes(op))?;
         let mut files = FileMap::new();
-        files.insert(OP_FILE.into(), FileEntry { mode: FileMode::Regular, blob });
+        files.insert(
+            OP_FILE.into(),
+            FileEntry {
+                mode: FileMode::Regular,
+                blob,
+            },
+        );
         let tree = self.store.write_tree(&files)?;
         let commit = self.store.write_commit(&CommitSpec {
             tree,
@@ -102,10 +114,9 @@ impl<'a> OpLog<'a> {
     }
 
     pub fn read_at(&self, commit: &GitId) -> Result<SignedOp> {
-        let bytes = self
-            .store
-            .read_file(commit, OP_FILE)?
-            .ok_or_else(|| Error::Integrity(format!("oplog commit {} has no {OP_FILE}", commit.short())))?;
+        let bytes = self.store.read_file(commit, OP_FILE)?.ok_or_else(|| {
+            Error::Integrity(format!("oplog commit {} has no {OP_FILE}", commit.short()))
+        })?;
         Ok(serde_json::from_slice(&bytes)?)
     }
 
@@ -117,7 +128,10 @@ impl<'a> OpLog<'a> {
             out.push(self.read_at(&c)?);
             let info = self.store.read_commit(&c)?;
             if info.parents.len() > 1 {
-                return Err(Error::Integrity(format!("oplog commit {} is a merge", c.short())));
+                return Err(Error::Integrity(format!(
+                    "oplog commit {} is a merge",
+                    c.short()
+                )));
             }
             cur = info.parents.into_iter().next();
         }
@@ -140,7 +154,10 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
     let mut last_time = i64::MIN;
     for (i, op) in ops.iter().enumerate() {
         if op.entry.seq != i as u64 {
-            return Err(Error::Integrity(format!("expected seq {i}, found {}", op.entry.seq)));
+            return Err(Error::Integrity(format!(
+                "expected seq {i}, found {}",
+                op.entry.seq
+            )));
         }
         if op.entry.prev != prev {
             return Err(Error::Integrity(format!("op {i}: broken hash chain")));
@@ -166,12 +183,17 @@ mod tests {
             seq: 0,
             prev: GENESIS_PREV.into(),
             time_ms: 1000,
-            actor: Actor::Human { name: "ayse".into() },
+            actor: Actor::Human {
+                name: "ayse".into(),
+            },
             op: Op::RepoInit {
                 repo: "demo".into(),
                 daemon_key: key.public_hex(),
                 human: "ayse".into(),
-                human_key: HumanKey { alg: "ed25519".into(), public: "00".into() },
+                human_key: HumanKey {
+                    alg: "ed25519".into(),
+                    public: "00".into(),
+                },
                 policy: tree.clone(),
                 trunk: tree,
             },
@@ -188,7 +210,9 @@ mod tests {
             prev: prev.hash.clone(),
             time_ms,
             actor: Actor::Daemon,
-            op: Op::Freeze { reason: "test".into() },
+            op: Op::Freeze {
+                reason: "test".into(),
+            },
             evidence: vec![],
             facts: None,
             decision: Decision::allow(),
@@ -227,7 +251,10 @@ mod tests {
 
         let mut edited = o1.clone();
         edited.entry.decision = Decision::deny("rewritten");
-        assert!(verify_chain(&[g.clone(), edited]).is_err(), "content change");
+        assert!(
+            verify_chain(&[g.clone(), edited]).is_err(),
+            "content change"
+        );
 
         let mut resigned = o1.clone();
         resigned.entry.time_ms = 5000;
@@ -237,7 +264,13 @@ mod tests {
         let backwards = SignedOp::sign(next(&g, 500), &key);
         assert!(verify_chain(&[g.clone(), backwards]).is_err(), "time");
 
-        let skipped = SignedOp::sign(OpEntry { seq: 2, ..next(&g, 2000) }, &key);
+        let skipped = SignedOp::sign(
+            OpEntry {
+                seq: 2,
+                ..next(&g, 2000)
+            },
+            &key,
+        );
         assert!(verify_chain(&[g, skipped]).is_err(), "seq gap");
     }
 }

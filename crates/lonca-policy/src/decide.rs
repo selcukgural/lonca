@@ -15,12 +15,12 @@
 use std::collections::BTreeSet;
 
 use lonca_core::ops::{
-    Actor, Attestation, BindChecks, CheckKind, CheckResult, Decision, Facts, HumanSignature, LeaseItem, LeaseKind,
-    NegotiationMsg, ObservationLevel, Op, Outcome, Scope,
+    Actor, Attestation, BindChecks, CheckKind, CheckResult, Decision, Facts, HumanSignature,
+    LeaseItem, LeaseKind, NegotiationMsg, ObservationLevel, Op, Outcome, Scope,
 };
 use lonca_core::paths::{
-    path_matches, path_pattern_within, symbol_matches, symbol_pattern_within, validate_path_pattern,
-    validate_repo_path, validate_symbol_pattern,
+    path_matches, path_pattern_within, symbol_matches, symbol_pattern_within,
+    validate_path_pattern, validate_repo_path, validate_symbol_pattern,
 };
 
 use crate::config::{CVal, CedarOutcome, PolicyBundle};
@@ -56,13 +56,18 @@ impl Verdict {
         match out {
             CedarOutcome::Allow => {}
             CedarOutcome::Deny(rs) => rs.into_iter().for_each(|r| self.deny(r)),
-            CedarOutcome::Escalate { rules, approvals } => rules.into_iter().for_each(|r| self.escalate(r, approvals)),
+            CedarOutcome::Escalate { rules, approvals } => {
+                rules.into_iter().for_each(|r| self.escalate(r, approvals))
+            }
         }
     }
 
     fn finish(self, enrolled_humans: usize, cap: bool) -> Decision {
         if !self.deny.is_empty() {
-            return Decision { outcome: Outcome::Deny, reasons: self.deny };
+            return Decision {
+                outcome: Outcome::Deny,
+                reasons: self.deny,
+            };
         }
         if !self.escalate.is_empty() {
             let mut reasons = self.escalate;
@@ -73,9 +78,15 @@ impl Verdict {
                 reasons.push("approvals_capped".into());
             }
             reasons.push(format!("approvals={n}"));
-            return Decision { outcome: Outcome::Escalate, reasons };
+            return Decision {
+                outcome: Outcome::Escalate,
+                reasons,
+            };
         }
-        Decision { outcome: Outcome::Allow, reasons: self.info }
+        Decision {
+            outcome: Outcome::Allow,
+            reasons: self.info,
+        }
     }
 }
 
@@ -118,7 +129,10 @@ fn is_human_op(op: &Op) -> bool {
 }
 
 pub fn valid_token(s: &str, max: usize) -> bool {
-    !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+    !s.is_empty()
+        && s.len() <= max
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
 /// Observation level implied by the checks a harness hook reported.
@@ -179,11 +193,15 @@ pub fn scope_within(inner: &Scope, outer: &Scope) -> Result<(), String> {
             return Err(format!("op:{}", k.as_str()));
         }
     }
-    for (name, i, o) in [("max_files", inner.max_files, outer.max_files), ("max_lines", inner.max_lines, outer.max_lines)] {
+    for (name, i, o) in [
+        ("max_files", inner.max_files, outer.max_files),
+        ("max_lines", inner.max_lines, outer.max_lines),
+    ] {
         if let Some(o) = o
-            && i.is_none_or(|i| i > o) {
-                return Err(name.into());
-            }
+            && i.is_none_or(|i| i > o)
+        {
+            return Err(name.into());
+        }
     }
     Ok(())
 }
@@ -223,25 +241,44 @@ fn session_context(state: &State, actor: &Actor) -> Vec<(&'static str, CVal)> {
         Some(s) => (s.taint.is_some(), format!("{:?}", s.level).to_lowercase()),
         None => (false, "none".into()),
     };
-    vec![("tainted", CVal::Bool(tainted)), ("observation", CVal::Str(level))]
+    vec![
+        ("tainted", CVal::Bool(tainted)),
+        ("observation", CVal::Str(level)),
+    ]
 }
 
-pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignature>, ctx: &Ctx) -> Decision {
+pub fn decide(
+    state: &State,
+    actor: &Actor,
+    op: &Op,
+    human: Option<&HumanSignature>,
+    ctx: &Ctx,
+) -> Decision {
     let t = ctx.time_ms;
     let cfg = &ctx.policy.config;
 
     if state.next_seq == 0 {
-        let Op::RepoInit { repo, human: owner, human_key, .. } = op else {
+        let Op::RepoInit {
+            repo,
+            human: owner,
+            human_key,
+            ..
+        } = op
+        else {
             return Decision::deny("not_initialized");
         };
-        let Actor::Human { name } = actor else { return Decision::deny("genesis_needs_human") };
+        let Actor::Human { name } = actor else {
+            return Decision::deny("genesis_needs_human");
+        };
         if name != owner {
             return Decision::deny("genesis_actor_mismatch");
         }
         if !valid_token(repo, 64) || !valid_token(owner, 64) {
             return Decision::deny("invalid_name");
         }
-        let Some(sig) = human else { return Decision::deny("missing_human_signature") };
+        let Some(sig) = human else {
+            return Decision::deny("missing_human_signature");
+        };
         if let Err(e) = crate::human::verify(human_key, repo, op, sig, t) {
             return Decision::deny(e);
         }
@@ -254,9 +291,13 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
         return Decision::deny("time_backwards");
     }
     if let Some(reason) = &state.frozen
-        && !matches!(op, Op::Unfreeze { .. } | Op::Observe { .. } | Op::Taint { .. } | Op::Freeze { .. }) {
-            return Decision::deny(format!("frozen:{reason}"));
-        }
+        && !matches!(
+            op,
+            Op::Unfreeze { .. } | Op::Observe { .. } | Op::Taint { .. } | Op::Freeze { .. }
+        )
+    {
+        return Decision::deny(format!("frozen:{reason}"));
+    }
 
     // 1. Who may request this at all.
     match actor {
@@ -269,8 +310,12 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
             }
         }
         Actor::Human { name } => {
-            let Some(key) = state.humans.get(name) else { return Decision::deny("unknown_human") };
-            let Some(sig) = human else { return Decision::deny("missing_human_signature") };
+            let Some(key) = state.humans.get(name) else {
+                return Decision::deny("unknown_human");
+            };
+            let Some(sig) = human else {
+                return Decision::deny("missing_human_signature");
+            };
             if &sig.human != name {
                 return Decision::deny("signature_human_mismatch");
             }
@@ -288,7 +333,9 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
             if human.is_some() {
                 return Decision::deny("unexpected_human_signature");
             }
-            let Some(s) = state.sessions.get(session) else { return Decision::deny("unknown_session") };
+            let Some(s) = state.sessions.get(session) else {
+                return Decision::deny("unknown_session");
+            };
             if &s.agent != name {
                 return Decision::deny("session_agent_mismatch");
             }
@@ -319,7 +366,9 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
             if state.humans.contains_key(who) {
                 v.deny("already_enrolled");
             }
-            if !matches!(key.alg.as_str(), "ed25519" | "p256-se") || hex::decode(&key.public).is_err() {
+            if !matches!(key.alg.as_str(), "ed25519" | "p256-se")
+                || hex::decode(&key.public).is_err()
+            {
                 v.deny("invalid_key");
             }
         }
@@ -329,7 +378,14 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
                 v.escalate("policy_update", n - 1);
             }
         }
-        Op::SessionStart { session, agent, task, scope, expires_ms, .. } => {
+        Op::SessionStart {
+            session,
+            agent,
+            task,
+            scope,
+            expires_ms,
+            ..
+        } => {
             if !valid_token(session, 64) || !valid_token(agent, 64) {
                 v.deny("invalid_name");
             }
@@ -344,7 +400,11 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
                 v.deny("session_ttl");
             }
         }
-        Op::SessionBind { session, checks, level } => {
+        Op::SessionBind {
+            session,
+            checks,
+            level,
+        } => {
             if !state.session_active(session, t) {
                 v.deny("session_inactive");
             }
@@ -355,15 +415,24 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
         Op::SessionEnd { session, .. } | Op::CapRevoke { session, .. } => {
             match state.sessions.get(session) {
                 None => v.deny("unknown_session"),
-                Some(s) if s.ended.is_some() && matches!(op, Op::SessionEnd { .. }) => v.deny("session_ended"),
+                Some(s) if s.ended.is_some() && matches!(op, Op::SessionEnd { .. }) => {
+                    v.deny("session_ended")
+                }
                 Some(_) => {}
             }
             if let Some(own) = actor.session()
-                && !state.descends_from(session, own) {
-                    v.deny("not_own_session");
-                }
+                && !state.descends_from(session, own)
+            {
+                v.deny("not_own_session");
+            }
         }
-        Op::CapAttenuate { parent, child, agent, scope, expires_ms } => {
+        Op::CapAttenuate {
+            parent,
+            child,
+            agent,
+            scope,
+            expires_ms,
+        } => {
             let own = actor.session().unwrap_or_default();
             if parent != own {
                 v.deny("not_own_session");
@@ -384,7 +453,12 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
                 }
             }
         }
-        Op::LeaseAcquire { set, items, intent, ttl_ms } => {
+        Op::LeaseAcquire {
+            set,
+            items,
+            intent,
+            ttl_ms,
+        } => {
             let own = actor.session().unwrap_or_default();
             let s = &state.sessions[own];
             if !valid_token(set, 64) || state.leases.contains_key(set) {
@@ -426,7 +500,10 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
                 for a in items {
                     for b in &held.items {
                         if leases_conflict(a, b) {
-                            v.deny(format!("lease_held:{}:{}:{}", b.symbol, held.session, held.intent));
+                            v.deny(format!(
+                                "lease_held:{}:{}:{}",
+                                b.symbol, held.session, held.intent
+                            ));
                         }
                     }
                 }
@@ -436,9 +513,10 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
             None => v.deny("unknown_lease_set"),
             Some(l) => {
                 if let Some(own) = actor.session()
-                    && !state.descends_from(&l.session, own) {
-                        v.deny("not_own_lease");
-                    }
+                    && !state.descends_from(&l.session, own)
+                {
+                    v.deny("not_own_lease");
+                }
             }
         },
         Op::LeaseRenew { set, ttl_ms } => match state.leases.get(set) {
@@ -455,20 +533,37 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
                 }
             }
         },
-        Op::ChangePropose { change, base, claim, .. } => propose(state, actor, *change, base, claim, ctx, &mut v),
+        Op::ChangePropose {
+            change,
+            base,
+            claim,
+            ..
+        } => propose(state, actor, *change, base, claim, ctx, &mut v),
         Op::ChangeWithdraw { change } => match state.changes.get(change) {
             None => v.deny("unknown_change"),
             Some(c) => {
-                if !matches!(c.status, ChangeStatus::Queued | ChangeStatus::Pending { .. }) {
+                if !matches!(
+                    c.status,
+                    ChangeStatus::Queued | ChangeStatus::Pending { .. }
+                ) {
                     v.deny("change_not_in_flight");
                 }
                 if let Some(own) = actor.session()
-                    && !c.actor.session().is_some_and(|s| state.descends_from(s, own)) {
-                        v.deny("not_own_change");
-                    }
+                    && !c
+                        .actor
+                        .session()
+                        .is_some_and(|s| state.descends_from(s, own))
+                {
+                    v.deny("not_own_change");
+                }
             }
         },
-        Op::ChangeIntegrate { change, trunk_before, merged, conflicts } => {
+        Op::ChangeIntegrate {
+            change,
+            trunk_before,
+            merged,
+            conflicts,
+        } => {
             match state.changes.get(change) {
                 None => v.deny("unknown_change"),
                 Some(c) if c.status != ChangeStatus::Queued => v.deny("change_not_queued"),
@@ -499,9 +594,10 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
             None => v.deny("nothing_pending"),
             Some(p) => {
                 if let Actor::Human { name } = actor
-                    && p.approvals.contains(name) {
-                        v.deny("already_approved");
-                    }
+                    && p.approvals.contains(name)
+                {
+                    v.deny("already_approved");
+                }
                 if note.len() > 500 {
                     v.deny("note_too_long");
                 }
@@ -534,12 +630,20 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
                 v.deny("not_frozen");
             }
         }
-        Op::BridgePush { oplog_seq, oplog_hash, .. } => {
+        Op::BridgePush {
+            oplog_seq,
+            oplog_hash,
+            ..
+        } => {
             if *oplog_seq + 1 != state.next_seq || *oplog_hash != state.head_hash {
                 v.deny("stale_anchor");
             }
         }
-        Op::Negotiate { thread, to_session, message } => {
+        Op::Negotiate {
+            thread,
+            to_session,
+            message,
+        } => {
             let own = actor.session().unwrap_or_default();
             if to_session == own || !state.session_active(to_session, t) {
                 v.deny("invalid_counterparty");
@@ -564,9 +668,10 @@ pub fn decide(state: &State, actor: &Actor, op: &Op, human: Option<&HumanSignatu
                 }
             }
             if let NegotiationMsg::Yield { set } = message
-                && state.leases.get(set).map(|l| l.session.as_str()) != Some(own) {
-                    v.deny("not_own_lease");
-                }
+                && state.leases.get(set).map(|l| l.session.as_str()) != Some(own)
+            {
+                v.deny("not_own_lease");
+            }
         }
         Op::Redact { blob, reason } => {
             if state.redacted.contains(blob) {
@@ -594,13 +699,19 @@ fn verify_evidence(ctx: &Ctx, v: &mut Verdict) {
             CheckResult::Error => v.deny(format!("verification_error:{}", check_name(a.check))),
             CheckResult::Pass | CheckResult::Skipped => {}
         }
-        if vc.require_sandbox && matches!(a.check, CheckKind::Build | CheckKind::Tests)
-            && a.details.get("sandbox").is_none_or(|s| s == "none") {
-                v.deny("unsandboxed_verification");
-            }
+        if vc.require_sandbox
+            && matches!(a.check, CheckKind::Build | CheckKind::Tests)
+            && a.details.get("sandbox").is_none_or(|s| s == "none")
+        {
+            v.deny("unsandboxed_verification");
+        }
     }
     if vc.required {
-        let passed = |k: CheckKind| ctx.evidence.iter().any(|a| a.check == k && a.result == CheckResult::Pass);
+        let passed = |k: CheckKind| {
+            ctx.evidence
+                .iter()
+                .any(|a| a.check == k && a.result == CheckResult::Pass)
+        };
         if vc.build.is_some() && !passed(CheckKind::Build) {
             v.deny("verification_missing:build");
         }
@@ -631,7 +742,9 @@ fn propose(
     }
     if let Some(existing) = state.changes.get(&change) {
         match existing.status {
-            ChangeStatus::Conflicted { .. } | ChangeStatus::Rejected { .. } | ChangeStatus::Withdrawn => {
+            ChangeStatus::Conflicted { .. }
+            | ChangeStatus::Rejected { .. }
+            | ChangeStatus::Withdrawn => {
                 if existing.actor.label() != actor.label() {
                     v.deny("change_owned_by_other");
                 }
@@ -644,7 +757,11 @@ fn propose(
         ("adds", &claim.adds, &f.adds),
         ("deletes", &claim.deletes, &f.deletes),
         ("deleted_files", &claim.deleted_files, &f.deleted_files),
-        ("signature_changes", &claim.signature_changes, &f.signature_changes),
+        (
+            "signature_changes",
+            &claim.signature_changes,
+            &f.signature_changes,
+        ),
     ] {
         if sorted(claimed) != sorted(actual) {
             v.deny(format!("claim_mismatch:{name}"));
@@ -654,17 +771,27 @@ fn propose(
         v.deny("claim_mismatch:tests");
     }
     if let Some(r) = claim.revert_of
-        && !state.changes.contains_key(&r) {
-            v.deny("unknown_revert_target");
-        }
-    let files: BTreeSet<&String> = f.added_files.iter().chain(&f.modified_files).chain(&f.deleted_files).collect();
+        && !state.changes.contains_key(&r)
+    {
+        v.deny("unknown_revert_target");
+    }
+    let files: BTreeSet<&String> = f
+        .added_files
+        .iter()
+        .chain(&f.modified_files)
+        .chain(&f.deleted_files)
+        .collect();
     if files.is_empty() {
         v.deny("empty_change");
     }
     if files.len() > cfg.changes.max_files as usize {
         v.deny("too_many_files");
     }
-    let critical: Vec<&String> = files.iter().copied().filter(|p| policy.is_critical(p)).collect();
+    let critical: Vec<&String> = files
+        .iter()
+        .copied()
+        .filter(|p| policy.is_critical(p))
+        .collect();
 
     match actor {
         Actor::Daemon => v.deny("not_a_daemon_op:change.propose"),
@@ -679,11 +806,19 @@ fn propose(
             if s.scope.max_files.is_some_and(|m| files.len() > m as usize) {
                 v.deny("scope_max_files");
             }
-            if s.scope.max_lines.is_some_and(|m| f.lines_added + f.lines_removed > m) {
+            if s.scope
+                .max_lines
+                .is_some_and(|m| f.lines_added + f.lines_removed > m)
+            {
                 v.deny("scope_max_lines");
             }
-            let touched: BTreeSet<&String> =
-                f.edits.iter().chain(&f.adds).chain(&f.deletes).chain(&f.signature_changes).collect();
+            let touched: BTreeSet<&String> = f
+                .edits
+                .iter()
+                .chain(&f.adds)
+                .chain(&f.deletes)
+                .chain(&f.signature_changes)
+                .collect();
             if let Some(pats) = &s.scope.symbols {
                 for sym in &touched {
                     let name = symbols::split(sym).map(|(_, n)| n).unwrap_or(sym);
@@ -703,7 +838,10 @@ fn propose(
                 .filter(|l| l.session == *session)
                 .flat_map(|l| l.items.iter())
                 .collect();
-            let held = |kinds: &[LeaseKind], sym: &str| mine.iter().any(|l| kinds.contains(&l.kind) && symbols::covers(&l.symbol, sym));
+            let held = |kinds: &[LeaseKind], sym: &str| {
+                mine.iter()
+                    .any(|l| kinds.contains(&l.kind) && symbols::covers(&l.symbol, sym))
+            };
             for sym in f.edits.iter().chain(&f.signature_changes) {
                 if !held(&[LeaseKind::Edit, LeaseKind::Rename], sym) {
                     v.deny(format!("lease_missing:{sym}"));
@@ -715,7 +853,9 @@ fn propose(
                 }
             }
             for sym in &f.adds {
-                let Some(c) = symbols::container(sym) else { continue };
+                let Some(c) = symbols::container(sym) else {
+                    continue;
+                };
                 if !held(&[LeaseKind::Insert, LeaseKind::Edit, LeaseKind::Rename], &c) {
                     v.deny(format!("lease_missing:{c}"));
                 }
@@ -726,12 +866,24 @@ fn propose(
                 }
             }
 
-            let unobserved = s.level == ObservationLevel::Unobserved && cfg.observation.unobserved_is_tainted;
+            let unobserved =
+                s.level == ObservationLevel::Unobserved && cfg.observation.unobserved_is_tainted;
             if s.taint.is_some() || unobserved {
                 if !critical.is_empty() {
-                    v.deny(if s.taint.is_some() { "tainted_critical_path" } else { "unobserved_critical_path" });
+                    v.deny(if s.taint.is_some() {
+                        "tainted_critical_path"
+                    } else {
+                        "unobserved_critical_path"
+                    });
                 }
-                v.escalate(if s.taint.is_some() { "tainted_session" } else { "unobserved_session" }, 1);
+                v.escalate(
+                    if s.taint.is_some() {
+                        "tainted_session"
+                    } else {
+                        "unobserved_session"
+                    },
+                    1,
+                );
             }
             for p in &critical {
                 v.escalate(format!("critical_path:{p}"), 1);
@@ -753,7 +905,11 @@ fn propose(
     }
 
     let mut base_ctx = session_context(state, actor);
-    for (action, list) in [("file.add", &f.added_files), ("file.modify", &f.modified_files), ("file.delete", &f.deleted_files)] {
+    for (action, list) in [
+        ("file.add", &f.added_files),
+        ("file.modify", &f.modified_files),
+        ("file.delete", &f.deleted_files),
+    ] {
         for p in list {
             let mut c = base_ctx.clone();
             c.push(("path", CVal::Str(p.clone())));
@@ -769,7 +925,10 @@ fn propose(
         .count() as i64;
     base_ctx.extend([
         ("files", CVal::Long(files.len() as i64)),
-        ("lines", CVal::Long((f.lines_added + f.lines_removed) as i64)),
+        (
+            "lines",
+            CVal::Long((f.lines_added + f.lines_removed) as i64),
+        ),
         ("recent_reverts", CVal::Long(recent_reverts)),
         ("is_revert", CVal::Bool(claim.revert_of.is_some())),
         ("tests_deleted", CVal::Long(f.tests.deleted as i64)),

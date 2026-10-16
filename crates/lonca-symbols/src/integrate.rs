@@ -23,7 +23,12 @@ pub struct Integration {
     pub touched: Vec<String>,
 }
 
-pub fn integrate(store: &Store, base: &GitId, trunk: &GitId, change: &GitId) -> Result<Integration> {
+pub fn integrate(
+    store: &Store,
+    base: &GitId,
+    trunk: &GitId,
+    change: &GitId,
+) -> Result<Integration> {
     let base_files = store.commit_files(base)?;
     let ours = store.commit_files(trunk)?;
     let theirs = store.commit_files(change)?;
@@ -31,7 +36,12 @@ pub fn integrate(store: &Store, base: &GitId, trunk: &GitId, change: &GitId) -> 
     let write = |b: &[u8]| store.write_blob(b);
     let r = merge3(&base_files, &ours, &theirs, &read, &write)?;
     if !r.conflicts.is_empty() {
-        return Ok(Integration { merged: None, conflicts: r.conflicts, files: ours, touched: vec![] });
+        return Ok(Integration {
+            merged: None,
+            conflicts: r.conflicts,
+            files: ours,
+            touched: vec![],
+        });
     }
     let tree = store.write_tree(&r.files)?;
     let info = store.read_commit(change)?;
@@ -45,8 +55,17 @@ pub fn integrate(store: &Store, base: &GitId, trunk: &GitId, change: &GitId) -> 
         headers: info.headers,
     })?;
     let paths: BTreeSet<&String> = ours.keys().chain(r.files.keys()).collect();
-    let touched = paths.into_iter().filter(|p| ours.get(*p) != r.files.get(*p)).cloned().collect();
-    Ok(Integration { merged: Some(merged), conflicts: vec![], files: r.files, touched })
+    let touched = paths
+        .into_iter()
+        .filter(|p| ours.get(*p) != r.files.get(*p))
+        .cloned()
+        .collect();
+    Ok(Integration {
+        merged: Some(merged),
+        conflicts: vec![],
+        files: r.files,
+        touched,
+    })
 }
 
 /// Facts of a proposal: its commit against its base.

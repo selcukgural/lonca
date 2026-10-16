@@ -19,7 +19,9 @@ pub fn file_symbol(path: &str) -> String {
 
 /// Containers of `symbol`, innermost first, ending with `path#<file>`.
 pub fn ancestors(symbol: &str) -> Vec<String> {
-    let Some((path, name)) = split(symbol) else { return vec![] };
+    let Some((path, name)) = split(symbol) else {
+        return vec![];
+    };
     let mut out = Vec::new();
     if name == FILE {
         return out;
@@ -57,13 +59,19 @@ mod tests {
             ancestors("src/a.rs#Client.charge"),
             vec!["src/a.rs#Client".to_string(), "src/a.rs#<file>".to_string()]
         );
-        assert_eq!(ancestors("src/a.rs#run"), vec!["src/a.rs#<file>".to_string()]);
+        assert_eq!(
+            ancestors("src/a.rs#run"),
+            vec!["src/a.rs#<file>".to_string()]
+        );
         assert!(ancestors("src/a.rs#<file>").is_empty());
         assert!(covers("src/a.rs#Client", "src/a.rs#Client.charge"));
         assert!(covers("src/a.rs#<file>", "src/a.rs#<module>"));
         assert!(!covers("src/a.rs#Client", "src/a.rs#ClientX.charge"));
         assert!(!covers("src/a.rs#Client", "src/b.rs#Client.charge"));
         assert!(overlaps("src/a.rs#Client.charge", "src/a.rs#Client"));
-        assert!(!overlaps("src/a.rs#Client.charge", "src/a.rs#Client.refund"));
+        assert!(!overlaps(
+            "src/a.rs#Client.charge",
+            "src/a.rs#Client.refund"
+        ));
     }
 }

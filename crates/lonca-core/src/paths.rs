@@ -61,7 +61,11 @@ pub fn path_matches(pattern: &str, path: &str) -> bool {
         return true;
     }
     match pattern.strip_suffix("/**") {
-        Some(prefix) => path.len() > prefix.len() && path.starts_with(prefix) && path.as_bytes()[prefix.len()] == b'/',
+        Some(prefix) => {
+            path.len() > prefix.len()
+                && path.starts_with(prefix)
+                && path.as_bytes()[prefix.len()] == b'/'
+        }
         None => pattern == path,
     }
 }
@@ -86,7 +90,9 @@ pub fn path_pattern_within(inner: &str, outer: &str) -> bool {
 pub fn validate_symbol_pattern(p: &str) -> Result<()> {
     let body = p.strip_suffix('*').unwrap_or(p);
     if body.contains('*') || p.is_empty() || p.len() > 512 {
-        return Err(Error::Invalid(format!("symbol pattern {p:?}: '*' only at the end")));
+        return Err(Error::Invalid(format!(
+            "symbol pattern {p:?}: '*' only at the end"
+        )));
     }
     Ok(())
 }
@@ -113,8 +119,21 @@ mod tests {
     #[test]
     fn path_validation() {
         assert!(validate_repo_path("src/a.rs").is_ok());
-        for bad in ["", "/etc/passwd", "a/../b", "a//b", ".git/config", "a/.GIT/x", "a\\b", "dir/", "a/\u{202E}b"] {
-            assert!(validate_repo_path(bad).is_err(), "{bad:?} should be rejected");
+        for bad in [
+            "",
+            "/etc/passwd",
+            "a/../b",
+            "a//b",
+            ".git/config",
+            "a/.GIT/x",
+            "a\\b",
+            "dir/",
+            "a/\u{202E}b",
+        ] {
+            assert!(
+                validate_repo_path(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
         }
     }
 
@@ -144,9 +163,15 @@ mod tests {
     fn symbol_patterns() {
         assert!(symbol_matches("BillingClient.*", "BillingClient.charge"));
         assert!(!symbol_matches("BillingClient.*", "Other.charge"));
-        assert!(symbol_pattern_within("BillingClient.charge", "BillingClient.*"));
+        assert!(symbol_pattern_within(
+            "BillingClient.charge",
+            "BillingClient.*"
+        ));
         assert!(symbol_pattern_within("BillingClient.c*", "BillingClient.*"));
-        assert!(!symbol_pattern_within("BillingClient.*", "BillingClient.charge"));
+        assert!(!symbol_pattern_within(
+            "BillingClient.*",
+            "BillingClient.charge"
+        ));
         assert!(symbol_pattern_within("X", "*"));
         assert!(validate_symbol_pattern("a*b").is_err());
     }

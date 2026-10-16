@@ -12,7 +12,10 @@ pub fn bind(path: &Path) -> std::io::Result<UnixListener> {
     if path.exists() {
         // A live daemon answers; a stale socket file does not.
         if UnixStream::connect(path).is_ok() {
-            return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "a Lonca daemon is already running"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "a Lonca daemon is already running",
+            ));
         }
         std::fs::remove_file(path)?;
     }

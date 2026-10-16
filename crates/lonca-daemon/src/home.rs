@@ -37,7 +37,9 @@ impl Home {
         match std::env::var_os("LONCA_HOME") {
             Some(p) => Self::new(p),
             None => {
-                let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+                let home = std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."));
                 Self::new(home.join(".lonca"))
             }
         }
@@ -77,6 +79,11 @@ impl Home {
         self.root.join("tokens.json")
     }
 
+    /// Written by `lonca-audit --freeze-flag` when it finds a problem.
+    pub fn freeze_flag(&self, repo: &str) -> PathBuf {
+        self.root.join("freeze").join(repo)
+    }
+
     pub fn load_key(&self) -> Result<KeyPair> {
         KeyPair::load_or_create(&self.key_path())
     }
@@ -102,12 +109,21 @@ impl Tokens {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
             Err(e) => return Err(e.into()),
         };
-        Ok(Self { path: Some(path.to_path_buf()), map })
+        Ok(Self {
+            path: Some(path.to_path_buf()),
+            map,
+        })
     }
 
     pub fn issue(&mut self, repo: &str, session: &str) -> Result<String> {
         let token = format!("lonca_{}", hex::encode(random_bytes::<32>()));
-        self.map.insert(sha256_hex(token.as_bytes()), TokenEntry { repo: repo.into(), session: session.into() });
+        self.map.insert(
+            sha256_hex(token.as_bytes()),
+            TokenEntry {
+                repo: repo.into(),
+                session: session.into(),
+            },
+        );
         self.save()?;
         Ok(token)
     }
@@ -118,7 +134,8 @@ impl Tokens {
 
     pub fn revoke_sessions(&mut self, repo: &str, sessions: &[String]) -> Result<()> {
         let before = self.map.len();
-        self.map.retain(|_, e| !(e.repo == repo && sessions.contains(&e.session)));
+        self.map
+            .retain(|_, e| !(e.repo == repo && sessions.contains(&e.session)));
         if self.map.len() != before {
             self.save()?;
         }
@@ -126,7 +143,9 @@ impl Tokens {
     }
 
     fn save(&self) -> Result<()> {
-        let Some(path) = &self.path else { return Ok(()) };
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
         let tmp = path.with_extension("tmp");
         let mut opts = fs::OpenOptions::new();
         opts.write(true).create(true).truncate(true);

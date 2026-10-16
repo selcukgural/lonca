@@ -50,7 +50,8 @@ impl KeyPair {
 
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)?;
-        let bytes = hex::decode(text.trim()).map_err(|e| Error::Invalid(format!("key file: {e}")))?;
+        let bytes =
+            hex::decode(text.trim()).map_err(|e| Error::Invalid(format!("key file: {e}")))?;
         let arr: [u8; 32] = bytes
             .try_into()
             .map_err(|_| Error::Invalid("key file: expected 32 bytes".into()))?;
@@ -67,11 +68,21 @@ impl KeyPair {
 }
 
 pub fn verify_hex(public_hex: &str, msg: &[u8], sig_hex: &str) -> bool {
-    let Ok(pk) = hex::decode(public_hex) else { return false };
-    let Ok(pk): Result<[u8; 32], _> = pk.try_into() else { return false };
-    let Ok(vk) = VerifyingKey::from_bytes(&pk) else { return false };
-    let Ok(sig) = hex::decode(sig_hex) else { return false };
-    let Ok(sig): Result<[u8; 64], _> = sig.try_into() else { return false };
+    let Ok(pk) = hex::decode(public_hex) else {
+        return false;
+    };
+    let Ok(pk): Result<[u8; 32], _> = pk.try_into() else {
+        return false;
+    };
+    let Ok(vk) = VerifyingKey::from_bytes(&pk) else {
+        return false;
+    };
+    let Ok(sig) = hex::decode(sig_hex) else {
+        return false;
+    };
+    let Ok(sig): Result<[u8; 64], _> = sig.try_into() else {
+        return false;
+    };
     vk.verify_strict(msg, &Signature::from_bytes(&sig)).is_ok()
 }
 
@@ -85,7 +96,11 @@ mod tests {
         let sig = k.sign_hex(b"hello");
         assert!(verify_hex(&k.public_hex(), b"hello", &sig));
         assert!(!verify_hex(&k.public_hex(), b"hellO", &sig));
-        assert!(!verify_hex(&KeyPair::generate().public_hex(), b"hello", &sig));
+        assert!(!verify_hex(
+            &KeyPair::generate().public_hex(),
+            b"hello",
+            &sig
+        ));
     }
 
     #[test]
@@ -98,7 +113,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                fs::metadata(&p).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 }

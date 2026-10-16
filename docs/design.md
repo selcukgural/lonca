@@ -2,8 +2,8 @@
 
 Tasarım dokümanı.
 
-> Durum: Taslak v0.2 · 2026-10-16
-> v0.1: claude.ai üzerindeki tasarım tartışması. v0.2: Claude Code incelemesi ve proje kararları.
+> Durum: v0.3 · 2026-10-16 — dört fazın ilk uygulaması tamam (bkz. §11).
+> v0.1: claude.ai üzerindeki tasarım tartışması. v0.2: Claude Code incelemesi ve proje kararları. v0.3: uygulama durumu ve sapmalar.
 > Bu doküman Claude Code tarafından uygulama bağlamı olarak okunmak üzere yazılmıştır.
 
 ## 0. v0.1'den bu yana değişenler
@@ -560,6 +560,30 @@ Lisansları kullanmadan önce kontrol edilmeli.
 - **Claude Code ayrıntıları:** `allowManagedHooksOnly`'nin tam etki listesi belgelerde doğrulanamadı; uygulamadan önce test edilmeli.
 - **sudo önbelleği:** Claude Code'un Bash komutları kullanıcının sudo parola önbelleğini kullanabiliyor mu? Test edilmeli (§3.3).
 - **Doküman dili:** Açık kaynak için İngilizce'ye çevrilmeli mi?
+
+Faz 0'da kapananlar (gerekçeleri `docs/decisions.md`'de): temel **gitoxide + kendi çekirdeğimiz**, lisans **Apache-2.0**, change-id **jj ile birebir aynı `change-id` başlığı**, ilk diller **Rust, Python, TypeScript/TSX, JavaScript, C#, Go**, sandbox **macOS'ta Seatbelt, Linux'ta bubblewrap**.
+
+## 11. Uygulama Durumu (v0.1, 2026-10-16)
+
+| Bölüm | Durum | Not |
+|---|---|---|
+| §5.1 Çekirdek, Git uyumu, köprü | Tamam | Push/pull için `git` ikilisi; `ext::` vb. komut çalıştıran protokoller reddediliyor. |
+| §5.2 Operation Log | Tamam | SHA-256 zincir, daemon imzası, kayıtlı zaman, `refs/lonca/oplog`, push ile çapa. |
+| §5.3 Undo / revert / redaction | Tamam / kısmi | Undo ve revert telafi edici işlem; redaction mantıksal (blob daemon tarafından gizleniyor, Git geçmişinden silinmiyor). |
+| §5.4 Kimlik, oturum, imza | Tamam | Token'ın yalnızca hash'i diskte; Secure Enclave imzacı (`lonca-se`); `require_presence`. |
+| §5.5 Capability | Tamam, sapmalı | Biscuit yerine daemon tarafı kayıt; daraltma (`scope_within`) ve zincirleme iptal korunuyor. |
+| §5.6 Policy Engine | Tamam | Cedar, hata = red; `@escalate`, `@approvals`; politika korumalı ref'te. Tek geliştirici için onay sayısı kayıtlı insan sayısına kısılıyor (`approvals_capped`); "imza + bekleme süresi" yapılmadı. |
+| §5.7 Lease Manager | Tamam | Beklemesiz hepsi-ya-hiç; `edit` / `insert` / `rename`; import eklemeleri kiralamasız. İmza değişikliği tespit ediliyor ama çağıranlara bildirim yok. |
+| §5.8 Merge Queue | Tamam (seri) | Kilit dışında merge + doğrulama; toplu (spekülatif) doğrulama yapılmadı. 20 agent / tek dosya testi 1 saniyenin altında geçiyor. |
+| §5.9 Verification | Tamam / kısmi | Sözdizimi, build, test, beyan–diff, test silme/atlama eskalasyonu. Değişen testlerde eski test paketini yeni koda karşı koşmak yapılmadı. |
+| §5.10 Köken / taint | Tamam | Hook gözlemleri, `unobserved` = kirli, gözlem–etki tutarlılığı, müzakerede yayılma, ağ proxy'si (lsof ile atıf). Kirliliği içerik düzeyinde taşıma (okunan kirli içerik) kısmen: değişikliklerin köken etiketi var, okuyanı kirletme yalnızca "güvenilmeyen yollar" üzerinden. |
+| §5.11 MCP + CLI | Tamam | `lonca mcp` (9 araç), `lonca hook`, kapsamlı CLI. |
+| §5.12 Müzakere | Tamam | Yapısal mesajlar, tur sınırı, `yield` ile kiralama devri. |
+| §5.13 Auditor | Tamam | Karar, Facts ve merge yeniden hesaplama; yayımlanmış log karşılaştırması; dondurma bayrağı. Karar kodunu paylaşıyor (açık soru duruyor). |
+| §5.14 AI Danışman | Tamam | `lonca advise`; günlük bütçe; diff kırpılmıyor, büyükse reddediliyor. Yalnızca sahte API'ye karşı test edildi. |
+| §3.1–3.3 Sertleştirilmiş mod | Tamam, sahada denenmedi | Kurulum betikleri (macOS/Linux), peer uid kontrolü, sudo kontrolü, managed settings denetimi. Betikler `--render` ile ve Lonca'nın kendi denetleyicisiyle test edildi; gerçek `sudo` kurulumu çalıştırılmadı. |
+| İzole mod | Yapılmadı | Container tabanlı agent çalıştırma. |
+| Ekip sunucusu | Yapılmadı | Tasarım açık soru olarak duruyor. |
 
 ---
 

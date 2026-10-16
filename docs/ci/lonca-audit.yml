@@ -1,0 +1,25 @@
+# Example workflow for a repository that Lonca pushes to: every push is
+# audited on infrastructure separate from the developer's machine.
+# Copy to .github/workflows/lonca-audit.yml and pin <REV> to a Lonca commit.
+name: lonca-audit
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch the Lonca refs (operation log, policy, proposals)
+        run: git fetch --no-tags origin '+refs/lonca/*:refs/lonca/*'
+      - name: Install lonca-audit
+        run: cargo install --locked --git https://github.com/lonca-dev/lonca --rev <REV> lonca-audit
+      - name: Replay and verify every decision
+        run: lonca-audit verify .git

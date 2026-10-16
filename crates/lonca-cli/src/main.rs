@@ -163,6 +163,16 @@ enum Cmd {
         #[arg(long = "as")]
         human: Option<String>,
     },
+    /// Withhold a blob (leaked secret, personal data) from every reader.
+    Redact {
+        blob: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
     /// Stop all work on a repository.
     Freeze {
         reason: String,
@@ -988,6 +998,26 @@ fn run(cmd: Cmd) -> Result<()> {
             let repo = repo_name(repo)?;
             let mut c = human_client(&repo)?;
             submit(&mut c, &human_name(human)?, &repo, Op::Freeze { reason })?;
+            Ok(())
+        }
+        Cmd::Redact {
+            blob,
+            reason,
+            repo,
+            human,
+        } => {
+            let repo = repo_name(repo)?;
+            let mut c = human_client(&repo)?;
+            let blob = GitId::parse(&blob)?;
+            submit(
+                &mut c,
+                &human_name(human)?,
+                &repo,
+                Op::Redact { blob, reason },
+            )?;
+            println!(
+                "note: the blob is withheld by Lonca; copies already pushed to other remotes are not removed."
+            );
             Ok(())
         }
         Cmd::Unfreeze {

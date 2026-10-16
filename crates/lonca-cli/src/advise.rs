@@ -163,16 +163,18 @@ fn today() -> String {
 /// Credentials: an API key, else an OAuth access token from `ant`.
 fn auth_headers() -> Result<Vec<(String, String)>> {
     if let Ok(k) = std::env::var("ANTHROPIC_API_KEY")
-        && !k.is_empty() {
-            return Ok(vec![("x-api-key".into(), k)]);
-        }
+        && !k.is_empty()
+    {
+        return Ok(vec![("x-api-key".into(), k)]);
+    }
     if let Ok(t) = std::env::var("ANTHROPIC_AUTH_TOKEN")
-        && !t.is_empty() {
-            return Ok(vec![
-                ("authorization".into(), format!("Bearer {t}")),
-                ("anthropic-beta".into(), "oauth-2025-04-20".into()),
-            ]);
-        }
+        && !t.is_empty()
+    {
+        return Ok(vec![
+            ("authorization".into(), format!("Bearer {t}")),
+            ("anthropic-beta".into(), "oauth-2025-04-20".into()),
+        ]);
+    }
     let out = std::process::Command::new("ant")
         .args(["auth", "print-credentials", "--access-token"])
         .output();

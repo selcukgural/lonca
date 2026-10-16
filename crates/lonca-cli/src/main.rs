@@ -611,9 +611,10 @@ fn run(cmd: Cmd) -> Result<()> {
                         json!({"items": items, "intent": intent, "ttl_ms": ctx::duration_ms(&ttl)?}),
                     )?;
                     if let Some(set) = r["set"].as_str()
-                        && r["decision"]["outcome"] == "allow" {
-                            println!("lease set {set}");
-                        }
+                        && r["decision"]["outcome"] == "allow"
+                    {
+                        println!("lease set {set}");
+                    }
                     r
                 }
                 LeaseCmd::Release { set } => call(&mut c, "lease.release", json!({"set": set}))?,

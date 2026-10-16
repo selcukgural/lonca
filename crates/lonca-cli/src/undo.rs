@@ -251,10 +251,9 @@ pub fn revert(
     for o in &all {
         let e = &o.entry;
         let by_actor = matches_actor(&e.actor.label(), e.actor.session(), actor);
-        if by_actor
-            && let Op::ChangePropose { change, .. } = &e.op {
-                mine.insert(*change);
-            }
+        if by_actor && let Op::ChangePropose { change, .. } = &e.op {
+            mine.insert(*change);
+        }
         if e.seq < since || !e.decision.is_allow() {
             continue;
         }

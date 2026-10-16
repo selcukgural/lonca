@@ -102,7 +102,12 @@ fn handle(v: &Value, ws: &Workspace, cwd: &str) -> Result<Option<Value>> {
             let r = ctx::call(
                 &mut client,
                 "hook.bind",
-                json!({"harness": "claude-code", "harness_session": harness_session, "sudo_without_password": sudo_without_password()}),
+                json!({
+                    "harness": "claude-code",
+                    "harness_session": harness_session,
+                    "sudo_without_password": sudo_without_password(),
+                    "workspace": ws.root,
+                }),
             )?;
             let level = r["level"].as_str().unwrap_or("unobserved");
             let session = ws.meta.session.clone().unwrap_or_default();

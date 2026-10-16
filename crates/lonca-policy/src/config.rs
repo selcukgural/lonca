@@ -53,6 +53,11 @@ retries = 0
 [observation]
 # Sessions that nothing observes are treated like tainted sessions.
 unobserved_is_tainted = true
+# Outbound connections through the Lonca proxy: "taint" lets them through
+# and marks the session tainted, "deny" refuses them.
+network = "taint"
+# Let sandboxed commands reach loopback, private and link-local addresses.
+allow_private_network = false
 
 [approvals]
 # With fewer enrolled humans than a rule requires, require all of them.
@@ -159,6 +164,8 @@ pub struct Verification {
 #[serde(deny_unknown_fields, default)]
 pub struct Observation {
     pub unobserved_is_tainted: bool,
+    pub network: String,
+    pub allow_private_network: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -261,6 +268,8 @@ impl Default for Observation {
     fn default() -> Self {
         Self {
             unobserved_is_tainted: true,
+            network: "taint".into(),
+            allow_private_network: false,
         }
     }
 }
@@ -352,6 +361,11 @@ impl PolicyBundle {
         ) {
             return Err(format!(
                 "{CONFIG_FILE}: integrity.on_unmediated must be restore or freeze"
+            ));
+        }
+        if !matches!(config.observation.network.as_str(), "taint" | "deny") {
+            return Err(format!(
+                "{CONFIG_FILE}: observation.network must be taint or deny"
             ));
         }
         let cedar = PolicySet::from_str(policy_text).map_err(|e| format!("{POLICY_FILE}: {e}"))?;

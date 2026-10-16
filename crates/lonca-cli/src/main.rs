@@ -44,6 +44,19 @@ enum Cmd {
         /// Claude Code managed settings to inspect when binding sessions.
         #[arg(long)]
         managed_settings: Option<PathBuf>,
+        /// Network proxy for sandboxed commands (loopback only).
+        #[arg(long, default_value = "127.0.0.1:8471")]
+        proxy: String,
+        #[arg(long)]
+        no_proxy: bool,
+        /// Socket permissions, octal (hardened mode: 660 with --socket-group).
+        #[arg(long, default_value = "600")]
+        socket_mode: String,
+        #[arg(long)]
+        socket_group: Option<String>,
+        /// Only these uids may connect (repeatable).
+        #[arg(long = "allow-uid")]
+        allow_uids: Vec<u32>,
     },
     /// Human identities (development file keys).
     #[command(subcommand)]
@@ -373,6 +386,11 @@ fn run(cmd: Cmd) -> Result<()> {
             home,
             allow_user_owned_settings,
             managed_settings,
+            proxy,
+            no_proxy,
+            socket_mode,
+            socket_group,
+            allow_uids,
         } => {
             let home = home
                 .map(lonca_daemon::Home::new)
@@ -385,14 +403,40 @@ fn run(cmd: Cmd) -> Result<()> {
             };
             let svc =
                 lonca_daemon::Service::open(home.clone(), settings, lonca_daemon::system_clock())?;
-            let listener = lonca_daemon::server::bind(&home.socket())?;
+            let access = lonca_daemon::server::Access {
+                mode: u32::from_str_radix(&socket_mode, 8)
+                    .context("--socket-mode is octal, e.g. 660")?,
+                group: match socket_group {
+                    Some(g) => Some(
+                        lonca_daemon::server::group_id(&g)
+                            .with_context(|| format!("unknown group {g}"))?,
+                    ),
+                    None => None,
+                },
+                allowed_uids: if allow_uids.is_empty() {
+                    None
+                } else {
+                    Some(allow_uids)
+                },
+            };
+            let listener = lonca_daemon::server::bind_with(&home.socket(), &access)?;
             svc.spawn_worker();
+            if !no_proxy {
+                match lonca_daemon::proxy::bind(&proxy) {
+                    Ok(l) => {
+                        let s = svc.clone();
+                        std::thread::spawn(move || lonca_daemon::proxy::serve(l, s));
+                        eprintln!("lonca daemon: network proxy on {proxy}");
+                    }
+                    Err(e) => eprintln!("lonca daemon: proxy not started on {proxy}: {e}"),
+                }
+            }
             eprintln!(
                 "lonca daemon: listening on {} (key {})",
                 home.socket().display(),
                 &svc.public_key()[..16]
             );
-            lonca_daemon::server::serve(listener, svc);
+            lonca_daemon::server::serve_with(listener, svc, access);
             Ok(())
         }
         Cmd::Human(HumanCmd::Keygen { name }) => {

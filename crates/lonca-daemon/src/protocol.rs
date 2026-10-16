@@ -219,6 +219,9 @@ pub struct HookBind {
     pub harness: String,
     pub harness_session: String,
     pub sudo_without_password: bool,
+    /// Workspace root; lets the network proxy attribute connections.
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

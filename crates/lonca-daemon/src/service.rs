@@ -58,6 +58,13 @@ impl Default for Settings {
 
 type Hr = std::result::Result<Value, (String, String)>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProxyVerdict {
+    pub allow: bool,
+    pub allow_private: bool,
+    pub reason: String,
+}
+
 fn fail<T>(code: &str, msg: impl Into<String>) -> std::result::Result<T, (String, String)> {
     Err((code.into(), msg.into()))
 }
@@ -94,6 +101,8 @@ struct Inner {
     repos: BTreeMap<String, RepoHandle>,
     tokens: Tokens,
     prepared: BTreeMap<String, Op>,
+    /// (repo, session) -> workspace root, as reported at bind time.
+    workspaces: BTreeMap<(String, String), PathBuf>,
 }
 
 pub struct Service {
@@ -134,6 +143,7 @@ impl Service {
                 repos,
                 tokens,
                 prepared: BTreeMap::new(),
+                workspaces: BTreeMap::new(),
             }),
             wake: (Mutex::new(0), Condvar::new()),
         });
@@ -960,7 +970,102 @@ impl Service {
         let mut out = logged(&signed);
         out["level"] = json!(level);
         out["notes"] = json!(ins.notes);
+        if let Some(ws) = b
+            .workspace
+            .filter(|w| std::path::Path::new(w).is_absolute())
+        {
+            let session = signed.entry.op.clone();
+            if let Op::SessionBind { session, .. } = session {
+                guard.workspaces.insert((repo, session), PathBuf::from(ws));
+            }
+        }
         Ok(out)
+    }
+
+    // ---------------------------------------------------------------- network
+
+    /// Records an outbound connection seen by the Lonca proxy and decides
+    /// whether to let it through. `cwd` is the working directory of the
+    /// connecting process when it could be determined; the connection is
+    /// attributed to the sessions whose workspace contains it, otherwise to
+    /// every session routed through the proxy (fail closed).
+    pub fn proxy_connect(&self, cwd: Option<&std::path::Path>, host: &str) -> ProxyVerdict {
+        let now = self.now();
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        let mut matched: Vec<(String, String)> = match cwd {
+            Some(c) => inner
+                .workspaces
+                .iter()
+                .filter(|(_, root)| c.starts_with(root))
+                .map(|(k, _)| k.clone())
+                .collect(),
+            None => vec![],
+        };
+        let attributed = !matched.is_empty();
+        if !attributed {
+            for (name, r) in inner.repos.iter().filter(|(_, r)| r.initialized()) {
+                let s = &r.chain.state;
+                for x in s.sessions.values() {
+                    if x.level == lonca_core::ops::ObservationLevel::HooksSandbox
+                        && s.session_active(&x.id, now)
+                    {
+                        matched.push((name.clone(), x.id.clone()));
+                    }
+                }
+            }
+        }
+        if matched.is_empty() {
+            return ProxyVerdict {
+                allow: false,
+                allow_private: false,
+                reason: "no Lonca session uses this proxy".into(),
+            };
+        }
+        let mut allow = true;
+        let mut allow_private = true;
+        for (repo, session) in &matched {
+            let Some(r) = inner.repos.get_mut(repo) else {
+                continue;
+            };
+            let Ok(policy) = r.policy() else {
+                allow = false;
+                continue;
+            };
+            allow &= policy.config.observation.network == "taint";
+            allow_private &= policy.config.observation.allow_private_network;
+            let ev = lonca_core::ops::Observation {
+                phase: lonca_core::ops::Phase::Pre,
+                kind: lonca_core::ops::ObsKind::Fetch {
+                    host: host.to_string(),
+                },
+                external: true,
+            };
+            if r.submit(
+                Submission::new(
+                    Actor::Daemon,
+                    Op::Observe {
+                        session: session.clone(),
+                        events: vec![ev],
+                    },
+                ),
+                now,
+            )
+            .is_err()
+            {
+                allow = false;
+            }
+        }
+        let reason = if allow {
+            String::new()
+        } else {
+            "network access is denied by repository policy".into()
+        };
+        ProxyVerdict {
+            allow,
+            allow_private,
+            reason,
+        }
     }
 
     // ---------------------------------------------------------------- integrity

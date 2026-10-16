@@ -4,6 +4,7 @@ pub mod client;
 pub mod home;
 pub mod hooks;
 pub mod protocol;
+pub mod proxy;
 pub mod repo;
 pub mod server;
 pub mod service;

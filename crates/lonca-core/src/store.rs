@@ -92,6 +92,8 @@ pub struct CommitInfo {
     pub message: String,
     pub author_name: String,
     pub author_email: String,
+    /// Author time in milliseconds (Git stores seconds).
+    pub time_ms: i64,
 }
 
 impl CommitInfo {
@@ -239,6 +241,7 @@ impl Store {
             message: c.message.to_str_lossy().into_owned(),
             author_name: author.name.to_str_lossy().into_owned(),
             author_email: author.email.to_str_lossy().into_owned(),
+            time_ms: author.time().map_err(git)?.seconds * 1000,
         })
     }
 

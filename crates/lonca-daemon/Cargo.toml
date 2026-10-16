@@ -4,3 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base64 = "0.23.1"
+hex = "0.4.3"
+libc = "0.2.190"
+lonca-core = { version = "0.1.0", path = "../lonca-core" }
+lonca-policy = { version = "0.1.0", path = "../lonca-policy" }
+lonca-symbols = { version = "0.1.0", path = "../lonca-symbols" }
+lonca-verify = { version = "0.1.0", path = "../lonca-verify" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+tempfile = "3.27.0"

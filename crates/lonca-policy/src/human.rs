@@ -12,6 +12,23 @@ pub fn intent_bytes(repo: &str, op: &Op, nonce: &str, issued_ms: i64) -> Vec<u8>
     canonical_bytes(&HumanIntent::new(repo, op, nonce, issued_ms))
 }
 
+/// Signs `op` with a file key (development signer: no user presence).
+pub fn sign_ed25519(
+    key: &lonca_core::keys::KeyPair,
+    human: &str,
+    repo: &str,
+    op: &Op,
+    now_ms: i64,
+) -> HumanSignature {
+    let nonce = lonca_core::canonical::random_id("nonce");
+    HumanSignature {
+        human: human.to_string(),
+        sig: key.sign_hex(&intent_bytes(repo, op, &nonce, now_ms)),
+        nonce,
+        issued_ms: now_ms,
+    }
+}
+
 pub fn verify(key: &HumanKey, repo: &str, op: &Op, sig: &HumanSignature, now_ms: i64) -> Result<(), &'static str> {
     if sig.issued_ms > now_ms + MAX_SKEW_MS || sig.issued_ms < now_ms - MAX_AGE_MS {
         return Err("stale_human_signature");

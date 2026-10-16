@@ -9,6 +9,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use crate::canonical::random_bytes;
 use crate::error::{Error, Result};
 
+#[derive(Clone)]
 pub struct KeyPair {
     sk: SigningKey,
 }

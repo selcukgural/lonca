@@ -1893,6 +1893,19 @@ dependencies = [
 [[package]]
 name = "lonca-daemon"
 version = "0.1.0"
+dependencies = [
+ "base64",
+ "hex",
+ "libc",
+ "lonca-core",
+ "lonca-policy",
+ "lonca-symbols",
+ "lonca-verify",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
 
 [[package]]
 name = "lonca-policy"

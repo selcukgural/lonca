@@ -1,14 +1,14 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Symbols, facts and structural merge.
+//!
+//! Everything here is a pure function of file contents, so the daemon and
+//! the auditor compute exactly the same facts and merges.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod extract;
+pub mod facts;
+pub mod lang;
+pub mod merge;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use extract::{Parsed, Sym, parse};
+pub use facts::{Analysis, analyze};
+pub use lang::Lang;
+pub use merge::{MergeResult, merge3};

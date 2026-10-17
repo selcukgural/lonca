@@ -5,7 +5,8 @@
 //! a [`Gate`], which decides whether it goes through. Loopback, private and
 //! link-local destinations are refused unless the gate allows them, and the
 //! proxy connects to the address it checked, so DNS cannot swap in a private
-//! address after the check. The proxy never sees inside TLS.
+//! address after the check. The proxy never looks inside TLS itself; a gate
+//! may serve a tunnel it let through ([`Gate::relay`]).
 //!
 //! It has no dependencies and knows nothing about who uses it: the gate
 //! holds all the policy.
@@ -82,6 +83,25 @@ pub trait Gate: Send + Sync + 'static {
 
     /// Told how every request that reached [`Gate::decide`] ended.
     fn finished(&self, _request: &Request<'_>, _outcome: Outcome) {}
+
+    /// Offered every `CONNECT` tunnel the gate let through, before a byte
+    /// of it is relayed. A gate that serves the tunnel itself (to look
+    /// inside TLS for a host it holds the keys of, say) returns `None` once
+    /// it is done; returning the tunnel has the proxy relay its bytes as
+    /// they are.
+    fn relay(&self, _request: &Request<'_>, tunnel: Tunnel) -> Option<Tunnel> {
+        Some(tunnel)
+    }
+}
+
+/// A `CONNECT` tunnel the gate let through: the client has been told it is
+/// established, and nothing has been relayed yet.
+pub struct Tunnel {
+    pub client: TcpStream,
+    pub upstream: TcpStream,
+    /// What the client sent after its request, which the proxy has already
+    /// read: the start of the tunnel's bytes.
+    pub early: Vec<u8>,
 }
 
 /// Binds the proxy. Only loopback addresses are accepted: the proxy is for
@@ -388,16 +408,32 @@ fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std
     };
     track(&upstream);
     client.set_read_timeout(None)?;
-    let mut up_w = upstream.try_clone()?;
-    match rest_of_request {
+    // Bytes already buffered after the head belong to the tunnel.
+    let buffered = reader.buffer().to_vec();
+    drop(reader);
+    let (client, upstream, buffered) = match rest_of_request {
         None => {
             let mut c = &client;
             c.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")?;
+            let tunnel = Tunnel {
+                client,
+                upstream,
+                early: buffered,
+            };
+            match gate.relay(&request, tunnel) {
+                Some(t) => (t.client, t.upstream, t.early),
+                None => {
+                    gate.finished(&request, Outcome::Tunneled);
+                    return Ok(());
+                }
+            }
         }
-        Some(h) => up_w.write_all(h.as_bytes())?,
-    }
-    // Bytes already buffered after the head belong to the tunnel.
-    let buffered = reader.buffer().to_vec();
+        Some(h) => {
+            (&upstream).write_all(h.as_bytes())?;
+            (client, upstream, buffered)
+        }
+    };
+    let mut up_w = upstream.try_clone()?;
     if !buffered.is_empty() {
         up_w.write_all(&buffered)?;
     }

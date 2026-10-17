@@ -162,3 +162,60 @@ fn dropping_the_server_stops_it() {
     drop(server);
     assert!(TcpStream::connect(addr).is_err());
 }
+
+/// Serves the tunnels it is offered itself, writing its own greeting
+/// instead of relaying the upstream's.
+struct Taker;
+
+impl Gate for Taker {
+    fn decide(&self, _request: &Request<'_>) -> Verdict {
+        Verdict {
+            allow: true,
+            allow_private: true,
+            reason: String::new(),
+        }
+    }
+
+    fn relay(&self, request: &Request<'_>, tunnel: lonca_net::Tunnel) -> Option<lonca_net::Tunnel> {
+        if !request.port.is_multiple_of(2) {
+            return Some(tunnel);
+        }
+        let mut client = tunnel.client;
+        let _ = writeln!(
+            client,
+            "taken over, early {:?}",
+            String::from_utf8_lossy(&tunnel.early)
+        );
+        None
+    }
+}
+
+#[test]
+fn a_gate_can_serve_a_tunnel_itself() {
+    let listener = lonca_net::bind("127.0.0.1:0").unwrap();
+    let proxy = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || lonca_net::serve(listener, Arc::new(Taker)));
+    // An even port is taken over, an odd one relayed; find one of each.
+    let (mut even, mut odd) = (None, None);
+    while even.is_none() || odd.is_none() {
+        let up = upstream();
+        if up.is_multiple_of(2) {
+            even.get_or_insert(up);
+        } else {
+            odd.get_or_insert(up);
+        }
+    }
+
+    let mut s = TcpStream::connect(("127.0.0.1", proxy)).unwrap();
+    let target = format!("127.0.0.1:{}", even.unwrap());
+    // The tunnel's first bytes come with the request.
+    write!(s, "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\nhi").unwrap();
+    let mut all = String::new();
+    let _ = BufReader::new(s).read_to_string(&mut all);
+    assert!(all.starts_with("HTTP/1.1 200"), "{all}");
+    assert!(all.ends_with("taken over, early \"hi\"\n"), "{all}");
+
+    let (status, body) = connect(proxy, &format!("127.0.0.1:{}", odd.unwrap()));
+    assert!(status.contains("200"), "{status}");
+    assert!(body.contains("hello from upstream"), "{body}");
+}

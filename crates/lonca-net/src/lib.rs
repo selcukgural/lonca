@@ -227,24 +227,50 @@ fn accept<G: Gate>(listener: TcpListener, gate: Arc<G>, shared: &Arc<Shared>) {
     }
 }
 
+/// Whether `ip` is anything but the public internet: this computer, its
+/// network, a link, a documentation or benchmarking range, multicast or
+/// reserved, or any of those inside an IPv6 address (mapped, NAT64, or the
+/// old IPv4-compatible form).
 pub fn is_private(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v) => {
-            v.is_loopback() || v.is_private() || v.is_link_local() || v.is_unspecified() || v.is_broadcast()
-                || v.octets()[0] == 100 && (v.octets()[1] & 0xc0) == 64 // 100.64.0.0/10
-                || v.octets()[0] == 0
-        }
+        IpAddr::V4(v) => private_v4(v),
         IpAddr::V6(v) => {
             if let Some(v4) = v.to_ipv4_mapped() {
-                return is_private(IpAddr::V4(v4));
+                return private_v4(v4);
             }
-            let s = v.segments()[0];
-            v.is_loopback()
-                || v.is_unspecified()
-                || (s & 0xfe00) == 0xfc00
-                || (s & 0xffc0) == 0xfe80
+            let s = v.segments();
+            // NAT64 (64:ff9b::/96) carries an IPv4 address at its end.
+            if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                let [a, b] = s[6].to_be_bytes();
+                let [c, d] = s[7].to_be_bytes();
+                return private_v4(std::net::Ipv4Addr::new(a, b, c, d));
+            }
+            v.is_unspecified()
+                || v.is_loopback()
+                || v.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00 // unique local
+                || (s[0] & 0xffc0) == 0xfe80 // link local
+                || (s[0] & 0xffc0) == 0xfec0 // site local
+                || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
+                || s[..6] == [0, 0, 0, 0, 0, 0] // IPv4-compatible, deprecated
         }
     }
+}
+
+fn private_v4(ip: std::net::Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_multicast()
+        || a == 0
+        || (a == 100 && (64..128).contains(&b)) // shared address space
+        || (a == 192 && b == 0 && c == 0) // IETF protocol assignments
+        || (a == 198 && (18..20).contains(&b)) // benchmarking
+        || a >= 240 // reserved
 }
 
 /// Splits `host:port` (with `[v6]` brackets) and checks it.
@@ -469,10 +495,27 @@ mod tests {
             "fd00::1",
             "fe80::1",
             "::ffff:127.0.0.1",
+            "192.0.0.1",
+            "198.18.0.1",
+            "192.0.2.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "255.255.255.255",
+            "fec0::1",
+            "ff02::1",
+            "2001:db8::1",
+            "64:ff9b::7f00:1",
+            "::127.0.0.1",
         ] {
             assert!(is_private(ip.parse().unwrap()), "{ip}");
         }
-        for ip in ["93.184.216.34", "1.1.1.1", "2606:4700::1111"] {
+        for ip in [
+            "93.184.216.34",
+            "1.1.1.1",
+            "2606:4700::1111",
+            "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
+        ] {
             assert!(!is_private(ip.parse().unwrap()), "{ip}");
         }
     }

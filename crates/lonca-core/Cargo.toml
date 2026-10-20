@@ -2,6 +2,11 @@
 name = "lonca-core"
 version = "0.1.0"
 edition = "2024"
+description = "Deterministic building blocks of Lonca: change ids, the signed operation log, keys and the Git store"
+license = "Apache-2.0"
+repository = "https://github.com/selcukgural/lonca"
+keywords = ["vcs", "git", "agents", "oplog"]
+categories = ["development-tools"]
 
 [dependencies]
 base64 = "0.23.1"

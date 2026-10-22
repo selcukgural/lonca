@@ -219,3 +219,87 @@ fn a_gate_can_serve_a_tunnel_itself() {
     assert!(status.contains("200"), "{status}");
     assert!(body.contains("hello from upstream"), "{body}");
 }
+
+/// Serves the plain requests it is offered itself on an even port, saying
+/// what it was handed; on an odd one hands them back to go on as they are.
+struct PlainTaker;
+
+impl Gate for PlainTaker {
+    fn decide(&self, _request: &Request<'_>) -> Verdict {
+        Verdict {
+            allow: true,
+            allow_private: true,
+            reason: String::new(),
+        }
+    }
+
+    fn relay_plain(
+        &self,
+        request: &Request<'_>,
+        head: String,
+        tunnel: lonca_net::Tunnel,
+    ) -> Option<(String, lonca_net::Tunnel)> {
+        if !request.port.is_multiple_of(2) {
+            return Some((head, tunnel));
+        }
+        let mut client = tunnel.client;
+        let _ = writeln!(
+            client,
+            "taken over: {:?}, early {:?}",
+            head.lines().next().unwrap_or_default(),
+            String::from_utf8_lossy(&tunnel.early)
+        );
+        None
+    }
+}
+
+/// An upstream that answers each connection with the first line it got.
+fn echo_upstream() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let mut s = s.unwrap();
+            let mut line = String::new();
+            let _ = BufReader::new(s.try_clone().unwrap()).read_line(&mut line);
+            let _ = write!(s, "upstream got {line}");
+        }
+    });
+    port
+}
+
+#[test]
+fn a_gate_can_serve_a_plain_request_itself() {
+    let listener = lonca_net::bind("127.0.0.1:0").unwrap();
+    let proxy = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || lonca_net::serve(listener, Arc::new(PlainTaker)));
+    let (mut even, mut odd) = (None, None);
+    while even.is_none() || odd.is_none() {
+        let up = echo_upstream();
+        if up.is_multiple_of(2) {
+            even.get_or_insert(up);
+        } else {
+            odd.get_or_insert(up);
+        }
+    }
+    let ask = |port: u16, extra: &str| {
+        let mut s = TcpStream::connect(("127.0.0.1", proxy)).unwrap();
+        write!(
+            s,
+            "GET http://127.0.0.1:{port}/a?b HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n{extra}"
+        )
+        .unwrap();
+        s.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut all = String::new();
+        let _ = BufReader::new(s).read_to_string(&mut all);
+        all
+    };
+    // Handed the head with its path alone, and what came after it.
+    let taken = ask(even.unwrap(), "next");
+    assert_eq!(
+        taken, "taken over: \"GET /a?b HTTP/1.1\", early \"next\"\n",
+        "{taken}"
+    );
+    let passed = ask(odd.unwrap(), "");
+    assert_eq!(passed, "upstream got GET /a?b HTTP/1.1\r\n", "{passed}");
+}

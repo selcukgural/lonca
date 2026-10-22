@@ -92,10 +92,26 @@ pub trait Gate: Send + Sync + 'static {
     fn relay(&self, _request: &Request<'_>, tunnel: Tunnel) -> Option<Tunnel> {
         Some(tunnel)
     }
+
+    /// Offered every plain (absolute `http://`) request the gate let
+    /// through, before a byte of it reaches the host: its `head` with the
+    /// target cut to the path, and the connection to the host, whose
+    /// `early` is what the client sent after the head. A gate that serves
+    /// it itself (to read each request on the connection, say) returns
+    /// `None` once it is done; handing them back has the proxy send the
+    /// head on and relay the rest as it is.
+    fn relay_plain(
+        &self,
+        _request: &Request<'_>,
+        head: String,
+        tunnel: Tunnel,
+    ) -> Option<(String, Tunnel)> {
+        Some((head, tunnel))
+    }
 }
 
-/// A `CONNECT` tunnel the gate let through: the client has been told it is
-/// established, and nothing has been relayed yet.
+/// A connection the gate let through: for a `CONNECT` tunnel, the client
+/// has been told it is established; nothing has been relayed yet.
 pub struct Tunnel {
     pub client: TcpStream,
     pub upstream: TcpStream,
@@ -455,8 +471,21 @@ fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std
             }
         }
         Some(h) => {
-            (&upstream).write_all(h.as_bytes())?;
-            (client, upstream, buffered)
+            let tunnel = Tunnel {
+                client,
+                upstream,
+                early: buffered,
+            };
+            match gate.relay_plain(&request, h, tunnel) {
+                Some((h, t)) => {
+                    (&t.upstream).write_all(h.as_bytes())?;
+                    (t.client, t.upstream, t.early)
+                }
+                None => {
+                    gate.finished(&request, Outcome::Tunneled);
+                    return Ok(());
+                }
+            }
         }
     };
     let mut up_w = upstream.try_clone()?;

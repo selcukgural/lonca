@@ -27,6 +27,7 @@ the design: `docs/decisions.md`.
 cargo test --workspace          # ~110 tests, includes real sandbox and socket tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
+cargo deny check                # advisories, licenses, crates.io only (deny.toml)
 ```
 
 - Every decision scenario test ends with a replay of its log

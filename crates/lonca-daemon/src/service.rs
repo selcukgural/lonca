@@ -1312,3 +1312,29 @@ pub fn is_ancestor(store: &Store, ancestor: &GitId, commit: &GitId) -> Result<bo
     }
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_error_keeps_its_message_under_a_stable_code() {
+        let cases = [
+            (Error::Invalid("a".into()), "invalid", "invalid: a"),
+            (Error::Conflict("b".into()), "conflict", "conflict: b"),
+            (Error::Integrity("c".into()), "integrity", "integrity: c"),
+            (
+                Error::Unsupported("op 3: log format 9".into()),
+                "unsupported",
+                "unsupported: op 3: log format 9",
+            ),
+            (Error::Git("d".into()), "internal", "git: d"),
+            (Error::Io(std::io::Error::other("e")), "internal", "io: e"),
+        ];
+        for (err, code, msg) in cases {
+            assert_eq!(from_err(err), (code.to_string(), msg.to_string()));
+        }
+        let json = serde_json::from_str::<Value>("{").unwrap_err();
+        assert_eq!(from_err(Error::Json(json)).0, "internal");
+    }
+}

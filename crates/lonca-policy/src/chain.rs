@@ -17,6 +17,9 @@ pub struct Submission {
     pub op: Op,
     pub human: Option<HumanSignature>,
     pub facts: Option<Facts>,
+    /// Symbol engine version that computed `facts` or the merge; set by the
+    /// daemon on proposals and integrations.
+    pub symbols_engine: Option<u32>,
     pub evidence: Vec<Attestation>,
 }
 
@@ -27,6 +30,7 @@ impl Submission {
             op,
             human: None,
             facts: None,
+            symbols_engine: None,
             evidence: vec![],
         }
     }
@@ -83,6 +87,7 @@ impl Chain {
             op: sub.op,
             evidence: sub.evidence,
             facts: sub.facts,
+            symbols_engine: sub.symbols_engine,
             decision,
             human: sub.human,
         };

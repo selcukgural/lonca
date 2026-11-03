@@ -219,7 +219,7 @@ Sertleştirilmiş mod şu varsayıma dayanır: agent kullanıcının hesabıyla 
 - **İmza:** Tüm kayıtları daemon imzalar. İnsan kaynaklı kayıtlar ek olarak insanın kullanıcı varlığı gerektiren imzasını taşır (§5.4).
 - **Çapa:** Log başının hash'i her push'ta uzak depoya gider. Yerelde geçmiş yeniden yazılırsa bir sonraki karşılaştırmada ortaya çıkar. İsteğe bağlı olarak ikinci bir tanık (ayrı repo veya şeffaflık günlüğü) kullanılabilir.
 - **Saklama:** Log'un referans verdiği nesneler GC ile silinmez, çünkü undo bunlara ihtiyaç duyar.
-- **Format sürümü:** Her kayıt bir format sürümü taşır; sürüm hash ve imzaya dahildir. Alanı olmayan eski kayıtlar sürüm 0 sayılır. Bilinmeyen sürüm reddedilir, sürüm zincir boyunca azalmaz (`docs/decisions.md`, "Log format versions").
+- **Format sürümü:** Her kayıt bir format sürümü taşır; sürüm hash ve imzaya dahildir. Alanı olmayan eski kayıtlar sürüm 0 sayılır. Bilinmeyen sürüm reddedilir, sürüm zincir boyunca azalmaz (`docs/decisions.md`, "Log format versions"). Öneri ve entegrasyon kayıtları, olguları ve birleştirmeyi hesaplayan sembol motorunun sürümünü de taşır; auditor o sürümle yeniden hesaplar ("Symbol engine versions").
 - **Atomiklik:** Daemon tek yazıcıdır. Lease edinme ve token rotasyonu gibi durum değişiklikleri sıralı ve atomik olarak uygulanır.
 
 ### 5.3 Undo, revert ve redaction

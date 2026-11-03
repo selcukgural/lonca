@@ -2319,7 +2319,9 @@ version = "0.1.0"
 dependencies = [
  "diffy",
  "lonca-core",
+ "serde_json",
  "similar",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-c-sharp",
  "tree-sitter-go",

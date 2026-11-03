@@ -25,8 +25,11 @@ const OP_FILE: &str = "op.json";
 /// their encoding, so their bytes, hashes and signatures are unchanged.
 pub const FORMAT_LEGACY: u32 = 0;
 /// The format this build writes. Version 1 is version 0 with the field
-/// written out.
-pub const FORMAT_CURRENT: u32 = 1;
+/// written out; version 2 adds `symbols_engine`.
+pub const FORMAT_CURRENT: u32 = 2;
+/// The first format whose `change.propose` and `change.integrate` entries
+/// record the symbol engine version.
+pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -56,6 +59,11 @@ pub struct OpEntry {
     pub op: Op,
     pub evidence: Vec<Attestation>,
     pub facts: Option<Facts>,
+    /// Version of the symbol engine that computed this entry's facts or
+    /// merge. Present exactly on `change.propose` and `change.integrate`
+    /// entries from format 2 on; absent means version 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbols_engine: Option<u32>,
     pub decision: Decision,
     pub human: Option<HumanSignature>,
 }
@@ -63,6 +71,21 @@ pub struct OpEntry {
 impl OpEntry {
     pub fn digest(&self) -> String {
         digest_of(self)
+    }
+
+    /// Whether this entry's facts or merge come from the symbol engine.
+    pub fn uses_symbols_engine(&self) -> bool {
+        matches!(
+            self.op,
+            Op::ChangePropose { .. } | Op::ChangeIntegrate { .. }
+        )
+    }
+
+    /// The symbol engine version the auditor must recompute with, for
+    /// entries that use the engine.
+    pub fn engine(&self) -> Option<u32> {
+        self.uses_symbols_engine()
+            .then(|| self.symbols_engine.unwrap_or(0))
     }
 }
 
@@ -217,6 +240,16 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
                 op.entry.format
             )));
         }
+        let wants_engine =
+            op.entry.format >= FORMAT_SYMBOLS_ENGINE && op.entry.uses_symbols_engine();
+        if op.entry.symbols_engine.is_some() != wants_engine {
+            return Err(Error::Integrity(format!(
+                "op {i}: symbols_engine must be {} in a format {} {} entry",
+                if wants_engine { "present" } else { "absent" },
+                op.entry.format,
+                op.entry.op.kind().as_str()
+            )));
+        }
         if op.entry.seq != i as u64 {
             return Err(Error::Integrity(format!(
                 "expected seq {i}, found {}",
@@ -265,6 +298,7 @@ mod tests {
             },
             evidence: vec![],
             facts: None,
+            symbols_engine: None,
             decision: Decision::allow(),
             human: None,
         }
@@ -282,6 +316,7 @@ mod tests {
             },
             evidence: vec![],
             facts: None,
+            symbols_engine: None,
             decision: Decision::allow(),
             human: None,
         }
@@ -353,7 +388,7 @@ mod tests {
         };
         let enc = |e: &OpEntry| String::from_utf8(canonical_bytes(e)).unwrap();
         assert!(enc(&legacy).starts_with("{\"seq\":0,"), "{}", enc(&legacy));
-        assert!(enc(&current).starts_with("{\"format\":1,\"seq\":0,"));
+        assert!(enc(&current).starts_with("{\"format\":2,\"seq\":0,"));
         assert_ne!(legacy.digest(), current.digest(), "format is in the digest");
 
         // Changing the format of a signed entry breaks its signature.
@@ -381,7 +416,7 @@ mod tests {
         v["entry"]["op"] = serde_json::json!({"type": "from.the.future"});
         let bytes = serde_json::to_vec(&v).unwrap();
         match decode(&bytes) {
-            Err(Error::Unsupported(m)) => assert!(m.contains("op 0: log format 2"), "{m}"),
+            Err(Error::Unsupported(m)) => assert!(m.contains("op 0: log format 3"), "{m}"),
             other => panic!("expected Unsupported, got {other:?}"),
         }
 
@@ -422,5 +457,49 @@ mod tests {
             err.to_string().contains("op 3: log format goes back"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn the_symbols_engine_is_recorded_exactly_on_proposals_and_integrations() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(genesis(&key, &store), &key);
+        let tree = store.empty_tree().unwrap();
+        let integrate = |prev: &SignedOp, format, symbols_engine| OpEntry {
+            format,
+            symbols_engine,
+            op: Op::ChangeIntegrate {
+                change: crate::ChangeId::random(),
+                trunk_before: tree.clone(),
+                merged: None,
+                conflicts: vec![],
+            },
+            ..next(prev, 2000)
+        };
+        let ok = |e: OpEntry| verify_chain(&[g.clone(), SignedOp::sign(e, &key)]);
+
+        let recorded = integrate(&g, FORMAT_CURRENT, Some(7));
+        assert_eq!(recorded.engine(), Some(7));
+        assert!(ok(recorded).is_ok());
+        assert!(ok(integrate(&g, FORMAT_CURRENT, None)).is_err(), "missing");
+        let other = OpEntry {
+            symbols_engine: Some(0),
+            ..next(&g, 2000)
+        };
+        assert_eq!(other.engine(), None);
+        assert!(ok(other).is_err(), "on an op that uses no engine");
+
+        // Before format 2 the field did not exist; absent means engine 0.
+        let old = SignedOp::sign(with_format(genesis(&key, &store), 1), &key);
+        let v1 = |e| verify_chain(&[old.clone(), SignedOp::sign(e, &key)]);
+        let legacy = integrate(&old, 1, None);
+        assert_eq!(legacy.engine(), Some(0));
+        assert!(v1(legacy).is_ok());
+        assert!(v1(integrate(&old, 1, Some(0))).is_err());
+    }
+
+    fn with_format(e: OpEntry, format: u32) -> OpEntry {
+        OpEntry { format, ..e }
     }
 }

@@ -53,6 +53,13 @@ impl RepoHandle {
         let ops = log.read_all()?;
         if !ops.is_empty() {
             verify_chain(&ops)?;
+            for op in &ops {
+                if let Some(v) = op.entry.engine() {
+                    lonca_symbols::engine::check(v).map_err(|e| {
+                        Error::Unsupported(format!("repo {name}, op {}: {e}", op.entry.seq))
+                    })?;
+                }
+            }
             if let Op::RepoInit { daemon_key, .. } = &ops[0].entry.op
                 && *daemon_key != key.public_hex()
             {

@@ -1,0 +1,230 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.tsx#Price"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.tsx"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.tsx#Added"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.tsx#Gone"
+        ],
+        "edits": [
+          "src/sample.tsx#Label"
+        ],
+        "import_only_files": [],
+        "lines_added": 5,
+        "lines_removed": 4,
+        "modified_files": [
+          "src/sample.tsx"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "import React from \"react\";\n\nexport function Price(props: { amount: number }) {\n  return <span className=\"price\">{props.amount}</span>;\n}\n\nexport const Label = (p: { text: string; strong: boolean }) =>\n  p.strong ? <b>{p.text}</b> : <i>{p.text}</i>;\n\nexport function Added() {\n  return <hr />;\n}\n"
+  },
+  "path": "src/sample.tsx",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          26
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Price",
+          "own": "export function Price(props: { amount: number }) { return <span>{props.amount}</span>; }",
+          "signature": "function Price(props: { amount: number })",
+          "skipped": false,
+          "span": [
+            28,
+            35,
+            118
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Gone",
+          "own": "export function Gone() { return null; }",
+          "signature": "function Gone()",
+          "skipped": false,
+          "span": [
+            120,
+            127,
+            161
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Label",
+          "own": "export const Label = (p: { text: string }) => <b>{p.text}</b>;",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            163,
+            170,
+            225
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          26
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Price",
+          "own": "export function Price(props: { amount: number }) { return <span className=\"price\">{props.amount}</span>; }",
+          "signature": "function Price(props: { amount: number })",
+          "skipped": false,
+          "span": [
+            28,
+            35,
+            136
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Gone",
+          "own": "export function Gone() { return null; }",
+          "signature": "function Gone()",
+          "skipped": false,
+          "span": [
+            138,
+            145,
+            179
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Label",
+          "own": "export const Label = (p: { text: string }) => <b>{p.text}</b>;",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            181,
+            188,
+            243
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          26
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Price",
+          "own": "export function Price(props: { amount: number }) { return <span>{props.amount}</span>; }",
+          "signature": "function Price(props: { amount: number })",
+          "skipped": false,
+          "span": [
+            28,
+            35,
+            118
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Label",
+          "own": "export const Label = (p: { text: string; strong: boolean }) => p.strong ? <b>{p.text}</b> : <i>{p.text}</i>;",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            120,
+            127,
+            230
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Added",
+          "own": "export function Added() { return <hr />; }",
+          "signature": "function Added()",
+          "skipped": false,
+          "span": [
+            232,
+            239,
+            276
+          ]
+        }
+      ]
+    }
+  }
+}

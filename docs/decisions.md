@@ -71,9 +71,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 0** is every entry written before the field existed. The field
   is left out of their encoding, so their bytes, hashes and signatures are
   unchanged and existing logs verify as they are.
-- **Version 1** is version 0 with the field written out. The daemon writes
-  only the current version; a log written by an older release continues
-  with current entries after an upgrade.
+- **Version 1** is version 0 with the field written out.
+- **Version 2** adds `symbols_engine` (below).
+- The daemon writes only the current version; a log written by an older
+  release continues with current entries after an upgrade.
 - **Refusal.** Decoding reads the version before anything else. A version
   newer than the build knows is refused (`unsupported: ... upgrade lonca`)
   by the daemon, which then does not start, and by the auditor. The version
@@ -92,8 +93,43 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   audit must pass. Fixtures are never regenerated. Before 1.0 this policy
   will be reviewed; dropping a version would need a migration that
   preserves the old log as evidence.
-- **Not covered:** the semantics of the symbol engine (facts and merges the
-  auditor recomputes). Those get their own version (#37).
+- **Not covered:** the semantics of the symbol engine; see the next section.
+
+## Symbol engine versions
+
+The auditor recomputes the facts of every proposal and the merge of every
+integration from the Git objects. Extraction, facts and the merge are
+therefore part of the log's meaning, but they change more often than the
+entry format, so they have their own version
+(`crates/lonca-symbols/src/engine.rs`).
+
+- **Recorded per entry.** `change.propose` and `change.integrate` entries
+  carry `symbols_engine`, the version that computed their facts or merge.
+  From format 2 on it is present on exactly those entries; an entry of an
+  older format has none and means engine 0. Engine 0 is the engine of
+  v0.1.
+- **Recomputed with the recorded version.** `facts_of` and `integrate` take
+  the version as a parameter. The daemon passes the current one; the
+  auditor passes the one in the entry. A version the build does not know is
+  refused: the daemon does not start and the auditor reports an `engine`
+  finding.
+- **What is an engine change.** Anything that changes the output of
+  extraction, facts or the merge for some input: a new rule, a fixed gap,
+  a changed symbol name, and also an update of a tree-sitter grammar or of
+  `similar`/`diffy` that changes their output. Such a change adds a new
+  version; the old code stays in the crate behind the version switch,
+  frozen.
+- **Frozen output.** `crates/lonca-symbols/tests/engine.rs` pins, for each
+  engine version and each supported language, the extracted symbols, the
+  facts of both sides and the three-way merge of a small corpus
+  (`tests/engine/v<N>/`). The golden logs pin the same through the whole
+  daemon and auditor. A failing snapshot is never edited; it means the
+  change needs a new engine version. A dependency update that fails it
+  must wait until its output is the old version's or a new version is
+  added.
+- **Compatibility during 0.x** is the same as for the format: every engine
+  version that ever wrote an entry stays recomputable by every later
+  release.
 
 ## Open questions (carried from the design)
 

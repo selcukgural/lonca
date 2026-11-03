@@ -3,6 +3,7 @@
 //! Everything here is a pure function of file contents, so the daemon and
 //! the auditor compute exactly the same facts and merges.
 
+pub mod engine;
 pub mod extract;
 pub mod facts;
 pub mod integrate;

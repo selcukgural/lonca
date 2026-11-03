@@ -26,14 +26,16 @@ const OP_FILE: &str = "op.json";
 pub const FORMAT_LEGACY: u32 = 0;
 /// The format this build writes. Version 1 is version 0 with the field
 /// written out; version 2 adds `symbols_engine`; version 3 adds the human
-/// key operations.
-pub const FORMAT_CURRENT: u32 = 3;
+/// key operations; version 4 adds the daemon key operations.
+pub const FORMAT_CURRENT: u32 = 4;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
 /// The first format with `human.rotate`, `human.revoke`,
 /// `human.recovery_key` and `human.recover`.
 pub const FORMAT_HUMAN_KEYS: u32 = 3;
+/// The first format with `daemon.rotate` and `daemon.recover`.
+pub const FORMAT_DAEMON_KEYS: u32 = 4;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -92,6 +94,7 @@ impl OpEntry {
             | Op::HumanRevoke { .. }
             | Op::HumanRecoveryKey { .. }
             | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
+            Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
             _ => FORMAT_LEGACY,
         }
     }
@@ -101,6 +104,25 @@ impl OpEntry {
     pub fn engine(&self) -> Option<u32> {
         self.uses_symbols_engine()
             .then(|| self.symbols_engine.unwrap_or(0))
+    }
+
+    /// The daemon key in force after this entry, if the entry switched it:
+    /// an allowed `daemon.rotate` or `daemon.recover`.
+    pub fn switches_daemon_key(&self) -> Option<&str> {
+        self.op
+            .daemon_key_switch()
+            .filter(|_| self.decision.is_allow())
+    }
+
+    /// The daemon key that must have signed this entry, given the key in
+    /// force before it. An allowed `daemon.recover` is signed by the key it
+    /// installs, because the old key is gone; every other entry, a rotation
+    /// included, by the key in force.
+    pub fn signer<'a>(&'a self, in_force: &'a str) -> &'a str {
+        match (&self.op, self.switches_daemon_key()) {
+            (Op::DaemonRecover { .. }, Some(new)) => new,
+            _ => in_force,
+        }
     }
 }
 
@@ -235,12 +257,18 @@ pub fn decode(bytes: &[u8]) -> Result<SignedOp> {
 
 /// Checks sequence numbers, the hash chain, signatures, time order and
 /// format versions (known, and never decreasing along the chain).
-/// The daemon key is taken from the genesis `repo.init` entry.
+/// The daemon key is taken from the genesis `repo.init` entry and follows
+/// every allowed `daemon.rotate` and `daemon.recover`.
+///
+/// This checks who signed each entry, not whether a key switch was
+/// authorised: that needs the human keys in force, so the daemon
+/// (`lonca_policy::chain::replay_checked`) and the auditor decide every
+/// switch again.
 pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
     let Some(first) = ops.first() else {
         return Err(Error::Integrity("empty operation log".into()));
     };
-    let daemon_key = match &first.entry.op {
+    let mut daemon_key = match &first.entry.op {
         Op::RepoInit { daemon_key, .. } => daemon_key.clone(),
         _ => return Err(Error::Integrity("first operation is not repo.init".into())),
     };
@@ -285,7 +313,10 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
         if op.entry.time_ms < last_time {
             return Err(Error::Integrity(format!("op {i}: time goes backwards")));
         }
-        op.verify(&daemon_key)?;
+        op.verify(op.entry.signer(&daemon_key))?;
+        if let Some(new) = op.entry.switches_daemon_key() {
+            daemon_key = new.to_string();
+        }
         prev = op.hash.clone();
         last_time = op.entry.time_ms;
         last_format = op.entry.format;
@@ -574,6 +605,116 @@ mod tests {
             );
         }
         assert_eq!(next(&g, 2000).min_format(), FORMAT_LEGACY);
+    }
+
+    #[test]
+    fn daemon_key_operations_need_format_4() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 3), &key);
+        // Denied, so the key in force signs them and nothing switches.
+        for op in [
+            Op::DaemonRotate { key: "01".into() },
+            Op::DaemonRecover { key: "01".into() },
+        ] {
+            let at = |format| OpEntry {
+                format,
+                op: op.clone(),
+                decision: Decision::deny("test"),
+                ..next(&g, 2000)
+            };
+            assert_eq!(at(FORMAT_DAEMON_KEYS).min_format(), FORMAT_DAEMON_KEYS);
+            let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(format), &key)]);
+            assert!(chain(FORMAT_DAEMON_KEYS).is_ok(), "{op:?}");
+            let err = chain(FORMAT_DAEMON_KEYS - 1).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(&format!("{} needs log format 4", op.kind().as_str())),
+                "{err}"
+            );
+        }
+    }
+
+    /// An entry of `op` after `prev`, signed by `by`.
+    fn switch(prev: &SignedOp, op: Op, decision: Decision, by: &KeyPair) -> SignedOp {
+        SignedOp::sign(
+            OpEntry {
+                op,
+                decision,
+                ..next(prev, prev.entry.time_ms + 1)
+            },
+            by,
+        )
+    }
+
+    fn signed_by_error(ops: &[SignedOp]) -> String {
+        verify_chain(ops).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn the_daemon_key_follows_rotations() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let (old, new) = (KeyPair::generate(), KeyPair::generate());
+        let g = SignedOp::sign(genesis(&old, &store), &old);
+        let rotate = Op::DaemonRotate {
+            key: new.public_hex(),
+        };
+        // The rotation itself is signed by the old key, what follows by the
+        // new one.
+        let r = switch(&g, rotate.clone(), Decision::allow(), &old);
+        assert_eq!(
+            r.entry.switches_daemon_key(),
+            Some(new.public_hex().as_str())
+        );
+        let after = SignedOp::sign(next(&r, 3000), &new);
+        assert_eq!(
+            verify_chain(&[g.clone(), r.clone(), after.clone()]).unwrap(),
+            after.hash
+        );
+        let stale = SignedOp::sign(next(&r, 3000), &old);
+        assert!(
+            signed_by_error(&[g.clone(), r.clone(), stale]).contains("op 2: bad daemon signature")
+        );
+        let later = SignedOp::sign(next(&after, 4000), &old);
+        assert!(
+            signed_by_error(&[g.clone(), r, after, later]).contains("op 3: bad daemon signature")
+        );
+        let by_new = switch(&g, rotate.clone(), Decision::allow(), &new);
+        assert!(signed_by_error(&[g.clone(), by_new]).contains("op 1: bad daemon signature"));
+
+        // A denied rotation switches nothing.
+        let denied = switch(&g, rotate, Decision::deny("x"), &old);
+        assert_eq!(denied.entry.switches_daemon_key(), None);
+        let after = SignedOp::sign(next(&denied, 3000), &old);
+        assert!(verify_chain(&[g.clone(), denied.clone(), after]).is_ok());
+        let after = SignedOp::sign(next(&denied, 3000), &new);
+        assert!(signed_by_error(&[g, denied, after]).contains("op 2: bad daemon signature"));
+    }
+
+    #[test]
+    fn a_recovery_is_signed_by_the_key_it_installs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let (old, new) = (KeyPair::generate(), KeyPair::generate());
+        let g = SignedOp::sign(genesis(&old, &store), &old);
+        let recover = Op::DaemonRecover {
+            key: new.public_hex(),
+        };
+        let r = switch(&g, recover.clone(), Decision::allow(), &new);
+        assert_eq!(r.entry.signer(&old.public_hex()), new.public_hex());
+        let after = SignedOp::sign(next(&r, 3000), &new);
+        assert!(verify_chain(&[g.clone(), r.clone(), after]).is_ok());
+        let stale = SignedOp::sign(next(&r, 3000), &old);
+        assert!(signed_by_error(&[g.clone(), r, stale]).contains("op 2: bad daemon signature"));
+
+        let by_old = switch(&g, recover.clone(), Decision::allow(), &old);
+        assert!(signed_by_error(&[g.clone(), by_old]).contains("op 1: bad daemon signature"));
+        // A denied recovery is an ordinary entry of the key in force.
+        let denied = switch(&g, recover, Decision::deny("x"), &old);
+        assert_eq!(denied.entry.signer(&old.public_hex()), old.public_hex());
+        assert!(verify_chain(&[g, denied]).is_ok());
     }
 
     fn with_format(e: OpEntry, format: u32) -> OpEntry {

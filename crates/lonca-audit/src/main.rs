@@ -74,6 +74,12 @@ fn verify(args: &[String]) -> ExitCode {
     } else {
         println!("operations: {}", report.ops);
         println!("head:       {}", report.head_hash);
+        for k in &report.key_switches {
+            println!(
+                "daemon key {:>6} {:<14} {} by {}",
+                k.seq, k.kind, k.key, k.actor
+            );
+        }
         for f in &report.skipped {
             println!(
                 "skipped  {:>6} {:<9} {}",

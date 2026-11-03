@@ -3,9 +3,12 @@
 //! The daemon persists each prepared entry to the store before committing it
 //! to memory, so a failed write never leaves memory ahead of the log.
 
+use std::sync::Arc;
+
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{FORMAT_CURRENT, OpEntry, SignedOp};
 use lonca_core::ops::{Actor, Attestation, Facts, HumanSignature, Op};
+use lonca_core::{Error, GitId, Result};
 
 use crate::config::PolicyBundle;
 use crate::decide::{Ctx, decide};
@@ -50,14 +53,22 @@ impl Chain {
     }
 
     pub fn from_ops(key: KeyPair, ops: &[SignedOp]) -> Self {
-        Self {
-            state: State::replay(ops),
-            key,
-        }
+        Self::from_state(key, State::replay(ops))
     }
 
+    pub fn from_state(key: KeyPair, state: State) -> Self {
+        Self { state, key }
+    }
+
+    /// The key this sequencer signs with.
     pub fn public_key(&self) -> String {
         self.key.public_hex()
+    }
+
+    /// Signs with `key` from now on: after an allowed `daemon.rotate`, or
+    /// for a repository that has no entries yet.
+    pub fn set_key(&mut self, key: KeyPair) {
+        self.key = key;
     }
 
     /// Entry time: the wall clock, but never earlier than the previous entry.
@@ -97,4 +108,49 @@ impl Chain {
     pub fn commit(&mut self, op: &SignedOp) {
         self.state.apply(op);
     }
+}
+
+/// Replays a log whose chain verified (`verify_chain`) and decides every
+/// daemon key switch again with the state and policy before it.
+///
+/// `verify_chain` follows the daemon key through every allowed
+/// `daemon.rotate` and `daemon.recover`, but it can not tell whether the
+/// human signature that authorised the switch is real. Without this check,
+/// anyone who can write the store could re-anchor the log on their own key
+/// with a forged recovery, sign whatever they like, and rotate back to the
+/// daemon's key. `policy_at(None)` is the shipped default policy.
+pub fn replay_checked(
+    ops: &[SignedOp],
+    mut policy_at: impl FnMut(Option<&GitId>) -> Result<Arc<PolicyBundle>>,
+) -> Result<State> {
+    let mut state = State::new();
+    for op in ops {
+        let e = &op.entry;
+        if e.switches_daemon_key().is_some() {
+            let policy = policy_at(state.policy.as_ref())?;
+            let d = decide(
+                &state,
+                &e.actor,
+                &e.op,
+                e.human.as_ref(),
+                &Ctx {
+                    time_ms: e.time_ms,
+                    policy: &policy,
+                    facts: e.facts.as_ref(),
+                    evidence: &e.evidence,
+                },
+            );
+            if d != e.decision {
+                return Err(Error::Integrity(format!(
+                    "op {}: {} is not authorised (replay gives {:?} {:?})",
+                    e.seq,
+                    e.op.kind().as_str(),
+                    d.outcome,
+                    d.reasons
+                )));
+            }
+        }
+        state.apply(op);
+    }
+    Ok(state)
 }

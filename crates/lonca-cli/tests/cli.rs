@@ -16,20 +16,7 @@ impl Env {
         let dir = tempfile::Builder::new().prefix("lc").tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let sock = root.join("s");
-        let settings = Settings {
-            managed_settings: root.join("managed.json"),
-            require_root_settings: false,
-            git: "git".into(),
-        };
-        let svc = Service::open(
-            Home::new(root.join("home")),
-            settings,
-            lonca_daemon::system_clock(),
-        )
-        .unwrap();
-        let listener = lonca_daemon::server::bind(&sock).unwrap();
-        svc.spawn_worker();
-        std::thread::spawn(move || lonca_daemon::server::serve(listener, svc));
+        start_daemon(&root, &root.join("home"), &sock);
         Env {
             _dir: dir,
             root,
@@ -99,6 +86,19 @@ impl Env {
         }
         panic!("queue did not drain");
     }
+}
+
+/// An in-process daemon on `home`, serving `sock`.
+fn start_daemon(root: &Path, home: &Path, sock: &Path) {
+    let settings = Settings {
+        managed_settings: root.join("managed.json"),
+        require_root_settings: false,
+        git: "git".into(),
+    };
+    let svc = Service::open(Home::new(home), settings, lonca_daemon::system_clock()).unwrap();
+    let listener = lonca_daemon::server::bind(sock).unwrap();
+    svc.spawn_worker();
+    std::thread::spawn(move || lonca_daemon::server::serve(listener, svc));
 }
 
 fn text(b: &[u8]) -> String {
@@ -517,4 +517,79 @@ fn secure_enclave_keys_through_a_fake_helper() {
         out.starts_with(&format!("bora: p256-se {FAKE_SE_PUBLIC}\n")),
         "{out}"
     );
+}
+
+#[test]
+fn daemon_keys_rotate_and_move_to_another_daemon_through_the_cli() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    e.run(r, &["init", "demo"]);
+    e.run(r, &["init", "other"]);
+    let key_of = |sock: &Path, repo: &str| -> String {
+        let out = e
+            .cmd(r, &["status", "--repo", repo, "--json"])
+            .env("LONCA_SOCKET", sock)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["daemon_key"].as_str().unwrap().to_string()
+    };
+    let old = key_of(&e.sock, "demo");
+
+    let out = e.run(r, &["daemon-key", "rotate", "--repo", "demo"]);
+    assert!(out.contains("demo: #"), "{out}");
+    assert!(out.contains("still on the old daemon key: other"), "{out}");
+    let out = e.run(r, &["daemon-key", "rotate", "--repo", "demo,other"]);
+    assert!(
+        out.contains("demo: already uses the new daemon key"),
+        "{out}"
+    );
+    assert!(out.contains("other: #"), "{out}");
+    assert!(out.contains("the daemon signs with"), "{out}");
+    let first = key_of(&e.sock, "other");
+    assert_ne!(first, old);
+    assert_eq!(key_of(&e.sock, "demo"), first);
+    // Without --repo: every repository still on the current key.
+    let out = e.run(r, &["daemon-key", "rotate"]);
+    assert!(out.contains("demo: #") && out.contains("other: #"), "{out}");
+    assert!(out.contains("the daemon signs with"), "{out}");
+    let new = key_of(&e.sock, "demo");
+    assert!(new != first && new != old);
+
+    // Another daemon (as when moving to hardened mode) gets a copy of the
+    // store and continues it on its own key.
+    let home2 = r.join("home2");
+    std::fs::create_dir_all(home2.join("repos")).unwrap();
+    let copy = std::process::Command::new("git")
+        .args(["clone", "-q", "--mirror"])
+        .arg(r.join("home/repos/demo.git"))
+        .arg(home2.join("repos/demo.git"))
+        .output()
+        .unwrap();
+    assert!(copy.status.success(), "{}", text(&copy.stderr));
+    let sock2 = r.join("s2");
+    start_daemon(r, &home2, &sock2);
+    let recover = e
+        .cmd(r, &["daemon-key", "recover", "--repo", "demo"])
+        .env("LONCA_SOCKET", &sock2)
+        .output()
+        .unwrap();
+    assert!(
+        recover.status.success(),
+        "{}{}",
+        text(&recover.stdout),
+        text(&recover.stderr)
+    );
+    assert!(text(&recover.stdout).contains("recovered onto daemon key"));
+    let moved = key_of(&sock2, "demo");
+    assert_ne!(moved, new);
+    let again = e
+        .cmd(r, &["daemon-key", "recover", "--repo", "demo"])
+        .env("LONCA_SOCKET", &sock2)
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    assert!(text(&again.stdout).contains("use `lonca daemon-key rotate`"));
 }

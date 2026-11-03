@@ -99,8 +99,32 @@ fn logged(op: &SignedOp) -> Value {
     json!({"seq": op.entry.seq, "decision": op.entry.decision})
 }
 
+/// The daemon's signing keys. During a rotation some repositories are on
+/// the current key and some on the next one.
+struct DaemonKeys {
+    current: KeyPair,
+    next: Option<KeyPair>,
+}
+
+impl DaemonKeys {
+    /// The key new repositories and recoveries use.
+    fn for_new(&self) -> &KeyPair {
+        self.next.as_ref().unwrap_or(&self.current)
+    }
+
+    fn all(&self) -> Vec<&KeyPair> {
+        std::iter::once(self.for_new())
+            .chain(self.next.as_ref().map(|_| &self.current))
+            .collect()
+    }
+}
+
 struct Inner {
+    keys: DaemonKeys,
     repos: BTreeMap<String, RepoHandle>,
+    /// Repositories whose log is on a daemon key this daemon does not hold.
+    /// They accept nothing but `daemon.recover`.
+    foreign: BTreeMap<String, RepoHandle>,
     tokens: Tokens,
     prepared: BTreeMap<String, Op>,
     /// (repo, session) -> workspace root, as reported at bind time.
@@ -109,7 +133,6 @@ struct Inner {
 
 pub struct Service {
     pub home: Home,
-    key: KeyPair,
     clock: Clock,
     verifier: Verifier,
     settings: Settings,
@@ -120,9 +143,11 @@ pub struct Service {
 impl Service {
     pub fn open(home: Home, settings: Settings, clock: Clock) -> Result<Arc<Self>> {
         home.ensure()?;
-        let key = home.load_key()?;
+        let (current, next) = home.load_keys()?;
+        let keys = DaemonKeys { current, next };
         let tokens = Tokens::load(&home.tokens_path())?;
         let mut repos = BTreeMap::new();
+        let mut foreign = BTreeMap::new();
         for entry in std::fs::read_dir(home.repos())? {
             let path = entry?.path();
             let Some(name) = path
@@ -132,17 +157,26 @@ impl Service {
             else {
                 continue;
             };
-            let r = RepoHandle::open(name, &path, key.clone())?;
-            repos.insert(name.to_string(), r);
+            let r = RepoHandle::open(name, &path, &keys.all())?;
+            if r.foreign() {
+                eprintln!(
+                    "lonca: repository {name} is on another daemon key; \
+                     recover it with `lonca daemon-key recover --repo {name}`"
+                );
+                foreign.insert(name.to_string(), r);
+            } else {
+                repos.insert(name.to_string(), r);
+            }
         }
         let svc = Arc::new(Self {
             verifier: Verifier::new(home.scratch()),
             home,
-            key,
             clock,
             settings,
             inner: Mutex::new(Inner {
+                keys,
                 repos,
+                foreign,
                 tokens,
                 prepared: BTreeMap::new(),
                 workspaces: BTreeMap::new(),
@@ -158,6 +192,7 @@ impl Service {
                         .map_err(|e| Error::Integrity(format!("{}: {}", e.0, e.1)))?;
                 }
             }
+            svc.promote_if_done(&mut inner)?;
         }
         Ok(svc)
     }
@@ -170,8 +205,41 @@ impl Service {
         (self.clock)()
     }
 
+    /// The daemon's current key.
     pub fn public_key(&self) -> String {
-        self.key.public_hex()
+        self.lock().keys.current.public_hex()
+    }
+
+    /// The key of an unfinished rotation.
+    pub fn next_key(&self) -> Option<String> {
+        self.lock().keys.next.as_ref().map(KeyPair::public_hex)
+    }
+
+    /// Ends a rotation once no initialized repository uses the current key:
+    /// the next key becomes the current one and the old secret is deleted.
+    fn promote_if_done(&self, inner: &mut Inner) -> Result<()> {
+        let Some(next) = inner.keys.next.clone() else {
+            return Ok(());
+        };
+        let current = inner.keys.current.public_hex();
+        if inner
+            .repos
+            .values()
+            .any(|r| r.initialized() && r.chain.public_key() == current)
+        {
+            return Ok(());
+        }
+        self.home.promote_next_key()?;
+        inner.keys = DaemonKeys {
+            current: next.clone(),
+            next: None,
+        };
+        // A prepared genesis named the old key: it must be prepared again.
+        for r in inner.repos.values_mut().filter(|r| !r.initialized()) {
+            r.chain.set_key(next.clone());
+            inner.prepared.remove(&r.name);
+        }
+        Ok(())
     }
 
     fn notify_queue(&self) {
@@ -190,9 +258,12 @@ impl Service {
     fn dispatch(&self, req: &Request) -> Hr {
         let p = &req.params;
         match req.method.as_str() {
-            "ping" => {
-                Ok(json!({"version": env!("CARGO_PKG_VERSION"), "daemon_key": self.public_key()}))
-            }
+            "ping" => Ok(json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "daemon_key": self.public_key(),
+                "next_key": self.next_key(),
+            })),
+            "daemon.prepare_rotate" => self.prepare_rotate(),
             "repo.list" => Ok(json!(self.lock().repos.keys().collect::<Vec<_>>())),
             "repo.prepare_init" => self.prepare_init(params(p)?),
             "repo.init" => self.init(params(p)?),
@@ -256,6 +327,16 @@ impl Service {
         inner: &'a mut Inner,
         name: &str,
     ) -> std::result::Result<&'a mut RepoHandle, (String, String)> {
+        if let Some(r) = inner.foreign.get(name) {
+            return fail(
+                "foreign_key",
+                format!(
+                    "repository {name} is on daemon key {}, which this daemon does not hold; \
+                     recover it with `lonca daemon-key recover --repo {name}`",
+                    &r.chain.state.daemon_key[..16]
+                ),
+            );
+        }
         match inner.repos.get_mut(name) {
             Some(r) if r.initialized() => Ok(r),
             _ => fail("not_found", format!("no repository {name}")),
@@ -310,22 +391,26 @@ impl Service {
                 "repository and human names: letters, digits, '.', '_', '-'",
             );
         }
-        let mut inner = self.lock();
-        if inner.repos.get(&p.repo).is_some_and(|r| r.initialized()) {
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        if inner.repos.get(&p.repo).is_some_and(|r| r.initialized())
+            || inner.foreign.contains_key(&p.repo)
+        {
             return fail("conflict", format!("repository {} exists", p.repo));
         }
         let now = self.now();
         if !inner.repos.contains_key(&p.repo) {
             let path = self.home.repo_path(&p.repo);
             let r = if path.exists() {
-                RepoHandle::open(&p.repo, &path, self.key.clone())
+                RepoHandle::open(&p.repo, &path, &inner.keys.all())
             } else {
-                RepoHandle::create(&p.repo, &path, self.key.clone())
+                RepoHandle::create(&p.repo, &path, inner.keys.for_new().clone())
             }
             .or_fail()?;
             inner.repos.insert(p.repo.clone(), r);
         }
         let r = inner.repos.get_mut(&p.repo).expect("inserted");
+        r.chain.set_key(inner.keys.for_new().clone());
         let trunk = match &p.import_from {
             Some(src) => {
                 let branch = p.branch.clone().unwrap_or_else(|| "main".into());
@@ -365,7 +450,7 @@ impl Service {
         let policy = r.write_default_policy(now).or_fail()?;
         let op = Op::RepoInit {
             repo: p.repo.clone(),
-            daemon_key: self.public_key(),
+            daemon_key: r.chain.public_key(),
             human: p.human,
             human_key: p.human_key,
             policy,
@@ -460,7 +545,7 @@ impl Service {
         Ok(json!({
             "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "frozen": s.frozen, "queue": s.queue,
             "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
-            "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now,
+            "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now, "daemon_key": s.daemon_key,
         }))
     }
 
@@ -639,11 +724,86 @@ impl Service {
         )
     }
 
-    fn human_submit(&self, req: &Request, p: HumanSubmit) -> Hr {
-        let name = Self::repo_name(req)?;
+    // ---------------------------------------------------------------- daemon keys
+
+    /// Starts (or resumes) a rotation: creates the next key and lists the
+    /// repositories still on the current one. Each of them moves with a
+    /// human-signed `daemon.rotate` naming the next key.
+    fn prepare_rotate(&self) -> Hr {
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        if inner.keys.next.is_none() {
+            inner.keys.next = Some(self.home.load_or_create_next_key().or_fail()?);
+        }
+        let next = inner.keys.for_new().clone();
+        let current = inner.keys.current.public_hex();
+        let repos: Vec<&String> = inner
+            .repos
+            .iter()
+            .filter(|(_, r)| r.initialized() && r.chain.public_key() == current)
+            .map(|(n, _)| n)
+            .collect();
+        Ok(json!({"key": next.public_hex(), "repos": repos}))
+    }
+
+    /// Re-anchors a foreign repository on this daemon's key. Nothing is
+    /// logged unless the recovery is allowed: the entry is signed by the
+    /// new key, which the log only accepts for an allowed recovery.
+    fn daemon_recover(&self, name: &str, p: HumanSubmit) -> Hr {
         let mut guard = self.lock();
         let inner = &mut *guard;
         let now = self.now();
+        let Some(r) = inner.foreign.get_mut(name) else {
+            if inner.repos.get(name).is_some_and(|r| r.initialized()) {
+                return fail(
+                    "invalid",
+                    format!(
+                        "this daemon holds the key of repository {name}; \
+                         use `lonca daemon-key rotate`"
+                    ),
+                );
+            }
+            return fail("not_found", format!("no repository {name}"));
+        };
+        let key = inner.keys.for_new().clone();
+        if p.op.daemon_key_switch() != Some(key.public_hex().as_str()) {
+            return fail(
+                "invalid",
+                format!(
+                    "a recovery here must name this daemon's key {}",
+                    key.public_hex()
+                ),
+            );
+        }
+        r.chain.set_key(key);
+        let mut sub = Submission::new(
+            Actor::Human {
+                name: p.sig.human.clone(),
+            },
+            p.op,
+        );
+        sub.human = Some(p.sig);
+        let dry = r.dry_run(sub.clone(), now).or_fail()?;
+        if !dry.entry.decision.is_allow() {
+            return fail("denied", dry.entry.decision.reasons.join(", "));
+        }
+        let op = r.submit(sub, now).or_fail()?;
+        let mut r = inner.foreign.remove(name).expect("present");
+        Self::reconcile(&mut r, now)?;
+        inner.repos.insert(name.to_string(), r);
+        Self::revoke_ended_tokens(inner, name)?;
+        Ok(logged(&op))
+    }
+
+    fn human_submit(&self, req: &Request, p: HumanSubmit) -> Hr {
+        let name = Self::repo_name(req)?;
+        if matches!(p.op, Op::DaemonRecover { .. }) {
+            return self.daemon_recover(&name, p);
+        }
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        let now = self.now();
+        let next = inner.keys.next.clone();
         let r = Self::repo(inner, &name)?;
         Self::reconcile(r, now)?;
         let mut sub = Submission::new(
@@ -671,6 +831,13 @@ impl Service {
             }
             Op::PolicyUpdate { policy } => {
                 RepoHandle::load_policy(&r.store, policy).or_fail()?;
+            }
+            // Only to a key this daemon holds: anything else would end the
+            // log, since nobody could sign the next entry.
+            Op::DaemonRotate { key }
+                if next.as_ref().map(KeyPair::public_hex).as_ref() != Some(key) =>
+            {
+                return fail("invalid", "rotate to the key from daemon.prepare_rotate");
             }
             Op::ImportExternal {
                 commit,
@@ -746,6 +913,11 @@ impl Service {
             Op::Approve { .. } => {
                 Self::revoke_ended_tokens(inner, &name)?;
                 self.notify_queue();
+            }
+            Op::DaemonRotate { .. } => {
+                let r = Self::repo(inner, &name)?;
+                r.chain.set_key(next.expect("checked above"));
+                self.promote_if_done(inner).or_fail()?;
             }
             Op::ChangePropose { .. } => self.notify_queue(),
             _ => {}

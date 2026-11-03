@@ -63,6 +63,10 @@ enum Cmd {
     /// Human identities: file keys or Secure Enclave keys.
     #[command(subcommand)]
     Human(HumanCmd),
+    /// The daemon's signing key: rotate it, or recover repositories whose
+    /// daemon key is lost.
+    #[command(subcommand)]
+    DaemonKey(DaemonKeyCmd),
     /// Create a repository, optionally importing an existing Git branch.
     Init {
         repo: String,
@@ -299,6 +303,29 @@ enum HumanCmd {
         #[arg(long)]
         secure_enclave: bool,
         /// The human to recover (on a new machine there is no default).
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonKeyCmd {
+    /// Move repositories to a new daemon key (signed by the current one).
+    /// The old key is deleted once no repository uses it; rerun to resume.
+    Rotate {
+        /// Repositories to move (comma-separated; default: every repository
+        /// still on the current key).
+        #[arg(long, value_delimiter = ',')]
+        repo: Vec<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
+    /// Continue repositories whose daemon key is lost, or that come from
+    /// another daemon (moving to hardened mode), on this daemon's key.
+    /// Ends every session in them.
+    Recover {
+        #[arg(long, value_delimiter = ',', required = true)]
+        repo: Vec<String>,
         #[arg(long = "as")]
         human: Option<String>,
     },
@@ -617,6 +644,12 @@ fn run(cmd: Cmd) -> Result<()> {
             &ctx::absolute(&recovery_key)?,
             secure_enclave,
         ),
+        Cmd::DaemonKey(DaemonKeyCmd::Rotate { repo, human }) => {
+            keys::daemon_rotate(&keys::name(human)?, &repo)
+        }
+        Cmd::DaemonKey(DaemonKeyCmd::Recover { repo, human }) => {
+            keys::daemon_recover(&keys::name(human)?, &repo)
+        }
         Cmd::Init {
             repo,
             import,

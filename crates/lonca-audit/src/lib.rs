@@ -9,8 +9,11 @@
 //! 3. every recorded fact set equals the facts recomputed from the Git
 //!    objects, and every merged commit equals the recomputed merge, both
 //!    with the symbol engine version recorded in the entry;
-//! 4. trunk and policy refs equal the replayed state;
-//! 5. (`compare`) a pushed log is a prefix of the local one, so history that
+//! 4. every daemon key switch (`daemon.rotate`, `daemon.recover`) was
+//!    authorised: its decision replays as allowed, so a forged human
+//!    signature can not move the log to another key;
+//! 5. trunk and policy refs equal the replayed state;
+//! 6. (`compare`) a pushed log is a prefix of the local one, so history that
 //!    was published can not be rewritten unnoticed.
 //!
 //! It contains no AI and calls no network.
@@ -45,6 +48,18 @@ pub struct Report {
     pub findings: Vec<Finding>,
     /// Rechecks skipped because objects were missing (e.g. a shallow clone).
     pub skipped: Vec<Finding>,
+    /// Every daemon key switch along the log, for the reader to see.
+    pub key_switches: Vec<KeySwitch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct KeySwitch {
+    pub seq: u64,
+    /// `daemon.rotate` or `daemon.recover`.
+    pub kind: String,
+    /// Who requested it (`human:<name>`).
+    pub actor: String,
+    pub key: String,
 }
 
 impl Report {
@@ -162,10 +177,23 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
                 evidence: &e.evidence,
             },
         );
+        if let Some(key) = e.switches_daemon_key() {
+            rep.key_switches.push(KeySwitch {
+                seq: e.seq,
+                kind: e.op.kind().as_str().into(),
+                actor: e.actor.label(),
+                key: key.into(),
+            });
+        }
         if d != e.decision {
+            let kind = if e.op.daemon_key_switch().is_some() {
+                "daemon_key"
+            } else {
+                "decision"
+            };
             rep.find(
                 Some(e.seq),
-                "decision",
+                kind,
                 format!(
                     "{}: recorded {:?} {:?}, replay gives {:?} {:?}",
                     e.op.kind().as_str(),

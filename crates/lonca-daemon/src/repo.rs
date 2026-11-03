@@ -7,13 +7,13 @@ use base64::Engine;
 use lonca_core::changeid::CHANGE_ID_HEADER;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
-use lonca_core::ops::Op;
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileEntry, FileMap, FileMode, GitId, Result, Store};
-use lonca_policy::chain::{Chain, Submission};
+use lonca_policy::chain::{Chain, Submission, replay_checked};
 use lonca_policy::config::{
     CONFIG_FILE, DEFAULT_CONFIG, DEFAULT_POLICY, POLICY_FILE, PolicyBundle,
 };
+use lonca_policy::state::State;
 
 use crate::protocol::FileChange;
 
@@ -45,13 +45,18 @@ impl RepoHandle {
         })
     }
 
-    /// Opens a store and replays its log. Refuses a log that does not
-    /// verify or that another daemon key signed.
-    pub fn open(name: &str, path: &Path, key: KeyPair) -> Result<Self> {
+    /// Opens a store and replays its log, deciding every daemon key switch
+    /// again. Refuses a log that does not verify. `keys` are the keys this
+    /// daemon holds, the one for new repositories first; the repository
+    /// signs with the one its log is on. A log on none of them is
+    /// [`RepoHandle::foreign`].
+    pub fn open(name: &str, path: &Path, keys: &[&KeyPair]) -> Result<Self> {
         let store = Store::open(path)?;
         let log = OpLog::new(&store);
         let ops = log.read_all()?;
-        if !ops.is_empty() {
+        let state = if ops.is_empty() {
+            State::new()
+        } else {
             verify_chain(&ops)?;
             for op in &ops {
                 if let Some(v) = op.entry.engine() {
@@ -60,22 +65,31 @@ impl RepoHandle {
                     })?;
                 }
             }
-            if let Op::RepoInit { daemon_key, .. } = &ops[0].entry.op
-                && *daemon_key != key.public_hex()
-            {
-                return Err(Error::Integrity(format!(
-                    "repo {name} was created by another daemon key"
-                )));
-            }
-        }
+            replay_checked(&ops, |id| match id {
+                None => Ok(Arc::new(PolicyBundle::default_bundle())),
+                Some(id) => Self::load_policy(&store, id).map(Arc::new),
+            })
+            .map_err(|e| Error::Integrity(format!("repo {name}: {e}")))?
+        };
+        let key = keys
+            .iter()
+            .find(|k| k.public_hex() == state.daemon_key)
+            .unwrap_or(&keys[0]);
         let head = log.head()?;
         Ok(Self {
             name: name.into(),
             store: Arc::new(store),
-            chain: Chain::from_ops(key, &ops),
+            chain: Chain::from_state((*key).clone(), state),
             head,
             policy: None,
         })
+    }
+
+    /// The log is on a daemon key this daemon does not hold: another daemon
+    /// wrote it, or this daemon's key was lost. Only `daemon.recover` can
+    /// continue it.
+    pub fn foreign(&self) -> bool {
+        self.initialized() && self.chain.state.daemon_key != self.chain.public_key()
     }
 
     pub fn initialized(&self) -> bool {

@@ -70,7 +70,30 @@ fn golden_repo() -> Env {
         reason: "golden".into(),
     });
     human_keys(&mut e);
+    daemon_keys(&mut e);
     e
+}
+
+/// From format 4: the daemon key is rotated, a session starts, then the
+/// key is lost and a human recovers the log onto a new daemon key, which
+/// ends the session; one more entry follows under the new key.
+fn daemon_keys(e: &mut Env) {
+    let allowed = |r: Value| assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let next = e.ok("daemon.prepare_rotate", None, None, json!({}))["key"]
+        .as_str()
+        .expect("key")
+        .to_string();
+    allowed(e.human(Op::DaemonRotate { key: next }));
+    let t = e.session("s6", &["notes.md"]);
+    e.lease(&t, "notes.md#<file>");
+    std::fs::remove_file(e.root.join("home/daemon.key")).unwrap();
+    e.reopen();
+    let key = e.ok("ping", None, None, json!({}))["daemon_key"]
+        .as_str()
+        .expect("key")
+        .to_string();
+    allowed(e.human(Op::DaemonRecover { key }));
+    e.session("s7", &["notes.md"]);
 }
 
 /// From format 3: a second human with a session, then ayse sets a recovery
@@ -267,6 +290,26 @@ fn golden_v3_log_still_verifies_replays_and_audits() {
             .all(|o| o.entry.decision.is_allow()),
         "the key operations in the fixture are allowed"
     );
+}
+
+#[test]
+fn golden_v4_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v4.bundle",
+        "bdda8f61008981ccab907c4aa6d156621bb4dcca57b992229ffbccebf7aa7a5f",
+        4,
+    );
+    let switches: Vec<&str> = ops
+        .iter()
+        .filter(|o| o.entry.switches_daemon_key().is_some())
+        .map(|o| o.entry.op.kind().as_str())
+        .collect();
+    assert_eq!(switches, ["daemon.rotate", "daemon.recover"]);
+    // Three daemon keys signed it: genesis, rotation, recovery.
+    let (_dir, store) = load("oplog-v4.bundle");
+    let r = audit(&store, Options::default()).unwrap();
+    assert_eq!(r.key_switches.len(), 2);
+    assert_ne!(r.key_switches[0].key, r.key_switches[1].key);
 }
 
 fn open_service(e: &Env) -> lonca_core::Result<Arc<Service>> {

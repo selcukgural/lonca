@@ -3,6 +3,7 @@
 //! ```text
 //! $LONCA_HOME/
 //!   daemon.key        ed25519 signing key (0600)
+//!   daemon.next.key   the key a rotation in progress moves to (0600)
 //!   tokens.json       sha256(session token) -> session (0600)
 //!   lonca.sock        Unix socket
 //!   repos/<name>.git  bare Git stores
@@ -90,6 +91,43 @@ impl Home {
 
     pub fn load_key(&self) -> Result<KeyPair> {
         KeyPair::load_or_create(&self.key_path())
+    }
+
+    /// Where a rotation keeps the new key until every repository uses it.
+    pub fn next_key_path(&self) -> PathBuf {
+        self.root.join("daemon.next.key")
+    }
+
+    /// The current key and the key of an unfinished rotation. A crash
+    /// between the two steps of [`Home::promote_next_key`] leaves only the
+    /// next key; it is the current one then.
+    pub fn load_keys(&self) -> Result<(KeyPair, Option<KeyPair>)> {
+        let next = self.next_key_path();
+        if !self.key_path().exists() && next.exists() {
+            fs::rename(&next, self.key_path())?;
+        }
+        let current = self.load_key()?;
+        let next = if next.exists() {
+            Some(KeyPair::load(&next)?)
+        } else {
+            None
+        };
+        Ok((current, next))
+    }
+
+    /// The next key, created on first use.
+    pub fn load_or_create_next_key(&self) -> Result<KeyPair> {
+        KeyPair::load_or_create(&self.next_key_path())
+    }
+
+    /// Makes the next key the current one once no repository uses the
+    /// current key. The old secret is deleted: the entries it signed stay
+    /// verifiable through its public key in the log, and nothing may be
+    /// signed with it again.
+    pub fn promote_next_key(&self) -> Result<()> {
+        fs::remove_file(self.key_path())?;
+        fs::rename(self.next_key_path(), self.key_path())?;
+        Ok(())
     }
 }
 

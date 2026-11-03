@@ -115,7 +115,7 @@ impl H {
             },
         );
         assert!(d.is_allow(), "{d:?}");
-        self.humans.push((name.into(), key));
+        self.use_key(name, key);
     }
 
     /// The key the harness signs with for `name` from now on.
@@ -1695,4 +1695,60 @@ fn presence_does_not_block_recovery() {
     assert!(d.is_allow(), "{d:?}");
     // The policy changed mid-test, so the log is not replayed here (as in
     // `presence_can_be_required_for_human_signatures`).
+}
+
+#[test]
+fn a_released_key_operation_is_checked_again() {
+    let policy = PolicyBundle::parse(
+        DEFAULT_CONFIG,
+        &format!(
+            "{DEFAULT_POLICY}\n@id(\"keys-reviewed\")\n@escalate(\"keys\")\n\
+             forbid(principal, action in [Lonca::Action::\"human.revoke\", Lonca::Action::\"human.rotate\"], resource);\n"
+        ),
+    )
+    .unwrap();
+    let mut h = H::with_policy(policy);
+    h.enroll("bora");
+    h.enroll("cem");
+    // ayse asks to revoke herself; meanwhile bora and cem are revoked.
+    assert_eq!(
+        h.human("ayse", revoke("ayse", "leaving")).outcome,
+        Outcome::Escalate
+    );
+    let own = h.chain.state.next_seq - 1;
+    for who in ["bora", "cem"] {
+        assert_eq!(
+            h.human("ayse", revoke(who, "left")).outcome,
+            Outcome::Escalate
+        );
+        let seq = h.chain.state.next_seq - 1;
+        assert!(h.human("ayse", approve(seq)).is_allow());
+    }
+    assert_eq!(h.chain.state.humans.len(), 1);
+    assert!(denied_with(&h.human("ayse", approve(own)), "last_human"));
+    assert!(h.chain.state.humans.contains_key("ayse"));
+
+    // A rotation whose key was taken while it waited is refused on release.
+    h.enroll("bora");
+    let new = KeyPair::generate();
+    assert_eq!(
+        h.human("bora", rotate("bora", &new)).outcome,
+        Outcome::Escalate
+    );
+    let seq = h.chain.state.next_seq - 1;
+    let enroll = Op::HumanEnroll {
+        human: "cem".into(),
+        key: file_key(&new),
+    };
+    assert!(h.human("ayse", enroll).is_allow());
+    assert!(denied_with(&h.human("ayse", approve(seq)), "key_reused"));
+    let new2 = KeyPair::generate();
+    assert_eq!(
+        h.human("bora", rotate("bora", &new2)).outcome,
+        Outcome::Escalate
+    );
+    let seq = h.chain.state.next_seq - 1;
+    assert!(h.human("ayse", approve(seq)).is_allow());
+    assert_eq!(h.chain.state.humans["bora"], file_key(&new2));
+    h.assert_replay();
 }

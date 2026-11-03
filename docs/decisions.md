@@ -186,6 +186,10 @@ request them, and a policy can escalate them like any other operation.
   P-256 point), so a rotation can not lock a human out. `human.enroll`
   keeps its older, looser check: tightening it could change the replay of
   existing logs.
+- **Escalated key operations are checked again on release.** A policy may
+  send a key operation to approval. The approval that releases it denies
+  the release if the operation would now revoke the last human, or if its
+  new key has meanwhile become someone's key.
 - **Frozen repositories** still accept the key operations: replacing or
   withdrawing a key is how a human answers an incident, and recovery is
   the only way back in when the key that would unfreeze is lost.

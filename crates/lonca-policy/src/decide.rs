@@ -690,6 +690,23 @@ pub fn decide(
                 }
                 if p.approvals.len() as u32 + 1 >= p.required {
                     v.info.push(RELEASED.into());
+                    // A released key operation takes effect now: recheck
+                    // what may have changed since it was requested.
+                    match &p.op {
+                        Op::HumanRevoke { human: who, .. }
+                            if state.humans.len() == 1 && state.humans.contains_key(who) =>
+                        {
+                            v.deny("last_human")
+                        }
+                        Op::HumanRotate { key, .. }
+                        | Op::HumanRecoveryKey { key, .. }
+                        | Op::HumanRecover { key, .. }
+                            if state.key_known(&key.public) =>
+                        {
+                            v.deny("key_reused")
+                        }
+                        _ => {}
+                    }
                 }
             }
         },

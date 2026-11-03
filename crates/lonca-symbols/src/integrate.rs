@@ -5,12 +5,16 @@
 //! linear and the auditor can recompute the exact same commit id. When the
 //! proposal was made on the current trunk, the merged commit *is* the
 //! proposal commit.
+//!
+//! Both entry points take the symbol engine version (see [`crate::engine`]):
+//! the daemon passes the current one, the auditor the one in the entry.
 
 use std::collections::BTreeSet;
 
 use lonca_core::store::CommitSpec;
 use lonca_core::{FileMap, GitId, Result, Store};
 
+use crate::engine;
 use crate::facts::{Analysis, analyze};
 use crate::merge::merge3;
 
@@ -25,10 +29,13 @@ pub struct Integration {
 
 pub fn integrate(
     store: &Store,
+    engine: u32,
     base: &GitId,
     trunk: &GitId,
     change: &GitId,
 ) -> Result<Integration> {
+    engine::check(engine)?;
+    // Engine 0 is the only version so far; later versions dispatch here.
     let base_files = store.commit_files(base)?;
     let ours = store.commit_files(trunk)?;
     let theirs = store.commit_files(change)?;
@@ -69,7 +76,8 @@ pub fn integrate(
 }
 
 /// Facts of a proposal: its commit against its base.
-pub fn facts_of(store: &Store, base: &GitId, commit: &GitId) -> Result<Analysis> {
+pub fn facts_of(store: &Store, engine: u32, base: &GitId, commit: &GitId) -> Result<Analysis> {
+    engine::check(engine)?;
     let b = store.commit_files(base)?;
     let n = store.commit_files(commit)?;
     analyze(&b, &n, &|id| store.read_blob(id))

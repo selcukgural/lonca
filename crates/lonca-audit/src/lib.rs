@@ -7,7 +7,8 @@
 //! 2. every decision is reproduced by the decision function from the state
 //!    before it and the policy in force at that point;
 //! 3. every recorded fact set equals the facts recomputed from the Git
-//!    objects, and every merged commit equals the recomputed merge;
+//!    objects, and every merged commit equals the recomputed merge, both
+//!    with the symbol engine version recorded in the entry;
 //! 4. trunk and policy refs equal the replayed state;
 //! 5. (`compare`) a pushed log is a prefix of the local one, so history that
 //!    was published can not be rewritten unnoticed.
@@ -23,6 +24,7 @@ use lonca_core::{GitId, Result, Store};
 use lonca_policy::config::{CONFIG_FILE, POLICY_FILE, PolicyBundle};
 use lonca_policy::decide::{Ctx, decide};
 use lonca_policy::state::State;
+use lonca_symbols::engine;
 use lonca_symbols::integrate::{facts_of, integrate};
 use serde::Serialize;
 
@@ -138,7 +140,14 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
                 },
             },
         };
-        if opts.deep {
+        let engine_known = match e.engine().map(engine::check) {
+            Some(Err(err)) => {
+                rep.find(Some(e.seq), "engine", err.to_string());
+                false
+            }
+            _ => true,
+        };
+        if opts.deep && engine_known {
             recheck_objects(store, &state, op, &mut rep);
         }
         let d = decide(
@@ -187,13 +196,14 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
 
 fn recheck_objects(store: &Store, state: &State, op: &SignedOp, rep: &mut Report) {
     let e = &op.entry;
+    let engine = e.engine().unwrap_or(engine::ENGINE_CURRENT);
     match &e.op {
         Op::ChangePropose { base, commit, .. } => {
             if !store.has_object(commit) || !store.has_object(base) {
                 rep.skip(e.seq, "facts", "proposal objects not present");
                 return;
             }
-            match facts_of(store, base, commit) {
+            match facts_of(store, engine, base, commit) {
                 Ok(a) if Some(&a.facts) == e.facts.as_ref() => {}
                 Ok(a) => rep.find(
                     Some(e.seq),
@@ -216,7 +226,7 @@ fn recheck_objects(store: &Store, state: &State, op: &SignedOp, rep: &mut Report
                 rep.skip(e.seq, "merge", "integration objects not present");
                 return;
             }
-            match integrate(store, &rec.base, trunk_before, &rec.commit) {
+            match integrate(store, engine, &rec.base, trunk_before, &rec.commit) {
                 Ok(i) => {
                     if &i.merged != merged || &i.conflicts != conflicts {
                         rep.find(

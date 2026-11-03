@@ -1,0 +1,498 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#charge"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.rs#added"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.rs#gone"
+        ],
+        "edits": [
+          "src/sample.rs#Ledger.add",
+          "src/sample.rs#sig",
+          "src/sample.rs#tests.charges"
+        ],
+        "import_only_files": [
+          "src/sample.rs"
+        ],
+        "lines_added": 10,
+        "lines_removed": 4,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [
+          "src/sample.rs#sig"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 1,
+          "skipped": 1
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "use std::collections::BTreeMap;\nuse std::fmt::Write;\n\n/// Charges an amount.\npub fn charge(amount: u64) -> u64 {\n    amount * 2\n}\n\npub fn sig(a: u32, b: u32) -> u32 {\n    a + b\n}\n\npub fn added() -> String {\n    let mut s = String::new();\n    write!(s, \"x\").unwrap();\n    s\n}\n\npub struct Ledger {\n    entries: BTreeMap<String, u64>,\n}\n\nimpl Ledger {\n    pub fn add(&mut self, k: &str, v: u64) {\n        self.entries.entry(k.into()).or_insert(v);\n    }\n\n    pub fn total(&self) -> u64 {\n        self.entries.values().sum()\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    #[ignore]\n    fn charges() {\n        assert_eq!(charge(2), 2);\n    }\n}\n"
+  },
+  "path": "src/sample.rs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          31
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "/// Charges an amount. pub fn charge(amount: u64) -> u64 { amount }",
+          "signature": "pub fn charge(amount: u64) -> u64",
+          "skipped": false,
+          "span": [
+            33,
+            56,
+            104
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "gone",
+          "own": "pub fn gone() {}",
+          "signature": "pub fn gone()",
+          "skipped": false,
+          "span": [
+            106,
+            106,
+            122
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "pub fn sig(a: u32) -> u32 { a + 1 }",
+          "signature": "pub fn sig(a: u32) -> u32",
+          "skipped": false,
+          "span": [
+            124,
+            124,
+            163
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "pub struct Ledger { entries: BTreeMap<String, u64>, }",
+          "signature": "pub struct Ledger",
+          "skipped": false,
+          "span": [
+            165,
+            165,
+            222
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "pub fn add(&mut self, k: &str, v: u64) { self.entries.insert(k.into(), v); }",
+              "signature": "pub fn add(&mut self, k: &str, v: u64)",
+              "skipped": false,
+              "span": [
+                242,
+                242,
+                330
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "pub fn total(&self) -> u64 { self.entries.values().sum() }",
+              "signature": "pub fn total(&self) -> u64",
+              "skipped": false,
+              "span": [
+                336,
+                336,
+                406
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Ledger",
+          "own": "impl Ledger { }",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            224,
+            224,
+            408
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "tests.charges",
+              "own": "#[test] fn charges() { assert_eq!(charge(2), 2); }",
+              "signature": "fn charges()",
+              "skipped": false,
+              "span": [
+                458,
+                470,
+                524
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "tests",
+          "own": "#[cfg(test)] mod tests { use super::*; }",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            410,
+            423,
+            526
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          31
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "/// Charges an amount. pub fn charge(amount: u64) -> u64 { amount * 2 }",
+          "signature": "pub fn charge(amount: u64) -> u64",
+          "skipped": false,
+          "span": [
+            33,
+            56,
+            108
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "gone",
+          "own": "pub fn gone() {}",
+          "signature": "pub fn gone()",
+          "skipped": false,
+          "span": [
+            110,
+            110,
+            126
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "pub fn sig(a: u32) -> u32 { a + 1 }",
+          "signature": "pub fn sig(a: u32) -> u32",
+          "skipped": false,
+          "span": [
+            128,
+            128,
+            167
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "pub struct Ledger { entries: BTreeMap<String, u64>, }",
+          "signature": "pub struct Ledger",
+          "skipped": false,
+          "span": [
+            169,
+            169,
+            226
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "pub fn add(&mut self, k: &str, v: u64) { self.entries.insert(k.into(), v); }",
+              "signature": "pub fn add(&mut self, k: &str, v: u64)",
+              "skipped": false,
+              "span": [
+                246,
+                246,
+                334
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "pub fn total(&self) -> u64 { self.entries.values().sum() }",
+              "signature": "pub fn total(&self) -> u64",
+              "skipped": false,
+              "span": [
+                340,
+                340,
+                410
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Ledger",
+          "own": "impl Ledger { }",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            228,
+            228,
+            412
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "tests.charges",
+              "own": "#[test] fn charges() { assert_eq!(charge(2), 2); }",
+              "signature": "fn charges()",
+              "skipped": false,
+              "span": [
+                462,
+                474,
+                528
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "tests",
+          "own": "#[cfg(test)] mod tests { use super::*; }",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            414,
+            427,
+            530
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          31
+        ],
+        [
+          32,
+          52
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "/// Charges an amount. pub fn charge(amount: u64) -> u64 { amount }",
+          "signature": "pub fn charge(amount: u64) -> u64",
+          "skipped": false,
+          "span": [
+            54,
+            77,
+            125
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "pub fn sig(a: u32, b: u32) -> u32 { a + b }",
+          "signature": "pub fn sig(a: u32, b: u32) -> u32",
+          "skipped": false,
+          "span": [
+            127,
+            127,
+            174
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "added",
+          "own": "pub fn added() -> String { let mut s = String::new(); write!(s, \"x\").unwrap(); s }",
+          "signature": "pub fn added() -> String",
+          "skipped": false,
+          "span": [
+            176,
+            176,
+            270
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "pub struct Ledger { entries: BTreeMap<String, u64>, }",
+          "signature": "pub struct Ledger",
+          "skipped": false,
+          "span": [
+            272,
+            272,
+            329
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "pub fn add(&mut self, k: &str, v: u64) { self.entries.entry(k.into()).or_insert(v); }",
+              "signature": "pub fn add(&mut self, k: &str, v: u64)",
+              "skipped": false,
+              "span": [
+                349,
+                349,
+                446
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "pub fn total(&self) -> u64 { self.entries.values().sum() }",
+              "signature": "pub fn total(&self) -> u64",
+              "skipped": false,
+              "span": [
+                452,
+                452,
+                522
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Ledger",
+          "own": "impl Ledger { }",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            331,
+            331,
+            524
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "tests.charges",
+              "own": "#[test] #[ignore] fn charges() { assert_eq!(charge(2), 2); }",
+              "signature": "fn charges()",
+              "skipped": true,
+              "span": [
+                574,
+                600,
+                654
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "tests",
+          "own": "#[cfg(test)] mod tests { use super::*; }",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            526,
+            539,
+            656
+          ]
+        }
+      ]
+    }
+  }
+}

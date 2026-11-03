@@ -69,8 +69,16 @@ impl H {
         }
     }
 
-    fn submit(&mut self, sub: Submission) -> Decision {
+    fn submit(&mut self, mut sub: Submission) -> Decision {
         self.now += 1;
+        // Like the daemon: proposals and integrations record the symbol
+        // engine (here the facts are written by hand, nominally engine 0).
+        if matches!(
+            sub.op,
+            Op::ChangePropose { .. } | Op::ChangeIntegrate { .. }
+        ) {
+            sub.symbols_engine = Some(0);
+        }
         let op = self.chain.prepare(sub, self.now, &self.policy);
         self.chain.commit(&op);
         self.log.push(op.clone());

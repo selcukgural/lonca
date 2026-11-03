@@ -16,6 +16,7 @@ use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::decide::level_for;
+use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate};
 use lonca_verify::Verifier;
 use serde::de::DeserializeOwned;
@@ -540,7 +541,7 @@ impl Service {
                 max,
             )
             .or_fail()?;
-        let a = facts_of(&r.store, &p.base, &commit).or_fail()?;
+        let a = facts_of(&r.store, ENGINE_CURRENT, &p.base, &commit).or_fail()?;
         let f = &a.facts;
         let claim = Claim {
             intent: p.intent,
@@ -646,7 +647,12 @@ impl Service {
                 ..
             } => {
                 r.check_proposal(commit, base, *change).or_fail()?;
-                sub.facts = Some(facts_of(&r.store, base, commit).or_fail()?.facts);
+                sub.facts = Some(
+                    facts_of(&r.store, ENGINE_CURRENT, base, commit)
+                        .or_fail()?
+                        .facts,
+                );
+                sub.symbols_engine = Some(ENGINE_CURRENT);
             }
             Op::PolicyUpdate { policy } => {
                 RepoHandle::load_policy(&r.store, policy).or_fail()?;
@@ -794,7 +800,7 @@ impl Service {
                 max,
             )
             .or_fail()?;
-        let analysis = facts_of(&r.store, &p.base, &commit).or_fail()?;
+        let analysis = facts_of(&r.store, ENGINE_CURRENT, &p.base, &commit).or_fail()?;
         let seq = r.chain.state.next_seq;
         r.store
             .ref_cas(&format!("refs/lonca/changes/{change}/{seq}"), &commit, None)
@@ -809,6 +815,7 @@ impl Service {
             },
         );
         sub.facts = Some(analysis.facts.clone());
+        sub.symbols_engine = Some(ENGINE_CURRENT);
         let op = r.submit(sub, now).or_fail()?;
         let unobserved = op
             .entry
@@ -859,7 +866,7 @@ impl Service {
                 max,
             )
             .or_fail()?;
-        let a = facts_of(&r.store, &p.base, &commit).or_fail()?;
+        let a = facts_of(&r.store, ENGINE_CURRENT, &p.base, &commit).or_fail()?;
         Ok(json!({"facts": a.facts, "syntax_errors": a.syntax_errors}))
     }
 
@@ -1160,7 +1167,7 @@ impl Service {
             let vcfg = r.policy()?.config.verification.clone();
             (r.store.clone(), change, commit, base, trunk, vcfg)
         };
-        let integ = integrate(&store, &base, &trunk, &commit)?;
+        let integ = integrate(&store, ENGINE_CURRENT, &base, &trunk, &commit)?;
         let mut evidence = Vec::new();
         if let Some(m) = &integ.merged {
             let tree = store.read_commit(m)?.tree;
@@ -1185,6 +1192,7 @@ impl Service {
         };
         let mut sub = Submission::new(Actor::Daemon, op);
         sub.evidence = evidence;
+        sub.symbols_engine = Some(ENGINE_CURRENT);
         let signed = r.submit(sub, self.now())?;
         if signed.entry.decision.is_allow()
             && let Some(m) = &integ.merged

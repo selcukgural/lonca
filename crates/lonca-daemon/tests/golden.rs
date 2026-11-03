@@ -17,11 +17,45 @@ use common::*;
 use lonca_audit::{Options, audit};
 use lonca_core::canonical::canonical_bytes;
 use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_LEGACY};
+use lonca_symbols::engine::ENGINE_CURRENT;
 use std::collections::BTreeSet;
 
-/// `busy_repo` plus lease release, session end, freeze and unfreeze.
+const LEDGER_RS: &str = "pub struct Ledger {\n    total: u64,\n}\n\nimpl Ledger {\n    pub fn add(&mut self, v: u64) {\n        self.total += v;\n    }\n\n    pub fn total(&self) -> u64 {\n        self.total\n    }\n}\n";
+const LEDGER_PY: &str = "import os\n\n\nclass Ledger:\n    def add(self, v):\n        self.total += v\n\n    def total(self):\n        return self.total\n";
+
+/// `busy_repo` plus lease release, session end, freeze and unfreeze, and
+/// human changes to methods in Rust and Python, so the facts and merges in
+/// the log depend on more of the symbol engine (qualified member names,
+/// imports, signatures).
 fn golden_repo() -> Env {
     let mut e = busy_repo();
+    e.human_change(
+        vec![
+            file("src/ledger.rs", LEDGER_RS),
+            file("app/ledger.py", LEDGER_PY),
+        ],
+        "ledger",
+    );
+    e.svc.process_all();
+    e.human_change(
+        vec![
+            file(
+                "src/ledger.rs",
+                &LEDGER_RS.replace(
+                    "self.total += v;",
+                    "self.total = self.total.saturating_add(v);",
+                ),
+            ),
+            file(
+                "app/ledger.py",
+                &LEDGER_PY
+                    .replace("import os\n", "import os\nimport sys\n")
+                    .replace("def add(self, v):", "def add(self, v, note):"),
+            ),
+        ],
+        "ledger methods",
+    );
+    e.svc.process_all();
     let t = e.session("s3", &["notes.md"]);
     let set = e.lease(&t, "notes.md#<file>")["set"]
         .as_str()
@@ -137,6 +171,21 @@ fn golden_v1_log_still_verifies_replays_and_audits() {
     );
 }
 
+#[test]
+fn golden_v2_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v2.bundle",
+        "ec816526807edc4243261b1cdd649ec847509488fc86e921adcdcd0b29b66af1",
+        2,
+    );
+    assert!(
+        ops.iter()
+            .filter(|o| o.entry.uses_symbols_engine())
+            .all(|o| o.entry.symbols_engine == Some(0)),
+        "v2 entries record symbol engine 0"
+    );
+}
+
 fn open_service(e: &Env) -> lonca_core::Result<Arc<Service>> {
     Service::open(
         Home::new(e.root.join("home")),
@@ -161,6 +210,7 @@ fn an_upgraded_daemon_continues_a_v0_log_with_current_entries() {
     rewrite_log(&e, |entries| {
         for x in entries.iter_mut() {
             x.format = FORMAT_LEGACY;
+            x.symbols_engine = None;
         }
     });
     let old = formats(&e).len();
@@ -215,6 +265,48 @@ fn a_format_downgrade_along_the_chain_is_refused() {
         r.findings
             .iter()
             .any(|f| f.kind == "chain" && f.detail.contains("log format goes back")),
+        "{:#?}",
+        r.findings
+    );
+}
+
+#[test]
+fn the_daemon_records_the_symbol_engine_on_proposals_and_integrations() {
+    let e = busy_repo();
+    let ops = OpLog::new(&e.store()).read_all().unwrap();
+    let mut used = 0;
+    for o in &ops {
+        let x = &o.entry;
+        if x.uses_symbols_engine() {
+            used += 1;
+            assert_eq!(x.symbols_engine, Some(ENGINE_CURRENT), "op {}", x.seq);
+        } else {
+            assert_eq!(x.symbols_engine, None, "op {}", x.seq);
+        }
+    }
+    assert!(used >= 4, "busy_repo proposes and integrates");
+}
+
+#[test]
+fn daemon_and_auditor_refuse_a_symbol_engine_they_do_not_know() {
+    let e = busy_repo();
+    rewrite_log(&e, |entries| {
+        let x = entries
+            .iter_mut()
+            .find(|x| matches!(x.op, Op::ChangeIntegrate { .. }))
+            .unwrap();
+        x.symbols_engine = Some(ENGINE_CURRENT + 1);
+    });
+    let err = open_service(&e).err().expect("daemon refuses the log");
+    assert!(
+        matches!(&err, lonca_core::Error::Unsupported(m) if m.contains("symbol engine")),
+        "{err}"
+    );
+    let r = audit(&e.store(), Options::default()).unwrap();
+    assert!(
+        r.findings
+            .iter()
+            .any(|f| f.kind == "engine" && f.detail.contains("upgrade lonca")),
         "{:#?}",
         r.findings
     );

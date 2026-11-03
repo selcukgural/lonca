@@ -131,6 +131,40 @@ entry format, so they have their own version
   version that ever wrote an entry stays recomputable by every later
   release.
 
+## Mutation testing
+
+Passing tests do not show that they would catch a flipped `>=` or a
+`decide()` arm replaced with `Ok(Allow)`. Mutation testing measures that.
+
+- **Tool: cargo-mutants** (27.1.0, pinned with `--locked` and an explicit
+  version). It needs no code changes or annotations, reads
+  `.cargo/mutants.toml`, and supports `--in-diff` for PRs and `--shard` for
+  splitting a full run.
+- **Whole-workspace tests per mutant** (`test_workspace = true`). Much of
+  the safety-critical code is tested from other crates: `lonca-audit` only
+  from `lonca-daemon/tests/audit.rs`, `chain.rs`/`state.rs` mainly from
+  `lonca-policy/tests/decide.rs`, `lonca-core` from everything above it.
+  Per-package testing would report those as survivors. A workspace test
+  run is about 10 s, so the cost is acceptable. cargo-mutants has no
+  per-crate test list, so this is one setting for all crates.
+- **Timeouts** come from the measured baseline: `timeout_multiplier = 5`,
+  `minimum_test_timeout = 60` s. A mutant that hangs the daemon or a
+  socket test ends as a timeout, which counts as caught.
+- **Exclusion policy.** `exclude_re` lists only mutants shown to be
+  equivalent (no test could tell them apart from the original) or
+  irrelevant (text that no caller reads), each with a comment giving the
+  reason. Nothing in `decide.rs`, `chain.rs`, `state.rs`, `oplog.rs`,
+  `canonical.rs`, `changeid.rs` or `keys.rs` is excluded without review.
+  A surviving mutant is otherwise killed with a test. "Hard to test" is
+  not a reason to exclude.
+- **Tests are hermetic under mutation.** cargo-mutants runs copies of the
+  tree in parallel. Tests use their own temp dirs, `127.0.0.1:0` ports and
+  short socket paths; the CLI tests point `HOME` and `LONCA_HOME` into
+  their temp dir and drop the developer's `ANTHROPIC_*` variables, so a
+  mutant cannot write to the real home or reach the real API.
+- **Not nextest.** Not installed by default and not needed for speed:
+  the workspace test run is dominated by two ~1.3 s binaries.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

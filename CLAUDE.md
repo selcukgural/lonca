@@ -37,3 +37,31 @@ cargo deny check                # advisories, licenses, crates.io only (deny.tom
   auditor's deep checks if it carries recomputable data.
 - Unix socket paths are limited to ~100 bytes; tests use short temp dirs or
   `LONCA_SOCKET`.
+
+## Mutation testing
+
+cargo-mutants checks that the tests would catch a wrong `>=`, a dropped `!`
+or a `decide()` arm replaced with `Ok(Allow)`. Config: `.cargo/mutants.toml`
+(whole-workspace tests per mutant, timeouts); policy: `docs/decisions.md`.
+
+```sh
+cargo install --locked cargo-mutants@27.1.0
+cargo mutants --list -p lonca-policy        # what would be mutated
+cargo mutants -p lonca-policy -j 4          # one crate
+git diff main -- crates > /tmp/git.diff && cargo mutants --in-diff /tmp/git.diff -j 4
+```
+
+- Results are in `mutants.out/`: `missed.txt` lists survivors (tests still
+  pass with the mutant: a gap), `timeout.txt` hangs (counted as caught),
+  `unviable.txt` mutants that do not compile (ignored), `caught.txt` the
+  rest; `diff/` has each mutant as a patch.
+- For a PR, run `--in-diff` over the whole diff against its base. Do not
+  narrow it with `-f`, because survivors in other files are missed.
+- A new survivor in a security-critical file (`decide.rs`, `chain.rs`,
+  `state.rs`, `oplog.rs`, `canonical.rs`, `changeid.rs`, `keys.rs`, the
+  auditor, the merge) is fixed with a test, or listed in `exclude_re` with
+  a written reason why it is equivalent.
+- `exclude_re` and `--re` do not filter "delete field … from struct"
+  mutants (cargo-mutants 27.1.0); use file globs or a test.
+- Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
+  paths, no writes to `$HOME`. Parallel jobs (`-j`) run copies at once.

@@ -39,12 +39,22 @@ impl Env {
 
     fn cmd(&self, cwd: &Path, args: &[&str]) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_lonca"));
+        // Hermetic: nothing reaches the developer's home or API key, even
+        // under a mutant that ignores an override (cargo-mutants runs these).
         c.current_dir(cwd)
             .args(args)
+            .env("HOME", self.root.join("user"))
+            .env("LONCA_HOME", self.root.join("lonca-home"))
             .env("LONCA_SOCKET", &self.sock)
             .env("LONCA_HUMANS", self.root.join("humans"))
+            .env("LONCA_ADVISOR_LEDGER", self.root.join("ledger.json"))
             .env_remove("LONCA_HUMAN")
-            .env_remove("LONCA_WORKSPACE");
+            .env_remove("LONCA_WORKSPACE")
+            .env_remove("LONCA_SE")
+            .env_remove("LONCA_ADVISOR_DAILY_CALLS")
+            .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("ANTHROPIC_AUTH_TOKEN")
+            .env_remove("ANTHROPIC_BASE_URL");
         c
     }
 

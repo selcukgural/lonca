@@ -1,0 +1,26 @@
+# cargo-mutants configuration (https://mutants.rs/). How to run it and how to
+# read the results: CLAUDE.md, "Mutation testing". Policy: docs/decisions.md.
+
+# Run the whole workspace's tests for every mutant. Many modules are tested
+# from other crates (lonca-audit only from lonca-daemon/tests/audit.rs,
+# lonca-policy chain/state from tests/decide.rs, most of lonca-core from
+# downstream crates), so per-package testing reports false survivors.
+# A workspace test run takes ~10 s, so this is affordable.
+test_workspace = true
+
+# The unmutated test run takes ~10 s on an M-series Mac (cargo-mutants'
+# auto timeout is then 55 s). A mutant that hangs the daemon or a socket
+# test must end as a timeout, not stall the job. Linux CI runners are slower,
+# hence the generous multiplier and floor.
+timeout_multiplier = 5.0
+minimum_test_timeout = 60
+
+# Mutants that are equivalent (no behaviour can tell them apart) or
+# irrelevant. Every entry needs a comment saying why. Nothing in decide.rs,
+# chain.rs, state.rs, oplog.rs, canonical.rs, changeid.rs or keys.rs is
+# excluded without review.
+#
+# cargo-mutants 27.1.0 does not apply exclude_re (or --re) to "delete field
+# ... from struct expression" mutants; exclude those with exclude_globs or
+# kill them with a test.
+exclude_re = []

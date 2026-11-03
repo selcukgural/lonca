@@ -95,6 +95,7 @@ fn mentions_lonca_internals(cmd: &str) -> bool {
         "managed-settings",
         "lonca.sock",
         "daemon.key",
+        "daemon.next.key",
         "tokens.json",
     ]
     .iter()

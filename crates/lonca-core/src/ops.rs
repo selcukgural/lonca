@@ -60,6 +60,10 @@ pub enum OpKind {
     HumanRecoveryKey,
     #[serde(rename = "human.recover")]
     HumanRecover,
+    #[serde(rename = "daemon.rotate")]
+    DaemonRotate,
+    #[serde(rename = "daemon.recover")]
+    DaemonRecover,
     #[serde(rename = "policy.update")]
     PolicyUpdate,
     #[serde(rename = "session.start")]
@@ -115,6 +119,8 @@ impl OpKind {
             OpKind::HumanRevoke => "human.revoke",
             OpKind::HumanRecoveryKey => "human.recovery_key",
             OpKind::HumanRecover => "human.recover",
+            OpKind::DaemonRotate => "daemon.rotate",
+            OpKind::DaemonRecover => "daemon.recover",
             OpKind::PolicyUpdate => "policy.update",
             OpKind::SessionStart => "session.start",
             OpKind::SessionBind => "session.bind",
@@ -396,6 +402,15 @@ pub enum Op {
     /// used up by it.
     #[serde(rename = "human.recover")]
     HumanRecover { human: String, key: HumanKey },
+    /// Replaces the daemon key (Ed25519, hex). Signed by the old daemon key
+    /// and by a human; later entries are signed by the new key.
+    #[serde(rename = "daemon.rotate")]
+    DaemonRotate { key: String },
+    /// Re-anchors the log on a new daemon key when the old one is gone (or
+    /// belongs to a daemon that is being replaced). Signed by the new key
+    /// and by a human.
+    #[serde(rename = "daemon.recover")]
+    DaemonRecover { key: String },
     #[serde(rename = "policy.update")]
     PolicyUpdate { policy: GitId },
     #[serde(rename = "session.start")]
@@ -503,6 +518,8 @@ impl Op {
             Op::HumanRevoke { .. } => OpKind::HumanRevoke,
             Op::HumanRecoveryKey { .. } => OpKind::HumanRecoveryKey,
             Op::HumanRecover { .. } => OpKind::HumanRecover,
+            Op::DaemonRotate { .. } => OpKind::DaemonRotate,
+            Op::DaemonRecover { .. } => OpKind::DaemonRecover,
             Op::PolicyUpdate { .. } => OpKind::PolicyUpdate,
             Op::SessionStart { .. } => OpKind::SessionStart,
             Op::SessionBind { .. } => OpKind::SessionBind,
@@ -525,6 +542,14 @@ impl Op {
             Op::Unfreeze { .. } => OpKind::Unfreeze,
             Op::Negotiate { .. } => OpKind::Negotiate,
             Op::Redact { .. } => OpKind::Redact,
+        }
+    }
+
+    /// The daemon key this operation installs, if it is a key switch.
+    pub fn daemon_key_switch(&self) -> Option<&str> {
+        match self {
+            Op::DaemonRotate { key } | Op::DaemonRecover { key } => Some(key),
+            _ => None,
         }
     }
 }
@@ -624,6 +649,8 @@ mod tests {
             OpKind::HumanRevoke,
             OpKind::HumanRecoveryKey,
             OpKind::HumanRecover,
+            OpKind::DaemonRotate,
+            OpKind::DaemonRecover,
         ] {
             assert_eq!(
                 serde_json::to_string(&k).unwrap(),
@@ -644,6 +671,8 @@ mod tests {
             OpKind::HumanRevoke,
             OpKind::HumanRecoveryKey,
             OpKind::HumanRecover,
+            OpKind::DaemonRotate,
+            OpKind::DaemonRecover,
             OpKind::Freeze,
             OpKind::ImportExternal,
         ] {

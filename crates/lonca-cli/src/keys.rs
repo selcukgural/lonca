@@ -1,5 +1,6 @@
 //! `lonca human rotate | recovery-key | recover`: replacing a human's key
-//! in every repository they are enrolled in.
+//! in every repository they are enrolled in; `lonca daemon-key rotate |
+//! recover`: replacing the daemon's key.
 //!
 //! A rotation or recovery is prepared as a "next" key next to the current
 //! one (`<name>.next.key` or `<name>.next.se`). It replaces the current key
@@ -219,6 +220,99 @@ pub fn recover(
         "recovered. The recovery key is used up: delete {} and set a new one with \
          `lonca human recovery-key`.",
         recovery_key.display()
+    );
+    Ok(())
+}
+
+fn strings(v: &serde_json::Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Moves repositories to a new daemon key. The daemon keeps the new key
+/// next to the current one and replaces the current one once no repository
+/// uses it; until then each repository signs with its own.
+pub fn daemon_rotate(name: &str, repos: &[String]) -> Result<()> {
+    let mut c = ctx::connect()?;
+    let prep = call(&mut c, "daemon.prepare_rotate", json!({}))?;
+    let key = prep["key"].as_str().unwrap_or_default().to_string();
+    let repos = if repos.is_empty() {
+        strings(&prep["repos"])
+    } else {
+        repos.to_vec()
+    };
+    let mut failed = vec![];
+    for repo in &repos {
+        let mut c = human_client(repo)?;
+        let st = call(&mut c, "status", json!({}))?;
+        if st["daemon_key"].as_str() == Some(key.as_str()) {
+            println!("{repo}: already uses the new daemon key");
+            continue;
+        }
+        print!("{repo}: ");
+        let op = Op::DaemonRotate { key: key.clone() };
+        allowed(repo, &submit(&mut c, name, repo, op)?, &mut failed);
+    }
+    if !failed.is_empty() {
+        bail!("not rotated in {}", failed.join(", "));
+    }
+    // Read-only from here: preparing again would start the next rotation.
+    let ping = call(&mut c, "ping", json!({}))?;
+    let mut left = vec![];
+    if !ping["next_key"].is_null() {
+        for repo in strings(&call(&mut c, "repo.list", json!({}))?) {
+            let st = call(&mut human_client(&repo)?, "status", json!({}))?;
+            if st["daemon_key"] == ping["daemon_key"] {
+                left.push(repo);
+            }
+        }
+    }
+    if left.is_empty() {
+        println!("the daemon signs with {key} now; the old key is deleted.");
+    } else {
+        println!(
+            "still on the old daemon key: {}. They keep working; rotate them (a human \
+             enrolled there signs) to finish.",
+            left.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Re-anchors repositories whose daemon key is lost (or that come from
+/// another daemon, e.g. when moving to hardened mode) on this daemon's key.
+pub fn daemon_recover(name: &str, repos: &[String]) -> Result<()> {
+    let mut c = ctx::connect()?;
+    let ping = call(&mut c, "ping", json!({}))?;
+    let key = ping["next_key"]
+        .as_str()
+        .or(ping["daemon_key"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    let mut failed = vec![];
+    for repo in repos {
+        let mut c = human_client(repo)?;
+        print!("{repo}: ");
+        let op = Op::DaemonRecover { key: key.clone() };
+        match submit(&mut c, name, repo, op) {
+            Ok(r) => allowed(repo, &r, &mut failed),
+            Err(e) => {
+                println!("{e}");
+                failed.push(repo.clone());
+            }
+        }
+    }
+    if !failed.is_empty() {
+        bail!("not recovered: {}", failed.join(", "));
+    }
+    println!(
+        "recovered onto daemon key {key}. Every session ended; start new ones. \
+         Audit the repositories (`lonca-audit verify`) to see the switch."
     );
     Ok(())
 }

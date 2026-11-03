@@ -116,6 +116,8 @@ fn is_human_op(op: &Op) -> bool {
             | Op::HumanRevoke { .. }
             | Op::HumanRecoveryKey { .. }
             | Op::HumanRecover { .. }
+            | Op::DaemonRotate { .. }
+            | Op::DaemonRecover { .. }
             | Op::PolicyUpdate { .. }
             | Op::SessionStart { .. }
             | Op::SessionEnd { .. }
@@ -132,9 +134,10 @@ fn is_human_op(op: &Op) -> bool {
     )
 }
 
-/// The human key operations. They stay possible in a frozen repository:
-/// replacing or withdrawing a key is how a human answers an incident, and
-/// the only way back in when the key that would unfreeze is lost.
+/// The human and daemon key operations. They stay possible in a frozen
+/// repository: replacing or withdrawing a key is how a human answers an
+/// incident, and the only way back in when the key that would unfreeze is
+/// lost.
 fn is_key_op(op: &Op) -> bool {
     matches!(
         op,
@@ -142,7 +145,18 @@ fn is_key_op(op: &Op) -> bool {
             | Op::HumanRevoke { .. }
             | Op::HumanRecoveryKey { .. }
             | Op::HumanRecover { .. }
+            | Op::DaemonRotate { .. }
+            | Op::DaemonRecover { .. }
     )
+}
+
+/// An Ed25519 public key as the daemon writes it: 32 bytes, lowercase hex,
+/// a valid point.
+pub fn valid_daemon_key(k: &str) -> bool {
+    valid_human_key(&HumanKey {
+        alg: "ed25519".into(),
+        public: k.to_string(),
+    })
 }
 
 /// A key a human can sign with: a known algorithm and a public key in the
@@ -445,6 +459,16 @@ pub fn decide(
                 v.deny("not_own_key");
             }
             check_new_key(state, key, &mut v);
+        }
+        Op::DaemonRotate { key } | Op::DaemonRecover { key } => {
+            if !valid_daemon_key(key) {
+                v.deny("invalid_key");
+            } else if *key == state.daemon_key
+                || state.retired_daemon_keys.contains(key)
+                || state.key_known(key)
+            {
+                v.deny("key_reused");
+            }
         }
         Op::HumanRevoke { human: who, reason } => {
             if !state.humans.contains_key(who) {
@@ -791,6 +815,14 @@ pub fn decide(
     if !matches!(actor, Actor::Daemon) && !matches!(op, Op::ChangePropose { .. }) {
         let ctxv = session_context(state, actor);
         v.cedar(ctx.policy.evaluate(actor, op.kind().as_str(), ctxv));
+    }
+    // A daemon key switch can not wait for approval: a recovery is signed
+    // by the new key, so it can not sit in the log as pending while the old
+    // key signs on, and a rotation follows the same rule.
+    if op.daemon_key_switch().is_some() {
+        for r in std::mem::take(&mut v.escalate) {
+            v.deny(format!("not_escalatable:{r}"));
+        }
     }
     v.finish(state.humans.len(), cfg.approvals.cap_to_enrolled_humans)
 }

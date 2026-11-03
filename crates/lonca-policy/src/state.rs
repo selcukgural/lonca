@@ -117,6 +117,8 @@ pub struct State {
     /// Public keys that were rotated away, used up or revoked. They are
     /// never accepted again.
     pub retired_keys: BTreeSet<String>,
+    /// Daemon keys that were rotated away or replaced by a recovery.
+    pub retired_daemon_keys: BTreeSet<String>,
     pub policy: Option<GitId>,
     pub trunk: Option<GitId>,
     pub trunk_history: BTreeSet<GitId>,
@@ -471,6 +473,26 @@ impl State {
                 self.retire(old);
                 let old = self.recovery.remove(human);
                 self.retire(old);
+            }
+            Op::DaemonRotate { key } => {
+                let old = std::mem::replace(&mut self.daemon_key, key.clone());
+                self.retired_daemon_keys.insert(old);
+            }
+            Op::DaemonRecover { key } => {
+                // The daemon that held the session tokens is gone (or is
+                // being replaced): every session ends. What they proposed
+                // keeps its decision, like after `session.end`.
+                let roots: Vec<String> = self
+                    .sessions
+                    .values()
+                    .filter(|s| s.parent.is_none())
+                    .map(|s| s.id.clone())
+                    .collect();
+                for id in roots {
+                    self.end_sessions(&id, "revoked: daemon key recovered", false);
+                }
+                let old = std::mem::replace(&mut self.daemon_key, key.clone());
+                self.retired_daemon_keys.insert(old);
             }
             Op::PolicyUpdate { policy } => self.policy = Some(policy.clone()),
             Op::SessionStart {

@@ -75,8 +75,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 2** adds `symbols_engine` (below).
 - **Version 3** adds the human key operations (`human.rotate`,
   `human.revoke`, `human.recovery_key`, `human.recover`; see "Human keys").
-  An entry of an older format can not contain them; the chain check
-  refuses one that does.
+- **Version 4** adds the daemon key operations (`daemon.rotate`,
+  `daemon.recover`; see "Daemon keys").
+- An entry of an older format can not contain an operation type that a
+  later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
   release continues with current entries after an upgrade.
 - **Refusal.** Decoding reads the version before anything else. A version
@@ -199,6 +201,73 @@ request them, and a policy can escalate them like any other operation.
   installed only after every repository accepted it; a rerun skips the
   repositories that already use it. The old key file is kept as
   `<name>.key.retired-<ms>`.
+
+## Daemon keys
+
+The daemon key signs every entry; `repo.init` names it. Before this, a
+lost `daemon.key` (disk failure, reinstall, a new machine) ended the
+repository's log, and so did moving to hardened mode, where the key
+belongs to `_lonca`.
+
+- **`daemon.rotate {key}`** moves a repository to a new daemon key. The
+  entry is signed by the old key and carries a human signature (presence
+  when the policy requires it); every later entry is signed by the new key.
+  The daemon only accepts a rotation to the key it prepared
+  (`daemon.prepare_rotate`), so a typo can not end the log.
+- **`daemon.recover {key}`** re-anchors a repository whose daemon key this
+  daemon does not hold: the key is lost, or the store was copied from
+  another daemon. The entry is signed by the new key, because the old one
+  is gone, and by a human. The daemon decides it before writing it and
+  writes nothing if it is refused: a refused recovery could not be signed
+  by the key in force. Every session ends, since the daemon that held
+  their tokens is gone; what they proposed keeps its decision and its
+  place in the queue, as after `session.end`. A rotation keeps sessions:
+  the daemon and its tokens (stored as hashes) stay.
+- **Who.** Any enrolled human; agents and the daemon can not request
+  either. Both work in a frozen repository, like the human key
+  operations. Unlike `human.recover`, a daemon recovery has no presence
+  exemption: the human signs with their own key.
+- **No waiting for approval.** A recovery is signed by the new key, so it
+  can not sit in the log as pending while the old key signs on; a
+  rotation follows the same rule. A policy rule that escalates either is
+  turned into a denial (`not_escalatable:<rule>`); `forbid` rules still
+  deny. Requiring several humans for a key switch would need several
+  signatures on one entry; that is open (with #19).
+- **Keys** are valid Ed25519 points in lowercase hex, never the key in
+  force, a retired daemon key or a human key.
+- **Verification.** `verify_chain` follows the key through every allowed
+  switch: a rotation is checked against the old key, a recovery against
+  the key it installs. That alone would let anyone who can write the store
+  forge a recovery onto their own key, append entries, and rotate back to
+  the daemon's key. So the daemon decides every key switch again when it
+  opens a repository (`lonca_policy::chain::replay_checked`) and refuses
+  to start if one does not replay; the auditor reports such a switch as a
+  `daemon_key` finding and lists every switch it saw. A human key holder
+  can still re-anchor a log on a key of their choice: that is what
+  recovery is, and the switch is in the log for every auditor to see.
+- **Files.** `daemon.prepare_rotate` creates `daemon.next.key` next to
+  `daemon.key`. While some repositories are on each, the daemon signs each
+  repository with the key its log is on, and new repositories get the
+  next key. When no repository uses the current key, the old secret is
+  deleted and the next key takes its place. A crash between the two steps
+  leaves only the next key, which is then used as the current one. The
+  old secret is deleted rather than kept: the entries it signed stay
+  verifiable through its public key in the log, and nothing may be signed
+  with it again.
+- **A repository on another key** (`foreign_key`) accepts nothing but
+  `daemon.recover`; the daemon still starts, and lists it at startup.
+- **Mode change (cooperative to hardened).** The hardened daemon gets a
+  copy of each store (for example `git clone --mirror` of the cooperative
+  store or of a pushed remote into its `repos/`, as `_lonca`) and runs
+  with its own new key; then `lonca daemon-key recover --repo a,b` as an
+  enrolled human. The cooperative key lived where the developer's account
+  could write, so it is not carried over; recovery retires it. Stop the
+  cooperative daemon first: it still holds its key and would go on
+  writing to its own copy, which then differs from the hardened one.
+- **CLI.** `lonca daemon-key rotate [--repo a,b]` (default: every
+  repository still on the current key; rerun to resume) and
+  `lonca daemon-key recover --repo a,b`. The Touch ID prompt names the
+  first 16 hex digits of the new key, as `lonca daemon` prints its key.
 
 ## Mutation testing
 

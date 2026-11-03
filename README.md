@@ -146,6 +146,14 @@ through Lonca's proxy. They never edit sudoers; read their advice about
 sudo's credential cache. `--render DIR` shows the generated files without
 installing anything.
 
+Repositories created in cooperative mode move with their history: stop
+the cooperative daemon, copy each store into the hardened daemon's
+`repos/` (as `_lonca`, e.g. `git clone --mirror`), and run
+`lonca daemon-key recover --repo <name>` as an enrolled human. The same
+command continues a repository whose `daemon.key` was lost;
+`lonca daemon-key rotate` replaces a key that is still there. See
+[docs/decisions.md](docs/decisions.md), "Daemon keys".
+
 ## Repository layout
 
 | Crate | Role |

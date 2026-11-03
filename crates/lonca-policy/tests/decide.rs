@@ -6,7 +6,9 @@ use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{SignedOp, verify_chain};
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
-use lonca_policy::chain::{Chain, Submission};
+use std::sync::Arc;
+
+use lonca_policy::chain::{Chain, Submission, replay_checked};
 use lonca_policy::config::{DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle};
 use lonca_policy::decide::{Ctx, decide};
 use lonca_policy::human::intent_bytes;
@@ -22,7 +24,7 @@ fn gid(c: char) -> GitId {
 
 struct H {
     chain: Chain,
-    policy: PolicyBundle,
+    policy: Arc<PolicyBundle>,
     humans: Vec<(String, KeyPair)>,
     now: i64,
     log: Vec<SignedOp>,
@@ -36,7 +38,7 @@ impl H {
     fn with_policy(policy: PolicyBundle) -> Self {
         let mut h = H {
             chain: Chain::new(KeyPair::generate()),
-            policy,
+            policy: Arc::new(policy),
             humans: vec![("ayse".into(), KeyPair::generate())],
             now: T0,
             log: vec![],
@@ -277,9 +279,55 @@ impl H {
         )
     }
 
-    /// Replays the whole log: chain integrity plus every decision.
+    /// The key the harness signs with for `name`.
+    fn key_of(&self, name: &str) -> KeyPair {
+        self.humans
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap()
+            .1
+            .clone()
+    }
+
+    /// A rotation as the daemon does it: signed by the key in force; if it
+    /// is allowed, the new key signs from the next entry on.
+    fn rotate_daemon(&mut self, name: &str, new: &KeyPair) -> Decision {
+        let d = self.human(name, daemon_rotate(new));
+        if d.is_allow() {
+            self.chain.set_key(new.clone());
+        }
+        d
+    }
+
+    /// A recovery as the daemon does it: decided first, and logged (signed
+    /// by the new key) only if allowed.
+    fn recover_daemon_with(
+        &mut self,
+        signer: &KeyPair,
+        name: &str,
+        op: Op,
+        new: &KeyPair,
+    ) -> Decision {
+        let sig = self.sign_with(signer, name, &op);
+        let mut sub = Submission::new(Actor::Human { name: name.into() }, op);
+        sub.human = Some(sig);
+        let t = self.now + 1;
+        let signed =
+            Chain::from_state(new.clone(), self.chain.state.clone()).prepare(sub, t, &self.policy);
+        if signed.entry.decision.is_allow() {
+            self.now = t;
+            self.chain.set_key(new.clone());
+            self.chain.commit(&signed);
+            self.log.push(signed.clone());
+        }
+        signed.entry.decision
+    }
+
+    /// Replays the whole log: chain integrity plus every decision, and the
+    /// daemon's own check of the daemon key switches.
     fn assert_replay(&self) {
         verify_chain(&self.log).expect("chain verifies");
+        replay_checked(&self.log, |_| Ok(self.policy.clone())).expect("key switches replay");
         let mut state = State::new();
         for op in &self.log {
             let e = &op.entry;
@@ -1141,7 +1189,7 @@ fn policy_without_permit_denies_everything_for_agents() {
     .unwrap();
     let mut h = H::with_policy(PolicyBundle::default_bundle());
     h.start_observed("s1", &["src/**"]);
-    h.policy = strict;
+    h.policy = Arc::new(strict);
     assert!(denied_with(
         &h.lease("s1", "l1", &[("src/a.rs#f", LeaseKind::Edit)]),
         "policy_default_deny"
@@ -1157,7 +1205,7 @@ fn presence_can_be_required_for_human_signatures() {
     )
     .unwrap();
     let mut h = H::new();
-    h.policy = strict;
+    h.policy = Arc::new(strict);
     let d = h.human("ayse", Op::Freeze { reason: "x".into() });
     assert!(denied_with(&d, "presence_required"), "{d:?}");
 
@@ -1165,7 +1213,7 @@ fn presence_can_be_required_for_human_signatures() {
     use p256::ecdsa::signature::Signer;
     let sk = p256::ecdsa::SigningKey::from_slice(&[9u8; 32]).unwrap();
     let public = hex::encode(sk.verifying_key().to_sec1_point(false).as_bytes());
-    h.policy = PolicyBundle::default_bundle();
+    h.policy = Arc::new(PolicyBundle::default_bundle());
     let enroll = Op::HumanEnroll {
         human: "cem".into(),
         key: HumanKey {
@@ -1174,11 +1222,13 @@ fn presence_can_be_required_for_human_signatures() {
         },
     };
     assert!(h.human("ayse", enroll).is_allow());
-    h.policy = PolicyBundle::parse(
-        &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
-        DEFAULT_POLICY,
-    )
-    .unwrap();
+    h.policy = Arc::new(
+        PolicyBundle::parse(
+            &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
+            DEFAULT_POLICY,
+        )
+        .unwrap(),
+    );
     let op = Op::Freeze { reason: "y".into() };
     let nonce = random_id("nonce");
     let issued = h.now + 1;
@@ -1657,11 +1707,13 @@ fn presence_does_not_block_recovery() {
         key: file_key(&rec),
     };
     assert!(h.human("ayse", set_rec).is_allow());
-    h.policy = PolicyBundle::parse(
-        &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
-        DEFAULT_POLICY,
-    )
-    .unwrap();
+    h.policy = Arc::new(
+        PolicyBundle::parse(
+            &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
+            DEFAULT_POLICY,
+        )
+        .unwrap(),
+    );
     let new = KeyPair::generate();
     assert!(denied_with(
         &h.human("ayse", rotate("ayse", &new)),
@@ -1768,4 +1820,269 @@ fn a_released_key_operation_is_checked_again() {
     assert!(h.human("ayse", approve(seq)).is_allow());
     assert_eq!(h.chain.state.humans["bora"], file_key(&new2));
     h.assert_replay();
+}
+
+fn daemon_rotate(key: &KeyPair) -> Op {
+    Op::DaemonRotate {
+        key: key.public_hex(),
+    }
+}
+
+fn daemon_recover(key: &KeyPair) -> Op {
+    Op::DaemonRecover {
+        key: key.public_hex(),
+    }
+}
+
+#[test]
+fn a_human_rotates_the_daemon_key_and_the_new_key_signs_on() {
+    let mut h = H::new();
+    h.enroll("bora");
+    h.start_observed("s1", &["src/**"]);
+    let old = h.chain.state.daemon_key.clone();
+    let new = KeyPair::generate();
+
+    assert!(denied_with(
+        &h.agent("s1", daemon_rotate(&new)),
+        "not_grantable:daemon.rotate"
+    ));
+    assert!(denied_with(
+        &h.daemon(daemon_rotate(&new), vec![]),
+        "not_a_daemon_op:daemon.rotate"
+    ));
+    // A valid Ed25519 point in lowercase hex, and never a key in use or
+    // used before.
+    let public = new.public_hex();
+    assert_ne!(public, public.to_uppercase());
+    for (key, why) in [
+        ("zz".repeat(32), "invalid_key"),
+        (public.to_uppercase(), "invalid_key"),
+        (public[2..].to_string(), "invalid_key"),
+        (old.clone(), "key_reused"),
+        (h.key_of("bora").public_hex(), "key_reused"),
+    ] {
+        let d = h.human("ayse", Op::DaemonRotate { key: key.clone() });
+        assert!(denied_with(&d, why), "{key}: {d:?}");
+        assert_eq!(h.chain.state.daemon_key, old);
+    }
+
+    // Any enrolled human may rotate it.
+    let d = h.rotate_daemon("bora", &new);
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(h.chain.state.daemon_key, public);
+    assert!(h.chain.state.retired_daemon_keys.contains(&old));
+    // The daemon keeps its tokens, so sessions go on.
+    assert!(h.chain.state.session_active("s1", h.now));
+    assert!(
+        h.lease("s1", "l1", &[("src/a.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    // A retired key never comes back.
+    assert!(denied_with(
+        &h.human("ayse", Op::DaemonRotate { key: old }),
+        "key_reused"
+    ));
+    let newer = KeyPair::generate();
+    assert!(h.rotate_daemon("ayse", &newer).is_allow());
+    assert!(denied_with(
+        &h.human("ayse", daemon_rotate(&new)),
+        "key_reused"
+    ));
+    h.assert_replay();
+}
+
+#[test]
+fn a_lost_daemon_key_is_recovered_with_a_human_signature() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    let sym = "src/billing.rs#Client.charge";
+    h.wrote("s1", "src/billing.rs");
+    assert!(h.lease("s1", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert!(h.propose("s1", c, edit(sym)).is_allow());
+    let old = h.chain.state.daemon_key.clone();
+    let new = KeyPair::generate();
+    let ayse = h.key_of("ayse");
+
+    // Refusals are not logged: a forged signature, an unknown human, the
+    // key in force, and agents.
+    let seq = h.chain.state.next_seq;
+    let stranger = KeyPair::generate();
+    let tries = [
+        (
+            &stranger,
+            "ayse",
+            daemon_recover(&new),
+            "bad_human_signature",
+        ),
+        (&stranger, "mallory", daemon_recover(&new), "unknown_human"),
+        (
+            &ayse,
+            "ayse",
+            Op::DaemonRecover { key: old.clone() },
+            "key_reused",
+        ),
+    ];
+    for (signer, name, op, why) in tries {
+        let d = h.recover_daemon_with(signer, name, op, &new);
+        assert!(denied_with(&d, why), "{why}: {d:?}");
+    }
+    assert!(denied_with(
+        &h.agent("s1", daemon_recover(&new)),
+        "not_grantable:daemon.recover"
+    ));
+    assert_eq!(h.chain.state.next_seq, seq + 1, "only the agent's try");
+
+    let d = h.recover_daemon_with(&ayse, "ayse", daemon_recover(&new), &new);
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(h.chain.state.daemon_key, new.public_hex());
+    assert!(h.chain.state.retired_daemon_keys.contains(&old));
+    // The daemon that held the tokens is gone: every session ends, and
+    // what they proposed keeps its place in the queue.
+    assert_eq!(
+        h.chain.state.sessions["s1"].ended.as_deref(),
+        Some("revoked: daemon key recovered")
+    );
+    assert!(h.chain.state.leases.is_empty());
+    assert_eq!(h.chain.state.queue, vec![c]);
+    let trunk = h.chain.state.trunk.clone().unwrap();
+    let d = h.daemon(
+        Op::ChangeIntegrate {
+            change: c,
+            trunk_before: trunk,
+            merged: Some(gid('e')),
+            conflicts: vec![],
+        },
+        vec![pass(CheckKind::Build), pass(CheckKind::Tests)],
+    );
+    assert!(d.is_allow(), "{d:?}");
+    // Recovery onto a key used before is refused like a rotation.
+    let d = h.recover_daemon_with(&ayse, "ayse", Op::DaemonRecover { key: old }, &new);
+    assert!(denied_with(&d, "key_reused"), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn a_forged_daemon_key_switch_is_caught_by_the_replay() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    let daemon = h.chain.state.daemon_key.clone();
+    let attacker = KeyPair::generate();
+    // Someone who can write the store but holds no human key: a recovery
+    // onto their own key with a forged signature and a recorded allow,
+    // entries of their own, then a "rotation" back to the daemon's key.
+    let forge = |h: &H, op: Op, at: i64, prev: &SignedOp| {
+        let sig = h.sign_with(&attacker, "ayse", &op);
+        let mut sub = Submission::new(
+            Actor::Human {
+                name: "ayse".into(),
+            },
+            op,
+        );
+        sub.human = Some(sig);
+        let mut state = State::replay(&h.log);
+        if prev.entry.seq + 1 != state.next_seq {
+            state.apply(prev);
+        }
+        let mut e = Chain::from_state(attacker.clone(), state)
+            .prepare(sub, at, &h.policy)
+            .entry;
+        assert!(!e.decision.is_allow());
+        e.decision = Decision::allow();
+        SignedOp::sign(e, &attacker)
+    };
+    let last = h.log.last().unwrap().clone();
+    let recover = forge(&h, daemon_recover(&attacker), h.now + 1, &last);
+    let back = forge(
+        &h,
+        Op::DaemonRotate {
+            key: daemon.clone(),
+        },
+        h.now + 2,
+        &recover,
+    );
+    let mut log = h.log.clone();
+    log.extend([recover.clone(), back]);
+    // The chain alone accepts it, and ends on the daemon's key.
+    assert!(verify_chain(&log).is_ok());
+    assert_eq!(State::replay(&log).daemon_key, daemon);
+    let err = replay_checked(&log, |_| Ok(h.policy.clone())).unwrap_err();
+    assert!(
+        err.to_string().contains(&format!(
+            "op {}: daemon.recover is not authorised",
+            recover.entry.seq
+        )),
+        "{err}"
+    );
+    h.assert_replay();
+}
+
+#[test]
+fn daemon_key_switches_can_not_wait_for_approval() {
+    let policy = PolicyBundle::parse(
+        DEFAULT_CONFIG,
+        &format!(
+            "{DEFAULT_POLICY}\n@id(\"daemon-keys-need-two\")\n@escalate(\"daemon-keys\")\n@approvals(\"2\")\n\
+             forbid(principal, action in [Lonca::Action::\"daemon.rotate\", Lonca::Action::\"daemon.recover\"], resource);\n"
+        ),
+    )
+    .unwrap();
+    let mut h = H::with_policy(policy);
+    let old = h.chain.state.daemon_key.clone();
+    let new = KeyPair::generate();
+    let d = h.rotate_daemon("ayse", &new);
+    assert_eq!(d.outcome, Outcome::Deny, "{d:?}");
+    assert!(
+        d.reasons.iter().any(|r| r.starts_with("not_escalatable:")),
+        "{d:?}"
+    );
+    let ayse = h.key_of("ayse");
+    let d = h.recover_daemon_with(&ayse, "ayse", daemon_recover(&new), &new);
+    assert!(denied_with(&d, "not_escalatable:"), "{d:?}");
+    assert_eq!(h.chain.state.daemon_key, old);
+    assert!(h.chain.state.pending.is_empty());
+    h.assert_replay();
+}
+
+#[test]
+fn daemon_keys_change_in_a_frozen_repository_and_need_presence_when_required() {
+    let mut h = H::new();
+    assert!(
+        h.daemon(
+            Op::Freeze {
+                reason: "incident".into()
+            },
+            vec![]
+        )
+        .is_allow()
+    );
+    let new = KeyPair::generate();
+    assert!(h.rotate_daemon("ayse", &new).is_allow());
+    let newer = KeyPair::generate();
+    let ayse = h.key_of("ayse");
+    assert!(
+        h.recover_daemon_with(&ayse, "ayse", daemon_recover(&newer), &newer)
+            .is_allow()
+    );
+    assert!(h.chain.state.frozen.is_some());
+    h.assert_replay();
+
+    // Unlike `human.recover`, a daemon recovery has no exemption from
+    // presence: the human's own key signs it.
+    h.policy = Arc::new(
+        PolicyBundle::parse(
+            &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
+            DEFAULT_POLICY,
+        )
+        .unwrap(),
+    );
+    let last = KeyPair::generate();
+    assert!(denied_with(
+        &h.rotate_daemon("ayse", &last),
+        "presence_required"
+    ));
+    assert!(denied_with(
+        &h.recover_daemon_with(&ayse, "ayse", daemon_recover(&last), &last),
+        "presence_required"
+    ));
 }

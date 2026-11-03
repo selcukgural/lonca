@@ -151,6 +151,11 @@ pub fn describe(repo: &str, op: &Op) -> String {
         Op::HumanRevoke { human, .. } => format!("REVOKE {human} and end their sessions"),
         Op::HumanRecoveryKey { human, .. } => format!("set a recovery key for {human}"),
         Op::HumanRecover { human, .. } => format!("RECOVER {human} with the recovery key"),
+        Op::DaemonRotate { key } => format!("REPLACE the daemon key with {}", short_key(key)),
+        Op::DaemonRecover { key } => format!(
+            "HAND the repository to daemon key {} (approve only for your own daemon)",
+            short_key(key)
+        ),
         Op::PolicyUpdate { .. } => "change the repository policy".to_string(),
         Op::SessionStart { agent, scope, .. } => {
             format!("start agent {agent} on {}", scope.paths.join(", "))
@@ -169,6 +174,11 @@ pub fn describe(repo: &str, op: &Op) -> String {
         other => other.kind().as_str().to_string(),
     };
     format!("Lonca ({repo}): {what}")
+}
+
+/// The first 16 hex digits, as `lonca daemon` prints its key.
+fn short_key(k: &str) -> &str {
+    k.get(..16).unwrap_or(k)
 }
 
 pub fn sign(human: &str, repo: &str, op: &Op) -> Result<HumanSignature> {
@@ -238,5 +248,17 @@ mod tests {
         let text = describe("demo", &rotate);
         assert!(text.contains("demo"), "{text}");
         assert!(text.contains("REPLACE the key of ayse"), "{text}");
+        let key = "0123456789abcdef".repeat(4);
+        let text = describe("demo", &Op::DaemonRotate { key: key.clone() });
+        assert!(
+            text.ends_with("REPLACE the daemon key with 0123456789abcdef"),
+            "{text}"
+        );
+        let text = describe("demo", &Op::DaemonRecover { key });
+        assert!(
+            text.contains("HAND the repository to daemon key 0123456789abcdef ("),
+            "{text}"
+        );
+        assert_eq!(short_key("abc"), "abc");
     }
 }

@@ -1,0 +1,4 @@
+# Frozen parser corpus for the symbol engine (input data, not code we run).
+# Vendored so GitHub's language detection, and with it CodeQL default setup,
+# does not treat it as C#, Go, JavaScript, Python or TypeScript sources.
+crates/lonca-symbols/tests/engine/** linguist-vendored

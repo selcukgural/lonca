@@ -74,6 +74,7 @@ fn from_err(e: Error) -> (String, String) {
         Error::Invalid(_) => "invalid",
         Error::Conflict(_) => "conflict",
         Error::Integrity(_) => "integrity",
+        Error::Unsupported(_) => "unsupported",
         Error::Git(_) | Error::Io(_) | Error::Json(_) => "internal",
     };
     (code.into(), e.to_string())

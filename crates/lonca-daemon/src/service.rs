@@ -333,7 +333,7 @@ impl Service {
                 format!(
                     "repository {name} is on daemon key {}, which this daemon does not hold; \
                      recover it with `lonca daemon-key recover --repo {name}`",
-                    &r.chain.state.daemon_key[..16]
+                    r.chain.state.daemon_key.get(..16).unwrap_or_default()
                 ),
             );
         }

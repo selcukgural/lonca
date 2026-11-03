@@ -277,3 +277,34 @@ fn a_forged_key_switch_in_the_store_stops_the_daemon_and_fails_the_audit() {
     let kinds: Vec<&str> = r.findings.iter().map(|f| f.kind.as_str()).collect();
     assert_eq!(kinds, ["daemon_key", "daemon_key"], "{:#?}", r.findings);
 }
+
+#[test]
+fn a_genesis_prepared_before_the_rotation_ended_is_prepared_again() {
+    let mut e = Env::new();
+    e.init(None);
+    let human_key = HumanKey {
+        alg: "ed25519".into(),
+        public: e.human.public_hex(),
+    };
+    let params = json!({"repo": "late", "human": "ayse", "human_key": human_key});
+    let prep = e.ok("repo.prepare_init", None, None, params.clone());
+    let stale: Op = serde_json::from_value(prep["op"].clone()).unwrap();
+    let next = e.ok("daemon.prepare_rotate", None, None, json!({}))["key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = submit_to(&mut e, "demo", Op::DaemonRotate { key: next.clone() }).unwrap();
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert!(!home(&e).next_key_path().exists(), "rotation finished");
+
+    // The prepared genesis named the deleted key.
+    let sig = sign_ed25519(&e.human, "ayse", "late", &stale, e.now());
+    let err = e
+        .call("repo.init", None, None, json!({"op": stale, "sig": sig}))
+        .unwrap_err();
+    assert_eq!(err.0, "invalid", "{err:?}");
+    init_repo(&mut e, "late");
+    assert_eq!(daemon_key_of(&mut e, "late"), next);
+    e.reopen();
+    assert_eq!(daemon_key_of(&mut e, "late"), next);
+}

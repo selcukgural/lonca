@@ -279,6 +279,9 @@ impl Service {
         let Some(s) = r.chain.state.sessions.get(&e.session) else {
             return fail("unauthenticated", "unknown session");
         };
+        if s.ended.is_some() {
+            return fail("unauthenticated", "session ended");
+        }
         Ok((
             e.repo,
             Actor::Agent {
@@ -442,9 +445,21 @@ impl Service {
             .values()
             .map(|p| json!({"seq": p.seq, "actor": p.actor.label(), "op": p.op.kind().as_str(), "reasons": p.reasons, "approvals": p.approvals, "required": p.required}))
             .collect();
+        // Public keys only: which key each human signs with, and the
+        // recovery key if one is set.
+        let humans: serde_json::Map<String, Value> = s
+            .humans
+            .iter()
+            .map(|(n, k)| {
+                (
+                    n.clone(),
+                    json!({"alg": k.alg, "public": k.public, "recovery": s.recovery.get(n).map(|r| &r.public)}),
+                )
+            })
+            .collect();
         Ok(json!({
             "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "frozen": s.frozen, "queue": s.queue,
-            "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
+            "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
             "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now,
         }))
     }
@@ -723,7 +738,16 @@ impl Service {
             Op::CapRevoke { session, .. } | Op::SessionEnd { session, .. } => {
                 Self::revoke_tokens(inner, &name, session)?;
             }
-            Op::Approve { .. } | Op::ChangePropose { .. } => self.notify_queue(),
+            // Key operations end every session of the human; an approval
+            // may release an operation that ends sessions.
+            Op::HumanRotate { .. } | Op::HumanRevoke { .. } | Op::HumanRecover { .. } => {
+                Self::revoke_ended_tokens(inner, &name)?;
+            }
+            Op::Approve { .. } => {
+                Self::revoke_ended_tokens(inner, &name)?;
+                self.notify_queue();
+            }
+            Op::ChangePropose { .. } => self.notify_queue(),
             _ => {}
         }
         Ok(out)
@@ -741,6 +765,23 @@ impl Service {
             .sessions
             .values()
             .filter(|s| s.ended.is_some() && r.chain.state.descends_from(&s.id, root))
+            .map(|s| s.id.clone())
+            .collect();
+        inner.tokens.revoke_sessions(repo, &ended).or_fail()
+    }
+
+    /// Drops the token of every ended session of a repository.
+    fn revoke_ended_tokens(
+        inner: &mut Inner,
+        repo: &str,
+    ) -> std::result::Result<(), (String, String)> {
+        let r = Self::repo(inner, repo)?;
+        let ended: Vec<String> = r
+            .chain
+            .state
+            .sessions
+            .values()
+            .filter(|s| s.ended.is_some())
             .map(|s| s.id.clone())
             .collect();
         inner.tokens.revoke_sessions(repo, &ended).or_fail()

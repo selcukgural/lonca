@@ -59,6 +59,10 @@ impl H {
 
     fn sign(&self, name: &str, op: &Op) -> HumanSignature {
         let key = &self.humans.iter().find(|(n, _)| n == name).unwrap().1;
+        self.sign_with(key, name, op)
+    }
+
+    fn sign_with(&self, key: &KeyPair, name: &str, op: &Op) -> HumanSignature {
         let nonce = random_id("nonce");
         let issued_ms = self.now + 1;
         HumanSignature {
@@ -90,6 +94,34 @@ impl H {
         let mut sub = Submission::new(Actor::Human { name: name.into() }, op);
         sub.human = Some(sig);
         self.submit(sub)
+    }
+
+    /// Submits `op` as `name`, signed with `key` (whatever key that is).
+    fn human_with(&mut self, key: &KeyPair, name: &str, op: Op) -> Decision {
+        let sig = self.sign_with(key, name, &op);
+        let mut sub = Submission::new(Actor::Human { name: name.into() }, op);
+        sub.human = Some(sig);
+        self.submit(sub)
+    }
+
+    /// Enrolls `name` with a new file key (signed by ayse).
+    fn enroll(&mut self, name: &str) {
+        let key = KeyPair::generate();
+        let d = self.human(
+            "ayse",
+            Op::HumanEnroll {
+                human: name.into(),
+                key: file_key(&key),
+            },
+        );
+        assert!(d.is_allow(), "{d:?}");
+        self.use_key(name, key);
+    }
+
+    /// The key the harness signs with for `name` from now on.
+    fn use_key(&mut self, name: &str, key: KeyPair) {
+        self.humans.retain(|(n, _)| n != name);
+        self.humans.push((name.into(), key));
     }
 
     fn human_change(&mut self, name: &str, op: Op, facts: Facts) -> Decision {
@@ -130,6 +162,10 @@ impl H {
     }
 
     fn start(&mut self, session: &str, paths: &[&str]) {
+        self.start_as("ayse", session, paths);
+    }
+
+    fn start_as(&mut self, human: &str, session: &str, paths: &[&str]) {
         let op = Op::SessionStart {
             session: session.into(),
             agent: format!("bot-{session}"),
@@ -152,13 +188,17 @@ impl H {
             },
             expires_ms: self.now + 120 * MIN,
         };
-        let d = self.human("ayse", op);
+        let d = self.human(human, op);
         assert!(d.is_allow(), "{d:?}");
     }
 
     /// Start a session and bind it as observed by locked hooks + sandbox.
     fn start_observed(&mut self, session: &str, paths: &[&str]) {
-        self.start(session, paths);
+        self.start_observed_as("ayse", session, paths);
+    }
+
+    fn start_observed_as(&mut self, human: &str, session: &str, paths: &[&str]) {
+        self.start_as(human, session, paths);
         let checks = BindChecks {
             harness: "claude-code".into(),
             harness_session: format!("h-{session}"),
@@ -264,6 +304,13 @@ impl H {
             );
             state.apply(op);
         }
+    }
+}
+
+fn file_key(k: &KeyPair) -> HumanKey {
+    HumanKey {
+        alg: "ed25519".into(),
+        public: k.public_hex(),
     }
 }
 
@@ -738,6 +785,19 @@ fn attenuation_only_narrows_and_revocation_cascades() {
 }
 
 #[test]
+fn humans_can_not_request_agent_and_daemon_operations() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    let observe = Op::Observe {
+        session: "s1".into(),
+        events: vec![],
+    };
+    let d = h.human("ayse", observe);
+    assert!(denied_with(&d, "not_a_human_op:observe"), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
 fn human_signatures_can_not_be_replayed_or_forged() {
     let mut h = H::new();
     let op = Op::Freeze { reason: "x".into() };
@@ -1132,4 +1192,580 @@ fn presence_can_be_required_for_human_signatures() {
     });
     let d = h.submit(sub);
     assert!(d.is_allow(), "{d:?}");
+}
+
+fn rotate(name: &str, key: &KeyPair) -> Op {
+    Op::HumanRotate {
+        human: name.into(),
+        key: file_key(key),
+    }
+}
+
+fn revoke(name: &str, reason: &str) -> Op {
+    Op::HumanRevoke {
+        human: name.into(),
+        reason: reason.into(),
+    }
+}
+
+fn approve(seq: u64) -> Op {
+    Op::Approve {
+        target_seq: seq,
+        note: String::new(),
+    }
+}
+
+fn pending_seq(h: &H, c: ChangeId) -> u64 {
+    let ChangeStatus::Pending { seq } = h.chain.state.changes[&c].status else {
+        panic!("{:?}", h.chain.state.changes[&c].status)
+    };
+    seq
+}
+
+#[test]
+fn rotation_replaces_the_key_and_ends_what_the_human_set_in_motion() {
+    let mut h = H::new();
+    h.enroll("bora");
+    let old = h.humans[0].1.clone();
+
+    // ayse's session with a lease and a queued change, a change of her own,
+    // and an approval she gave to bora's session.
+    h.start_observed("s1", &["src/**"]);
+    h.wrote("s1", "src/a.rs");
+    assert!(
+        h.lease("s1", "l1", &[("src/a.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    let c1 = ChangeId::random();
+    assert!(h.propose("s1", c1, edit("src/a.rs#f")).is_allow());
+    let c2 = ChangeId::random();
+    let f2 = edit("docs/x.md#<file>");
+    let own = Op::ChangePropose {
+        change: c2,
+        commit: gid('c'),
+        base: h.chain.state.trunk.clone().unwrap(),
+        claim: claim_of(&f2),
+    };
+    assert!(h.human_change("ayse", own, f2).is_allow());
+    h.start_observed_as("bora", "s2", &["**"]);
+    h.wrote("s2", "auth/login.rs");
+    assert!(
+        h.lease("s2", "l2", &[("auth/login.rs#check", LeaseKind::Edit)])
+            .is_allow()
+    );
+    let c3 = ChangeId::random();
+    let d = h.propose("s2", c3, edit("auth/login.rs#check"));
+    assert!(d.reasons.contains(&"approvals=2".to_string()), "{d:?}");
+    let seq = pending_seq(&h, c3);
+    assert!(h.human("ayse", approve(seq)).is_allow());
+
+    // Only the human may rotate their own key, and only to a fresh, valid one.
+    let new = KeyPair::generate();
+    assert!(denied_with(
+        &h.human("bora", rotate("ayse", &new)),
+        "not_own_key"
+    ));
+    assert!(denied_with(
+        &h.human("ayse", rotate("ayse", &old)),
+        "key_reused"
+    ));
+    let bora_key = h.humans[1].1.clone();
+    assert!(denied_with(
+        &h.human("ayse", rotate("ayse", &bora_key)),
+        "key_reused"
+    ));
+    for public in [
+        new.public_hex().to_uppercase(),
+        new.public_hex()[2..].to_string(),
+        "zz".repeat(32),
+    ] {
+        let bad = Op::HumanRotate {
+            human: "ayse".into(),
+            key: HumanKey {
+                alg: "ed25519".into(),
+                public,
+            },
+        };
+        assert!(denied_with(&h.human("ayse", bad), "invalid_key"));
+    }
+    let unknown_alg = Op::HumanRotate {
+        human: "ayse".into(),
+        key: HumanKey {
+            alg: "rsa".into(),
+            public: new.public_hex(),
+        },
+    };
+    assert!(denied_with(&h.human("ayse", unknown_alg), "invalid_key"));
+    // Agents and the daemon can not touch keys.
+    assert!(denied_with(
+        &h.agent("s1", rotate("ayse", &new)),
+        "not_grantable:human.rotate"
+    ));
+    assert!(denied_with(
+        &h.daemon(rotate("ayse", &new), vec![]),
+        "not_a_daemon_op"
+    ));
+
+    assert!(h.human("ayse", rotate("ayse", &new)).is_allow());
+    let st = &h.chain.state;
+    assert_eq!(st.humans["ayse"], file_key(&new));
+    assert!(st.retired_keys.contains(&old.public_hex()));
+    assert!(
+        st.sessions["s1"]
+            .ended
+            .as_deref()
+            .unwrap()
+            .contains("rotated")
+    );
+    assert!(!st.leases.contains_key("l1"));
+    assert_eq!(st.changes[&c1].status, ChangeStatus::Withdrawn);
+    assert_eq!(st.changes[&c2].status, ChangeStatus::Withdrawn);
+    assert!(st.queue.is_empty());
+    // bora's work goes on, without ayse's approval.
+    assert!(st.sessions["s2"].ended.is_none());
+    assert!(st.leases.contains_key("l2"));
+    assert!(st.pending[&seq].approvals.is_empty());
+
+    // The old key no longer signs; the new one does, and the old key can
+    // never come back.
+    assert!(denied_with(
+        &h.human_with(&old, "ayse", Op::Freeze { reason: "x".into() }),
+        "bad_human_signature"
+    ));
+    h.use_key("ayse", new.clone());
+    assert!(h.human("ayse", approve(seq)).is_allow());
+    let released = h.human("bora", approve(seq));
+    assert!(released.reasons.contains(&"released".to_string()));
+    assert!(denied_with(
+        &h.human("ayse", rotate("ayse", &old)),
+        "key_reused"
+    ));
+    let enroll_old = Op::HumanEnroll {
+        human: "cem".into(),
+        key: file_key(&old),
+    };
+    assert!(denied_with(&h.human("ayse", enroll_old), "key_reused"));
+    // Signatures made with the old key stay valid history.
+    h.assert_replay();
+}
+
+#[test]
+fn revocation_by_another_human_cascades_and_is_final() {
+    let mut h = H::new();
+    h.enroll("bora");
+    let bora = h.humans[1].1.clone();
+    let rec = KeyPair::generate();
+    let set_rec = Op::HumanRecoveryKey {
+        human: "bora".into(),
+        key: file_key(&rec),
+    };
+    assert!(h.human("bora", set_rec).is_allow());
+
+    h.start_observed("s1", &["src/**"]);
+    h.start_observed_as("bora", "s2", &["src/**"]);
+    let narrow = Scope {
+        paths: vec!["src/b/**".into()],
+        symbols: None,
+        ops: vec![OpKind::LeaseAcquire],
+        max_files: None,
+        max_lines: None,
+    };
+    let child = Op::CapAttenuate {
+        parent: "s2".into(),
+        child: "s2c".into(),
+        agent: "sub".into(),
+        scope: narrow,
+        expires_ms: h.now + 60 * MIN,
+    };
+    assert!(h.agent("s2", child).is_allow());
+    assert!(
+        h.lease("s2c", "l2", &[("src/b/x.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    let talk = |to: &str| Op::Negotiate {
+        thread: "t1".into(),
+        to_session: to.into(),
+        message: NegotiationMsg::Counter { note: "hi".into() },
+    };
+    assert!(h.agent("s1", talk("s2")).is_allow());
+
+    assert!(denied_with(
+        &h.human("ayse", revoke("cem", "x")),
+        "not_enrolled"
+    ));
+    assert!(denied_with(
+        &h.human("ayse", revoke("bora", "  ")),
+        "reason_required"
+    ));
+    assert!(denied_with(
+        &h.human("ayse", revoke("bora", &"x".repeat(501))),
+        "reason_too_long"
+    ));
+    // 500 bytes is still a valid reason.
+    let at_limit = h.human("ayse", revoke("cem", &"x".repeat(500)));
+    assert!(denied_with(&at_limit, "not_enrolled"), "{at_limit:?}");
+    assert!(!denied_with(&at_limit, "reason_too_long"), "{at_limit:?}");
+    assert!(denied_with(
+        &h.agent("s1", revoke("bora", "x")),
+        "not_grantable:human.revoke"
+    ));
+
+    assert!(h.human("ayse", revoke("bora", "laptop stolen")).is_allow());
+    let st = &h.chain.state;
+    assert!(!st.humans.contains_key("bora"));
+    assert!(!st.recovery.contains_key("bora"));
+    assert!(st.retired_keys.contains(&bora.public_hex()));
+    assert!(st.retired_keys.contains(&rec.public_hex()));
+    for s in ["s2", "s2c"] {
+        assert!(
+            st.sessions[s]
+                .ended
+                .as_deref()
+                .unwrap()
+                .contains("human:bora revoked: laptop stolen"),
+            "{s}"
+        );
+    }
+    assert!(st.sessions["s1"].ended.is_none());
+    assert!(st.leases.is_empty());
+
+    // Nothing of bora's works any more.
+    assert!(denied_with(
+        &h.human("bora", Op::Freeze { reason: "x".into() }),
+        "unknown_human"
+    ));
+    let recover = Op::HumanRecover {
+        human: "bora".into(),
+        key: file_key(&KeyPair::generate()),
+    };
+    assert!(denied_with(
+        &h.human_with(&rec, "bora", recover),
+        "unknown_human"
+    ));
+    assert!(denied_with(
+        &h.agent("s1", talk("s2")),
+        "invalid_counterparty"
+    ));
+    assert!(denied_with(
+        &h.lease("s2c", "l3", &[("src/b/y.rs#f", LeaseKind::Edit)]),
+        "session_inactive"
+    ));
+
+    // Re-enrolment needs a new key.
+    let again = |k: &KeyPair| Op::HumanEnroll {
+        human: "bora".into(),
+        key: file_key(k),
+    };
+    assert!(denied_with(&h.human("ayse", again(&bora)), "key_reused"));
+    let fresh = KeyPair::generate();
+    assert!(h.human("ayse", again(&fresh)).is_allow());
+
+    // The last human can not be revoked, not even by themself.
+    h.use_key("bora", fresh);
+    assert!(h.human("bora", revoke("ayse", "left the team")).is_allow());
+    assert!(denied_with(
+        &h.human("bora", revoke("bora", "x")),
+        "last_human"
+    ));
+    h.assert_replay();
+}
+
+#[test]
+fn a_lost_key_is_recovered_once_with_the_recovery_key() {
+    let mut h = H::new();
+    h.enroll("bora");
+    let old = h.humans[0].1.clone();
+    let rec = KeyPair::generate();
+    let new = KeyPair::generate();
+    let recover = |k: &KeyPair| Op::HumanRecover {
+        human: "ayse".into(),
+        key: file_key(k),
+    };
+    let set_rec = |k: &KeyPair| Op::HumanRecoveryKey {
+        human: "ayse".into(),
+        key: file_key(k),
+    };
+    assert!(denied_with(
+        &h.human_with(&rec, "ayse", recover(&new)),
+        "no_recovery_key"
+    ));
+    assert!(denied_with(&h.human("bora", set_rec(&rec)), "not_own_key"));
+    assert!(denied_with(&h.human("ayse", set_rec(&old)), "key_reused"));
+    assert!(h.human("ayse", set_rec(&rec)).is_allow());
+    assert_eq!(h.chain.state.recovery["ayse"], file_key(&rec));
+    // Replacing the recovery key retires the old one.
+    let rec2 = KeyPair::generate();
+    assert!(h.human("ayse", set_rec(&rec2)).is_allow());
+    assert!(h.chain.state.retired_keys.contains(&rec.public_hex()));
+    assert!(denied_with(
+        &h.human_with(&rec, "ayse", recover(&new)),
+        "bad_human_signature"
+    ));
+    let rec = rec2;
+
+    h.start_observed("s1", &["src/**"]);
+    assert!(
+        h.lease("s1", "l1", &[("src/a.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    // The recovery key signs only recoveries, and not for someone else.
+    assert!(denied_with(
+        &h.human_with(&rec, "ayse", Op::Freeze { reason: "x".into() }),
+        "bad_human_signature"
+    ));
+    let for_bora = Op::HumanRecover {
+        human: "bora".into(),
+        key: file_key(&new),
+    };
+    assert!(denied_with(
+        &h.human_with(&rec, "ayse", for_bora),
+        "not_own_key"
+    ));
+    assert!(denied_with(
+        &h.human_with(&rec, "ayse", recover(&rec)),
+        "key_reused"
+    ));
+    // The current key can not stand in for the recovery key.
+    assert!(denied_with(
+        &h.human_with(&old, "ayse", recover(&new)),
+        "bad_human_signature"
+    ));
+
+    assert!(h.human_with(&rec, "ayse", recover(&new)).is_allow());
+    let st = &h.chain.state;
+    assert_eq!(st.humans["ayse"], file_key(&new));
+    assert!(!st.recovery.contains_key("ayse"));
+    assert!(st.retired_keys.contains(&old.public_hex()));
+    assert!(st.retired_keys.contains(&rec.public_hex()));
+    assert!(
+        st.sessions["s1"]
+            .ended
+            .as_deref()
+            .unwrap()
+            .contains("recovered")
+    );
+    assert!(st.leases.is_empty());
+
+    // Used up: a second recovery with the same key fails.
+    let newer = KeyPair::generate();
+    assert!(denied_with(
+        &h.human_with(&rec, "ayse", recover(&newer)),
+        "no_recovery_key"
+    ));
+    assert!(denied_with(
+        &h.human_with(&old, "ayse", Op::Freeze { reason: "x".into() }),
+        "bad_human_signature"
+    ));
+    h.use_key("ayse", new);
+    assert!(
+        h.human("ayse", Op::Freeze { reason: "x".into() })
+            .is_allow()
+    );
+    h.assert_replay();
+}
+
+#[test]
+fn key_operations_work_in_a_frozen_repository() {
+    let mut h = H::new();
+    h.enroll("bora");
+    assert!(
+        h.daemon(
+            Op::Freeze {
+                reason: "incident".into()
+            },
+            vec![]
+        )
+        .is_allow()
+    );
+    let rec = KeyPair::generate();
+    let set_rec = Op::HumanRecoveryKey {
+        human: "ayse".into(),
+        key: file_key(&rec),
+    };
+    assert!(h.human("ayse", set_rec).is_allow());
+    assert!(h.human("ayse", revoke("bora", "incident")).is_allow());
+    let new = KeyPair::generate();
+    assert!(h.human("ayse", rotate("ayse", &new)).is_allow());
+    h.use_key("ayse", new);
+    // The key that would unfreeze is lost: recover, then unfreeze.
+    let newer = KeyPair::generate();
+    let recover = Op::HumanRecover {
+        human: "ayse".into(),
+        key: file_key(&newer),
+    };
+    assert!(h.human_with(&rec, "ayse", recover).is_allow());
+    h.use_key("ayse", newer);
+    let start = Op::SessionStart {
+        session: "s1".into(),
+        agent: "bot".into(),
+        model: None,
+        task: "T".into(),
+        scope: Scope {
+            paths: vec!["**".into()],
+            symbols: None,
+            ops: vec![OpKind::LeaseAcquire],
+            max_files: None,
+            max_lines: None,
+        },
+        expires_ms: h.now + 60 * MIN,
+    };
+    assert!(denied_with(&h.human("ayse", start), "frozen:incident"));
+    assert!(
+        h.human(
+            "ayse",
+            Op::Unfreeze {
+                reason: "ok".into()
+            }
+        )
+        .is_allow()
+    );
+    h.assert_replay();
+}
+
+#[test]
+fn revocation_can_need_approval_and_applies_when_released() {
+    let policy = PolicyBundle::parse(
+        DEFAULT_CONFIG,
+        &format!(
+            "{DEFAULT_POLICY}\n@id(\"revoke-needs-two\")\n@escalate(\"revoke\")\n@approvals(\"2\")\n\
+             forbid(principal, action == Lonca::Action::\"human.revoke\", resource);\n"
+        ),
+    )
+    .unwrap();
+    let mut h = H::with_policy(policy);
+    h.enroll("bora");
+    h.enroll("cem");
+    h.start_observed_as("bora", "s2", &["src/**"]);
+    let d = h.human("ayse", revoke("bora", "left"));
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    assert!(h.chain.state.humans.contains_key("bora"));
+    let seq = h.chain.state.next_seq - 1;
+    assert!(h.human("ayse", approve(seq)).is_allow());
+    let released = h.human("cem", approve(seq));
+    assert!(released.reasons.contains(&"released".to_string()));
+    assert!(!h.chain.state.humans.contains_key("bora"));
+    assert!(h.chain.state.sessions["s2"].ended.is_some());
+    h.assert_replay();
+}
+
+#[test]
+fn presence_does_not_block_recovery() {
+    let mut h = H::new();
+    let rec = KeyPair::generate();
+    let set_rec = Op::HumanRecoveryKey {
+        human: "ayse".into(),
+        key: file_key(&rec),
+    };
+    assert!(h.human("ayse", set_rec).is_allow());
+    h.policy = PolicyBundle::parse(
+        &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
+        DEFAULT_POLICY,
+    )
+    .unwrap();
+    let new = KeyPair::generate();
+    assert!(denied_with(
+        &h.human("ayse", rotate("ayse", &new)),
+        "presence_required"
+    ));
+
+    // Recover onto a Secure Enclave (P-256) key; a malformed one is refused.
+    use p256::ecdsa::signature::Signer;
+    let sk = p256::ecdsa::SigningKey::from_slice(&[11u8; 32]).unwrap();
+    let public = hex::encode(sk.verifying_key().to_sec1_point(false).as_bytes());
+    let se = |public: String| Op::HumanRecover {
+        human: "ayse".into(),
+        key: HumanKey {
+            alg: "p256-se".into(),
+            public,
+        },
+    };
+    let mut broken = public.clone();
+    broken.replace_range(2..4, if &public[2..4] == "00" { "01" } else { "00" });
+    assert!(denied_with(
+        &h.human_with(&rec, "ayse", se(format!("05{}", &public[2..]))),
+        "invalid_key"
+    ));
+    assert!(denied_with(
+        &h.human_with(&rec, "ayse", se(broken)),
+        "invalid_key"
+    ));
+    let d = h.human_with(&rec, "ayse", se(public));
+    assert!(d.is_allow(), "{d:?}");
+
+    let op = Op::Freeze { reason: "y".into() };
+    let nonce = random_id("nonce");
+    let issued = h.now + 1;
+    let sig: p256::ecdsa::Signature = sk.sign(&intent_bytes(REPO, &op, &nonce, issued));
+    let mut sub = Submission::new(
+        Actor::Human {
+            name: "ayse".into(),
+        },
+        op,
+    );
+    sub.human = Some(HumanSignature {
+        human: "ayse".into(),
+        nonce,
+        issued_ms: issued,
+        sig: hex::encode(sig.to_der().as_bytes()),
+    });
+    let d = h.submit(sub);
+    assert!(d.is_allow(), "{d:?}");
+    // The policy changed mid-test, so the log is not replayed here (as in
+    // `presence_can_be_required_for_human_signatures`).
+}
+
+#[test]
+fn a_released_key_operation_is_checked_again() {
+    let policy = PolicyBundle::parse(
+        DEFAULT_CONFIG,
+        &format!(
+            "{DEFAULT_POLICY}\n@id(\"keys-reviewed\")\n@escalate(\"keys\")\n\
+             forbid(principal, action in [Lonca::Action::\"human.revoke\", Lonca::Action::\"human.rotate\"], resource);\n"
+        ),
+    )
+    .unwrap();
+    let mut h = H::with_policy(policy);
+    h.enroll("bora");
+    h.enroll("cem");
+    // ayse asks to revoke herself; meanwhile bora and cem are revoked.
+    assert_eq!(
+        h.human("ayse", revoke("ayse", "leaving")).outcome,
+        Outcome::Escalate
+    );
+    let own = h.chain.state.next_seq - 1;
+    for who in ["bora", "cem"] {
+        assert_eq!(
+            h.human("ayse", revoke(who, "left")).outcome,
+            Outcome::Escalate
+        );
+        let seq = h.chain.state.next_seq - 1;
+        assert!(h.human("ayse", approve(seq)).is_allow());
+    }
+    assert_eq!(h.chain.state.humans.len(), 1);
+    assert!(denied_with(&h.human("ayse", approve(own)), "last_human"));
+    assert!(h.chain.state.humans.contains_key("ayse"));
+
+    // A rotation whose key was taken while it waited is refused on release.
+    h.enroll("bora");
+    let new = KeyPair::generate();
+    assert_eq!(
+        h.human("bora", rotate("bora", &new)).outcome,
+        Outcome::Escalate
+    );
+    let seq = h.chain.state.next_seq - 1;
+    let enroll = Op::HumanEnroll {
+        human: "cem".into(),
+        key: file_key(&new),
+    };
+    assert!(h.human("ayse", enroll).is_allow());
+    assert!(denied_with(&h.human("ayse", approve(seq)), "key_reused"));
+    let new2 = KeyPair::generate();
+    assert_eq!(
+        h.human("bora", rotate("bora", &new2)).outcome,
+        Outcome::Escalate
+    );
+    let seq = h.chain.state.next_seq - 1;
+    assert!(h.human("ayse", approve(seq)).is_allow());
+    assert_eq!(h.chain.state.humans["bora"], file_key(&new2));
+    h.assert_replay();
 }

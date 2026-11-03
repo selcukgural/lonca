@@ -113,16 +113,24 @@ fn run_helper(args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
 }
 
 pub fn se_keygen(name: &str) -> Result<String> {
-    let p = se_key_path(name);
+    se_keygen_at(&se_key_path(name))
+}
+
+/// Creates a Secure Enclave key whose blob is stored at `p`.
+pub fn se_keygen_at(p: &Path) -> Result<String> {
     std::fs::create_dir_all(humans_dir())?;
     run_helper(&["keygen", &p.to_string_lossy()], None)
+}
+
+pub fn se_public_at(p: &Path) -> Result<String> {
+    run_helper(&["public", &p.to_string_lossy()], None)
 }
 
 /// The public key a human signs with.
 pub fn human_public(name: &str) -> Result<lonca_core::ops::HumanKey> {
     let se = se_key_path(name);
     if se.exists() {
-        let public = run_helper(&["public", &se.to_string_lossy()], None)?;
+        let public = se_public_at(&se)?;
         return Ok(lonca_core::ops::HumanKey {
             alg: "p256-se".into(),
             public,
@@ -139,6 +147,10 @@ pub fn describe(repo: &str, op: &Op) -> String {
     let what = match op {
         Op::RepoInit { .. } => "create the repository".to_string(),
         Op::HumanEnroll { human, .. } => format!("enroll {human} as a human"),
+        Op::HumanRotate { human, .. } => format!("REPLACE the key of {human}"),
+        Op::HumanRevoke { human, .. } => format!("REVOKE {human} and end their sessions"),
+        Op::HumanRecoveryKey { human, .. } => format!("set a recovery key for {human}"),
+        Op::HumanRecover { human, .. } => format!("RECOVER {human} with the recovery key"),
         Op::PolicyUpdate { .. } => "change the repository policy".to_string(),
         Op::SessionStart { agent, scope, .. } => {
             format!("start agent {agent} on {}", scope.paths.join(", "))
@@ -206,5 +218,25 @@ pub fn absolute(p: &Path) -> Result<PathBuf> {
         Ok(p.to_path_buf())
     } else {
         Ok(std::env::current_dir()?.join(p))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_touch_id_prompt_names_the_repository_and_the_key_change() {
+        let key = lonca_core::ops::HumanKey {
+            alg: "ed25519".into(),
+            public: "00".into(),
+        };
+        let rotate = Op::HumanRotate {
+            human: "ayse".into(),
+            key,
+        };
+        let text = describe("demo", &rotate);
+        assert!(text.contains("demo"), "{text}");
+        assert!(text.contains("REPLACE the key of ayse"), "{text}");
     }
 }

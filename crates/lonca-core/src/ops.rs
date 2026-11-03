@@ -52,6 +52,14 @@ pub enum OpKind {
     RepoInit,
     #[serde(rename = "human.enroll")]
     HumanEnroll,
+    #[serde(rename = "human.rotate")]
+    HumanRotate,
+    #[serde(rename = "human.revoke")]
+    HumanRevoke,
+    #[serde(rename = "human.recovery_key")]
+    HumanRecoveryKey,
+    #[serde(rename = "human.recover")]
+    HumanRecover,
     #[serde(rename = "policy.update")]
     PolicyUpdate,
     #[serde(rename = "session.start")]
@@ -103,6 +111,10 @@ impl OpKind {
         match self {
             OpKind::RepoInit => "repo.init",
             OpKind::HumanEnroll => "human.enroll",
+            OpKind::HumanRotate => "human.rotate",
+            OpKind::HumanRevoke => "human.revoke",
+            OpKind::HumanRecoveryKey => "human.recovery_key",
+            OpKind::HumanRecover => "human.recover",
             OpKind::PolicyUpdate => "policy.update",
             OpKind::SessionStart => "session.start",
             OpKind::SessionBind => "session.bind",
@@ -370,6 +382,20 @@ pub enum Op {
     },
     #[serde(rename = "human.enroll")]
     HumanEnroll { human: String, key: HumanKey },
+    /// Replaces the signer's own key. Signed with the current key.
+    #[serde(rename = "human.rotate")]
+    HumanRotate { human: String, key: HumanKey },
+    /// Withdraws a human's keys and everything they set in motion.
+    #[serde(rename = "human.revoke")]
+    HumanRevoke { human: String, reason: String },
+    /// Sets (or replaces) the signer's recovery key, kept off the machine.
+    /// Signed with the current key.
+    #[serde(rename = "human.recovery_key")]
+    HumanRecoveryKey { human: String, key: HumanKey },
+    /// Replaces a lost key. Signed with the human's recovery key, which is
+    /// used up by it.
+    #[serde(rename = "human.recover")]
+    HumanRecover { human: String, key: HumanKey },
     #[serde(rename = "policy.update")]
     PolicyUpdate { policy: GitId },
     #[serde(rename = "session.start")]
@@ -473,6 +499,10 @@ impl Op {
         match self {
             Op::RepoInit { .. } => OpKind::RepoInit,
             Op::HumanEnroll { .. } => OpKind::HumanEnroll,
+            Op::HumanRotate { .. } => OpKind::HumanRotate,
+            Op::HumanRevoke { .. } => OpKind::HumanRevoke,
+            Op::HumanRecoveryKey { .. } => OpKind::HumanRecoveryKey,
+            Op::HumanRecover { .. } => OpKind::HumanRecover,
             Op::PolicyUpdate { .. } => OpKind::PolicyUpdate,
             Op::SessionStart { .. } => OpKind::SessionStart,
             Op::SessionBind { .. } => OpKind::SessionBind,
@@ -590,6 +620,10 @@ mod tests {
             OpKind::LeaseAcquire,
             OpKind::Redact,
             OpKind::SessionBind,
+            OpKind::HumanRotate,
+            OpKind::HumanRevoke,
+            OpKind::HumanRecoveryKey,
+            OpKind::HumanRecover,
         ] {
             assert_eq!(
                 serde_json::to_string(&k).unwrap(),
@@ -606,6 +640,10 @@ mod tests {
             OpKind::CapRevoke,
             OpKind::Redact,
             OpKind::HumanEnroll,
+            OpKind::HumanRotate,
+            OpKind::HumanRevoke,
+            OpKind::HumanRecoveryKey,
+            OpKind::HumanRecover,
             OpKind::Freeze,
             OpKind::ImportExternal,
         ] {

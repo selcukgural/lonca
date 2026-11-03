@@ -69,7 +69,65 @@ fn golden_repo() -> Env {
     e.human(Op::Unfreeze {
         reason: "golden".into(),
     });
+    human_keys(&mut e);
     e
+}
+
+/// From format 3: a second human with a session, then ayse sets a recovery
+/// key, rotates, recovers and revokes the second human.
+fn human_keys(e: &mut Env) {
+    let key = |k: &KeyPair| HumanKey {
+        alg: "ed25519".into(),
+        public: k.public_hex(),
+    };
+    let allowed = |r: Value| assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let bora = KeyPair::generate();
+    allowed(e.human(Op::HumanEnroll {
+        human: "bora".into(),
+        key: key(&bora),
+    }));
+    let start = Op::SessionStart {
+        session: "s4".into(),
+        agent: "bot-s4".into(),
+        model: None,
+        task: "T-4".into(),
+        scope: Scope {
+            paths: vec!["notes.md".into()],
+            symbols: None,
+            ops: vec![OpKind::LeaseAcquire],
+            max_files: None,
+            max_lines: None,
+        },
+        expires_ms: e.now() + 3_600_000,
+    };
+    let body = json!({"op": start, "sig": sign_ed25519(&bora, "bora", "demo", &start, e.now())});
+    allowed(e.ok("human.submit", Some("demo"), None, body));
+    let t = e.session("s5", &["notes.md"]);
+    e.lease(&t, "notes.md#<file>");
+
+    let rec = KeyPair::generate();
+    allowed(e.human(Op::HumanRecoveryKey {
+        human: "ayse".into(),
+        key: key(&rec),
+    }));
+    let rotated = KeyPair::generate();
+    allowed(e.human(Op::HumanRotate {
+        human: "ayse".into(),
+        key: key(&rotated),
+    }));
+    e.human = rotated;
+    let recovered = KeyPair::generate();
+    let op = Op::HumanRecover {
+        human: "ayse".into(),
+        key: key(&recovered),
+    };
+    let body = json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now())});
+    allowed(e.ok("human.submit", Some("demo"), None, body));
+    e.human = recovered;
+    allowed(e.human(Op::HumanRevoke {
+        human: "bora".into(),
+        reason: "golden".into(),
+    }));
 }
 
 #[test]
@@ -183,6 +241,31 @@ fn golden_v2_log_still_verifies_replays_and_audits() {
             .filter(|o| o.entry.uses_symbols_engine())
             .all(|o| o.entry.symbols_engine == Some(0)),
         "v2 entries record symbol engine 0"
+    );
+}
+
+#[test]
+fn golden_v3_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v3.bundle",
+        "9d6b940cf79c0872bf8bff2e3a0b61e805f8ebb31c5ce3f70419de44d92b2e33",
+        3,
+    );
+    let kinds: BTreeSet<&str> = ops.iter().map(|o| o.entry.op.kind().as_str()).collect();
+    for k in [
+        "human.enroll",
+        "human.recovery_key",
+        "human.rotate",
+        "human.recover",
+        "human.revoke",
+    ] {
+        assert!(kinds.contains(k), "fixture lacks {k}: {kinds:?}");
+    }
+    assert!(
+        ops.iter()
+            .filter(|o| o.entry.op.kind().as_str().starts_with("human."))
+            .all(|o| o.entry.decision.is_allow()),
+        "the key operations in the fixture are allowed"
     );
 }
 

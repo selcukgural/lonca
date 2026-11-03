@@ -269,3 +269,127 @@ impl Env {
         Store::open(&self.root.join("home/repos/demo.git")).unwrap()
     }
 }
+
+/// A repository with integrations, a denial, an escalation, a conflict and
+/// a policy change.
+pub fn busy_repo() -> Env {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(
+        vec![file("src/lib.rs", LIB), file("notes.md", "a\n")],
+        "seed",
+    );
+    e.svc.process_all();
+    let base = e.trunk();
+    let t1 = e.session("s1", &["src/**"]);
+    let t2 = e.session("s2", &["src/**"]);
+    for t in [&t1, &t2] {
+        e.bind(t);
+        e.wrote(t, "src/lib.rs");
+    }
+    e.lease(&t1, "src/lib.rs#charge");
+    e.lease(&t2, "src/lib.rs#refund");
+    e.propose(
+        &t1,
+        &base,
+        vec![file(
+            "src/lib.rs",
+            &LIB.replacen("    a\n", "    a + 1\n", 1),
+        )],
+        &["src/lib.rs#charge"],
+    );
+    let refund = LIB.replace(
+        "pub fn refund(a: u64) -> u64 {\n    a\n",
+        "pub fn refund(a: u64) -> u64 {\n    0\n",
+    );
+    e.propose(
+        &t2,
+        &base,
+        vec![file("src/lib.rs", &refund)],
+        &["src/lib.rs#refund"],
+    );
+    // Denied: claim does not match.
+    e.propose(
+        &t2,
+        &base,
+        vec![file("src/lib.rs", &refund)],
+        &["src/lib.rs#charge"],
+    );
+    e.svc.process_all();
+    // A human conflicting with an integrated agent change.
+    let stale = LIB.replacen("    a\n", "    a + 9\n", 1);
+    let prep = e.ok(
+        "human.prepare_change",
+        Some("demo"),
+        None,
+        json!({"base": base, "files": [file("src/lib.rs", &stale)], "author": "ayse", "intent": "late"}),
+    );
+    let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
+    e.human(op);
+    e.svc.process_all();
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": lonca_policy::config::DEFAULT_CONFIG.replace("max_rounds = 4", "max_rounds = 6"), "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
+    e.human(op);
+    e
+}
+
+/// Appends a signed entry the way `OpLog::append` does, but without its
+/// format check, so tests can write entries the daemon never would.
+pub fn append_raw(store: &Store, op: &SignedOp, head: Option<&GitId>) -> GitId {
+    use lonca_core::store::{CommitSpec, FileEntry, FileMap, FileMode};
+    let blob = store
+        .write_blob(&lonca_core::canonical::canonical_bytes(op))
+        .unwrap();
+    let mut files = FileMap::new();
+    files.insert(
+        "op.json".into(),
+        FileEntry {
+            mode: FileMode::Regular,
+            blob,
+        },
+    );
+    let tree = store.write_tree(&files).unwrap();
+    let commit = store
+        .write_commit(&CommitSpec {
+            tree,
+            parents: head.into_iter().cloned().collect(),
+            author_name: "lonca".into(),
+            author_email: "daemon@lonca.invalid".into(),
+            time_ms: op.entry.time_ms,
+            message: format!("lonca op {}\n", op.entry.seq),
+            headers: vec![],
+        })
+        .unwrap();
+    store.ref_cas("refs/lonca/oplog", &commit, head).unwrap();
+    commit
+}
+
+/// Rewrites the daemon's log in place: `edit` changes the entries, then
+/// everything is re-chained and re-signed with the daemon key (an insider
+/// with the key, or a log written by an older lonca).
+pub fn rewrite_log(e: &Env, edit: impl Fn(&mut Vec<lonca_core::oplog::OpEntry>)) {
+    let store = e.store();
+    let mut entries: Vec<_> = OpLog::new(&store)
+        .read_all()
+        .unwrap()
+        .into_iter()
+        .map(|o| o.entry)
+        .collect();
+    edit(&mut entries);
+    let repo = e.root.join("home/repos/demo.git");
+    git(&repo, &["update-ref", "-d", "refs/lonca/oplog"]);
+    let key = KeyPair::load(&e.root.join("home/daemon.key")).unwrap();
+    let mut prev = lonca_core::oplog::GENESIS_PREV.to_string();
+    let mut head = None;
+    for mut entry in entries {
+        entry.prev = prev;
+        let signed = SignedOp::sign(entry, &key);
+        prev = signed.hash.clone();
+        head = Some(append_raw(&store, &signed, head.as_ref()));
+    }
+}

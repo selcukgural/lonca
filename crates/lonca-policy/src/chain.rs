@@ -4,7 +4,7 @@
 //! to memory, so a failed write never leaves memory ahead of the log.
 
 use lonca_core::keys::KeyPair;
-use lonca_core::oplog::{OpEntry, SignedOp};
+use lonca_core::oplog::{FORMAT_CURRENT, OpEntry, SignedOp};
 use lonca_core::ops::{Actor, Attestation, Facts, HumanSignature, Op};
 
 use crate::config::PolicyBundle;
@@ -75,6 +75,7 @@ impl Chain {
             },
         );
         let entry = OpEntry {
+            format: FORMAT_CURRENT,
             seq: self.state.next_seq,
             prev: self.state.head_hash.clone(),
             time_ms,

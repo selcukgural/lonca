@@ -63,6 +63,38 @@ from the design.
   server-side refusal fallbacks, under a daily call budget reserved before
   each request. Its output never reaches a decision.
 
+## Log format versions
+
+Every operation entry carries a `format` version, covered by its digest and
+the daemon signature (`crates/lonca-core/src/oplog.rs`).
+
+- **Version 0** is every entry written before the field existed. The field
+  is left out of their encoding, so their bytes, hashes and signatures are
+  unchanged and existing logs verify as they are.
+- **Version 1** is version 0 with the field written out. The daemon writes
+  only the current version; a log written by an older release continues
+  with current entries after an upgrade.
+- **Refusal.** Decoding reads the version before anything else. A version
+  newer than the build knows is refused (`unsupported: ... upgrade lonca`)
+  by the daemon, which then does not start, and by the auditor. The version
+  never decreases along the chain; a decrease is an integrity failure.
+- **When the version changes.** Any change to what an entry can contain or
+  mean: a new operation type, a new or renamed field, a changed encoding,
+  or a changed meaning of a recorded value. Additions that an old reader
+  would silently drop count too, because the old reader would then compute
+  a different digest.
+- **Compatibility during 0.x.** A log written by any 0.x release stays
+  readable, verifiable and auditable by every later release. The decoding
+  path of an old version is never removed. Each version gets a golden log
+  (`crates/lonca-daemon/tests/fixtures/oplog-vN.bundle`) written once by the
+  release that introduced it and checked by CI forever after: the head hash
+  is pinned, every entry must re-encode to its stored bytes, and the deep
+  audit must pass. Fixtures are never regenerated. Before 1.0 this policy
+  will be reviewed; dropping a version would need a migration that
+  preserves the old log as evidence.
+- **Not covered:** the semantics of the symbol engine (facts and merges the
+  auditor recomputes). Those get their own version (#37).
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

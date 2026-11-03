@@ -4,6 +4,10 @@
 //!
 //! The chain does not rely on Git's SHA-1: every entry carries the SHA-256 of
 //! the previous entry, and the daemon signs the SHA-256 of each entry.
+//!
+//! Every entry carries a format version (`docs/decisions.md`, "Log format
+//! versions"). Entries are never rewritten, so every version ever written
+//! stays readable; a version this build does not know is refused.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +21,33 @@ pub const OPLOG_REF: &str = "refs/lonca/oplog";
 pub const GENESIS_PREV: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const OP_FILE: &str = "op.json";
 
+/// Entries written before the format field existed. The field is left out of
+/// their encoding, so their bytes, hashes and signatures are unchanged.
+pub const FORMAT_LEGACY: u32 = 0;
+/// The format this build writes. Version 1 is version 0 with the field
+/// written out.
+pub const FORMAT_CURRENT: u32 = 1;
+
+fn is_legacy(format: &u32) -> bool {
+    *format == FORMAT_LEGACY
+}
+
+/// Refuses a format this build can not read.
+pub fn check_format(seq: u64, format: u32) -> Result<()> {
+    if format > FORMAT_CURRENT {
+        return Err(Error::Unsupported(format!(
+            "op {seq}: log format {format} is newer than this build of lonca knows \
+             (up to {FORMAT_CURRENT}); upgrade lonca"
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpEntry {
+    /// Entry format version, covered by the digest and the signature.
+    #[serde(default, skip_serializing_if = "is_legacy")]
+    pub format: u32,
     pub seq: u64,
     pub prev: String,
     /// Assigned by the daemon; never decreases along the chain.
@@ -84,6 +113,12 @@ impl<'a> OpLog<'a> {
     /// Appends one signed entry. `expected_head` must be the current head
     /// commit (compare-and-swap), so two writers can never interleave.
     pub fn append(&self, op: &SignedOp, expected_head: Option<&GitId>) -> Result<GitId> {
+        if op.entry.format != FORMAT_CURRENT {
+            return Err(Error::Invalid(format!(
+                "op {}: refusing to append log format {} (this build writes {FORMAT_CURRENT})",
+                op.entry.seq, op.entry.format
+            )));
+        }
         let blob = self.store.write_blob(&canonical_bytes(op))?;
         let mut files = FileMap::new();
         files.insert(
@@ -117,7 +152,7 @@ impl<'a> OpLog<'a> {
         let bytes = self.store.read_file(commit, OP_FILE)?.ok_or_else(|| {
             Error::Integrity(format!("oplog commit {} has no {OP_FILE}", commit.short()))
         })?;
-        Ok(serde_json::from_slice(&bytes)?)
+        decode(&bytes)
     }
 
     /// All entries, oldest first.
@@ -140,7 +175,28 @@ impl<'a> OpLog<'a> {
     }
 }
 
-/// Checks sequence numbers, the hash chain, signatures and time order.
+/// Decodes a stored entry. The format version is read first, so an entry
+/// from a newer lonca is refused as such rather than as a decoding or hash
+/// error.
+pub fn decode(bytes: &[u8]) -> Result<SignedOp> {
+    #[derive(Deserialize)]
+    struct Probe {
+        entry: ProbeEntry,
+    }
+    #[derive(Deserialize)]
+    struct ProbeEntry {
+        #[serde(default)]
+        format: u32,
+        #[serde(default)]
+        seq: u64,
+    }
+    let probe: Probe = serde_json::from_slice(bytes)?;
+    check_format(probe.entry.seq, probe.entry.format)?;
+    Ok(serde_json::from_slice(bytes)?)
+}
+
+/// Checks sequence numbers, the hash chain, signatures, time order and
+/// format versions (known, and never decreasing along the chain).
 /// The daemon key is taken from the genesis `repo.init` entry.
 pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
     let Some(first) = ops.first() else {
@@ -152,7 +208,15 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
     };
     let mut prev = GENESIS_PREV.to_string();
     let mut last_time = i64::MIN;
+    let mut last_format = FORMAT_LEGACY;
     for (i, op) in ops.iter().enumerate() {
+        check_format(op.entry.seq, op.entry.format)?;
+        if op.entry.format < last_format {
+            return Err(Error::Integrity(format!(
+                "op {i}: log format goes back from {last_format} to {}",
+                op.entry.format
+            )));
+        }
         if op.entry.seq != i as u64 {
             return Err(Error::Integrity(format!(
                 "expected seq {i}, found {}",
@@ -168,6 +232,7 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
         op.verify(&daemon_key)?;
         prev = op.hash.clone();
         last_time = op.entry.time_ms;
+        last_format = op.entry.format;
     }
     Ok(prev)
 }
@@ -180,6 +245,7 @@ mod tests {
     fn genesis(key: &KeyPair, store: &Store) -> OpEntry {
         let tree = store.empty_tree().unwrap();
         OpEntry {
+            format: FORMAT_CURRENT,
             seq: 0,
             prev: GENESIS_PREV.into(),
             time_ms: 1000,
@@ -206,6 +272,7 @@ mod tests {
 
     fn next(prev: &SignedOp, time_ms: i64) -> OpEntry {
         OpEntry {
+            format: FORMAT_CURRENT,
             seq: prev.entry.seq + 1,
             prev: prev.hash.clone(),
             time_ms,
@@ -272,5 +339,88 @@ mod tests {
             &key,
         );
         assert!(verify_chain(&[g, skipped]).is_err(), "seq gap");
+    }
+
+    #[test]
+    fn format_is_encoded_and_signed_except_for_legacy_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let current = genesis(&key, &store);
+        let legacy = OpEntry {
+            format: FORMAT_LEGACY,
+            ..current.clone()
+        };
+        let enc = |e: &OpEntry| String::from_utf8(canonical_bytes(e)).unwrap();
+        assert!(enc(&legacy).starts_with("{\"seq\":0,"), "{}", enc(&legacy));
+        assert!(enc(&current).starts_with("{\"format\":1,\"seq\":0,"));
+        assert_ne!(legacy.digest(), current.digest(), "format is in the digest");
+
+        // Changing the format of a signed entry breaks its signature.
+        let mut edited = SignedOp::sign(current, &key);
+        edited.entry.format = FORMAT_LEGACY;
+        assert!(edited.verify(&key.public_hex()).is_err());
+
+        // A legacy entry round-trips to the same bytes.
+        let signed = SignedOp::sign(legacy, &key);
+        let bytes = canonical_bytes(&signed);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back, signed);
+        assert_eq!(canonical_bytes(&back), bytes);
+    }
+
+    #[test]
+    fn unknown_formats_are_refused_before_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(genesis(&key, &store), &key);
+        let mut v: serde_json::Value = serde_json::from_slice(&canonical_bytes(&g)).unwrap();
+        v["entry"]["format"] = (FORMAT_CURRENT + 1).into();
+        // A newer lonca may also have changed the shape of other fields.
+        v["entry"]["op"] = serde_json::json!({"type": "from.the.future"});
+        let bytes = serde_json::to_vec(&v).unwrap();
+        match decode(&bytes) {
+            Err(Error::Unsupported(m)) => assert!(m.contains("op 0: log format 2"), "{m}"),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+
+        let future = SignedOp::sign(
+            OpEntry {
+                format: FORMAT_CURRENT + 1,
+                ..genesis(&key, &store)
+            },
+            &key,
+        );
+        assert!(matches!(
+            verify_chain(std::slice::from_ref(&future)),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            OpLog::new(&store).append(&future, None),
+            Err(Error::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn formats_may_rise_along_the_chain_but_never_fall() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let with = |e: OpEntry, format| OpEntry { format, ..e };
+        let g = SignedOp::sign(with(genesis(&key, &store), FORMAT_LEGACY), &key);
+        let o1 = SignedOp::sign(with(next(&g, 2000), FORMAT_LEGACY), &key);
+        let o2 = SignedOp::sign(with(next(&o1, 3000), FORMAT_CURRENT), &key);
+        assert_eq!(
+            verify_chain(&[g.clone(), o1.clone(), o2.clone()]).unwrap(),
+            o2.hash
+        );
+
+        let back = SignedOp::sign(with(next(&o2, 4000), FORMAT_LEGACY), &key);
+        let err = verify_chain(&[g, o1, o2, back]).unwrap_err();
+        assert!(
+            err.to_string().contains("op 3: log format goes back"),
+            "{err}"
+        );
     }
 }

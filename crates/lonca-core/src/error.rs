@@ -14,6 +14,9 @@ pub enum Error {
     Integrity(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    /// Data written by a newer (or unknown) version of Lonca.
+    #[error("unsupported: {0}")]
+    Unsupported(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

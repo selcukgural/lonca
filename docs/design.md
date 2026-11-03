@@ -219,6 +219,7 @@ Sertleştirilmiş mod şu varsayıma dayanır: agent kullanıcının hesabıyla 
 - **İmza:** Tüm kayıtları daemon imzalar. İnsan kaynaklı kayıtlar ek olarak insanın kullanıcı varlığı gerektiren imzasını taşır (§5.4).
 - **Çapa:** Log başının hash'i her push'ta uzak depoya gider. Yerelde geçmiş yeniden yazılırsa bir sonraki karşılaştırmada ortaya çıkar. İsteğe bağlı olarak ikinci bir tanık (ayrı repo veya şeffaflık günlüğü) kullanılabilir.
 - **Saklama:** Log'un referans verdiği nesneler GC ile silinmez, çünkü undo bunlara ihtiyaç duyar.
+- **Format sürümü:** Her kayıt bir format sürümü taşır; sürüm hash ve imzaya dahildir. Alanı olmayan eski kayıtlar sürüm 0 sayılır. Bilinmeyen sürüm reddedilir, sürüm zincir boyunca azalmaz (`docs/decisions.md`, "Log format versions").
 - **Atomiklik:** Daemon tek yazıcıdır. Lease edinme ve token rotasyonu gibi durum değişiklikleri sıralı ve atomik olarak uygulanır.
 
 ### 5.3 Undo, revert ve redaction
@@ -568,7 +569,7 @@ Faz 0'da kapananlar (gerekçeleri `docs/decisions.md`'de): temel **gitoxide + ke
 | Bölüm | Durum | Not |
 |---|---|---|
 | §5.1 Çekirdek, Git uyumu, köprü | Tamam | Push/pull için `git` ikilisi; `ext::` vb. komut çalıştıran protokoller reddediliyor. |
-| §5.2 Operation Log | Tamam | SHA-256 zincir, daemon imzası, kayıtlı zaman, `refs/lonca/oplog`, push ile çapa. |
+| §5.2 Operation Log | Tamam | SHA-256 zincir, daemon imzası, kayıtlı zaman, `refs/lonca/oplog`, push ile çapa, kayıt format sürümü. |
 | §5.3 Undo / revert / redaction | Tamam / kısmi | Undo ve revert telafi edici işlem; redaction mantıksal (blob daemon tarafından gizleniyor, Git geçmişinden silinmiyor). |
 | §5.4 Kimlik, oturum, imza | Tamam | Token'ın yalnızca hash'i diskte; Secure Enclave imzacı (`lonca-se`); `require_presence`. |
 | §5.5 Capability | Tamam, sapmalı | Biscuit yerine daemon tarafı kayıt; daraltma (`scope_within`) ve zincirleme iptal korunuyor. |

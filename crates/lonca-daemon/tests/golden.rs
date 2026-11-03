@@ -128,6 +128,15 @@ fn golden_v0_log_still_verifies_replays_and_audits() {
     }
 }
 
+#[test]
+fn golden_v1_log_still_verifies_replays_and_audits() {
+    check_golden(
+        "oplog-v1.bundle",
+        "3761c7aefd055c300110e1277b8461d9fee782de8aba3c4591275023860a88e5",
+        1,
+    );
+}
+
 fn open_service(e: &Env) -> lonca_core::Result<Arc<Service>> {
     Service::open(
         Home::new(e.root.join("home")),

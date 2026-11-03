@@ -220,3 +220,23 @@ pub fn absolute(p: &Path) -> Result<PathBuf> {
         Ok(std::env::current_dir()?.join(p))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_touch_id_prompt_names_the_repository_and_the_key_change() {
+        let key = lonca_core::ops::HumanKey {
+            alg: "ed25519".into(),
+            public: "00".into(),
+        };
+        let rotate = Op::HumanRotate {
+            human: "ayse".into(),
+            key,
+        };
+        let text = describe("demo", &rotate);
+        assert!(text.contains("demo"), "{text}");
+        assert!(text.contains("REPLACE the key of ayse"), "{text}");
+    }
+}

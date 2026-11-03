@@ -23,4 +23,9 @@ minimum_test_timeout = 60
 # cargo-mutants 27.1.0 does not apply exclude_re (or --re) to "delete field
 # ... from struct expression" mutants; exclude those with exclude_globs or
 # kill them with a test.
-exclude_re = []
+exclude_re = [
+  # Waking the queue worker after a human proposal only shortens its wait:
+  # the worker also wakes every 2 s and drains the same queue, so no test
+  # can tell the two apart without timing.
+  'delete match arm Op::ChangePropose\{\.\.\} in Service::human_submit',
+]

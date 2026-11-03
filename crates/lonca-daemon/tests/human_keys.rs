@@ -126,3 +126,25 @@ fn a_leftover_token_of_an_ended_session_is_refused() {
     assert_eq!(sessions_with_tokens(&e), ["s1"]);
     assert_eq!(refused(&mut e, &t1), "session ended");
 }
+
+#[test]
+fn a_human_ending_a_session_drops_its_token() {
+    let mut e = Env::new();
+    e.init(None);
+    let t1 = e.session("s1", &["src/**"]);
+    let t2 = e.session("s2", &["src/**"]);
+    let r = e.human(Op::CapRevoke {
+        session: "s1".into(),
+        reason: "done".into(),
+    });
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(sessions_with_tokens(&e), ["s2"]);
+    refused(&mut e, &t1);
+    let r = e.human(Op::SessionEnd {
+        session: "s2".into(),
+        reason: "done".into(),
+    });
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert!(sessions_with_tokens(&e).is_empty());
+    refused(&mut e, &t2);
+}

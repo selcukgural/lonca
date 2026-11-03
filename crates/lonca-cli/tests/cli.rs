@@ -339,10 +339,31 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
     );
     assert!(out.contains("move it off this machine"), "{out}");
     assert!(status_json(&e)["humans"]["ayse"]["recovery"].is_string());
+    // Running it again skips the repository that already has the key.
+    let rec_args = [
+        "human",
+        "recovery-key",
+        "--repo",
+        "demo",
+        "--out",
+        rec.to_str().unwrap(),
+    ];
+    assert!(e.run(r, &rec_args).contains("demo: already set"));
 
-    // Rotation: the new key is installed and signs; the old one is kept aside.
+    // Rotation: an interrupted run leaves the new key waiting and the old
+    // one in use; rerunning it skips the repository that already took it.
+    let cut = e
+        .cmd(
+            r,
+            &["human", "rotate", "--repo", "demo", "--repo", "nosuch"],
+        )
+        .output()
+        .unwrap();
+    assert!(!cut.status.success());
+    assert_eq!(whoami(&e), first);
+    assert!(r.join("humans/ayse.next.key").exists());
     let out = e.run(r, &["human", "rotate", "--repo", "demo"]);
-    assert!(out.contains("allow"), "{out}");
+    assert!(out.contains("demo: already uses the new key"), "{out}");
     let second = whoami(&e);
     assert_ne!(first, second);
     assert_eq!(status_json(&e)["humans"]["ayse"]["public"], second.as_str());
@@ -360,9 +381,8 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
 
     // The machine is lost: recover from the recovery key alone.
     std::fs::remove_dir_all(r.join("humans")).unwrap();
-    let out = e.run(
-        r,
-        &[
+    let recover = |more: &[&str]| {
+        let mut args = vec![
             "human",
             "recover",
             "--repo",
@@ -371,9 +391,16 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
             rec.to_str().unwrap(),
             "--as",
             "ayse",
-        ],
-    );
-    assert!(out.contains("recovered"), "{out}");
+        ];
+        args.extend_from_slice(more);
+        e.cmd(r, &args).output().unwrap()
+    };
+    assert!(!recover(&["--repo", "nosuch"]).status.success());
+    let out = recover(&[]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let out = text(&out.stdout);
+    assert!(out.contains("demo: already recovered"), "{out}");
+    assert!(out.contains("recovered."), "{out}");
     let third = whoami(&e);
     assert_ne!(third, second);
     let st = status_json(&e);
@@ -429,4 +456,65 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
         .output()
         .unwrap();
     assert!(!bad.status.success());
+}
+
+/// The P-256 base point: a valid SEC1 public key for a fake Secure Enclave.
+const FAKE_SE_PUBLIC: &str = "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5";
+
+/// A stand-in for the `lonca-se` helper that creates and reads key blobs
+/// but cannot sign.
+#[cfg(unix)]
+fn fake_se(e: &Env) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let p = e.root.join("fake-se");
+    let script = format!(
+        "#!/bin/sh\n\
+         case \"$1\" in\n\
+         keygen) echo blob > \"$2\" && echo {FAKE_SE_PUBLIC} ;;\n\
+         public) test -f \"$2\" || {{ echo \"no key $2\" >&2; exit 1; }}; echo {FAKE_SE_PUBLIC} ;;\n\
+         *) echo \"unsupported: $1\" >&2; exit 1 ;;\n\
+         esac\n"
+    );
+    std::fs::write(&p, script).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
+#[cfg(unix)]
+#[test]
+fn secure_enclave_keys_through_a_fake_helper() {
+    let e = Env::new();
+    let r = &e.root;
+    let se = fake_se(&e);
+    let run_se = |args: &[&str]| {
+        let out = e.cmd(r, args).env("LONCA_SE", &se).output().unwrap();
+        assert!(
+            out.status.success(),
+            "lonca {args:?}\nstdout: {}\nstderr: {}",
+            text(&out.stdout),
+            text(&out.stderr)
+        );
+        text(&out.stdout)
+    };
+
+    // A file key rotated to a Secure Enclave key: the next key is created
+    // by the helper, accepted by the repository and installed.
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    let out = run_se(&["human", "rotate", "--repo", "demo", "--secure-enclave"]);
+    assert!(out.contains("allow"), "{out}");
+    let st = status_json(&e);
+    assert_eq!(st["humans"]["ayse"]["alg"], "p256-se");
+    assert_eq!(st["humans"]["ayse"]["public"], FAKE_SE_PUBLIC);
+    assert!(r.join("humans/ayse.se").exists());
+    assert!(!r.join("humans/ayse.key").exists());
+    let out = run_se(&["human", "whoami"]);
+    assert_eq!(out.trim(), format!("ayse: p256-se {FAKE_SE_PUBLIC}"));
+
+    // A new Secure Enclave identity prints the helper's public key.
+    let out = run_se(&["human", "keygen", "bora", "--secure-enclave"]);
+    assert!(
+        out.starts_with(&format!("bora: p256-se {FAKE_SE_PUBLIC}\n")),
+        "{out}"
+    );
 }

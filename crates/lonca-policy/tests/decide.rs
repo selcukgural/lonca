@@ -785,6 +785,19 @@ fn attenuation_only_narrows_and_revocation_cascades() {
 }
 
 #[test]
+fn humans_can_not_request_agent_and_daemon_operations() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    let observe = Op::Observe {
+        session: "s1".into(),
+        events: vec![],
+    };
+    let d = h.human("ayse", observe);
+    assert!(denied_with(&d, "not_a_human_op:observe"), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
 fn human_signatures_can_not_be_replayed_or_forged() {
     let mut h = H::new();
     let op = Op::Freeze { reason: "x".into() };
@@ -1388,6 +1401,10 @@ fn revocation_by_another_human_cascades_and_is_final() {
         &h.human("ayse", revoke("bora", &"x".repeat(501))),
         "reason_too_long"
     ));
+    // 500 bytes is still a valid reason.
+    let at_limit = h.human("ayse", revoke("cem", &"x".repeat(500)));
+    assert!(denied_with(&at_limit, "not_enrolled"), "{at_limit:?}");
+    assert!(!denied_with(&at_limit, "reason_too_long"), "{at_limit:?}");
     assert!(denied_with(
         &h.agent("s1", revoke("bora", "x")),
         "not_grantable:human.revoke"

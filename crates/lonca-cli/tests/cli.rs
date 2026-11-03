@@ -305,3 +305,128 @@ fn advisor_sends_the_diff_and_prints_structured_advice() {
     assert!(request.contains("+    a * 2"), "the diff is sent");
     assert!(request.contains("\"json_schema\""));
 }
+
+fn status_json(e: &Env) -> serde_json::Value {
+    serde_json::from_str(&e.run(&e.root, &["status", "--repo", "demo", "--json"])).unwrap()
+}
+
+/// The public key `human whoami` prints for the default human.
+fn whoami(e: &Env) -> String {
+    let out = e.run(&e.root, &["human", "whoami"]);
+    out.split_whitespace().last().unwrap().to_string()
+}
+
+#[test]
+fn human_keys_rotate_recover_and_revoke_through_the_cli() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    let first = whoami(&e);
+
+    // A recovery key, written where the user chooses.
+    let rec = r.join("usb/rec.key");
+    let out = e.run(
+        r,
+        &[
+            "human",
+            "recovery-key",
+            "--repo",
+            "demo",
+            "--out",
+            rec.to_str().unwrap(),
+        ],
+    );
+    assert!(out.contains("move it off this machine"), "{out}");
+    assert!(status_json(&e)["humans"]["ayse"]["recovery"].is_string());
+
+    // Rotation: the new key is installed and signs; the old one is kept aside.
+    let out = e.run(r, &["human", "rotate", "--repo", "demo"]);
+    assert!(out.contains("allow"), "{out}");
+    let second = whoami(&e);
+    assert_ne!(first, second);
+    assert_eq!(status_json(&e)["humans"]["ayse"]["public"], second.as_str());
+    assert!(!r.join("humans/ayse.next.key").exists());
+    let retired: Vec<_> = std::fs::read_dir(r.join("humans"))
+        .unwrap()
+        .filter_map(|d| d.ok())
+        .filter(|d| {
+            d.file_name()
+                .to_string_lossy()
+                .starts_with("ayse.key.retired-")
+        })
+        .collect();
+    assert_eq!(retired.len(), 1);
+
+    // The machine is lost: recover from the recovery key alone.
+    std::fs::remove_dir_all(r.join("humans")).unwrap();
+    let out = e.run(
+        r,
+        &[
+            "human",
+            "recover",
+            "--repo",
+            "demo",
+            "--recovery-key",
+            rec.to_str().unwrap(),
+            "--as",
+            "ayse",
+        ],
+    );
+    assert!(out.contains("recovered"), "{out}");
+    let third = whoami(&e);
+    assert_ne!(third, second);
+    let st = status_json(&e);
+    assert_eq!(st["humans"]["ayse"]["public"], third.as_str());
+    assert!(st["humans"]["ayse"]["recovery"].is_null(), "used up");
+    // A second recovery with the same key is refused.
+    let again = e
+        .cmd(
+            r,
+            &[
+                "human",
+                "recover",
+                "--repo",
+                "demo",
+                "--recovery-key",
+                rec.to_str().unwrap(),
+            ],
+        )
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    assert!(
+        text(&again.stdout).contains("no_recovery_key"),
+        "{}",
+        text(&again.stdout)
+    );
+    std::fs::remove_file(r.join("humans/ayse.next.key")).unwrap();
+
+    // Another human is enrolled and then revoked.
+    let out = e.run(r, &["human", "keygen", "bora"]);
+    let bora = out
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .to_string();
+    let enroll = [
+        "human", "enroll", "bora", "--alg", "ed25519", "--public", &bora, "--repo", "demo", "--as",
+        "ayse",
+    ];
+    assert!(e.run(r, &enroll).contains("allow"));
+    let revoke = [
+        "human", "revoke", "bora", "--repo", "demo", "--reason", "left", "--as", "ayse",
+    ];
+    assert!(e.run(r, &revoke).contains("allow"));
+    assert!(status_json(&e)["humans"]["bora"].is_null());
+
+    // Bad names never reach a file path.
+    let bad = e
+        .cmd(r, &["human", "rotate", "--repo", "demo", "--as", "../x"])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+}

@@ -3,6 +3,7 @@
 mod advise;
 mod ctx;
 mod hook;
+mod keys;
 mod mcp;
 mod undo;
 mod workspace;
@@ -253,6 +254,54 @@ enum HumanCmd {
         #[arg(long = "as")]
         human: Option<String>,
     },
+    /// Replace your key with a new one, signed by the current key. Ends
+    /// your sessions and withdraws what you have in flight.
+    Rotate {
+        /// Every repository you are enrolled in (comma-separated). The new
+        /// key is installed only once all of them accept it; rerun to
+        /// resume.
+        #[arg(long, value_delimiter = ',', required = true)]
+        repo: Vec<String>,
+        /// The new key is a Secure Enclave key.
+        #[arg(long)]
+        secure_enclave: bool,
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
+    /// Withdraw a human's keys and end everything they set in motion.
+    Revoke {
+        name: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
+    /// Create a recovery key and register it. Keep the file off this
+    /// machine: it replaces your key once, without user presence.
+    RecoveryKey {
+        #[arg(long, value_delimiter = ',', required = true)]
+        repo: Vec<String>,
+        /// Where to write the recovery key (an existing file is reused).
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
+    /// Replace a lost key using the recovery key. Uses the recovery key up.
+    Recover {
+        #[arg(long, value_delimiter = ',', required = true)]
+        repo: Vec<String>,
+        #[arg(long)]
+        recovery_key: PathBuf,
+        /// The new key is a Secure Enclave key.
+        #[arg(long)]
+        secure_enclave: bool,
+        /// The human to recover (on a new machine there is no default).
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -381,7 +430,7 @@ fn repo_name(r: Option<String>) -> Result<String> {
     }
 }
 
-fn human_client(repo: &str) -> Result<Client> {
+pub(crate) fn human_client(repo: &str) -> Result<Client> {
     let mut c = connect()?;
     c.repo = Some(repo.to_string());
     Ok(c)
@@ -395,7 +444,7 @@ pub(crate) fn submit(c: &mut Client, human: &str, repo: &str, op: Op) -> Result<
     Ok(r)
 }
 
-fn print_decision(r: &Value) {
+pub(crate) fn print_decision(r: &Value) {
     let outcome = r["decision"]["outcome"].as_str().unwrap_or("?");
     let reasons: Vec<&str> = r["decision"]["reasons"]
         .as_array()
@@ -530,6 +579,44 @@ fn run(cmd: Cmd) -> Result<()> {
             )?;
             Ok(())
         }
+        Cmd::Human(HumanCmd::Rotate {
+            repo,
+            secure_enclave,
+            human,
+        }) => keys::rotate(&keys::name(human)?, &repo, secure_enclave),
+        Cmd::Human(HumanCmd::Revoke {
+            name,
+            repo,
+            reason,
+            human,
+        }) => {
+            let human = human_name(human)?;
+            let mut c = human_client(&repo)?;
+            submit(
+                &mut c,
+                &human,
+                &repo,
+                Op::HumanRevoke {
+                    human: name,
+                    reason,
+                },
+            )?;
+            Ok(())
+        }
+        Cmd::Human(HumanCmd::RecoveryKey { repo, out, human }) => {
+            keys::recovery_key(&keys::name(human)?, &repo, &ctx::absolute(&out)?)
+        }
+        Cmd::Human(HumanCmd::Recover {
+            repo,
+            recovery_key,
+            secure_enclave,
+            human,
+        }) => keys::recover(
+            &keys::name(human)?,
+            &repo,
+            &ctx::absolute(&recovery_key)?,
+            secure_enclave,
+        ),
         Cmd::Init {
             repo,
             import,

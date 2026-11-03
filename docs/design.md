@@ -241,6 +241,7 @@ Sertleştirilmiş mod şu varsayıma dayanır: agent kullanıcının hesabıyla 
 - **Agent'ların uzun ömürlü anahtarı yoktur.** Agent işlemlerini daemon imzalar. İmzanın anlamı şudur: "S oturumu, C yetkisiyle bunu istedi ve şu karar verildi."
 - **İnsan imzası kullanıcı varlığı ister:** macOS'ta Secure Enclave + Touch ID, diğer sistemlerde FIDO2 güvenlik anahtarı kullanılır. Agent bu dokunuşu üretemez. Diskte duran bir SSH/GPG anahtarını ise agent da kullanabilir. Bu yüzden politika değişikliği ve onay gibi işlemler için bu tür anahtarlar kabul edilmez. Onay isteminin içeriğini agent değil daemon üretir (§3.3).
 - **Alt-agent'lar:** Bir agent kendi capability'sini yalnızca daraltarak alt oturumuna devredebilir (ilke 6). Devir log'a yazılır.
+- **İnsan anahtarı değiştirilebilir ve geri alınabilir:** `human.rotate` (mevcut anahtarla imzalı), `human.revoke` (başka bir insan veya kişinin kendisi; son insan geri alınamaz) ve tek geliştirici için makine dışında tutulan, tek kullanımlık bir kurtarma anahtarıyla `human.recover`. Üçü de aşağıdaki zincirleme iptali uygular; eski imzalar geçmiş olarak geçerli kalır. Ayrıntılar: `docs/decisions.md`, "Human keys".
 - **Zincirleme iptal "her şey" demektir.** Bir insanın veya oturumun yetkisi alındığında ondan türeyen her şey düşer: capability'ler, lease'ler, bekleyen öneriler, kuyruktaki doğrulama işleri, müzakere katılımları ve oturum token'ları.
 
 ### 5.5 Capability'ler
@@ -571,7 +572,7 @@ Faz 0'da kapananlar (gerekçeleri `docs/decisions.md`'de): temel **gitoxide + ke
 | §5.1 Çekirdek, Git uyumu, köprü | Tamam | Push/pull için `git` ikilisi; `ext::` vb. komut çalıştıran protokoller reddediliyor. |
 | §5.2 Operation Log | Tamam | SHA-256 zincir, daemon imzası, kayıtlı zaman, `refs/lonca/oplog`, push ile çapa, kayıt format sürümü. |
 | §5.3 Undo / revert / redaction | Tamam / kısmi | Undo ve revert telafi edici işlem; redaction mantıksal (blob daemon tarafından gizleniyor, Git geçmişinden silinmiyor). |
-| §5.4 Kimlik, oturum, imza | Tamam | Token'ın yalnızca hash'i diskte; Secure Enclave imzacı (`lonca-se`); `require_presence`. |
+| §5.4 Kimlik, oturum, imza | Tamam | Token'ın yalnızca hash'i diskte; Secure Enclave imzacı (`lonca-se`); `require_presence`; insan anahtarı rotate/revoke/recover ve zincirleme iptal. |
 | §5.5 Capability | Tamam, sapmalı | Biscuit yerine daemon tarafı kayıt; daraltma (`scope_within`) ve zincirleme iptal korunuyor. |
 | §5.6 Policy Engine | Tamam | Cedar, hata = red; `@escalate`, `@approvals`; politika korumalı ref'te. Tek geliştirici için onay sayısı kayıtlı insan sayısına kısılıyor (`approvals_capped`); "imza + bekleme süresi" yapılmadı. |
 | §5.7 Lease Manager | Tamam | Beklemesiz hepsi-ya-hiç; `edit` / `insert` / `rename`; import eklemeleri kiralamasız. İmza değişikliği tespit ediliyor ama çağıranlara bildirim yok. |

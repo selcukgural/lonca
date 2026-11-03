@@ -112,6 +112,11 @@ pub struct State {
     pub repo: String,
     pub daemon_key: String,
     pub humans: BTreeMap<String, HumanKey>,
+    /// Recovery keys of enrolled humans (`human.recovery_key`).
+    pub recovery: BTreeMap<String, HumanKey>,
+    /// Public keys that were rotated away, used up or revoked. They are
+    /// never accepted again.
+    pub retired_keys: BTreeSet<String>,
     pub policy: Option<GitId>,
     pub trunk: Option<GitId>,
     pub trunk_history: BTreeSet<GitId>,
@@ -357,6 +362,63 @@ impl State {
         }
     }
 
+    /// Ends everything a human set in motion (design §5.4): every session
+    /// they started and everything derived from it (capabilities, leases,
+    /// proposals, queued work, negotiations; the daemon drops the tokens),
+    /// their own changes in flight, the operations they requested that wait
+    /// for approval, and the approvals they gave to others. Entries they
+    /// signed earlier stay valid history.
+    fn end_human(&mut self, human: &str, reason: &str) {
+        let roots: Vec<String> = self
+            .sessions
+            .values()
+            .filter(|s| s.root_human == human)
+            .map(|s| s.id.clone())
+            .collect();
+        for id in roots {
+            self.end_sessions(&id, reason, true);
+        }
+        let is_human = |a: &Actor| matches!(a, Actor::Human { name } if name == human);
+        let owned: Vec<ChangeId> = self
+            .changes
+            .values()
+            .filter(|c| is_human(&c.actor))
+            .filter(|c| {
+                matches!(
+                    c.status,
+                    ChangeStatus::Queued | ChangeStatus::Pending { .. }
+                )
+            })
+            .map(|c| c.change)
+            .collect();
+        for ch in owned {
+            if let Some(c) = self.changes.get_mut(&ch) {
+                c.status = ChangeStatus::Withdrawn;
+            }
+            self.queue.retain(|q| *q != ch);
+        }
+        self.pending.retain(|_, p| !is_human(&p.actor));
+        for p in self.pending.values_mut() {
+            p.approvals.remove(human);
+        }
+    }
+
+    fn retire(&mut self, key: Option<HumanKey>) {
+        if let Some(k) = key {
+            self.retired_keys.insert(k.public);
+        }
+    }
+
+    /// Whether a public key is, or ever was, a key of some human.
+    pub fn key_known(&self, public: &str) -> bool {
+        self.retired_keys.contains(public)
+            || self
+                .humans
+                .values()
+                .chain(self.recovery.values())
+                .any(|k| k.public == public)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn effects(
         &mut self,
@@ -386,6 +448,29 @@ impl State {
             }
             Op::HumanEnroll { human, key } => {
                 self.humans.insert(human.clone(), key.clone());
+            }
+            Op::HumanRotate { human, key } => {
+                self.end_human(human, &format!("revoked: key of human:{human} rotated"));
+                let old = self.humans.insert(human.clone(), key.clone());
+                self.retire(old);
+            }
+            Op::HumanRevoke { human, reason } => {
+                self.end_human(human, &format!("revoked: human:{human} revoked: {reason}"));
+                let old = self.humans.remove(human);
+                self.retire(old);
+                let old = self.recovery.remove(human);
+                self.retire(old);
+            }
+            Op::HumanRecoveryKey { human, key } => {
+                let old = self.recovery.insert(human.clone(), key.clone());
+                self.retire(old);
+            }
+            Op::HumanRecover { human, key } => {
+                self.end_human(human, &format!("revoked: human:{human} recovered"));
+                let old = self.humans.insert(human.clone(), key.clone());
+                self.retire(old);
+                let old = self.recovery.remove(human);
+                self.retire(old);
             }
             Op::PolicyUpdate { policy } => self.policy = Some(policy.clone()),
             Op::SessionStart {

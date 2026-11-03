@@ -73,6 +73,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   unchanged and existing logs verify as they are.
 - **Version 1** is version 0 with the field written out.
 - **Version 2** adds `symbols_engine` (below).
+- **Version 3** adds the human key operations (`human.rotate`,
+  `human.revoke`, `human.recovery_key`, `human.recover`; see "Human keys").
+  An entry of an older format can not contain them; the chain check
+  refuses one that does.
 - The daemon writes only the current version; a log written by an older
   release continues with current entries after an upgrade.
 - **Refusal.** Decoding reads the version before anything else. A version
@@ -130,6 +134,67 @@ entry format, so they have their own version
 - **Compatibility during 0.x** is the same as for the format: every engine
   version that ever wrote an entry stays recomputable by every later
   release.
+
+## Human keys
+
+A human key can be replaced, withdrawn and recovered (design §5.4). All
+four operations are human operations; agents and the daemon can not
+request them, and a policy can escalate them like any other operation.
+
+- **`human.rotate`** replaces the signer's own key, signed with the current
+  key (with presence when the policy requires it). Only the human can
+  rotate their key.
+- **`human.revoke`** withdraws a human's key and recovery key. Any enrolled
+  human can request it, also for themself, with a reason. The last
+  enrolled human can not be revoked: nobody could sign afterwards. A
+  revoked name can be enrolled again, with a new key.
+- **Recovery when the only key is lost.** A single developer has no second
+  human to revoke and re-enrol them, and a Secure Enclave key dies with its
+  Mac. Decided: a **recovery key**, registered with
+  `human.recovery_key` (signed with the current key) and kept off the
+  machine (`lonca human recovery-key --out` writes it where the user
+  says, e.g. a USB stick or a password manager). `human.recover` is signed
+  with the recovery key and installs a new key. The recovery key signs
+  nothing else, is used up by the recovery, and is the one signature that
+  does not need presence even under `require_presence`, because the key
+  that has presence is the one that was lost. That makes the recovery key
+  as strong as the key it replaces: anyone holding it can take over the
+  human once. Hence off the machine, single use, and the cascade below so
+  that a recovery is visible and ends everything that was running. The
+  alternative, a signature plus a waiting period (#19), needs a key that
+  is not lost, so it does not cover this case; it remains planned for
+  policy changes.
+- **Cascade.** Rotation, revocation and recovery all end everything the
+  human set in motion: every session they started and every session
+  derived from it (capabilities, leases, queued and pending proposals,
+  queued verification), their own changes in flight, the operations they
+  requested that wait for approval, and the approvals they gave to other
+  pending operations. Negotiations end because both sides need an active
+  session. The daemon drops the tokens of every ended session, and also
+  refuses a token whose session has ended if one is left over. Rotation
+  cascades too: it may be a response to a suspected compromise, and "the
+  key changed" should mean nothing signed or started under the old key is
+  still moving.
+- **History stays valid.** Entries signed before a rotation, revocation or
+  recovery remain valid: the auditor replays every decision with the
+  state, and so the keys, in force at that point.
+- **Keys are never reused.** A key that was rotated away, used up or
+  revoked is retired and refused by every later key operation and by
+  `human.enroll`. A new key must also differ from every key in use
+  (primary or recovery), and the key operations check that it is a
+  well-formed key of its algorithm (lowercase hex, a valid Ed25519 or
+  P-256 point), so a rotation can not lock a human out. `human.enroll`
+  keeps its older, looser check: tightening it could change the replay of
+  existing logs.
+- **Frozen repositories** still accept the key operations: replacing or
+  withdrawing a key is how a human answers an incident, and recovery is
+  the only way back in when the key that would unfreeze is lost.
+- **CLI.** `lonca human rotate|recover --repo a,b` takes every repository
+  the human is enrolled in, because the local key is shared between them.
+  The new key waits next to the current one (`<name>.next.key|se`) and is
+  installed only after every repository accepted it; a rerun skips the
+  repositories that already use it. The old key file is kept as
+  `<name>.key.retired-<ms>`.
 
 ## Mutation testing
 

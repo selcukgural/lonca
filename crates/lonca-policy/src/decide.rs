@@ -15,8 +15,8 @@
 use std::collections::BTreeSet;
 
 use lonca_core::ops::{
-    Actor, Attestation, BindChecks, CheckKind, CheckResult, Decision, Facts, HumanSignature,
-    LeaseItem, LeaseKind, NegotiationMsg, ObservationLevel, Op, Outcome, Scope,
+    Actor, Attestation, BindChecks, CheckKind, CheckResult, Decision, Facts, HumanKey,
+    HumanSignature, LeaseItem, LeaseKind, NegotiationMsg, ObservationLevel, Op, Outcome, Scope,
 };
 use lonca_core::paths::{
     path_matches, path_pattern_within, symbol_matches, symbol_pattern_within,
@@ -112,6 +112,10 @@ fn is_human_op(op: &Op) -> bool {
     matches!(
         op,
         Op::HumanEnroll { .. }
+            | Op::HumanRotate { .. }
+            | Op::HumanRevoke { .. }
+            | Op::HumanRecoveryKey { .. }
+            | Op::HumanRecover { .. }
             | Op::PolicyUpdate { .. }
             | Op::SessionStart { .. }
             | Op::SessionEnd { .. }
@@ -126,6 +130,48 @@ fn is_human_op(op: &Op) -> bool {
             | Op::Unfreeze { .. }
             | Op::Redact { .. }
     )
+}
+
+/// The human key operations. They stay possible in a frozen repository:
+/// replacing or withdrawing a key is how a human answers an incident, and
+/// the only way back in when the key that would unfreeze is lost.
+fn is_key_op(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::HumanRotate { .. }
+            | Op::HumanRevoke { .. }
+            | Op::HumanRecoveryKey { .. }
+            | Op::HumanRecover { .. }
+    )
+}
+
+/// A key a human can sign with: a known algorithm and a public key in the
+/// form that algorithm uses (lowercase hex). Stricter than the check
+/// `human.enroll` has always made, so a rotation can not lock a human out
+/// with a key nothing can sign for.
+pub fn valid_human_key(k: &HumanKey) -> bool {
+    if k.public != k.public.to_ascii_lowercase() {
+        return false;
+    }
+    let Ok(bytes) = hex::decode(&k.public) else {
+        return false;
+    };
+    match k.alg.as_str() {
+        "ed25519" => <[u8; 32]>::try_from(bytes.as_slice())
+            .ok()
+            .is_some_and(|b| ed25519_dalek::VerifyingKey::from_bytes(&b).is_ok()),
+        "p256-se" => p256::ecdsa::VerifyingKey::from_sec1_bytes(&bytes).is_ok(),
+        _ => false,
+    }
+}
+
+/// Checks a key that a key operation adds.
+fn check_new_key(state: &State, k: &HumanKey, v: &mut Verdict) {
+    if !valid_human_key(k) {
+        v.deny("invalid_key");
+    } else if state.key_known(&k.public) {
+        v.deny("key_reused");
+    }
 }
 
 pub fn valid_token(s: &str, max: usize) -> bool {
@@ -295,6 +341,7 @@ pub fn decide(
             op,
             Op::Unfreeze { .. } | Op::Observe { .. } | Op::Taint { .. } | Op::Freeze { .. }
         )
+        && !is_key_op(op)
     {
         return Decision::deny(format!("frozen:{reason}"));
     }
@@ -310,8 +357,19 @@ pub fn decide(
             }
         }
         Actor::Human { name } => {
-            let Some(key) = state.humans.get(name) else {
+            let recover = matches!(op, Op::HumanRecover { .. });
+            if !state.humans.contains_key(name) {
                 return Decision::deny("unknown_human");
+            }
+            // A recovery is signed with the recovery key, everything else
+            // with the human's current key.
+            let key = if recover {
+                state.recovery.get(name)
+            } else {
+                state.humans.get(name)
+            };
+            let Some(key) = key else {
+                return Decision::deny("no_recovery_key");
             };
             let Some(sig) = human else {
                 return Decision::deny("missing_human_signature");
@@ -325,7 +383,9 @@ pub fn decide(
             if let Err(e) = crate::human::verify(key, &state.repo, op, sig, t) {
                 return Decision::deny(e);
             }
-            if cfg.approvals.require_presence && key.alg != "p256-se" {
+            // The recovery key is the one signature without presence: the
+            // Secure Enclave key it replaces is bound to a lost machine.
+            if cfg.approvals.require_presence && key.alg != "p256-se" && !recover {
                 return Decision::deny("presence_required");
             }
             if !is_human_op(op) {
@@ -373,6 +433,30 @@ pub fn decide(
                 || hex::decode(&key.public).is_err()
             {
                 v.deny("invalid_key");
+            }
+            if state.retired_keys.contains(&key.public) {
+                v.deny("key_reused");
+            }
+        }
+        Op::HumanRotate { human: who, key }
+        | Op::HumanRecoveryKey { human: who, key }
+        | Op::HumanRecover { human: who, key } => {
+            if actor.label() != format!("human:{who}") {
+                v.deny("not_own_key");
+            }
+            check_new_key(state, key, &mut v);
+        }
+        Op::HumanRevoke { human: who, reason } => {
+            if !state.humans.contains_key(who) {
+                v.deny("not_enrolled");
+            } else if state.humans.len() == 1 {
+                v.deny("last_human");
+            }
+            if reason.trim().is_empty() {
+                v.deny("reason_required");
+            }
+            if reason.len() > 500 {
+                v.deny("reason_too_long");
             }
         }
         Op::PolicyUpdate { .. } => {

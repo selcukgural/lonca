@@ -25,11 +25,15 @@ const OP_FILE: &str = "op.json";
 /// their encoding, so their bytes, hashes and signatures are unchanged.
 pub const FORMAT_LEGACY: u32 = 0;
 /// The format this build writes. Version 1 is version 0 with the field
-/// written out; version 2 adds `symbols_engine`.
-pub const FORMAT_CURRENT: u32 = 2;
+/// written out; version 2 adds `symbols_engine`; version 3 adds the human
+/// key operations.
+pub const FORMAT_CURRENT: u32 = 3;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
+/// The first format with `human.rotate`, `human.revoke`,
+/// `human.recovery_key` and `human.recover`.
+pub const FORMAT_HUMAN_KEYS: u32 = 3;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -79,6 +83,17 @@ impl OpEntry {
             self.op,
             Op::ChangePropose { .. } | Op::ChangeIntegrate { .. }
         )
+    }
+
+    /// The first format that can contain this entry's operation type.
+    pub fn min_format(&self) -> u32 {
+        match self.op {
+            Op::HumanRotate { .. }
+            | Op::HumanRevoke { .. }
+            | Op::HumanRecoveryKey { .. }
+            | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
+            _ => FORMAT_LEGACY,
+        }
     }
 
     /// The symbol engine version the auditor must recompute with, for
@@ -250,6 +265,14 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
                 op.entry.op.kind().as_str()
             )));
         }
+        if op.entry.format < op.entry.min_format() {
+            return Err(Error::Integrity(format!(
+                "op {i}: {} needs log format {} or later, found {}",
+                op.entry.op.kind().as_str(),
+                op.entry.min_format(),
+                op.entry.format
+            )));
+        }
         if op.entry.seq != i as u64 {
             return Err(Error::Integrity(format!(
                 "expected seq {i}, found {}",
@@ -388,7 +411,11 @@ mod tests {
         };
         let enc = |e: &OpEntry| String::from_utf8(canonical_bytes(e)).unwrap();
         assert!(enc(&legacy).starts_with("{\"seq\":0,"), "{}", enc(&legacy));
-        assert!(enc(&current).starts_with("{\"format\":2,\"seq\":0,"));
+        assert!(
+            enc(&current).starts_with(&format!("{{\"format\":{FORMAT_CURRENT},\"seq\":0,")),
+            "{}",
+            enc(&current)
+        );
         assert_ne!(legacy.digest(), current.digest(), "format is in the digest");
 
         // Changing the format of a signed entry breaks its signature.
@@ -416,7 +443,10 @@ mod tests {
         v["entry"]["op"] = serde_json::json!({"type": "from.the.future"});
         let bytes = serde_json::to_vec(&v).unwrap();
         match decode(&bytes) {
-            Err(Error::Unsupported(m)) => assert!(m.contains("op 0: log format 3"), "{m}"),
+            Err(Error::Unsupported(m)) => assert!(
+                m.contains(&format!("op 0: log format {}", FORMAT_CURRENT + 1)),
+                "{m}"
+            ),
             other => panic!("expected Unsupported, got {other:?}"),
         }
 
@@ -497,6 +527,53 @@ mod tests {
         assert_eq!(legacy.engine(), Some(0));
         assert!(v1(legacy).is_ok());
         assert!(v1(integrate(&old, 1, Some(0))).is_err());
+    }
+
+    #[test]
+    fn human_key_operations_need_format_3() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let k = || HumanKey {
+            alg: "ed25519".into(),
+            public: "01".into(),
+        };
+        let ops = [
+            Op::HumanRotate {
+                human: "ayse".into(),
+                key: k(),
+            },
+            Op::HumanRevoke {
+                human: "ayse".into(),
+                reason: "lost".into(),
+            },
+            Op::HumanRecoveryKey {
+                human: "ayse".into(),
+                key: k(),
+            },
+            Op::HumanRecover {
+                human: "ayse".into(),
+                key: k(),
+            },
+        ];
+        for op in ops {
+            let at = |format| OpEntry {
+                format,
+                op: op.clone(),
+                ..next(&g, 2000)
+            };
+            assert_eq!(at(FORMAT_HUMAN_KEYS).min_format(), FORMAT_HUMAN_KEYS);
+            let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(format), &key)]);
+            assert!(chain(FORMAT_HUMAN_KEYS).is_ok(), "{op:?}");
+            let err = chain(FORMAT_HUMAN_KEYS - 1).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(&format!("{} needs log format 3", op.kind().as_str())),
+                "{err}"
+            );
+        }
+        assert_eq!(next(&g, 2000).min_format(), FORMAT_LEGACY);
     }
 
     fn with_format(e: OpEntry, format: u32) -> OpEntry {

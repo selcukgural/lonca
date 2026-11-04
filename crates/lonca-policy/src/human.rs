@@ -20,7 +20,7 @@ pub fn sign_ed25519(
     op: &Op,
     now_ms: i64,
 ) -> HumanSignature {
-    let nonce = lonca_core::canonical::random_id("nonce");
+    let nonce = lonca_core::canonical::nonce();
     HumanSignature {
         human: human.to_string(),
         sig: key.sign_hex(&intent_bytes(repo, op, &nonce, now_ms)),
@@ -73,7 +73,7 @@ pub fn sign_login_ed25519(
     ttl_ms: i64,
     now_ms: i64,
 ) -> HumanSignature {
-    let nonce = lonca_core::canonical::random_id("nonce");
+    let nonce = lonca_core::canonical::nonce();
     HumanSignature {
         human: human.to_string(),
         sig: key.sign_hex(&login_bytes(repo, human, ttl_ms, &nonce, now_ms)),
@@ -172,7 +172,7 @@ mod tests {
             Err("stale_human_signature")
         );
         let mut short = login.clone();
-        short.nonce = "short".into();
+        short.nonce.truncate(15);
         assert_eq!(
             verify_login(&key, Some("demo"), 3_600_000, &short, now),
             Err("bad_nonce")

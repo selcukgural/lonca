@@ -186,7 +186,7 @@ fn short_key(k: &str) -> &str {
 pub fn sign(human: &str, repo: &str, op: &Op) -> Result<HumanSignature> {
     let se = se_key_path(human);
     if se.exists() {
-        let nonce = lonca_core::canonical::random_id("nonce");
+        let nonce = lonca_core::canonical::nonce();
         let issued_ms = now_ms();
         let msg = lonca_policy::human::intent_bytes(repo, op, &nonce, issued_ms);
         let sig = run_helper(
@@ -308,7 +308,7 @@ fn sign_login_with(
     ttl_ms: i64,
 ) -> Result<HumanSignature> {
     if secure_enclave {
-        let nonce = lonca_core::canonical::random_id("nonce");
+        let nonce = lonca_core::canonical::nonce();
         let issued_ms = now_ms();
         let msg = lonca_policy::human::login_bytes(repo, human, ttl_ms, &nonce, issued_ms);
         let sig = run_helper(

@@ -28,4 +28,9 @@ exclude_re = [
   # the worker also wakes every 2 s and drains the same queue, so no test
   # can tell the two apart without timing.
   'delete match arm Op::ChangePropose\{\.\.\} in Service::human_submit',
+  # Pruning old login nonces (`now - LOGIN_NONCE_WINDOW_MS`) only frees
+  # memory: a nonce older than the window belongs to a signature that is
+  # stale anyway and is refused before the nonce is looked at, so keeping
+  # every nonce (what `now / WINDOW` amounts to) is not observable.
+  'replace - with / in Service::login',
 ]

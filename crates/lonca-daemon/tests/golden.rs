@@ -444,6 +444,41 @@ fn scratch_roots_in_an_old_format_entry_are_refused() {
     assert!(err.contains("session.start needs log format 5"), "{err}");
 }
 
+/// `reject` needs format 6: an older entry carrying one is refused.
+#[test]
+fn a_reject_in_an_old_format_entry_is_refused() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("notes.md", "a\n")], "seed");
+    e.svc.process_all();
+    let base = e.trunk();
+    let t = e.session("s1", &["notes.md"]);
+    e.lease(&t, "notes.md#<file>");
+    let r = e.propose(
+        &t,
+        &base,
+        vec![file("notes.md", "b\n")],
+        &["notes.md#<file>"],
+    );
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let d = e.human(Op::Reject {
+        target_seq: r["seq"].as_u64().unwrap(),
+        reason: "no".into(),
+    });
+    assert_eq!(d["decision"]["outcome"], "allow", "{d}");
+    assert_eq!(*formats(&e).last().unwrap(), 6);
+    rewrite_log(&e, |entries| {
+        for x in entries.iter_mut() {
+            x.format = 5;
+        }
+    });
+    let err = match open_service(&e) {
+        Ok(_) => panic!("a format 5 entry with a reject was accepted"),
+        Err(e) => e.to_string(),
+    };
+    assert!(err.contains("reject needs log format 6"), "{err}");
+}
+
 #[test]
 fn golden_v6_log_still_verifies_replays_and_audits() {
     let ops = check_golden(

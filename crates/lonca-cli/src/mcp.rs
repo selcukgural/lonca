@@ -221,3 +221,50 @@ pub fn run() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::tools;
+
+    /// The tool list is what a worker's harness sees; every tool the
+    /// server dispatches is in it, and change_status tells a worker what
+    /// a rejection means for its next step.
+    #[test]
+    fn the_tool_list_names_every_tool_and_explains_rejection() {
+        let tools = tools();
+        let names: Vec<&str> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        for n in [
+            "status",
+            "symbols",
+            "lease_acquire",
+            "lease_release",
+            "preview",
+            "propose",
+            "change_status",
+            "sync",
+            "negotiate",
+        ] {
+            assert!(names.contains(&n), "{n} missing from {names:?}");
+        }
+        let status = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "change_status")
+            .unwrap();
+        let d = status["description"].as_str().unwrap();
+        assert!(
+            d.contains("rejected: ...") && d.contains("sync and propose again"),
+            "{d}"
+        );
+        assert_eq!(
+            status["inputSchema"]["required"],
+            serde_json::json!(["change"])
+        );
+    }
+}

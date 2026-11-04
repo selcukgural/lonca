@@ -459,6 +459,16 @@ equal to `PROTOCOL`.
   every path that appends signals it, and the waiter also re-checks
   every 250 ms, so a signal missed by a future path costs a quarter
   second, never the entry. One open request replaces a timer.
+- **CLI for runners (#77).** The commands a runner drives take `--json`
+  and print one object on stdout, the same facts the prose has; exit
+  codes tell the daemon's refusal (1) from an unreachable daemon (2)
+  and from client-side failures (3, including usage, which clap would
+  have reported as 2). A denied decision is an error for the CLI
+  (`denied: <reasons>`, exit 1) on the runner-driven commands
+  (`propose`, `approve`, `session start|end`), while the key-management
+  commands keep collecting denials per repository as before. The human
+  session file is documented as an interface, since a runner that talks
+  to the socket directly reuses it. No token in any output.
 
 ## Mutation testing
 

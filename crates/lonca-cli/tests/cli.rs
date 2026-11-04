@@ -848,3 +848,184 @@ fn the_human_session_file_is_reused_renewed_and_ended() {
         text(&out.stderr)
     );
 }
+
+/// What a runner reads: `--json` on the commands it drives, and exit
+/// codes that tell a refusal (1) from a missing daemon (2) and from a
+/// usage error (3). No token in any output (issue #77).
+#[test]
+fn runner_outputs_are_json_and_exit_codes_tell_failures_apart() {
+    let e = Env::new();
+    let r = &e.root;
+    let parse = |s: &str| -> serde_json::Value {
+        serde_json::from_str(s.trim()).unwrap_or_else(|err| panic!("{err}: {s}"))
+    };
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+
+    let who = parse(&e.run(r, &["human", "whoami", "--json"]));
+    assert_eq!(who["human"], "ayse");
+    assert_eq!(who["alg"], "ed25519");
+    let login = parse(&e.run(r, &["human", "login", "--json", "--ttl", "2h"]));
+    assert_eq!(login["human"], "ayse");
+    assert_eq!(login["repos"], serde_json::json!(["demo"]));
+    let session_file = PathBuf::from(login["session_file"].as_str().unwrap());
+    assert!(
+        session_file.ends_with("humans/ayse.session"),
+        "{session_file:?}"
+    );
+    let kept: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&session_file).unwrap()).unwrap();
+    let human_token = kept["token"].as_str().unwrap().to_string();
+    assert!(human_token.starts_with("lonca_h_"));
+    assert_eq!(kept["expires_ms"], login["expires_ms"]);
+
+    // Seed from a human workspace.
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo"]);
+    let hws = r.join("hws");
+    std::fs::create_dir_all(hws.join("src")).unwrap();
+    std::fs::write(
+        hws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    let seed = parse(&e.run(&hws, &["propose", "-i", "seed", "--json"]));
+    assert_eq!(seed["status"], "queued", "{seed}");
+    assert_eq!(seed["decision"]["outcome"], "allow");
+    assert!(seed["change"].as_str().unwrap().len() == 32);
+    e.settle();
+
+    let started = parse(&e.run(
+        r,
+        &[
+            "session",
+            "start",
+            "--repo",
+            "demo",
+            "--agent",
+            "claude",
+            "--paths",
+            "src/**",
+            "--workspace",
+            "ws",
+            "--json",
+        ],
+    ));
+    assert!(
+        started["session"].as_str().unwrap().starts_with("ses_"),
+        "{started}"
+    );
+    assert_eq!(started["workspace"].as_str(), r.join("ws").to_str());
+    assert_eq!(started["paths"], serde_json::json!(["src/**"]));
+    assert_eq!(started["decision"]["outcome"], "allow");
+    assert!(started["expires_ms"].as_i64().unwrap() > 0);
+    let ws = r.join("ws");
+    let agent_token = std::fs::read_to_string(ws.join(".lonca/session")).unwrap();
+    assert!(!started.to_string().contains(agent_token.trim()));
+    assert!(!login.to_string().contains(&human_token));
+
+    // A wrong claim: refused, exit 1, the reason on stderr; JSON says denied.
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n",
+    )
+    .unwrap();
+    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    let out = e
+        .cmd(
+            &ws,
+            &[
+                "propose",
+                "-i",
+                "wrong",
+                "--edits",
+                "src/lib.rs#nothing",
+                "--json",
+            ],
+        )
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("denied: ") && text(&out.stderr).contains("claim_mismatch"),
+        "{}",
+        text(&out.stderr)
+    );
+    let denied = parse(&text(&out.stdout));
+    assert_eq!(denied["status"], "denied");
+    assert_eq!(denied["decision"]["outcome"], "deny");
+
+    // The right claim from an unobserved session waits for a human.
+    let proposed = parse(&e.run(
+        &ws,
+        &["propose", "-i", "double", "--accept-facts", "--json"],
+    ));
+    assert_eq!(proposed["status"], "pending", "{proposed}");
+    let seq = proposed["seq"].as_u64().unwrap();
+    let pending = parse(&e.run(r, &["pending", "--repo", "demo", "--json"]));
+    assert_eq!(pending[0]["seq"], seq);
+    assert_eq!(pending[0]["change"], proposed["change"]);
+    assert_eq!(pending[0]["intent"], "double");
+    assert_eq!(pending[0]["agent"], "claude");
+    let approved = parse(&e.run(
+        r,
+        &["approve", &seq.to_string(), "--repo", "demo", "--json"],
+    ));
+    assert_eq!(approved["target_seq"], seq);
+    assert_eq!(approved["change"], proposed["change"]);
+    assert!(approved["seq"].as_u64().unwrap() > seq);
+    assert_eq!(approved["decision"]["outcome"], "allow", "{approved}");
+    e.settle();
+
+    // The human edited the same line meanwhile: one conflict, trunk's copy beside it.
+    std::fs::write(
+        hws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 3\n}\n",
+    )
+    .unwrap();
+    let synced = parse(&e.run(&hws, &["sync", "--json"]));
+    assert_ne!(synced["base_before"], synced["base_after"]);
+    assert_eq!(
+        synced["conflicts"],
+        serde_json::json!([{"path": "src/lib.rs", "trunk_copy": "src/lib.rs.trunk"}]),
+        "{synced}"
+    );
+    assert!(hws.join("src/lib.rs.trunk").exists());
+    let synced = parse(&e.run(&ws, &["sync", "--json"]));
+    assert_eq!(synced["conflicts"], serde_json::json!([]));
+
+    let ended = parse(&e.run(&ws, &["session", "end", "--json"]));
+    assert_eq!(ended["session"], started["session"]);
+    assert_eq!(ended["decision"]["outcome"], "allow");
+
+    // Exit codes: 2 without a daemon, 3 for usage, 0 for help.
+    let out = e
+        .cmd(r, &["status", "--repo", "demo"])
+        .env("LONCA_SOCKET", r.join("nope"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("cannot reach the Lonca daemon"));
+    let out = e.cmd(r, &["no-such-command"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let out = e.cmd(r, &["propose", "-i", "x"]).output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "no workspace: {}",
+        text(&out.stderr)
+    );
+    let out = e.cmd(r, &["--help"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    // A refused request that never became a log entry is also 1: here
+    // the login against a repository that does not know the human.
+    let out = e
+        .cmd(r, &["status", "--repo", "other", "--as", "ayse"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("human.login: unauthenticated: login failed"),
+        "{}",
+        text(&out.stderr)
+    );
+}

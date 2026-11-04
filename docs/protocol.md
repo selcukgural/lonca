@@ -515,6 +515,59 @@ The `reasons` of a decision. The ones a runner acts on:
 
 Everything else is a policy or key-management reason; show it.
 
+## CLI for runners
+
+Where the daemon has no call of its own, a runner drives `lonca`:
+creating a workspace is the CLI's work (`session start`, `workspace
+create`), and so are `sync`, `propose` from a workspace, `human login`.
+These commands take `--json` and print one JSON object (or array) on
+stdout; nothing else goes to stdout then. Human-readable output has the
+same facts, nothing more. **No token is ever printed**, in either form.
+
+Exit codes:
+
+| code | meaning |
+|---|---|
+| 0 | done; a proposal that waits for a human (`escalate`) is done too |
+| 1 | the daemon refused: an error code, or a logged decision with `outcome: deny`; stderr has `code: message` (`denied: claim_mismatch:edits`) |
+| 2 | the daemon is unreachable, or answered something that is not the protocol |
+| 3 | usage, and everything that never reached the daemon (no workspace, no local changes, no key) |
+
+`--json` shapes:
+
+- `session start --json`: `{"session", "workspace": absolute path,
+  "expires_ms", "paths": [glob], "seq", "decision"}`. The agent's token
+  is in `<workspace>/.lonca/session` (0600), nowhere else.
+- `session end --json` (in the agent's workspace): `{"session", "seq",
+  "decision"}`.
+- `sync --json`: `{"base_before": id, "base_after": id, "updated":
+  [path], "merged": [path], "conflicts": [{"path", "trunk_copy"}]}`.
+  A conflict leaves the local file as it was and writes trunk's version
+  to `trunk_copy` (`<path>.trunk`).
+- `propose --json`: `{"change", "commit", "seq", "decision", "status":
+  "queued" | "pending" | "denied"}`. `denied` also exits 1.
+- `pending --json`: the `pending` array of `status`.
+- `approve <seq> --json`: `{"seq", "target_seq", "change": change id |
+  null, "decision"}`; `seq` is the approval's own entry.
+- `human login --json`: `{"human", "expires_ms", "session_file",
+  "repos"}`.
+- `human whoami --json`: `{"human", "alg", "public"}` (local, no
+  daemon).
+- `status --json`: the `status` result, pretty-printed.
+
+**The human session file is an interface.** `lonca human login` keeps
+the session at `$LONCA_HUMANS/<name>.session`, else
+`~/.config/lonca/humans/<name>.session`, mode 0600, as `{"token",
+"expires_ms"}`. A runner that speaks to the socket itself may read the
+token from there and send it as `token`; when the daemon answers
+`unauthenticated` (expired, or the daemon restarted on another home)
+or `forbidden` after a key change, it runs `lonca human login --json`
+again, which needs no prompt for a file key and one Touch ID for a
+Secure Enclave key, and reads the file again. Every `lonca` human
+command does the same by itself. The file is readable by anything
+running as the developer: it opens reads and prepares only; every write
+still needs a signature.
+
 ## Protocol numbers
 
 - **1** (2026-11): this document. `ping.protocol`; `status.pending`

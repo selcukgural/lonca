@@ -243,6 +243,10 @@ fn log_waits_for_the_next_entry_and_gives_up_on_time() {
     );
 }
 
+fn code(r: Result<Value, (String, String)>) -> String {
+    r.map(|v| format!("ok: {v}")).unwrap_err().0
+}
+
 fn log_len(e: &mut Env) -> usize {
     e.ok("log", Some("demo"), None, json!({}))
         .as_array()
@@ -691,4 +695,207 @@ fn trees_are_fetched_in_pages() {
     .unwrap();
     assert_eq!(prep["tree_bytes"], 2304);
     assert_eq!(prep["warnings"], json!([]), "{prep}");
+}
+
+/// The diff and the evidence of a change come from the daemon: files
+/// with counts and symbols, redaction applied, a cap, and the checks of
+/// the last integration with their log tails.
+#[test]
+fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
+    use lonca_daemon::service::DIFF_CAP_BYTES;
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(
+        vec![
+            file("src/lib.rs", LIB),
+            file("notes.md", "a\nb\n"),
+            file(
+                "check.sh",
+                "echo BUILD BROKEN; grep -q 'a \\* 2' src/lib.rs\n",
+            ),
+        ],
+        "seed",
+    );
+    e.svc.process_all();
+    let base = e.trunk();
+    let token = e.session("s1", &["src/**", "notes.md"]);
+    e.bind(&token);
+    e.wrote(&token, "src/lib.rs");
+    e.wrote(&token, "notes.md");
+    e.lease(&token, "src/lib.rs#charge");
+    e.lease(&token, "notes.md#<file>");
+    let new = LIB.replacen("    a\n", "    a * 2\n", 1);
+    let r = e.propose(
+        &token,
+        &base,
+        vec![file("src/lib.rs", &new), file("notes.md", "a\nc\n")],
+        &["src/lib.rs#charge", "notes.md#<file>"],
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let change = r["change"].clone();
+
+    let d = e.ok("change.diff", Some("demo"), None, json!({"change": change}));
+    assert_eq!(d["format"], "unified");
+    assert_eq!(d["base"], json!(base));
+    assert_eq!(d["truncated"], false);
+    let files = d["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "{d}");
+    assert_eq!(files[0]["path"], "notes.md");
+    assert_eq!(files[0]["status"], "modified");
+    assert_eq!(
+        (files[0]["added"].as_u64(), files[0]["removed"].as_u64()),
+        (Some(1), Some(1))
+    );
+    assert_eq!(files[1]["path"], "src/lib.rs");
+    assert_eq!(files[1]["symbols"]["edits"], json!(["src/lib.rs#charge"]));
+    let diff = d["diff"].as_str().unwrap();
+    assert!(
+        diff.contains("--- a/src/lib.rs") && diff.contains("+    a * 2") && diff.contains("-b\n+c"),
+        "{diff}"
+    );
+    assert_eq!(
+        code(e.call(
+            "change.diff",
+            Some("demo"),
+            None,
+            json!({"change": change, "format": "side-by-side"})
+        )),
+        "invalid"
+    );
+    assert_eq!(
+        code(e.call(
+            "change.diff",
+            Some("demo"),
+            None,
+            json!({"change": ChangeId::random()})
+        )),
+        "not_found"
+    );
+    // An agent reads the diff of its own repository only.
+    assert!(
+        e.anon("change.diff", None, Some(&token), json!({"change": change}))
+            .is_ok()
+    );
+    assert_eq!(
+        code(e.anon(
+            "change.diff",
+            Some("other"),
+            Some(&token),
+            json!({"change": change})
+        )),
+        "forbidden"
+    );
+
+    // Before any integration there is no evidence; the test command then
+    // fails and its output is in the evidence.
+    let rec = e.ok("change.get", Some("demo"), None, json!({"change": change}));
+    assert_eq!(rec["evidence"], json!([]));
+    assert_eq!(rec["integrate_seq"], Value::Null);
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
+        "# test = \"cargo test --offline\"",
+        "test = \"sh check.sh\"",
+    );
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+    // The queued change integrates under the new policy: the check passes
+    // (a * 2 is there) and the log says BUILD BROKEN anyway.
+    e.svc.process_all();
+    let rec = e.ok("change.get", Some("demo"), None, json!({"change": change}));
+    assert_eq!(rec["status"]["status"], "integrated", "{rec}");
+    let ev = rec["evidence"].as_array().unwrap();
+    let tests = ev
+        .iter()
+        .find(|a| a["check"] == "tests")
+        .expect("tests check");
+    assert_eq!(tests["result"], "pass");
+    assert_eq!(tests["exit"], 0);
+    assert!(
+        tests["log"].as_str().unwrap().contains("BUILD BROKEN"),
+        "{tests}"
+    );
+    assert_eq!(tests["log_truncated"], false);
+    assert!(tests["sandbox"].is_string());
+    assert!(rec["integrate_seq"].as_u64().is_some());
+    assert_eq!(rec["integrate_decision"]["outcome"], "allow");
+
+    // A failing check: result fail, exit 1, the output kept.
+    let base = e.trunk();
+    e.wrote(&token, "src/lib.rs");
+    let bad = new.replacen("    a * 2\n", "    a * 3\n", 1);
+    let r = e.propose(
+        &token,
+        &base,
+        vec![file("src/lib.rs", &bad)],
+        &["src/lib.rs#charge"],
+    );
+    let failing = r["change"].clone();
+    e.svc.process_all();
+    let rec = e.ok("change.get", Some("demo"), None, json!({"change": failing}));
+    assert_eq!(rec["status"]["status"], "rejected", "{rec}");
+    let tests = rec["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["check"] == "tests")
+        .unwrap()
+        .clone();
+    assert_eq!(tests["result"], "fail");
+    assert_eq!(tests["exit"], 1);
+    assert!(tests["log"].as_str().unwrap().contains("BUILD BROKEN"));
+    assert_eq!(rec["integrate_decision"]["outcome"], "deny");
+
+    // Redaction: a redacted blob's file is out of the diff and named.
+    let trunk = e.trunk();
+    let st = e.ok("tree", Some("demo"), None, json!({"commit": trunk}));
+    let notes_blob = st
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "notes.md")
+        .unwrap()["blob"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.human(Op::Redact {
+        blob: GitId::parse(&notes_blob).unwrap(),
+        reason: "secret".into(),
+    });
+    let d = e.ok("change.diff", Some("demo"), None, json!({"change": change}));
+    assert_eq!(d["redacted"], json!(["notes.md"]));
+    assert_eq!(d["files"].as_array().unwrap().len(), 1);
+    assert!(!d["diff"].as_str().unwrap().contains("notes.md"));
+
+    // A diff over the cap is cut on a line boundary and says so: two
+    // files under the per-file cap whose diff together is over it.
+    let big: String = (0..35_000)
+        .map(|i| format!("line {i:08} {}\n", "x".repeat(20)))
+        .collect();
+    assert!(big.len() < 2 * 1024 * 1024 && 2 * big.len() > DIFF_CAP_BYTES);
+    let base = e.trunk();
+    e.wrote(&token, "src/big1.rs");
+    e.wrote(&token, "src/big2.rs");
+    let r = e.propose(
+        &token,
+        &base,
+        vec![file("src/big1.rs", &big), file("src/big2.rs", &big)],
+        &[],
+    );
+    assert_ne!(r["decision"]["outcome"], "deny", "{r}");
+    let d = e.ok(
+        "change.diff",
+        Some("demo"),
+        None,
+        json!({"change": r["change"]}),
+    );
+    assert_eq!(d["truncated"], true);
+    let text = d["diff"].as_str().unwrap();
+    assert!(text.len() <= DIFF_CAP_BYTES && text.ends_with('\n'));
+    assert_eq!(d["files"][0]["added"], 35_000);
+    assert_eq!(d["files"][1]["path"], "src/big2.rs");
 }

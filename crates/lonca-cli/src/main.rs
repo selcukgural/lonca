@@ -103,8 +103,17 @@ enum Cmd {
         #[arg(long = "as")]
         human: Option<String>,
     },
-    /// Facts of the local changes in this workspace.
-    Diff,
+    /// Facts of the local changes in this workspace; with a change id, the
+    /// unified diff of that change as the daemon computes it.
+    Diff {
+        change: Option<String>,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Symbol leases (agent workspaces).
     #[command(subcommand)]
     Lease(LeaseCmd),
@@ -128,13 +137,16 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Show a change.
+    /// Show a change (with --evidence, the checks of its last integration
+    /// attempt and their logs).
     Change {
         change: String,
         #[arg(long)]
         repo: Option<String>,
         #[arg(long = "as")]
         human: Option<String>,
+        #[arg(long)]
+        evidence: bool,
     },
     /// Operations waiting for human approval.
     Pending {
@@ -1141,7 +1153,42 @@ fn run(cmd: Cmd) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Diff => {
+        Cmd::Diff {
+            change: Some(change),
+            repo,
+            human,
+            json: as_json,
+        } => {
+            let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
+            let d = call(&mut c, "change.diff", json!({"change": change}))?;
+            if as_json {
+                return ctx::print_json(&d);
+            }
+            for f in d["files"].as_array().into_iter().flatten() {
+                println!(
+                    "{:<9} +{} -{} {}",
+                    f["status"].as_str().unwrap_or(""),
+                    f["added"]
+                        .as_u64()
+                        .map(|n| n.to_string())
+                        .unwrap_or("-".into()),
+                    f["removed"]
+                        .as_u64()
+                        .map(|n| n.to_string())
+                        .unwrap_or("-".into()),
+                    f["path"].as_str().unwrap_or("")
+                );
+            }
+            for p in d["redacted"].as_array().into_iter().flatten() {
+                println!("redacted  {}", p.as_str().unwrap_or(""));
+            }
+            print!("{}", d["diff"].as_str().unwrap_or(""));
+            if d["truncated"] == true {
+                println!("[diff truncated]");
+            }
+            Ok(())
+        }
+        Cmd::Diff { change: None, .. } => {
             let ws = Workspace::current()?;
             let changes = ws.changes()?;
             if changes.is_empty() {
@@ -1311,16 +1358,39 @@ fn run(cmd: Cmd) -> Result<()> {
             change,
             repo,
             human,
+            evidence,
         } => {
             let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&call(
-                    &mut c,
-                    "change.get",
-                    json!({"change": change})
-                )?)?
-            );
+            let rec = call(&mut c, "change.get", json!({"change": change}))?;
+            if !evidence {
+                println!("{}", serde_json::to_string_pretty(&rec)?);
+                return Ok(());
+            }
+            let checks = rec["evidence"].as_array().cloned().unwrap_or_default();
+            if checks.is_empty() {
+                println!("no integration attempt yet");
+            }
+            for a in checks {
+                println!(
+                    "{}: {} (exit {}, {} ms, sandbox {})",
+                    a["check"].as_str().unwrap_or(""),
+                    a["result"].as_str().unwrap_or(""),
+                    a["exit"]
+                        .as_i64()
+                        .map(|n| n.to_string())
+                        .unwrap_or("-".into()),
+                    a["duration_ms"].as_i64().unwrap_or(0),
+                    a["sandbox"].as_str().unwrap_or("-")
+                );
+                if let Some(log) = a["log"].as_str().filter(|l| !l.is_empty()) {
+                    if a["log_truncated"] == true {
+                        println!("  [log tail]");
+                    }
+                    for line in log.lines() {
+                        println!("  {line}");
+                    }
+                }
+            }
             Ok(())
         }
         Cmd::Pending {

@@ -87,6 +87,13 @@ pub const LOG_WAIT_MAX_MS: i64 = 30_000;
 /// what makes the request return at once.
 pub const LOG_POLL_MS: u64 = 2_000;
 
+/// Longest diff text `change.diff` returns; beyond it `truncated` is set.
+pub const DIFF_CAP_BYTES: usize = 2 * 1024 * 1024;
+
+/// Longest verification log `change.get` returns per check (the tail is
+/// kept).
+pub const EVIDENCE_LOG_CAP_BYTES: usize = 64 * 1024;
+
 /// Length of a human session when `human.login` names none.
 pub const HUMAN_SESSION_DEFAULT_MS: i64 = 60 * 60 * 1000;
 /// The longest human session a login may ask for.
@@ -155,6 +162,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("tree", Cred::Read),
     ("blobs", Cred::Read),
     ("change.get", Cred::Read),
+    ("change.diff", Cred::Read),
     ("human.prepare_change", Cred::Human),
     ("human.prepare_policy", Cred::Human),
     ("human.prepare_import", Cred::Human),
@@ -469,6 +477,7 @@ impl Service {
             "tree" => self.tree(&auth, params(p)?),
             "blobs" => self.blobs(&auth, params(p)?),
             "change.get" => self.change_get(&auth, params(p)?),
+            "change.diff" => self.change_diff(&auth, params(p)?),
             "whoami" => self.whoami(&auth),
             "human.prepare_change" => self.prepare_change(&auth, params(p)?),
             "human.prepare_policy" => self.prepare_policy(&auth, params(p)?),
@@ -1134,14 +1143,179 @@ impl Service {
         Ok(json!(out))
     }
 
+    /// The change record, plus `evidence`: the checks of its last
+    /// integration attempt with their results and log tails, read from
+    /// the log and the store (never the reviewer's own git).
     fn change_get(&self, auth: &Auth, c: ChangeRef) -> Hr {
         let name = auth.repo()?;
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
-        match r.chain.state.changes.get(&c.change) {
-            Some(rec) => Ok(json!(rec)),
-            None => fail("not_found", "unknown change"),
+        let Some(rec) = r.chain.state.changes.get(&c.change).cloned() else {
+            return fail("not_found", "unknown change");
+        };
+        let store = r.store.clone();
+        let redacted = r.chain.state.redacted.clone();
+        drop(inner);
+        let mut out = json!(rec);
+        let ops = OpLog::new(&store).read_all().or_fail()?;
+        let last = ops.iter().rev().find(
+            |o| matches!(&o.entry.op, Op::ChangeIntegrate { change, .. } if *change == c.change),
+        );
+        let evidence: Vec<Value> = match last {
+            Some(o) => o
+                .entry
+                .evidence
+                .iter()
+                .map(|a| {
+                    let (log, log_truncated) = match &a.log {
+                        Some(id) if !redacted.contains(id) => match store.read_blob(id) {
+                            Ok(bytes) => {
+                                let start = bytes.len().saturating_sub(EVIDENCE_LOG_CAP_BYTES);
+                                (
+                                    Value::String(
+                                        String::from_utf8_lossy(&bytes[start..]).into_owned(),
+                                    ),
+                                    start > 0,
+                                )
+                            }
+                            Err(_) => (Value::Null, false),
+                        },
+                        _ => (Value::Null, false),
+                    };
+                    let d = &a.details;
+                    json!({
+                        "check": a.check, "result": a.result,
+                        "exit": d.get("exit").and_then(|x| x.parse::<i64>().ok()),
+                        "duration_ms": d.get("duration_ms").and_then(|x| x.parse::<i64>().ok()),
+                        "attempts": d.get("attempts").and_then(|x| x.parse::<u32>().ok()),
+                        "sandbox": d.get("sandbox"), "error": d.get("error"),
+                        "details": d, "log": log, "log_truncated": log_truncated,
+                    })
+                })
+                .collect(),
+            None => vec![],
+        };
+        out["evidence"] = json!(evidence);
+        out["integrate_seq"] = json!(last.map(|o| o.entry.seq));
+        out["integrate_decision"] = json!(last.map(|o| &o.entry.decision));
+        Ok(out)
+    }
+
+    /// The unified diff of a change between its base and its commit,
+    /// computed by git in the store. Files whose blob on either side is
+    /// redacted are left out and named. Capped at [`DIFF_CAP_BYTES`].
+    fn change_diff(&self, auth: &Auth, p: ChangeDiff) -> Hr {
+        if let Some(f) = &p.format
+            && f != "unified"
+        {
+            return fail("invalid", "format: only unified");
         }
+        let name = auth.repo()?;
+        let mut inner = self.lock();
+        let r = Self::repo(&mut inner, &name)?;
+        let Some(rec) = r.chain.state.changes.get(&p.change).cloned() else {
+            return fail("not_found", "unknown change");
+        };
+        let store = r.store.clone();
+        let redacted = r.chain.state.redacted.clone();
+        drop(inner);
+        let before = store.commit_files(&rec.base).or_fail()?;
+        let after = store.commit_files(&rec.commit).or_fail()?;
+        let mut paths: Vec<String> = Vec::new();
+        let mut redacted_paths: Vec<String> = Vec::new();
+        let mut status: BTreeMap<String, &str> = BTreeMap::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for path in before.keys().chain(after.keys()) {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let (b, a) = (before.get(path), after.get(path));
+            let st = match (b, a) {
+                (Some(x), Some(y)) if x == y => continue,
+                (Some(_), Some(_)) => "modified",
+                (None, Some(_)) => "added",
+                (Some(_), None) => "deleted",
+                (None, None) => continue,
+            };
+            if [b, a]
+                .into_iter()
+                .flatten()
+                .any(|e| redacted.contains(&e.blob))
+            {
+                redacted_paths.push(path.clone());
+                continue;
+            }
+            status.insert(path.clone(), st);
+            paths.push(path.clone());
+        }
+        // Symbol facts by file, so a reviewer sees what each file changes.
+        let by_file = |items: &[String]| -> BTreeMap<String, Vec<String>> {
+            let mut m: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for s in items {
+                if let Some((p, _)) = s.split_once('#') {
+                    m.entry(p.to_string()).or_default().push(s.clone());
+                }
+            }
+            m
+        };
+        let edits = by_file(&rec.facts.edits);
+        let adds = by_file(&rec.facts.adds);
+        let deletes = by_file(&rec.facts.deletes);
+        let sigs = by_file(&rec.facts.signature_changes);
+        type Counts = BTreeMap<String, (Option<u64>, Option<u64>)>;
+        let (mut diff, mut counts): (String, Counts) = (String::new(), BTreeMap::new());
+        if !paths.is_empty() {
+            let (base, commit) = (rec.base.to_string(), rec.commit.to_string());
+            let mut args: Vec<&str> = vec![
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--numstat",
+                &base,
+                &commit,
+                "--",
+            ];
+            args.extend(paths.iter().map(String::as_str));
+            for line in git(&self.settings.git, store.path(), &args)?.lines() {
+                let mut it = line.split('\t');
+                let (a, d, path) = (it.next(), it.next(), it.next());
+                if let (Some(a), Some(d), Some(path)) = (a, d, path) {
+                    counts.insert(path.to_string(), (a.parse().ok(), d.parse().ok()));
+                }
+            }
+            args[3] = "--patch";
+            diff = git(&self.settings.git, store.path(), &args)?;
+        }
+        let truncated = diff.len() > DIFF_CAP_BYTES;
+        if truncated {
+            let mut cut = DIFF_CAP_BYTES;
+            while !diff.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            diff.truncate(cut);
+            if let Some(nl) = diff.rfind('\n') {
+                diff.truncate(nl + 1);
+            }
+        }
+        let files: Vec<Value> = paths
+            .iter()
+            .map(|p| {
+                let (added, removed) = counts.get(p).copied().unwrap_or((None, None));
+                json!({
+                    "path": p, "status": status[p], "added": added, "removed": removed,
+                    "symbols": {
+                        "edits": edits.get(p).cloned().unwrap_or_default(),
+                        "adds": adds.get(p).cloned().unwrap_or_default(),
+                        "deletes": deletes.get(p).cloned().unwrap_or_default(),
+                        "signature_changes": sigs.get(p).cloned().unwrap_or_default(),
+                    },
+                })
+            })
+            .collect();
+        Ok(json!({
+            "change": rec.change, "base": rec.base, "commit": rec.commit, "format": "unified",
+            "files": files, "redacted": redacted_paths, "diff": diff, "truncated": truncated,
+        }))
     }
 
     fn whoami(&self, auth: &Auth) -> Hr {

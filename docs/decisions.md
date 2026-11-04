@@ -353,7 +353,8 @@ A01/A07, zero trust: every request authenticated).
 | `log` | read | the operation log |
 | `tree` | read | files of a commit, sizes; contents on request |
 | `blobs` | read | one page of file contents of a commit |
-| `change.get` | read | one change record |
+| `change.get` | read | one change record, with the evidence of its last integration |
+| `change.diff` | read | the unified diff of a change, redaction applied |
 | `human.prepare_change` | human | builds a commit for a human change |
 | `human.prepare_policy` | human | writes a policy commit |
 | `human.prepare_import` | human | `git fetch` from a remote |
@@ -474,6 +475,24 @@ equal to `PROTOCOL`.
   commands keep collecting denials per repository as before. The human
   session file is documented as an interface, since a runner that talks
   to the socket directly reuses it. No token in any output.
+
+## Diff and evidence through the daemon
+
+A reviewer needs the diff and the verification evidence of a pending
+proposal; until #80 both came from the store with the reviewer's own
+git, which hardened mode denies and which bypassed redaction.
+`change.diff` runs git in the store between the change's base and
+commit (the daemon already uses the git binary for fetch, push and
+bundles; the trusted core does not), leaves out and names every file
+whose blob on either side is redacted, adds per-file counts and the
+symbol facts by file, and caps the text (2 MiB, `truncated`).
+`change.get` carries `evidence`: the checks of the change's last
+`change.integrate` entry with result, exit, duration, sandbox and the
+tail of the log blob (64 KiB), redacted blobs left out, found by
+reading the log back (one scan per call; the change record does not
+yet remember the entry). Both are reads and are not logged; `lonca diff
+CHANGE` and `lonca change CHANGE --evidence` print them, and the MCP
+`change_status` tool shows a worker its own failed build log.
 
 ## Tree paging
 

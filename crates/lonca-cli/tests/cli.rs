@@ -820,11 +820,17 @@ fn the_human_session_file_is_reused_renewed_and_ended() {
     assert!(!session.exists());
     assert_eq!(human_tokens(), 4, "the live one was revoked");
     e.run(r, &["human", "logout"]);
-    // A humans directory that is not a directory: logout reports it.
+    // A humans directory that is not a directory: logout reports it
+    // (`--as`, so that the identity lookup is not what fails).
     let out = e
-        .cmd(r, &["human", "logout"])
+        .cmd(r, &["human", "logout", "--as", "ayse"])
         .env("LONCA_HUMANS", r.join("home/tokens.json"))
         .output()
         .unwrap();
     assert!(!out.status.success(), "{}", text(&out.stdout));
+    assert!(
+        text(&out.stderr).contains("ayse.session"),
+        "{}",
+        text(&out.stderr)
+    );
 }

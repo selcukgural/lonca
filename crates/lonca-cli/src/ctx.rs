@@ -250,10 +250,11 @@ fn write_session(name: &str, s: &Session) -> Result<()> {
 }
 
 pub fn clear_session(name: &str) -> Result<()> {
-    match std::fs::remove_file(session_path(name)) {
+    let p = session_path(name);
+    match std::fs::remove_file(&p) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(e).with_context(|| format!("cannot remove {}", p.display())),
     }
 }
 

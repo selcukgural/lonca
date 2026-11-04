@@ -519,13 +519,7 @@ fn backup(repos: &[String], out: Option<&Path>) -> Result<()> {
 /// `lonca restore`: the daemon fetches the Lonca refs from a bundle, a bare
 /// store or a remote into a new repository and replays its log.
 fn restore(repo: &str, from: &str) -> Result<()> {
-    let from = if from.contains("://") || (from.contains('@') && from.contains(':')) {
-        from.to_string()
-    } else {
-        ctx::absolute(Path::new(from))?
-            .to_string_lossy()
-            .into_owned()
-    };
+    let from = source(from)?;
     let mut c = connect()?;
     let r = call(&mut c, "repo.restore", json!({"repo": repo, "from": from}))?;
     println!(
@@ -552,6 +546,18 @@ fn restore(repo: &str, from: &str) -> Result<()> {
     }
     println!("Audit it: lonca-audit verify <home>/repos/{repo}.git");
     Ok(())
+}
+
+/// A restore source as the daemon must see it: URLs (`https://`, `ssh://`,
+/// `user@host:path`) unchanged, everything else an absolute path.
+fn source(from: &str) -> Result<String> {
+    if from.contains("://") || (from.contains('@') && from.contains(':')) {
+        Ok(from.to_string())
+    } else {
+        Ok(ctx::absolute(Path::new(from))?
+            .to_string_lossy()
+            .into_owned())
+    }
 }
 
 /// Repository from the flag, else from the current workspace.
@@ -1396,5 +1402,22 @@ fn print_status(s: &Value) {
     let pending = s["pending"].as_array().map(|a| a.len()).unwrap_or(0);
     if pending > 0 {
         println!("pending approvals: {pending} (lonca pending)");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source;
+
+    #[test]
+    fn a_restore_source_is_a_url_or_an_absolute_path() {
+        for url in ["https://h/x.git", "ssh://h/x.git", "git@h:x.git"] {
+            assert_eq!(source(url).unwrap(), url);
+        }
+        assert_eq!(source("/abs/x.bundle").unwrap(), "/abs/x.bundle");
+        let cwd = std::env::current_dir().unwrap();
+        for rel in ["x.bundle", "a@b", "a:b"] {
+            assert_eq!(source(rel).unwrap(), cwd.join(rel).to_string_lossy());
+        }
     }
 }

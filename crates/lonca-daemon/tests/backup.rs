@@ -242,6 +242,12 @@ fn a_restore_on_another_daemon_is_foreign_until_a_human_recovers_it() {
     let err = o.call("status", Some("demo"), json!({})).unwrap_err();
     assert_eq!(err.0, "foreign_key", "{err:?}");
     assert_eq!(o.ok("repo.list", None, json!({})), json!([]));
+    // Deleting the store behind the daemon's back does not let a restore
+    // in: the daemon's view counts, until it is restarted.
+    std::fs::rename(o.home.join("repos/demo.git"), o.home.join("aside")).unwrap();
+    let err = o.restore("demo", &bundle).unwrap_err();
+    assert_eq!(err.0, "conflict", "{err:?}");
+    std::fs::rename(o.home.join("aside"), o.home.join("repos/demo.git")).unwrap();
     // Still foreign after a restart, and the store is where it belongs.
     o = Other::open(&e, "home3", false);
     let err = o.call("status", Some("demo"), json!({})).unwrap_err();
@@ -435,6 +441,10 @@ fn a_restore_refuses_what_it_can_not_trust_and_leaves_nothing_behind() {
         .unwrap_err();
     assert_eq!(err.0, "conflict", "{err:?}");
     assert!(err.1.contains("never replaces"), "{err:?}");
+    // A directory in repos/ the daemon does not know counts as existing.
+    std::fs::create_dir_all(o.home.join("repos/junk.git")).unwrap();
+    let err = o.restore("junk", &bundle).unwrap_err();
+    assert_eq!(err.0, "conflict", "{err:?}");
     // A prepared but never initialised repository counts as existing too.
     let key = HumanKey {
         alg: "ed25519".into(),

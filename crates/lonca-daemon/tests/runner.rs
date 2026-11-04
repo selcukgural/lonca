@@ -300,6 +300,10 @@ fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
         r["decision"]["reasons"][0],
         "scope_invalid:scratch:too_many"
     );
+    // Exactly the maximum is fine.
+    let eight: Vec<String> = (0..8).map(|i| format!("/tmp/s{i}")).collect();
+    let r = e.human(start("s-eight", scope(eight), e.now()));
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
 
     let r = e.human(start("s1", scope(vec![scratch_s.clone()]), e.now()));
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");

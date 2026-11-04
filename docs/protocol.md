@@ -319,6 +319,7 @@ Operation kinds (`op.op`) and their fields:
 | `change.withdraw` | `change` |
 | `change.integrate` | `change`, `trunk_before`, `merged` (id or null), `conflicts` |
 | `approve` | `target_seq`, `note` |
+| `reject` | `target_seq`, `reason` (1–4096 bytes; the requester reads it) |
 | `observe` | `session`, `events` |
 | `import.external` | `remote`, `commit`, `trunk_before` |
 | `import.unmediated` | `refname`, `found`, `expected` |
@@ -429,8 +430,8 @@ branch; `{"op": op (import.external)}`. Errors: `up_to_date`,
 *human* (a `human.recover` operation needs no session: its recovery-key
 signature is the credential). `{"op": op, "sig": human signature}`.
 Any human operation: the prepared ones above, `session.start`,
-`cap.revoke`, `approve`, `freeze`, `unfreeze`, `redact`, the key
-operations, `daemon.rotate`, `daemon.recover`. The signer must be the
+`cap.revoke`, `approve`, `reject`, `freeze`, `unfreeze`, `redact`, the
+key operations, `daemon.rotate`, `daemon.recover`. The signer must be the
 session's human. Result: logged, plus:
 
 - `session.start`, allowed: `"token"`, the agent's session token.
@@ -599,8 +600,11 @@ Exit codes:
 - `propose --json`: `{"change", "commit", "seq", "decision", "status":
   "queued" | "pending" | "denied"}`. `denied` also exits 1.
 - `pending --json`: the `pending` array of `status`.
-- `approve <seq> --json`: `{"seq", "target_seq", "change": change id |
-  null, "decision"}`; `seq` is the approval's own entry.
+- `approve <seq> --json` and `reject <seq> --reason … --json`:
+  `{"seq", "target_seq", "change": change id | null, "decision"}`;
+  `seq` is the decision's own entry. A rejected change reads
+  `{"status": "rejected", "reasons": ["rejected: <reason>"]}` in
+  `change.get` and `status.changes`.
 - `human login --json`: `{"human", "expires_ms", "session_file",
   "repos"}`.
 - `human whoami --json`: `{"human", "alg", "public"}` (local, no
@@ -625,7 +629,8 @@ still needs a signature.
 - **1** (2026-11): this document. Additions since, same number:
   `scope.scratch`, `hook.bind.scratch`, `session start --scratch`
   (#78); `tree[].size`, `blobs`, `repo.prepare_init.warnings` (#79);
-  `change.diff`, `change.get.evidence` (#80).
+  `change.diff`, `change.get.evidence` (#80); the `reject` operation
+  (#81).
   `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,

@@ -169,6 +169,18 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Decline an escalated operation with a reason for its requester.
+    Reject {
+        seq: u64,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Operation log.
     Log {
         #[arg(long)]
@@ -741,6 +753,7 @@ fn agent_client() -> Result<(Client, Workspace)> {
 }
 
 fn run(cmd: Cmd) -> Result<()> {
+    let is_reject = matches!(cmd, Cmd::Reject { .. });
     match cmd {
         Cmd::Daemon {
             home,
@@ -1431,13 +1444,27 @@ fn run(cmd: Cmd) -> Result<()> {
             note,
             human,
             json: as_json,
+        }
+        | Cmd::Reject {
+            seq,
+            repo,
+            reason: note,
+            human,
+            json: as_json,
         } => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
             let mut c = human_client(&repo, &human)?;
-            let op = Op::Approve {
-                target_seq: seq,
-                note,
+            let op = if is_reject {
+                Op::Reject {
+                    target_seq: seq,
+                    reason: note,
+                }
+            } else {
+                Op::Approve {
+                    target_seq: seq,
+                    note,
+                }
             };
             let r = if as_json {
                 // The change the pending entry is about, before it is released.

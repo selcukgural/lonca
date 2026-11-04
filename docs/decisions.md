@@ -81,6 +81,8 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   `cap.attenuate` (see "Scratch roots and taint policy"). The field is
   left out of the encoding when empty, so every earlier entry keeps its
   bytes; an entry that names a root needs format 5.
+- **Version 6** adds `reject` (see "Reject, and a pending proposal whose
+  session ends").
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -475,6 +477,36 @@ equal to `PROTOCOL`.
   commands keep collecting denials per repository as before. The human
   session file is documented as an interface, since a runner that talks
   to the socket directly reuses it. No token in any output.
+
+## Reject, and a pending proposal whose session ends
+
+The only human decision on an escalated operation was `approve`; a
+declined proposal stayed pending for good, held its leases and kept
+appearing in every review list (#81).
+
+- **`reject { target_seq, reason }`** is a human operation like
+  `approve`, signed and logged, never agent-grantable, escalatable by
+  policy like any other. It needs a pending target (`nothing_pending`)
+  and a reason, 1 to 4096 bytes (`reason_required`,
+  `reason_too_long`). Effect: the operation leaves the pending set; a
+  proposal becomes `rejected` with `rejected: <reason>` as its reason,
+  leaves the queue, and the lease sets of its session that cover a
+  symbol it changed are released, so the symbols are free for the next
+  attempt, by that session or another. The reason is data for the
+  requester (`change.get`, the MCP `change_status` tool, `lonca
+  pending`); Lonca never interprets it. `lonca reject SEQ --reason …`.
+- **A pending proposal outlives its session's expiry.** The commit is
+  in the store and the session is only its provenance, so a proposal
+  escalated before the session expired stays in the pending set and an
+  approval after the expiry still releases and integrates it (the
+  session's level and taint at proposal time are what the decision
+  recorded). The same holds for a session its agent *ended*
+  (`session.end`): the work is done and waits for the human. A session
+  a human *revoked* (`cap.revoke`, or a key change that ends everything
+  the human set in motion) withdraws its pending and queued proposals,
+  as before: a revocation is a decision about the work, expiry and a
+  normal end are not. `status.pending` carries `agent` and `task`, and
+  `status.sessions[].active` says whether the proposer is still around.
 
 ## Diff and evidence through the daemon
 

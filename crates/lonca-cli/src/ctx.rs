@@ -255,6 +255,7 @@ pub fn describe(repo: &str, op: &Op) -> String {
         Op::ChangePropose { change, .. } => format!("propose change {}", change.short()),
         Op::ChangeWithdraw { change } => format!("withdraw change {}", change.short()),
         Op::Approve { target_seq, .. } => format!("APPROVE operation #{target_seq}"),
+        Op::Reject { target_seq, .. } => format!("REJECT operation #{target_seq}"),
         Op::ImportExternal { remote, .. } => format!("import from {remote}"),
         Op::BridgePush { remote, .. } => format!("push to {remote}"),
         Op::Freeze { .. } => "freeze the repository".to_string(),

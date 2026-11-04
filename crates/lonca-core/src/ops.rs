@@ -90,6 +90,8 @@ pub enum OpKind {
     ChangeIntegrate,
     #[serde(rename = "approve")]
     Approve,
+    #[serde(rename = "reject")]
+    Reject,
     #[serde(rename = "observe")]
     Observe,
     #[serde(rename = "taint")]
@@ -134,6 +136,7 @@ impl OpKind {
             OpKind::ChangeWithdraw => "change.withdraw",
             OpKind::ChangeIntegrate => "change.integrate",
             OpKind::Approve => "approve",
+            OpKind::Reject => "reject",
             OpKind::Observe => "observe",
             OpKind::Taint => "taint",
             OpKind::ImportExternal => "import.external",
@@ -476,6 +479,11 @@ pub enum Op {
     },
     #[serde(rename = "approve")]
     Approve { target_seq: u64, note: String },
+    /// A human declines an escalated operation; the reason is for the
+    /// requester (a worker fixes and proposes again) and is never
+    /// interpreted.
+    #[serde(rename = "reject")]
+    Reject { target_seq: u64, reason: String },
     #[serde(rename = "observe")]
     Observe {
         session: String,
@@ -539,6 +547,7 @@ impl Op {
             Op::ChangeWithdraw { .. } => OpKind::ChangeWithdraw,
             Op::ChangeIntegrate { .. } => OpKind::ChangeIntegrate,
             Op::Approve { .. } => OpKind::Approve,
+            Op::Reject { .. } => OpKind::Reject,
             Op::Observe { .. } => OpKind::Observe,
             Op::Taint { .. } => OpKind::Taint,
             Op::ImportExternal { .. } => OpKind::ImportExternal,

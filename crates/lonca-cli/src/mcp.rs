@@ -26,7 +26,7 @@ fn tools() -> Value {
             "intent": {"type": "string"}, "edits": list, "adds": list, "deletes": list, "deleted_files": list, "signature_changes": list,
             "tests": {"type": "object", "properties": {"added": {"type": "integer"}, "modified": {"type": "integer"}, "deleted": {"type": "integer"}, "skipped": {"type": "integer"}}}
         }), &["intent"])},
-        {"name": "change_status", "description": "Status of a proposed change (queued, pending review, integrated, conflicted, rejected with reasons).", "inputSchema": s(json!({"change": {"type": "string"}}), &["change"])},
+        {"name": "change_status", "description": "Status of a proposed change (queued, pending review, integrated, conflicted, rejected with reasons: a human's `rejected: ...` reason says what to fix before you sync and propose again), with the evidence of its last integration attempt (build and test logs).", "inputSchema": s(json!({"change": {"type": "string"}}), &["change"])},
         {"name": "sync", "description": "Bring trunk into the workspace, keeping and merging your local edits.", "inputSchema": s(json!({}), &[])},
         {"name": "negotiate", "description": "Message another session about leases: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Bounded number of rounds.", "inputSchema": s(json!({"thread": {"type": "string"}, "to_session": {"type": "string"}, "message": {"type": "object", "description": "e.g. {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"} or {\"type\":\"yield\",\"set\":\"lse_...\"}"}}), &["thread", "to_session", "message"])},
     ])

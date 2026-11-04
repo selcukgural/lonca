@@ -944,6 +944,9 @@ fn a_rejection_carries_its_reason_to_the_worker_and_frees_the_leases() {
     // Unobserved session: every proposal escalates.
     let token = e.session("s1", &["src/**"]);
     e.lease(&token, "src/lib.rs#charge");
+    // A second lease set, on a symbol the change does not touch, outlives
+    // the rejection; only the covering set is released.
+    let other = e.lease(&token, "src/lib.rs#refund")["set"].clone();
     let new = LIB.replacen("    a\n", "    a * 2\n", 1);
     let r = e.propose(
         &token,
@@ -968,7 +971,9 @@ fn a_rejection_carries_its_reason_to_the_worker_and_frees_the_leases() {
     );
     let st = e.ok("status", Some("demo"), None, json!({}));
     assert_eq!(st["pending"], json!([]));
-    assert_eq!(st["leases"], json!([]), "{st}");
+    assert_eq!(st["leases"].as_array().unwrap().len(), 1, "{st}");
+    assert_eq!(st["leases"][0]["set"], other);
+    assert_eq!(st["leases"][0]["items"][0]["symbol"], "src/lib.rs#refund");
     assert_eq!(e.svc.process_all(), 0);
 
     // The worker reads the reason, fixes, leases again, proposes again.

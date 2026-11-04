@@ -1,6 +1,7 @@
 //! `lonca`: the command line for humans and agents.
 
 mod advise;
+mod checkout;
 mod ctx;
 mod hook;
 mod keys;
@@ -119,8 +120,10 @@ enum Cmd {
     Lease(LeaseCmd),
     /// Propose the local changes of this workspace.
     Propose {
+        /// What and why, for humans. Required from a workspace; with
+        /// --commit it defaults to the commit's subject.
         #[arg(long, short)]
-        intent: String,
+        intent: Option<String>,
         /// Use the computed facts as the claim (an explicit acknowledgement).
         #[arg(long)]
         accept_facts: bool,
@@ -134,6 +137,29 @@ enum Cmd {
         deleted_files: Vec<String>,
         #[arg(long, value_delimiter = ',')]
         signature_changes: Vec<String>,
+        /// From a git checkout: propose this commit (everything it changes
+        /// against the last fetched trunk) as a human change.
+        #[arg(long)]
+        commit: Option<String>,
+        /// With --commit: the repository (default: the checkout's
+        /// `lonca.repo` git config, else --repo is required).
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Bring trunk into a git checkout as `refs/lonca/trunk`, through the
+    /// daemon; merge or reset to it as with any remote.
+    Fetch {
+        #[arg(long)]
+        repo: Option<String>,
+        /// The checkout (default: the current directory).
+        #[arg(long)]
+        into: Option<PathBuf>,
+        #[arg(long = "as")]
+        human: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -1272,6 +1298,69 @@ fn run(cmd: Cmd) -> Result<()> {
             print_decision(&r);
             Ok(())
         }
+        Cmd::Fetch {
+            repo,
+            into,
+            human,
+            json: as_json,
+        } => {
+            let dir = ctx::absolute(into.as_deref().unwrap_or(Path::new(".")))?;
+            let repo = checkout::repo_name(&dir, repo)?;
+            let human = human_name(human)?;
+            let mut c = human_client(&repo, &human)?;
+            let r = checkout::fetch(&mut c, &dir, &repo)?;
+            if as_json {
+                return ctx::print_json(&r);
+            }
+            println!(
+                "refs/lonca/trunk -> {} ({} bytes{}){}",
+                r["trunk"].as_str().unwrap_or("").get(..12).unwrap_or(""),
+                r["bytes"],
+                if r["thin"] == true { ", thin" } else { "" },
+                match r["behind"].as_u64() {
+                    Some(0) => String::new(),
+                    Some(n) => format!("; the previous trunk ref was {n} behind"),
+                    None => String::new(),
+                }
+            );
+            Ok(())
+        }
+        Cmd::Propose {
+            intent,
+            commit: Some(rev),
+            repo,
+            human,
+            json: as_json,
+            ..
+        } => {
+            let dir = ctx::absolute(Path::new("."))?;
+            let repo = checkout::repo_name(&dir, repo)?;
+            let human = human_name(human)?;
+            let mut c = human_client(&repo, &human)?;
+            let r = checkout::propose(
+                &mut c,
+                &dir,
+                &repo,
+                &human,
+                &rev,
+                intent.as_deref().unwrap_or(""),
+            )?;
+            let status = match r["decision"]["outcome"].as_str() {
+                Some("allow") => "queued",
+                Some("escalate") => "pending",
+                _ => "denied",
+            };
+            if as_json {
+                ctx::print_json(&json!({
+                    "change": r["change"], "commit": r["commit"], "base": r["base"], "seq": r["seq"],
+                    "decision": r["decision"], "status": status,
+                }))?;
+            } else {
+                print_decision(&r);
+                println!("change {}", r["change"].as_str().unwrap_or(""));
+            }
+            ctx::denied(&r)
+        }
         Cmd::Propose {
             intent,
             accept_facts,
@@ -1280,8 +1369,11 @@ fn run(cmd: Cmd) -> Result<()> {
             deletes,
             deleted_files,
             signature_changes,
+            commit: None,
             json: as_json,
+            ..
         } => {
+            let intent = intent.context("pass --intent (-i): what the change does and why")?;
             let mut ws = Workspace::current()?;
             let changes = ws.changes()?;
             if changes.is_empty() {

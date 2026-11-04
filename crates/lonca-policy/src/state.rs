@@ -126,6 +126,9 @@ pub struct State {
     pub policy: Option<GitId>,
     pub trunk: Option<GitId>,
     pub trunk_history: BTreeSet<GitId>,
+    /// Every trunk commit in order, genesis first: how far a base is
+    /// behind is its distance from the end.
+    pub trunk_line: Vec<GitId>,
     pub sessions: BTreeMap<String, Session>,
     pub leases: BTreeMap<String, LeaseSet>,
     pub changes: BTreeMap<ChangeId, ChangeRecord>,
@@ -455,6 +458,7 @@ impl State {
                 self.policy = Some(policy.clone());
                 self.trunk = Some(trunk.clone());
                 self.trunk_history.insert(trunk.clone());
+                self.trunk_line.push(trunk.clone());
             }
             Op::HumanEnroll { human, key } => {
                 self.humans.insert(human.clone(), key.clone());
@@ -636,6 +640,7 @@ impl State {
                 let Some(merged) = merged else { return };
                 self.trunk = Some(merged.clone());
                 self.trunk_history.insert(merged.clone());
+                self.trunk_line.push(merged.clone());
                 if let Some(c) = self.changes.get_mut(change) {
                     c.status = ChangeStatus::Integrated {
                         commit: merged.clone(),
@@ -725,6 +730,7 @@ impl State {
             Op::ImportExternal { commit, .. } => {
                 self.trunk = Some(commit.clone());
                 self.trunk_history.insert(commit.clone());
+                self.trunk_line.push(commit.clone());
             }
             Op::ImportUnmediated { .. } => {}
             Op::BridgePush {
@@ -788,5 +794,16 @@ fn describe(k: &ObsKind) -> String {
         ObsKind::Mcp { tool } => format!("mcp {tool}"),
         ObsKind::Other { tool } => format!("tool {tool}"),
         ObsKind::Heartbeat => "heartbeat".into(),
+    }
+}
+
+impl State {
+    /// How many integrations trunk has had since `base` was trunk; `None`
+    /// when `base` was never trunk.
+    pub fn behind(&self, base: &GitId) -> Option<usize> {
+        self.trunk_line
+            .iter()
+            .rposition(|t| t == base)
+            .map(|i| self.trunk_line.len() - 1 - i)
     }
 }

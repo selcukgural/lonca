@@ -483,3 +483,26 @@ fn write_file(root: &Path, f: &TreeFile) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::encoded_len;
+
+    /// Base64 of n bytes is ceil(n / 3) * 4; the page budget depends on
+    /// it, so an under-estimate would ask the daemon for pages it refuses.
+    #[test]
+    fn encoded_length_is_base64_size() {
+        for (bytes, encoded) in [
+            (0, 0),
+            (1, 4),
+            (2, 4),
+            (3, 4),
+            (4, 8),
+            (6, 8),
+            (900, 1200),
+            (1500, 2000),
+        ] {
+            assert_eq!(encoded_len(bytes), encoded, "{bytes} bytes");
+        }
+    }
+}

@@ -284,11 +284,13 @@ fn a_gate_can_serve_a_plain_request_itself() {
     }
     let ask = |port: u16, extra: &str| {
         let mut s = TcpStream::connect(("127.0.0.1", proxy)).unwrap();
-        write!(
-            s,
+        // One write: `early` is what arrived with the head, so the head and
+        // what follows it must leave in the same segment, not one
+        // `write_fmt` piece at a time.
+        let request = format!(
             "GET http://127.0.0.1:{port}/a?b HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n{extra}"
-        )
-        .unwrap();
+        );
+        s.write_all(request.as_bytes()).unwrap();
         s.shutdown(std::net::Shutdown::Write).unwrap();
         let mut all = String::new();
         let _ = BufReader::new(s).read_to_string(&mut all);

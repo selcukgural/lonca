@@ -28,4 +28,14 @@ exclude_re = [
   # the worker also wakes every 2 s and drains the same queue, so no test
   # can tell the two apart without timing.
   'delete match arm Op::ChangePropose\{\.\.\} in Service::human_submit',
+  # Pruning old login nonces (`now - LOGIN_NONCE_WINDOW_MS`) only frees
+  # memory: a nonce older than the window belongs to a signature that is
+  # stale anyway and is refused before the nonce is looked at, so keeping
+  # every nonce (what `now / WINDOW` amounts to) is not observable.
+  'replace - with / in Service::login',
+  # The CLI renews a kept session when it expires within 30 s of now
+  # (`expires_ms > now + 30_000`). Whether the one millisecond of equality
+  # renews or reuses is not observable: the clock has moved on by the time
+  # the daemon answers.
+  'replace > with >= in human_client',
 ]

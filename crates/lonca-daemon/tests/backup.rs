@@ -18,6 +18,11 @@ struct Other {
     svc: Arc<Service>,
     home: PathBuf,
     next_id: u64,
+    human: KeyPair,
+    clock: Arc<AtomicI64>,
+    /// The human session of `ayse`, opened once a restored repository
+    /// knows her key; before that the daemon is in bootstrap.
+    token: Option<String>,
 }
 
 impl Other {
@@ -38,13 +43,17 @@ impl Other {
             svc,
             home,
             next_id: 1000,
+            human: e.human.clone(),
+            clock: e.clock.clone(),
+            token: None,
         }
     }
 
-    fn call(
+    fn raw(
         &mut self,
         method: &str,
         repo: Option<&str>,
+        token: Option<&str>,
         params: Value,
     ) -> Result<Value, (String, String)> {
         self.next_id += 1;
@@ -52,7 +61,7 @@ impl Other {
             id: self.next_id,
             method: method.into(),
             repo: repo.map(String::from),
-            token: None,
+            token: token.map(String::from),
             params,
         });
         if r.ok {
@@ -60,6 +69,31 @@ impl Other {
         } else {
             Err(r.error.map(|e| (e.code, e.message)).unwrap())
         }
+    }
+
+    /// Like `Env::call`: the human session when there is one to open.
+    fn call(
+        &mut self,
+        method: &str,
+        repo: Option<&str>,
+        params: Value,
+    ) -> Result<Value, (String, String)> {
+        if self.token.is_none() {
+            let ttl = 24 * 3_600_000;
+            let now = self.clock.load(Ordering::SeqCst);
+            let sig = sign_login_ed25519(&self.human, "ayse", None, ttl, now);
+            self.token = self
+                .raw(
+                    "human.login",
+                    None,
+                    None,
+                    json!({"sig": sig, "ttl_ms": ttl}),
+                )
+                .ok()
+                .map(|r| r["token"].as_str().unwrap().to_string());
+        }
+        let t = self.token.clone();
+        self.raw(method, repo, t.as_deref(), params)
     }
 
     fn ok(&mut self, method: &str, repo: Option<&str>, params: Value) -> Value {
@@ -155,7 +189,7 @@ fn a_backup_is_a_bundle_of_every_ref_at_one_point_of_the_log() {
     let err = e
         .call("repo.backup", Some("nope"), None, json!({}))
         .unwrap_err();
-    assert_eq!(err.0, "not_found");
+    assert_eq!(err.0, "forbidden");
 
     // Somewhere else than the home (hardened mode).
     let elsewhere = e.root.join("elsewhere");
@@ -170,7 +204,7 @@ fn a_backup_is_a_bundle_of_every_ref_at_one_point_of_the_log() {
         id: 1,
         method: "repo.backup".into(),
         repo: Some("demo".into()),
-        token: None,
+        token: e.human_token.clone(),
         params: json!({}),
     });
     assert!(r.ok, "{:?}", r.error);
@@ -219,9 +253,8 @@ fn a_restore_on_the_same_key_continues_the_repository_and_audits() {
         after["sessions"].as_array().unwrap().len(),
         before["sessions"].as_array().unwrap().len()
     );
-    let err = o.call("whoami", None, json!({})).unwrap_err();
+    let err = o.raw("whoami", None, Some(&t1), json!({})).unwrap_err();
     assert_eq!(err.0, "unauthenticated");
-    let _ = t1;
     // The daemon goes on writing with its key.
     let op = Op::Freeze { reason: "x".into() };
     let r = o.ok("human.submit", Some("demo"), e.sign(&op)).clone();

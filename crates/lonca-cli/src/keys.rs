@@ -17,7 +17,7 @@ use lonca_daemon::Client;
 use serde_json::json;
 
 use crate::ctx::{self, call};
-use crate::{human_client, print_decision, submit};
+use crate::{human_client, human_client_any, print_decision, submit};
 
 /// The human to act as, checked before it is used in file names.
 pub fn name(h: Option<String>) -> Result<String> {
@@ -125,7 +125,7 @@ pub fn rotate(name: &str, repos: &[String], secure_enclave: bool) -> Result<()> 
     let next = next_key(name, secure_enclave)?;
     let mut failed = vec![];
     for repo in repos {
-        let mut c = human_client(repo)?;
+        let mut c = human_client(repo, name)?;
         if enrolled(&mut c, name)?.0.as_deref() == Some(next.key.public.as_str()) {
             println!("{repo}: already uses the new key");
             continue;
@@ -158,7 +158,7 @@ pub fn recovery_key(name: &str, repos: &[String], out: &Path) -> Result<()> {
     };
     let mut failed = vec![];
     for repo in repos {
-        let mut c = human_client(repo)?;
+        let mut c = human_client(repo, name)?;
         if enrolled(&mut c, name)?.1.as_deref() == Some(key.public.as_str()) {
             println!("{repo}: already set");
             continue;
@@ -192,8 +192,19 @@ pub fn recover(
     let next = next_key(name, secure_enclave)?;
     let mut failed = vec![];
     for repo in repos {
-        let mut c = human_client(repo)?;
-        if enrolled(&mut c, name)?.0.as_deref() == Some(next.key.public.as_str()) {
+        // The key that would open a session is the one that was lost;
+        // without one, `human.recover` goes in on its signature alone.
+        let mut c = match human_client(repo, name) {
+            Ok(c) => c,
+            Err(_) => {
+                let mut c = ctx::connect()?;
+                c.repo = Some(repo.clone());
+                c
+            }
+        };
+        if c.token.is_some()
+            && enrolled(&mut c, name)?.0.as_deref() == Some(next.key.public.as_str())
+        {
             println!("{repo}: already recovered");
             continue;
         }
@@ -238,7 +249,7 @@ fn strings(v: &serde_json::Value) -> Vec<String> {
 /// next to the current one and replaces the current one once no repository
 /// uses it; until then each repository signs with its own.
 pub fn daemon_rotate(name: &str, repos: &[String]) -> Result<()> {
-    let mut c = ctx::connect()?;
+    let mut c = human_client_any(name)?;
     let prep = call(&mut c, "daemon.prepare_rotate", json!({}))?;
     let key = prep["key"].as_str().unwrap_or_default().to_string();
     let repos = if repos.is_empty() {
@@ -248,7 +259,7 @@ pub fn daemon_rotate(name: &str, repos: &[String]) -> Result<()> {
     };
     let mut failed = vec![];
     for repo in &repos {
-        let mut c = human_client(repo)?;
+        let mut c = human_client(repo, name)?;
         let st = call(&mut c, "status", json!({}))?;
         if st["daemon_key"].as_str() == Some(key.as_str()) {
             println!("{repo}: already uses the new daemon key");
@@ -266,7 +277,7 @@ pub fn daemon_rotate(name: &str, repos: &[String]) -> Result<()> {
     let mut left = vec![];
     if !ping["next_key"].is_null() {
         for repo in strings(&call(&mut c, "repo.list", json!({}))?) {
-            let st = call(&mut human_client(&repo)?, "status", json!({}))?;
+            let st = call(&mut human_client(&repo, name)?, "status", json!({}))?;
             if st["daemon_key"] == ping["daemon_key"] {
                 left.push(repo);
             }
@@ -296,7 +307,7 @@ pub fn daemon_recover(name: &str, repos: &[String]) -> Result<()> {
         .to_string();
     let mut failed = vec![];
     for repo in repos {
-        let mut c = human_client(repo)?;
+        let mut c = human_client(repo, name)?;
         print!("{repo}: ");
         let op = Op::DaemonRecover { key: key.clone() };
         match submit(&mut c, name, repo, op) {

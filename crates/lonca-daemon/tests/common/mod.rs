@@ -1,5 +1,10 @@
 //! Shared harness: a daemon driven through its request handler with a
 //! controllable clock and a file-key human.
+//!
+//! A call made with `token: None` goes out with the human's session
+//! (opened by `human.login` when the first request needs it, and again
+//! when the daemon refuses it: expiry, a reopened home, a rotated key).
+//! `anon` sends a request with no token at all.
 #![allow(dead_code, unused_imports)]
 
 pub use std::path::{Path, PathBuf};
@@ -14,7 +19,7 @@ pub use lonca_core::ops::{Claim, HumanKey, LeaseItem, LeaseKind, Op, OpKind, Out
 pub use lonca_core::{ChangeId, GitId, Store};
 pub use lonca_daemon::protocol::{FileChange, Request};
 pub use lonca_daemon::{Home, Service, Settings};
-pub use lonca_policy::human::sign_ed25519;
+pub use lonca_policy::human::{sign_ed25519, sign_login_ed25519};
 pub use serde_json::{Value, json};
 
 pub const T0: i64 = 1_760_000_000_000;
@@ -27,6 +32,8 @@ pub struct Env {
     pub human: KeyPair,
     pub settings: Settings,
     pub next_id: u64,
+    /// The human session used for calls made without a token.
+    pub human_token: Option<String>,
 }
 
 pub fn b64(s: &str) -> String {
@@ -77,6 +84,7 @@ impl Env {
             human: KeyPair::generate(),
             settings,
             next_id: 1,
+            human_token: None,
         }
     }
 
@@ -102,7 +110,8 @@ impl Env {
         self.clock.fetch_add(ms, Ordering::SeqCst);
     }
 
-    pub fn call(
+    /// One request with exactly this token (or none).
+    pub fn anon(
         &mut self,
         method: &str,
         repo: Option<&str>,
@@ -122,6 +131,56 @@ impl Env {
         } else {
             Err(r.error.map(|e| (e.code, e.message)).unwrap())
         }
+    }
+
+    /// A request; without a token, the human session stands in.
+    pub fn call(
+        &mut self,
+        method: &str,
+        repo: Option<&str>,
+        token: Option<&str>,
+        params: Value,
+    ) -> Result<Value, (String, String)> {
+        if token.is_some() {
+            return self.anon(method, repo, token, params);
+        }
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            let t = match &self.human_token {
+                Some(t) => Some(t.clone()),
+                None => self.login().ok(),
+            };
+            let r = self.anon(method, repo, t.as_deref(), params.clone());
+            // Expired, or the key it was opened with was rotated away:
+            // open a new session with the current key and try once more.
+            match &r {
+                Err((code, _))
+                    if (code == "unauthenticated" || code == "forbidden")
+                        && t.is_some()
+                        && attempts < 2 =>
+                {
+                    self.human_token = None;
+                }
+                _ => return r,
+            }
+        }
+    }
+
+    /// Opens a human session for `ayse` with the harness key, valid for
+    /// a day, the daemon's maximum.
+    pub fn login(&mut self) -> Result<String, (String, String)> {
+        let ttl = 24 * 3_600_000;
+        let sig = sign_login_ed25519(&self.human, "ayse", None, ttl, self.now());
+        let r = self.anon(
+            "human.login",
+            None,
+            None,
+            json!({"sig": sig, "ttl_ms": ttl}),
+        )?;
+        let t = r["token"].as_str().expect("token").to_string();
+        self.human_token = Some(t.clone());
+        Ok(t)
     }
 
     pub fn ok(

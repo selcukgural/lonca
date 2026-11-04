@@ -39,9 +39,15 @@ fn twenty_agents_one_file_no_lost_updates() {
     );
     let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
     assert_eq!(e.human(op)["decision"]["outcome"], "allow");
-    e.human_change(vec![file("src/lib.rs", &source())], "twenty functions");
-    e.svc.process_all();
+    let r = e.human_change(vec![file("src/lib.rs", &source())], "twenty functions");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(
+        e.svc.process_all(),
+        1,
+        "the seed must integrate (verification ran)"
+    );
     let base = e.trunk();
+    assert!(e.store().read_file(&base, "src/lib.rs").unwrap().is_some());
 
     let tokens: Vec<String> = (0..AGENTS)
         .map(|i| {

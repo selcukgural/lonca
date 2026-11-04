@@ -31,9 +31,24 @@ pub fn random_id(prefix: &str) -> String {
     format!("{prefix}_{}", hex::encode(random_bytes::<8>()))
 }
 
+/// A fresh nonce for a human signature: 16 random bytes as hex. No
+/// prefix, so nothing about it is fixed.
+pub fn nonce() -> String {
+    hex::encode(random_bytes::<16>())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonces_are_fresh_and_sized_for_signatures() {
+        let a = nonce();
+        let b = nonce();
+        assert_eq!(a.len(), 32);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b);
+    }
     use std::collections::BTreeMap;
 
     #[test]

@@ -1,7 +1,7 @@
 //! Scenario tests for the decision function. Every scenario ends by
 //! replaying its log and checking that each recorded decision is reproduced.
 
-use lonca_core::canonical::random_id;
+use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{SignedOp, verify_chain};
 use lonca_core::ops::*;
@@ -65,7 +65,7 @@ impl H {
     }
 
     fn sign_with(&self, key: &KeyPair, name: &str, op: &Op) -> HumanSignature {
-        let nonce = random_id("nonce");
+        let nonce = nonce();
         let issued_ms = self.now + 1;
         HumanSignature {
             human: name.into(),
@@ -885,7 +885,7 @@ fn human_signatures_can_not_be_replayed_or_forged() {
         },
     );
     forged.human = Some(HumanSignature {
-        nonce: random_id("nonce"),
+        nonce: nonce(),
         ..sig.clone()
     });
     assert!(denied_with(&h.submit(forged), "bad_human_signature"));
@@ -899,7 +899,7 @@ fn human_signatures_can_not_be_replayed_or_forged() {
         op,
     );
     stale.human = Some(HumanSignature {
-        nonce: random_id("nonce"),
+        nonce: nonce(),
         ..sig
     });
     assert!(denied_with(&h.submit(stale), "stale_human_signature"));
@@ -1230,7 +1230,7 @@ fn presence_can_be_required_for_human_signatures() {
         .unwrap(),
     );
     let op = Op::Freeze { reason: "y".into() };
-    let nonce = random_id("nonce");
+    let nonce = nonce();
     let issued = h.now + 1;
     let sig: p256::ecdsa::Signature = sk.sign(&intent_bytes(REPO, &op, &nonce, issued));
     let mut sub = Submission::new(Actor::Human { name: "cem".into() }, op);
@@ -1745,7 +1745,7 @@ fn presence_does_not_block_recovery() {
     assert!(d.is_allow(), "{d:?}");
 
     let op = Op::Freeze { reason: "y".into() };
-    let nonce = random_id("nonce");
+    let nonce = nonce();
     let issued = h.now + 1;
     let sig: p256::ecdsa::Signature = sk.sign(&intent_bytes(REPO, &op, &nonce, issued));
     let mut sub = Submission::new(

@@ -370,7 +370,9 @@ pub fn login(c: &mut Client, human: &str, ttl_ms: i64) -> Result<Session> {
             .as_str()
             .context("human.login returned no token")?
             .to_string(),
-        expires_ms: r["expires_ms"].as_i64().unwrap_or(now_ms() + ttl_ms),
+        expires_ms: r["expires_ms"]
+            .as_i64()
+            .context("human.login returned no expires_ms")?,
     };
     write_session(human, &s)?;
     c.token = Some(s.token.clone());

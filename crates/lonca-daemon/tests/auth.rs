@@ -285,11 +285,32 @@ fn a_human_session_opens_with_a_presence_signature_and_follows_the_key() {
         !tokens.contains(&t) && tokens.contains(&sha256_hex(t.as_bytes())),
         "{tokens}"
     );
-    // Replaying the same signature does not open a second session.
+    // Replaying the same signature does not open a second session, now
+    // or at any point while the signature is still fresh.
     assert_eq!(
-        code(e.anon("human.login", Some("demo"), None, json!({"sig": sig}))),
+        code(e.anon(
+            "human.login",
+            Some("demo"),
+            None,
+            json!({"sig": sig.clone()})
+        )),
         "unauthenticated"
     );
+    e.advance(9 * 60_000 + 30_000);
+    let r = e
+        .anon(
+            "human.login",
+            Some("demo"),
+            None,
+            json!({"sig": sig.clone()}),
+        )
+        .unwrap_err();
+    assert_eq!(r.1, "login signature already used", "{r:?}");
+    e.advance(60_000 + 1);
+    let r = e
+        .anon("human.login", Some("demo"), None, json!({"sig": sig}))
+        .unwrap_err();
+    assert_eq!(r.1, "stale_human_signature", "{r:?}");
     let who = e.ok("whoami", None, Some(&t), json!({}));
     assert_eq!(who["actor"], "human:ayse");
     assert_eq!(who["repos"], json!(["demo"]));

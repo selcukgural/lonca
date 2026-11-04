@@ -64,6 +64,10 @@ type Hr = std::result::Result<Value, (String, String)>;
 pub const HUMAN_SESSION_DEFAULT_MS: i64 = 60 * 60 * 1000;
 /// The longest human session a login may ask for.
 pub const HUMAN_SESSION_MAX_MS: i64 = 24 * 60 * 60 * 1000;
+/// How long a login nonce is remembered: as long as a signature can be
+/// fresh (its age plus the clock skew allowed), so a replay inside that
+/// window is refused and nothing older needs remembering.
+pub const LOGIN_NONCE_WINDOW_MS: i64 = MAX_AGE_MS + MAX_SKEW_MS;
 
 /// What a request must carry before its method runs. Deny by default: a
 /// method not in [`METHODS`] does not exist.
@@ -641,7 +645,7 @@ impl Service {
         let inner = &mut *guard;
         inner
             .login_nonces
-            .retain(|_, issued| *issued >= now - MAX_AGE_MS - MAX_SKEW_MS);
+            .retain(|_, issued| *issued >= now - LOGIN_NONCE_WINDOW_MS);
         if inner.login_nonces.contains_key(&p.sig.nonce) {
             return fail("unauthenticated", "login signature already used");
         }
@@ -2072,6 +2076,16 @@ mod tests {
         }
         assert_eq!(call("admin.everything", None), "unknown_method");
         assert_eq!(call("", None), "unknown_method");
+    }
+
+    /// The session constants are what the document says; a wrong operator
+    /// in one would change every session's length.
+    #[test]
+    fn session_constants_are_what_the_document_says() {
+        assert_eq!(HUMAN_SESSION_DEFAULT_MS, 3_600_000);
+        assert_eq!(HUMAN_SESSION_MAX_MS, 86_400_000);
+        assert_eq!(LOGIN_NONCE_WINDOW_MS, 660_000);
+        assert_eq!(LOGIN_NONCE_WINDOW_MS, MAX_AGE_MS + MAX_SKEW_MS);
     }
 
     #[test]

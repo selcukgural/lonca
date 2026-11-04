@@ -192,6 +192,35 @@ mod tests {
         );
     }
 
+    /// Freshness at its edges: exactly MAX_AGE old is fresh, one more
+    /// millisecond is stale; exactly MAX_SKEW ahead is fresh, one more is
+    /// stale; the nonce bounds are inclusive.
+    #[test]
+    fn freshness_boundaries() {
+        let now = 1_760_000_000_000;
+        let sig = |issued_ms: i64, nonce_len: usize| HumanSignature {
+            human: "ayse".into(),
+            nonce: "n".repeat(nonce_len),
+            issued_ms,
+            sig: String::new(),
+        };
+        assert_eq!(check_fresh(&sig(now - MAX_AGE_MS, 16), now), Ok(()));
+        assert_eq!(
+            check_fresh(&sig(now - MAX_AGE_MS - 1, 16), now),
+            Err("stale_human_signature")
+        );
+        assert_eq!(check_fresh(&sig(now + MAX_SKEW_MS, 16), now), Ok(()));
+        assert_eq!(
+            check_fresh(&sig(now + MAX_SKEW_MS + 1, 16), now),
+            Err("stale_human_signature")
+        );
+        assert_eq!(check_fresh(&sig(now, NONCE_MIN), now), Ok(()));
+        assert_eq!(check_fresh(&sig(now, NONCE_MIN - 1), now), Err("bad_nonce"));
+        assert_eq!(check_fresh(&sig(now, NONCE_MAX), now), Ok(()));
+        assert_eq!(check_fresh(&sig(now, NONCE_MAX + 1), now), Err("bad_nonce"));
+        assert_eq!((MAX_AGE_MS, MAX_SKEW_MS), (600_000, 60_000));
+    }
+
     #[test]
     fn p256_software_key_round_trip() {
         use ::p256::ecdsa::signature::Signer;

@@ -746,3 +746,85 @@ fn backup_and_restore_through_the_cli() {
     assert_eq!(rep.key_switches.len(), 1);
     assert_eq!(rep.key_switches[0].kind, "daemon.recover");
 }
+
+/// The kept human session: reused while it is good, renewed when it is
+/// about to expire, never used for another name, ended by logout, and
+/// the daemon holds one token hash per live session.
+#[test]
+fn the_human_session_file_is_reused_renewed_and_ended() {
+    let e = Env::new();
+    let r = &e.root;
+    let human_tokens = || -> usize {
+        let text = std::fs::read_to_string(r.join("home/tokens.json")).unwrap_or_default();
+        let map: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&text).unwrap_or_default();
+        map.values().filter(|v| v["human"].is_string()).count()
+    };
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    let session = r.join("humans/ayse.session");
+    assert!(!session.exists(), "init bootstraps without a session");
+    // Two reads, one session: the file is written once and reused.
+    e.run(r, &["status", "--repo", "demo"]);
+    assert!(session.exists());
+    let first = std::fs::read_to_string(&session).unwrap();
+    e.run(r, &["status", "--repo", "demo"]);
+    assert_eq!(std::fs::read_to_string(&session).unwrap(), first);
+    assert_eq!(human_tokens(), 1);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&session).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    // A session about to expire (under the 30 s margin) is renewed.
+    e.run(r, &["human", "login", "--ttl", "20s"]);
+    assert_eq!(human_tokens(), 2);
+    let short = std::fs::read_to_string(&session).unwrap();
+    e.run(r, &["status", "--repo", "demo"]);
+    assert_ne!(std::fs::read_to_string(&session).unwrap(), short);
+    assert_eq!(human_tokens(), 3);
+    // An expired file is replaced, not sent.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&session).unwrap()).unwrap();
+    v["expires_ms"] = serde_json::json!(1);
+    std::fs::write(&session, v.to_string()).unwrap();
+    e.run(r, &["status", "--repo", "demo"]);
+    let renewed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&session).unwrap()).unwrap();
+    assert!(renewed["expires_ms"].as_i64().unwrap() > 1);
+    assert_eq!(human_tokens(), 4);
+    // Another name never rides on this session: bora has no key.
+    std::fs::copy(&session, r.join("humans/bora.session")).unwrap();
+    let out = e
+        .cmd(r, &["status", "--repo", "demo", "--as", "bora"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", text(&out.stdout));
+    assert!(
+        text(&out.stderr).contains("no key for bora"),
+        "{}",
+        text(&out.stderr)
+    );
+    // A file whose token the daemon no longer knows is replaced.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&session).unwrap()).unwrap();
+    v["token"] = serde_json::json!("lonca_h_0000");
+    std::fs::write(&session, v.to_string()).unwrap();
+    e.run(r, &["status", "--repo", "demo"]);
+    assert_eq!(human_tokens(), 5);
+    // Logout ends the session at the daemon and forgets the file; twice is fine.
+    e.run(r, &["human", "logout"]);
+    assert!(!session.exists());
+    assert_eq!(human_tokens(), 4, "the live one was revoked");
+    e.run(r, &["human", "logout"]);
+    // A humans directory that is not a directory: logout reports it.
+    let out = e
+        .cmd(r, &["human", "logout"])
+        .env("LONCA_HUMANS", r.join("home/tokens.json"))
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{}", text(&out.stdout));
+}

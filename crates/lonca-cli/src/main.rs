@@ -422,6 +422,11 @@ enum SessionCmd {
         /// Directory for the agent's workspace.
         #[arg(long)]
         workspace: PathBuf,
+        /// A directory outside the workspace the agent may write to
+        /// (notes, logs). Writes there are not facts and can not be
+        /// proposed. Repeatable; recorded in the session's scope.
+        #[arg(long)]
+        scratch: Vec<PathBuf>,
         #[arg(long = "as")]
         human: Option<String>,
         #[arg(long)]
@@ -652,6 +657,35 @@ fn session_or_bootstrap(human: Option<&str>) -> Result<Client> {
         },
         None => connect(),
     }
+}
+
+/// Scratch roots as the daemon records them: absolute, normalized, and
+/// neither inside the workspace nor containing it. Created if missing.
+fn scratch_roots(workspace: &Path, dirs: &[PathBuf]) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for d in dirs {
+        let abs = ctx::absolute(d)?;
+        std::fs::create_dir_all(&abs)
+            .with_context(|| format!("cannot create scratch directory {}", abs.display()))?;
+        let abs = abs
+            .canonicalize()
+            .with_context(|| format!("scratch directory {}", abs.display()))?;
+        if abs.starts_with(workspace) || workspace.starts_with(&abs) {
+            bail!(
+                "scratch directory {} overlaps the workspace {}",
+                abs.display(),
+                workspace.display()
+            );
+        }
+        let s = abs.to_string_lossy().into_owned();
+        if !lonca_policy::decide::valid_scratch_root(&s) {
+            bail!("scratch directory {s} is not a plain absolute path");
+        }
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    Ok(out)
 }
 
 /// The human a workspace was created for, else the default identity.
@@ -939,10 +973,13 @@ fn run(cmd: Cmd) -> Result<()> {
             max_files,
             max_lines,
             workspace,
+            scratch,
             human,
             json: as_json,
         }) => {
             let human = human_name(human)?;
+            let dir = ctx::absolute(&workspace)?;
+            let scratch = scratch_roots(&dir, &scratch)?;
             let mut c = human_client(&repo, &human)?;
             let session = lonca_core::canonical::random_id("ses");
             let expires_ms = ctx::now_ms() + ctx::duration_ms(&ttl)?;
@@ -965,6 +1002,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     ],
                     max_files,
                     max_lines,
+                    scratch: scratch.clone(),
                 },
                 expires_ms,
             };
@@ -980,16 +1018,20 @@ fn run(cmd: Cmd) -> Result<()> {
             };
             let mut ac = connect()?;
             ac.token = Some(token.to_string());
-            let dir = ctx::absolute(&workspace)?;
-            let ws = Workspace::create(&mut ac, &dir, &repo, Some(session.clone()), None)?;
+            let mut ws = Workspace::create(&mut ac, &dir, &repo, Some(session.clone()), None)?;
+            ws.meta.scratch_roots = scratch.clone();
+            ws.save()?;
             ws.write_token(token)?;
             if as_json {
                 return ctx::print_json(&json!({
                     "session": session, "workspace": ws.root, "expires_ms": expires_ms,
-                    "paths": paths, "seq": r["seq"], "decision": r["decision"],
+                    "paths": paths, "scratch": scratch, "seq": r["seq"], "decision": r["decision"],
                 }));
             }
             println!("session {session}; workspace {}", ws.root.display());
+            for s in &scratch {
+                println!("scratch {s}");
+            }
             Ok(())
         }
         Cmd::Session(SessionCmd::Revoke {

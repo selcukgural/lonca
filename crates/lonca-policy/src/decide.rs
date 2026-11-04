@@ -206,6 +206,23 @@ pub fn level_for(c: &BindChecks) -> ObservationLevel {
     }
 }
 
+/// How many scratch roots a scope may name.
+pub const MAX_SCRATCH_ROOTS: usize = 8;
+
+/// A scratch root: an absolute, normalized directory path (no `..`, no
+/// `.`, no empty component, no trailing slash), at most 1024 bytes, no
+/// control characters.
+pub fn valid_scratch_root(p: &str) -> bool {
+    p.starts_with('/')
+        && p.len() > 1
+        && p.len() <= 1024
+        && !p.ends_with('/')
+        && !p.chars().any(char::is_control)
+        && p[1..]
+            .split('/')
+            .all(|c| !c.is_empty() && c != "." && c != "..")
+}
+
 fn validate_scope(scope: &Scope, v: &mut Verdict) {
     if scope.paths.is_empty() {
         v.deny("scope_invalid:no_paths");
@@ -223,6 +240,14 @@ fn validate_scope(scope: &Scope, v: &mut Verdict) {
     if scope.ops.is_empty() {
         v.deny("scope_invalid:no_ops");
     }
+    if scope.scratch.len() > MAX_SCRATCH_ROOTS {
+        v.deny("scope_invalid:scratch:too_many");
+    }
+    for s in &scope.scratch {
+        if !valid_scratch_root(s) {
+            v.deny(format!("scope_invalid:scratch:{s}"));
+        }
+    }
     for k in &scope.ops {
         if !k.agent_grantable() {
             v.deny(format!("scope_invalid:not_grantable:{}", k.as_str()));
@@ -235,6 +260,15 @@ pub fn scope_within(inner: &Scope, outer: &Scope) -> Result<(), String> {
     for p in &inner.paths {
         if !outer.paths.iter().any(|o| path_pattern_within(p, o)) {
             return Err(format!("path:{p}"));
+        }
+    }
+    for s in &inner.scratch {
+        if !outer
+            .scratch
+            .iter()
+            .any(|o| s == o || s.starts_with(&format!("{o}/")))
+        {
+            return Err(format!("scratch:{s}"));
         }
     }
     match (&inner.symbols, &outer.symbols) {

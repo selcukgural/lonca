@@ -220,6 +220,7 @@ fn auditor_flag_freezes_the_repository() {
                 ops: vec![OpKind::LeaseAcquire],
                 max_files: None,
                 max_lines: None,
+                scratch: vec![],
             },
             expires_ms: e.now() + 60_000,
         };

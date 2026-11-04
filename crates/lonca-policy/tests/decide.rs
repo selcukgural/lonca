@@ -187,6 +187,7 @@ impl H {
                 ],
                 max_files: None,
                 max_lines: None,
+                scratch: vec![],
             },
             expires_ms: self.now + 120 * MIN,
         };
@@ -757,6 +758,7 @@ fn attenuation_only_narrows_and_revocation_cascades() {
         ops: vec![OpKind::LeaseAcquire, OpKind::ChangePropose],
         max_files: Some(5),
         max_lines: None,
+        scratch: vec![],
     };
     let attenuate = |child: &str, scope: Scope, exp: i64| Op::CapAttenuate {
         parent: "s1".into(),
@@ -1419,6 +1421,7 @@ fn revocation_by_another_human_cascades_and_is_final() {
         ops: vec![OpKind::LeaseAcquire],
         max_files: None,
         max_lines: None,
+        scratch: vec![],
     };
     let child = Op::CapAttenuate {
         parent: "s2".into(),
@@ -1656,6 +1659,7 @@ fn key_operations_work_in_a_frozen_repository() {
             ops: vec![OpKind::LeaseAcquire],
             max_files: None,
             max_lines: None,
+            scratch: vec![],
         },
         expires_ms: h.now + 60 * MIN,
     };

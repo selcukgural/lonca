@@ -26,8 +26,9 @@ const OP_FILE: &str = "op.json";
 pub const FORMAT_LEGACY: u32 = 0;
 /// The format this build writes. Version 1 is version 0 with the field
 /// written out; version 2 adds `symbols_engine`; version 3 adds the human
-/// key operations; version 4 adds the daemon key operations.
-pub const FORMAT_CURRENT: u32 = 4;
+/// key operations; version 4 adds the daemon key operations; version 5
+/// adds `scope.scratch` on `session.start` and `cap.attenuate`.
+pub const FORMAT_CURRENT: u32 = 5;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -36,6 +37,8 @@ pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
 pub const FORMAT_HUMAN_KEYS: u32 = 3;
 /// The first format with `daemon.rotate` and `daemon.recover`.
 pub const FORMAT_DAEMON_KEYS: u32 = 4;
+/// The first format whose session scopes may name scratch roots.
+pub const FORMAT_SCRATCH: u32 = 5;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -95,6 +98,11 @@ impl OpEntry {
             | Op::HumanRecoveryKey { .. }
             | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
             Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
+            Op::SessionStart { ref scope, .. } | Op::CapAttenuate { ref scope, .. }
+                if !scope.scratch.is_empty() =>
+            {
+                FORMAT_SCRATCH
+            }
             _ => FORMAT_LEGACY,
         }
     }

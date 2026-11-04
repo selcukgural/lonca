@@ -173,6 +173,12 @@ pub struct Scope {
     pub ops: Vec<OpKind>,
     pub max_files: Option<u32>,
     pub max_lines: Option<u32>,
+    /// Absolute directories outside the workspace the agent may write to
+    /// (notes, logs, throwaway files). Writes there are allowed and are
+    /// not facts; nothing there can be proposed. Left out of the encoding
+    /// when empty, so entries without one keep their bytes (format 5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scratch: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

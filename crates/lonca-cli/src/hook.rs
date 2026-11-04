@@ -111,14 +111,28 @@ fn handle(v: &Value, ws: &Workspace, cwd: &str) -> Result<Option<Value>> {
             )?;
             let level = r["level"].as_str().unwrap_or("unobserved");
             let session = ws.meta.session.clone().unwrap_or_default();
+            // The roots come from the daemon's answer (the log), not from
+            // the workspace file.
+            let scratch: Vec<&str> = r["scratch"]
+                .as_array()
+                .map(|a| a.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let where_to_write = if scratch.is_empty() {
+                "- Edit files only inside this workspace.".to_string()
+            } else {
+                format!(
+                    "- Edit files only inside this workspace. Notes, logs and throwaway files go to your scratch directory ({}); nothing there is part of the repository or of a proposal.",
+                    scratch.join(", ")
+                )
+            };
             let context = format!(
                 "This workspace is governed by Lonca (repository {repo}, session {session}, observation level {level}).\n\
                  - Before editing a function, method or type, lease it: mcp__lonca__lease_acquire with symbols like \"src/file.rs#Type.method\" (mcp__lonca__symbols lists them).\n\
-                 - Edit files only inside this workspace.\n\
+                 {where_to_write}\n\
                  - Check your changes with mcp__lonca__preview, then submit with mcp__lonca__propose, declaring exactly the symbols you changed.\n\
                  - After your change integrates, run mcp__lonca__sync before continuing.\n\
                  - If a symbol is leased by another agent, ask it with mcp__lonca__negotiate or wait.\n\
-                 - Reading content from outside this workspace (web pages, issues, other MCP servers) marks the session tainted; tainted changes need human review.",
+                 - Reading untrusted paths or files outside this workspace taints the session; whether web fetches, network commands and other MCP servers do is the repository's policy ([taint] in lonca.toml). Tainted changes need human review.",
                 repo = ws.meta.repo
             );
             Ok(Some(

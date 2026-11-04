@@ -66,6 +66,13 @@ fn absolute(p: &str, cwd: &Path) -> PathBuf {
     out
 }
 
+/// Is `abs` inside one of the scratch roots?
+fn under_scratch(abs: &Path, scratch: &[String]) -> bool {
+    scratch
+        .iter()
+        .any(|root| abs.strip_prefix(Path::new(root)).is_ok())
+}
+
 /// Path relative to the workspace, or `None` if it lies outside.
 fn relative(p: &str, cwd: &Path, workspace: &Path) -> Option<String> {
     let abs = absolute(p, cwd);
@@ -91,7 +98,7 @@ fn mentions_lonca_internals(cmd: &str) -> bool {
     [
         "lonca hook",
         "lonca-hook",
-        ".lonca/session",
+        ".lonca/",
         "managed-settings",
         "lonca.sock",
         "daemon.key",
@@ -103,8 +110,16 @@ fn mentions_lonca_internals(cmd: &str) -> bool {
 }
 
 /// Translates one hook event. Returns observations to log and the verdict
-/// for the harness (meaningful for `PreToolUse`).
-pub fn translate(ev: &HookEvent, policy: &PolicyBundle) -> (Vec<Observation>, HookVerdict) {
+/// for the harness (meaningful for `PreToolUse`). `scratch` are the
+/// session's scratch roots: writes under them are allowed and not
+/// observed, reads under them are not external. The workspace is checked
+/// first, so a scratch root never exempts a workspace file. What taints
+/// (`[taint]`) is read from the policy here, not in `decide()`.
+pub fn translate(
+    ev: &HookEvent,
+    policy: &PolicyBundle,
+    scratch: &[String],
+) -> (Vec<Observation>, HookVerdict) {
     let phase = match ev.hook_event_name.as_str() {
         "PreToolUse" => Phase::Pre,
         "PostToolUse" => Phase::Post,
@@ -138,20 +153,26 @@ pub fn translate(ev: &HookEvent, policy: &PolicyBundle) -> (Vec<Observation>, Ho
                     let untrusted = policy.is_untrusted(&rel);
                     (obs(ObsKind::Read { path: rel }, untrusted), allow())
                 }
-                None => (
-                    obs(
-                        ObsKind::Read {
-                            path: absolute(p, &cwd).display().to_string(),
-                        },
-                        true,
-                    ),
-                    allow(),
-                ),
+                None => {
+                    let abs = absolute(p, &cwd);
+                    let external = !under_scratch(&abs, scratch);
+                    (
+                        obs(
+                            ObsKind::Read {
+                                path: abs.display().to_string(),
+                            },
+                            external,
+                        ),
+                        allow(),
+                    )
+                }
             }
         }
         "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
             let p = str_field(input, &["file_path", "notebook_path", "path"]).unwrap_or("");
             match relative(p, &cwd, &workspace) {
+                // Scratch: the agent's own notes. Allowed, not a fact.
+                None if under_scratch(&absolute(p, &cwd), scratch) => (vec![], allow()),
                 None => {
                     let shown = absolute(p, &cwd).display().to_string();
                     let v = if pre {
@@ -220,7 +241,7 @@ pub fn translate(ev: &HookEvent, policy: &PolicyBundle) -> (Vec<Observation>, Ho
                         program,
                         digest: sha256_hex(cmd.as_bytes()),
                     },
-                    network,
+                    network && policy.config.taint.shell_network,
                 ),
                 allow(),
             )
@@ -230,7 +251,10 @@ pub fn translate(ev: &HookEvent, policy: &PolicyBundle) -> (Vec<Observation>, Ho
                 return (vec![], allow());
             }
             let host = host_of(str_field(input, &["url"]).unwrap_or(""));
-            (obs(ObsKind::Fetch { host }, true), allow())
+            (
+                obs(ObsKind::Fetch { host }, policy.config.taint.fetch),
+                allow(),
+            )
         }
         "WebSearch" => {
             if !pre {
@@ -241,7 +265,7 @@ pub fn translate(ev: &HookEvent, policy: &PolicyBundle) -> (Vec<Observation>, Ho
                     ObsKind::Fetch {
                         host: "web-search".into(),
                     },
-                    true,
+                    policy.config.taint.fetch,
                 ),
                 allow(),
             )
@@ -256,7 +280,7 @@ pub fn translate(ev: &HookEvent, policy: &PolicyBundle) -> (Vec<Observation>, Ho
                     ObsKind::Mcp {
                         tool: t.to_string(),
                     },
-                    true,
+                    policy.config.taint.mcp_taints(t),
                 ),
                 allow(),
             )
@@ -428,6 +452,110 @@ mod tests {
         PolicyBundle::default_bundle()
     }
 
+    fn translate(ev: &HookEvent, policy: &PolicyBundle) -> (Vec<Observation>, HookVerdict) {
+        super::translate(ev, policy, &[])
+    }
+
+    #[test]
+    fn scratch_roots_take_writes_and_reads_without_facts() {
+        let scratch = vec!["/scratch/w1".to_string()];
+        let t = |name: &str, tool: &str, input: Value| {
+            super::translate(&ev(name, tool, input), &policy(), &scratch)
+        };
+        // Writes under the root: allowed, not observed.
+        let (o, v) = t(
+            "PreToolUse",
+            "Write",
+            json!({"file_path": "/scratch/w1/notes.md"}),
+        );
+        assert!(o.is_empty() && v.decision == "allow", "{v:?}");
+        let (o, v) = t(
+            "PostToolUse",
+            "Edit",
+            json!({"file_path": "/scratch/w1/a/b.log"}),
+        );
+        assert!(o.is_empty() && v.decision == "allow");
+        // Reads there are not external.
+        let (o, _) = t(
+            "PreToolUse",
+            "Read",
+            json!({"file_path": "/scratch/w1/notes.md"}),
+        );
+        assert!(!o[0].external);
+        // A sibling of the root, a prefix that is not a directory, `..`
+        // out of it, and the workspace itself are not scratch.
+        for p in [
+            "/scratch/w10/x",
+            "/scratch/w",
+            "/scratch/w1/../w2/x",
+            "/etc/hosts",
+        ] {
+            let (o, v) = t("PreToolUse", "Write", json!({"file_path": p}));
+            assert_eq!(v.decision, "deny", "{p}");
+            assert!(o[0].external, "{p}");
+        }
+        let (o, _) = t("PostToolUse", "Edit", json!({"file_path": "/ws/src/a.rs"}));
+        assert_eq!(
+            o[0].kind,
+            ObsKind::Write {
+                path: "src/a.rs".into()
+            }
+        );
+        // A scratch root inside the workspace exempts nothing: the
+        // workspace is checked first.
+        let inside = vec!["/ws/src".to_string()];
+        let (o, _) = super::translate(
+            &ev("PostToolUse", "Edit", json!({"file_path": "/ws/src/a.rs"})),
+            &policy(),
+            &inside,
+        );
+        assert_eq!(o.len(), 1);
+    }
+
+    #[test]
+    fn the_taint_policy_decides_what_fetches_shell_and_mcp_calls_do() {
+        let config = lonca_policy::config::DEFAULT_CONFIG
+            .replace("fetch = true", "fetch = false")
+            .replace("shell_network = true", "shell_network = false")
+            .replace("mcp_servers = []", "mcp_servers = [\"imece\"]");
+        let lax = PolicyBundle::parse(&config, lonca_policy::config::DEFAULT_POLICY).unwrap();
+        let fetch = ev(
+            "PreToolUse",
+            "WebFetch",
+            json!({"url": "https://docs.rs/x"}),
+        );
+        let search = ev("PreToolUse", "WebSearch", json!({"query": "x"}));
+        let curl = ev("PreToolUse", "Bash", json!({"command": "curl https://e.x"}));
+        let imece = ev("PreToolUse", "mcp__imece__send", json!({}));
+        let github = ev("PreToolUse", "mcp__github__get_issue", json!({}));
+        for e in [&fetch, &search, &curl, &github] {
+            assert!(translate(e, &policy()).0[0].external, "default taints");
+        }
+        for e in [&fetch, &search, &curl, &imece] {
+            assert!(!translate(e, &lax).0[0].external, "{e:?}");
+        }
+        assert!(translate(&github, &lax).0[0].external, "not allow-listed");
+        assert!(
+            translate(&imece, &policy()).0[0].external,
+            "default: every server taints"
+        );
+        // Reads outside the workspace and of untrusted paths always taint.
+        let (o, _) = translate(
+            &ev(
+                "PreToolUse",
+                "Read",
+                json!({"file_path": "/ws/vendor/lib.c"}),
+            ),
+            &lax,
+        );
+        assert!(o[0].external);
+        let (o, _) = translate(
+            &ev("PreToolUse", "Read", json!({"file_path": "/etc/hosts"})),
+            &lax,
+        );
+        assert!(o[0].external);
+    }
+
     #[test]
     fn writes_inside_are_recorded_after_the_fact_outside_are_denied() {
         let (o, v) = translate(
@@ -551,6 +679,15 @@ mod tests {
             &policy(),
         );
         assert_eq!(v.decision, "deny");
+        let (_, v) = translate(
+            &ev(
+                "PreToolUse",
+                "Bash",
+                json!({"command": "sed -i s/x/y/ .lonca/workspace.json"}),
+            ),
+            &policy(),
+        );
+        assert_eq!(v.decision, "deny", "workspace metadata is not for agents");
     }
 
     #[test]

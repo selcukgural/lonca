@@ -711,7 +711,7 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
             file("notes.md", "a\nb\n"),
             file(
                 "check.sh",
-                "echo BUILD BROKEN; grep -q 'a \\* 2' src/lib.rs\n",
+                "yes 'BUILD BROKEN' | head -c 40000; grep -q 'a \\* 2' src/lib.rs\n",
             ),
         ],
         "seed",
@@ -819,10 +819,13 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
         tests["log"].as_str().unwrap().contains("BUILD BROKEN"),
         "{tests}"
     );
-    assert_eq!(tests["log_truncated"], false);
+    // 40 KB of output: the tail is kept, 32 KiB of it, and it says so.
+    assert_eq!(tests["log_truncated"], true, "{tests}");
+    assert_eq!(tests["log"].as_str().unwrap().len(), 32 * 1024);
     assert!(tests["sandbox"].is_string());
     assert!(rec["integrate_seq"].as_u64().is_some());
     assert_eq!(rec["integrate_decision"]["outcome"], "allow");
+    let first_integrate = rec["integrate_seq"].as_u64().unwrap();
 
     // A failing check: result fail, exit 1, the output kept.
     let base = e.trunk();
@@ -849,6 +852,34 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
     assert_eq!(tests["exit"], 1);
     assert!(tests["log"].as_str().unwrap().contains("BUILD BROKEN"));
     assert_eq!(rec["integrate_decision"]["outcome"], "deny");
+
+    // A redacted log blob is withheld: null, not its tail.
+    let seq = first_integrate;
+    let entry = e.ok("log", Some("demo"), None, json!({"from": seq, "limit": 1}));
+    let log_blob = entry[0]["entry"]["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["check"] == "tests")
+        .unwrap()["log"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.human(Op::Redact {
+        blob: GitId::parse(&log_blob).unwrap(),
+        reason: "the log leaked a secret".into(),
+    });
+    let rec = e.ok("change.get", Some("demo"), None, json!({"change": change}));
+    let tests = rec["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["check"] == "tests")
+        .unwrap()
+        .clone();
+    assert_eq!(tests["log"], Value::Null, "{tests}");
+    assert_eq!(tests["log_truncated"], false);
+    assert_eq!(tests["result"], "pass");
 
     // Redaction: a redacted blob's file is out of the diff and named.
     let trunk = e.trunk();

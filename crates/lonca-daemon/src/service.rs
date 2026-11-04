@@ -91,8 +91,9 @@ pub const LOG_POLL_MS: u64 = 2_000;
 pub const DIFF_CAP_BYTES: usize = 2 * 1024 * 1024;
 
 /// Longest verification log `change.get` returns per check (the tail is
-/// kept).
-pub const EVIDENCE_LOG_CAP_BYTES: usize = 64 * 1024;
+/// kept). Below what the verifier records (64 KiB), so a long log is
+/// cut here and says so.
+pub const EVIDENCE_LOG_CAP_BYTES: usize = 32 * 1024;
 
 /// Length of a human session when `human.login` names none.
 pub const HUMAN_SESSION_DEFAULT_MS: i64 = 60 * 60 * 1000;
@@ -1286,17 +1287,7 @@ impl Service {
             args[3] = "--patch";
             diff = git(&self.settings.git, store.path(), &args)?;
         }
-        let truncated = diff.len() > DIFF_CAP_BYTES;
-        if truncated {
-            let mut cut = DIFF_CAP_BYTES;
-            while !diff.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            diff.truncate(cut);
-            if let Some(nl) = diff.rfind('\n') {
-                diff.truncate(nl + 1);
-            }
-        }
+        let (diff, truncated) = truncate_at_line(diff, DIFF_CAP_BYTES);
         let files: Vec<Value> = paths
             .iter()
             .map(|p| {
@@ -2331,6 +2322,25 @@ impl Service {
     }
 }
 
+/// Cuts `text` to at most `cap` bytes, on a line boundary (the last
+/// complete line that fits), never inside a UTF-8 character. The flag
+/// says whether anything was cut.
+fn truncate_at_line(mut text: String, cap: usize) -> (String, bool) {
+    if text.len() <= cap {
+        return (text, false);
+    }
+    let mut cut = cap;
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    text.truncate(cut);
+    match text.rfind('\n') {
+        Some(nl) => text.truncate(nl + 1),
+        None => text.clear(),
+    }
+    (text, true)
+}
+
 /// The files a change touches, as its facts say: added, modified and
 /// deleted, sorted, each once.
 fn touched_paths(f: &lonca_core::ops::Facts) -> Vec<String> {
@@ -2536,6 +2546,28 @@ mod tests {
 
     /// The session constants are what the document says; a wrong operator
     /// in one would change every session's length.
+    #[test]
+    fn a_diff_is_cut_on_a_line_inside_the_cap_never_inside_a_character() {
+        assert_eq!(DIFF_CAP_BYTES, 2_097_152);
+        assert_eq!(EVIDENCE_LOG_CAP_BYTES, 32_768);
+        let short = "a\nb\n".to_string();
+        assert_eq!(truncate_at_line(short.clone(), 4), (short.clone(), false));
+        assert_eq!(truncate_at_line(short, 3), ("a\n".to_string(), true));
+        // Lines of four bytes, "xé\n"; byte 202 falls inside the "é" of
+        // line 51, so the cut steps back and the last whole line ends at
+        // 200. A cut that jumped (say halved) would end far earlier.
+        let text: String = "xé\n".repeat(100);
+        let (cut, truncated) = truncate_at_line(text, 202);
+        assert!(truncated);
+        assert_eq!(cut.len(), 200, "{}", cut.len());
+        assert!(cut.ends_with("xé\n") && cut.is_char_boundary(cut.len()));
+        // No whole line fits: nothing is returned, never a partial character.
+        assert_eq!(
+            truncate_at_line("xé\n".to_string(), 2),
+            (String::new(), true)
+        );
+    }
+
     #[test]
     fn session_constants_are_what_the_document_says() {
         assert_eq!(HUMAN_SESSION_DEFAULT_MS, 3_600_000);

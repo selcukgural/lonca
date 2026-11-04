@@ -488,7 +488,7 @@ whose blob on either side is redacted, adds per-file counts and the
 symbol facts by file, and caps the text (2 MiB, `truncated`).
 `change.get` carries `evidence`: the checks of the change's last
 `change.integrate` entry with result, exit, duration, sandbox and the
-tail of the log blob (64 KiB), redacted blobs left out, found by
+tail of the log blob (32 KiB), redacted blobs left out, found by
 reading the log back (one scan per call; the change record does not
 yet remember the entry). Both are reads and are not logged; `lonca diff
 CHANGE` and `lonca change CHANGE --evidence` print them, and the MCP

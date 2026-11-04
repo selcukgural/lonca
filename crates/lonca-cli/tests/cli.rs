@@ -1351,9 +1351,11 @@ fn diff_and_evidence_of_a_change_through_the_cli() {
     let diff = e.run(r, &["diff", &change, "--repo", "demo"]);
     assert!(diff.contains("modified  +1 -1 src/lib.rs"), "{diff}");
     assert!(diff.contains("+    a * 2"), "{diff}");
+    assert!(!diff.contains("[diff truncated]"), "{diff}");
     let ev = e.run(r, &["change", &change, "--repo", "demo", "--evidence"]);
     assert!(ev.contains("tests: pass (exit 0,"), "{ev}");
     assert!(ev.contains("  checked"), "{ev}");
+    assert!(!ev.contains("[log tail]"), "{ev}");
     let j: serde_json::Value =
         serde_json::from_str(&e.run(r, &["diff", &change, "--repo", "demo", "--json"])).unwrap();
     assert_eq!(j["files"][0]["status"], "modified");

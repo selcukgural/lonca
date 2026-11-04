@@ -374,7 +374,7 @@ bytes is `ceil(n / 3) * 4`. `lonca-cli` does this in `fetch`
 
 `evidence` are the checks of the change's last `change.integrate`
 entry (empty before one); `log` is the tail of the check's output
-(64 KiB at most, `log_truncated` when cut), null for a redacted or
+(32 KiB at most, `log_truncated` when cut), null for a redacted or
 missing log. `not_found` for an unknown change.
 
 ### `change.diff`

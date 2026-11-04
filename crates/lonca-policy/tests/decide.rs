@@ -2090,3 +2090,30 @@ fn daemon_keys_change_in_a_frozen_repository_and_need_presence_when_required() {
         "presence_required"
     ));
 }
+
+#[test]
+fn scratch_roots_are_plain_absolute_directories() {
+    use lonca_policy::decide::valid_scratch_root;
+    for ok in [
+        "/a",
+        "/work/claude-1-scratch",
+        "/x/y.z",
+        &format!("/{}", "a".repeat(1023)),
+    ] {
+        assert!(valid_scratch_root(ok), "{ok}");
+    }
+    for bad in [
+        "",
+        "/",
+        "a",
+        "a/b",
+        "/a/",
+        "/a//b",
+        "/a/./b",
+        "/a/../b",
+        "/a\x01b",
+        &format!("/{}", "a".repeat(1024)),
+    ] {
+        assert!(!valid_scratch_root(bad), "{bad:?}");
+    }
+}

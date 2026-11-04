@@ -214,7 +214,6 @@ pub const MAX_SCRATCH_ROOTS: usize = 8;
 /// control characters.
 pub fn valid_scratch_root(p: &str) -> bool {
     p.starts_with('/')
-        && p.len() > 1
         && p.len() <= 1024
         && !p.ends_with('/')
         && !p.chars().any(char::is_control)

@@ -364,10 +364,36 @@ bytes is `ceil(n / 3) * 4`. `lonca-cli` does this in `fetch`
 
 ```json
 {"change", "actor": actor, "commit", "base", "claim", "facts", "status",
- "provenance", "proposed_seq", "created_ms", "version"}
+ "provenance", "proposed_seq", "created_ms", "version",
+ "integrate_seq": integer | null, "integrate_decision": decision | null,
+ "evidence": [{"check": check kind, "result": "pass" | "fail" | "error" | "skipped",
+               "exit": integer | null, "duration_ms": integer | null, "attempts": integer | null,
+               "sandbox": string | null, "error": string | null, "details": {string: string},
+               "log": string | null, "log_truncated": boolean}]}
 ```
 
-`not_found` for an unknown change.
+`evidence` are the checks of the change's last `change.integrate`
+entry (empty before one); `log` is the tail of the check's output
+(32 KiB at most, `log_truncated` when cut), null for a redacted or
+missing log. `not_found` for an unknown change.
+
+### `change.diff`
+
+*read.* `{"change": change id, "format": "unified" | null}`.
+
+```json
+{"change", "base": id, "commit": id, "format": "unified",
+ "files": [{"path", "status": "added" | "modified" | "deleted",
+            "added": integer | null, "removed": integer | null,
+            "symbols": {"edits": [symbol], "adds": [symbol], "deletes": [symbol], "signature_changes": [symbol]}}],
+ "redacted": [path], "diff": string, "truncated": boolean}
+```
+
+The unified diff between the change's base and commit, computed by the
+daemon in the store. Files whose blob on either side is redacted are
+left out of `files` and `diff` and listed in `redacted`. `added` and
+`removed` are line counts (null for binary files). `diff` is cut at
+2 MiB on a line boundary, `truncated` says so. Not logged.
 
 ### `human.prepare_change`
 
@@ -598,7 +624,8 @@ still needs a signature.
 
 - **1** (2026-11): this document. Additions since, same number:
   `scope.scratch`, `hook.bind.scratch`, `session start --scratch`
-  (#78); `tree[].size`, `blobs`, `repo.prepare_init.warnings` (#79).
+  (#78); `tree[].size`, `blobs`, `repo.prepare_init.warnings` (#79);
+  `change.diff`, `change.get.evidence` (#80).
   `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,

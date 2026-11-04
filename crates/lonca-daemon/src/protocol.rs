@@ -174,6 +174,16 @@ pub struct ChangeRef {
     pub change: ChangeId,
 }
 
+/// `change.diff`: the unified diff of a change, computed by the daemon
+/// in the store, with redaction applied and a size cap.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChangeDiff {
+    pub change: ChangeId,
+    /// Only `unified` today.
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Negotiate {
     pub thread: String,

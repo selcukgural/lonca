@@ -1296,3 +1296,67 @@ fn large_trees_are_fetched_in_pages_and_import_warns() {
         1500
     );
 }
+
+/// `lonca diff CHANGE` and `lonca change CHANGE --evidence` read through
+/// the daemon (issue #80).
+#[test]
+fn diff_and_evidence_of_a_change_through_the_cli() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo"]);
+    let hws = r.join("hws");
+    std::fs::create_dir_all(hws.join("src")).unwrap();
+    std::fs::write(
+        hws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    std::fs::write(hws.join("check.sh"), "echo checked; exit 0\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "seed"]).contains("allow"));
+    e.settle();
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
+        "# test = \"cargo test --offline\"",
+        "test = \"sh check.sh\"",
+    );
+    std::fs::write(r.join("lonca.toml"), config).unwrap();
+    std::fs::write(r.join("policy.cedar"), lonca_policy::config::DEFAULT_POLICY).unwrap();
+    assert!(
+        e.run(
+            r,
+            &[
+                "policy",
+                "set",
+                "--repo",
+                "demo",
+                "--config",
+                "lonca.toml",
+                "--policy",
+                "policy.cedar"
+            ]
+        )
+        .contains("allow")
+    );
+    e.run(&hws, &["sync"]);
+    std::fs::write(
+        hws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n",
+    )
+    .unwrap();
+    let out = e.run(&hws, &["propose", "-i", "double", "--json"]);
+    let proposed: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let change = proposed["change"].as_str().unwrap().to_string();
+    e.settle();
+    let diff = e.run(r, &["diff", &change, "--repo", "demo"]);
+    assert!(diff.contains("modified  +1 -1 src/lib.rs"), "{diff}");
+    assert!(diff.contains("+    a * 2"), "{diff}");
+    assert!(!diff.contains("[diff truncated]"), "{diff}");
+    let ev = e.run(r, &["change", &change, "--repo", "demo", "--evidence"]);
+    assert!(ev.contains("tests: pass (exit 0,"), "{ev}");
+    assert!(ev.contains("  checked"), "{ev}");
+    assert!(!ev.contains("[log tail]"), "{ev}");
+    let j: serde_json::Value =
+        serde_json::from_str(&e.run(r, &["diff", &change, "--repo", "demo", "--json"])).unwrap();
+    assert_eq!(j["files"][0]["status"], "modified");
+}

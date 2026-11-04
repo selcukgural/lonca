@@ -38,4 +38,9 @@ exclude_re = [
   # renews or reuses is not observable: the clock has moved on by the time
   # the daemon answers.
   'replace > with >= in human_client',
+  # Cutting a diff inside a UTF-8 character steps back to the character's
+  # start; stepping forward instead lands on its end, and the partial
+  # line after the cut is dropped either way, so the two can not be told
+  # apart from the result.
+  'replace -= with \+= in truncate_at_line',
 ]

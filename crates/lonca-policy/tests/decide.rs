@@ -2117,3 +2117,90 @@ fn scratch_roots_are_plain_absolute_directories() {
         assert!(!valid_scratch_root(bad), "{bad:?}");
     }
 }
+fn reject(seq: u64, reason: &str) -> Op {
+    Op::Reject {
+        target_seq: seq,
+        reason: reason.into(),
+    }
+}
+
+/// A human rejects an escalated proposal with a reason: the proposal is
+/// rejected, its leases on what it changed are released, the pending set
+/// is empty. Only humans may, only pending targets, only with a reason.
+#[test]
+fn a_human_rejects_an_escalated_proposal_with_a_reason() {
+    let mut h = H::new();
+    h.start_observed("s1", &["**"]);
+    h.wrote("s1", "auth/login.rs");
+    h.wrote("s1", "src/a.rs");
+    assert!(
+        h.lease(
+            "s1",
+            "l1",
+            &[
+                ("auth/login.rs#check", LeaseKind::Edit),
+                ("src/a.rs#f", LeaseKind::Edit)
+            ]
+        )
+        .is_allow()
+    );
+    let c = ChangeId::random();
+    let d = h.propose("s1", c, edit("auth/login.rs#check"));
+    assert_eq!(d.outcome, Outcome::Escalate);
+    let seq = pending_seq(&h, c);
+
+    let d = h.agent("s1", reject(seq, "no"));
+    assert!(
+        d.outcome == Outcome::Deny && d.reasons.iter().any(|r| r == "not_grantable:reject"),
+        "{d:?}"
+    );
+    assert!(denied_with(
+        &h.human("ayse", reject(seq, "   ")),
+        "reason_required"
+    ));
+    assert!(denied_with(
+        &h.human("ayse", reject(seq, &"x".repeat(4097))),
+        "reason_too_long"
+    ));
+    assert!(denied_with(
+        &h.human("ayse", reject(seq + 7, "no")),
+        "nothing_pending"
+    ));
+    assert!(h.chain.state.pending.contains_key(&seq));
+
+    let d = h.human("ayse", reject(seq, "wrong approach: use the token cache"));
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(
+        h.chain.state.changes[&c].status,
+        ChangeStatus::Rejected {
+            reasons: vec!["rejected: wrong approach: use the token cache".into()]
+        }
+    );
+    assert!(h.chain.state.pending.is_empty());
+    assert!(!h.chain.state.queue.contains(&c));
+    // The lease set covered a symbol of the change: released. Approving or
+    // rejecting it again finds nothing.
+    assert!(h.chain.state.leases.is_empty());
+    assert!(denied_with(
+        &h.human("ayse", approve(seq)),
+        "nothing_pending"
+    ));
+    assert!(denied_with(
+        &h.human("ayse", reject(seq, "again")),
+        "nothing_pending"
+    ));
+    // The session goes on: a new lease and a new proposal.
+    assert!(
+        h.lease("s1", "l2", &[("auth/login.rs#check", LeaseKind::Edit)])
+            .is_allow()
+    );
+    let c2 = ChangeId::random();
+    assert_eq!(
+        h.propose("s1", c2, edit("auth/login.rs#check")).outcome,
+        Outcome::Escalate
+    );
+    let d = h.human("ayse", approve(pending_seq(&h, c2)));
+    assert!(d.reasons.contains(&"released".to_string()), "{d:?}");
+    assert_eq!(h.chain.state.changes[&c2].status, ChangeStatus::Queued);
+    h.assert_replay();
+}

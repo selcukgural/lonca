@@ -26,7 +26,7 @@ fn tools() -> Value {
             "intent": {"type": "string"}, "edits": list, "adds": list, "deletes": list, "deleted_files": list, "signature_changes": list,
             "tests": {"type": "object", "properties": {"added": {"type": "integer"}, "modified": {"type": "integer"}, "deleted": {"type": "integer"}, "skipped": {"type": "integer"}}}
         }), &["intent"])},
-        {"name": "change_status", "description": "Status of a proposed change (queued, pending review, integrated, conflicted, rejected with reasons).", "inputSchema": s(json!({"change": {"type": "string"}}), &["change"])},
+        {"name": "change_status", "description": "Status of a proposed change (queued, pending review, integrated, conflicted, rejected with reasons: a human's `rejected: ...` reason says what to fix before you sync and propose again), with the evidence of its last integration attempt (build and test logs).", "inputSchema": s(json!({"change": {"type": "string"}}), &["change"])},
         {"name": "sync", "description": "Bring trunk into the workspace, keeping and merging your local edits.", "inputSchema": s(json!({}), &[])},
         {"name": "negotiate", "description": "Message another session about leases: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Bounded number of rounds.", "inputSchema": s(json!({"thread": {"type": "string"}, "to_session": {"type": "string"}, "message": {"type": "object", "description": "e.g. {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"} or {\"type\":\"yield\",\"set\":\"lse_...\"}"}}), &["thread", "to_session", "message"])},
     ])
@@ -220,4 +220,51 @@ pub fn run() -> Result<()> {
         out.flush()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tools;
+
+    /// The tool list is what a worker's harness sees; every tool the
+    /// server dispatches is in it, and change_status tells a worker what
+    /// a rejection means for its next step.
+    #[test]
+    fn the_tool_list_names_every_tool_and_explains_rejection() {
+        let tools = tools();
+        let names: Vec<&str> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        for n in [
+            "status",
+            "symbols",
+            "lease_acquire",
+            "lease_release",
+            "preview",
+            "propose",
+            "change_status",
+            "sync",
+            "negotiate",
+        ] {
+            assert!(names.contains(&n), "{n} missing from {names:?}");
+        }
+        let status = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "change_status")
+            .unwrap();
+        let d = status["description"].as_str().unwrap();
+        assert!(
+            d.contains("rejected: ...") && d.contains("sync and propose again"),
+            "{d}"
+        );
+        assert_eq!(
+            status["inputSchema"]["required"],
+            serde_json::json!(["change"])
+        );
+    }
 }

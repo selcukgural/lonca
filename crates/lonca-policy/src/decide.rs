@@ -126,6 +126,7 @@ fn is_human_op(op: &Op) -> bool {
             | Op::ChangePropose { .. }
             | Op::ChangeWithdraw { .. }
             | Op::Approve { .. }
+            | Op::Reject { .. }
             | Op::ImportExternal { .. }
             | Op::BridgePush { .. }
             | Op::Freeze { .. }
@@ -208,6 +209,9 @@ pub fn level_for(c: &BindChecks) -> ObservationLevel {
 
 /// How many scratch roots a scope may name.
 pub const MAX_SCRATCH_ROOTS: usize = 8;
+
+/// Longest reason of a `reject` (bytes): the text a worker reads.
+pub const MAX_REJECT_REASON: usize = 4096;
 
 /// A scratch root: an absolute, normalized directory path (no `..`, no
 /// `.`, no empty component, no trailing slash), at most 1024 bytes, no
@@ -767,6 +771,17 @@ pub fn decide(
                 }
             }
         },
+        Op::Reject { target_seq, reason } => {
+            if !state.pending.contains_key(target_seq) {
+                v.deny("nothing_pending");
+            }
+            if reason.trim().is_empty() {
+                v.deny("reason_required");
+            }
+            if reason.len() > MAX_REJECT_REASON {
+                v.deny("reason_too_long");
+            }
+        }
         Op::Observe { session, events } => {
             if !state.sessions.contains_key(session) {
                 v.deny("unknown_session");

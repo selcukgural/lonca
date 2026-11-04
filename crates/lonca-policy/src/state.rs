@@ -660,6 +660,45 @@ impl State {
                     self.effects(&p.actor, &p.op, p.facts.as_ref(), p.seq, time_ms, &[], true);
                 }
             }
+            // A human declines: the operation leaves the pending set; a
+            // proposal is rejected with the reason, and the lease sets of
+            // its session that cover what it changed are released, so the
+            // symbols are free for the next attempt (by it or by others).
+            Op::Reject { target_seq, reason } => {
+                let Some(p) = self.pending.remove(target_seq) else {
+                    return;
+                };
+                if let Op::ChangePropose { change, .. } = &p.op {
+                    let symbols: Vec<String> = self
+                        .changes
+                        .get(change)
+                        .map(|c| {
+                            c.facts
+                                .edits
+                                .iter()
+                                .chain(&c.facts.adds)
+                                .chain(&c.facts.deletes)
+                                .chain(&c.facts.signature_changes)
+                                .cloned()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if let Some(c) = self.changes.get_mut(change) {
+                        c.status = ChangeStatus::Rejected {
+                            reasons: vec![format!("rejected: {reason}")],
+                        };
+                    }
+                    self.queue.retain(|q| q != change);
+                    if let Some(session) = p.actor.session() {
+                        self.leases.retain(|_, l| {
+                            l.session != session
+                                || !l.items.iter().any(|i| {
+                                    symbols.iter().any(|s| crate::symbols::covers(&i.symbol, s))
+                                })
+                        });
+                    }
+                }
+            }
             Op::Observe { session, events } => {
                 if let Some(s) = self.sessions.get_mut(session) {
                     for ev in events {

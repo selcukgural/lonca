@@ -1360,3 +1360,105 @@ fn diff_and_evidence_of_a_change_through_the_cli() {
         serde_json::from_str(&e.run(r, &["diff", &change, "--repo", "demo", "--json"])).unwrap();
     assert_eq!(j["files"][0]["status"], "modified");
 }
+
+/// `lonca reject SEQ --reason …` declines a pending proposal; the worker
+/// reads the reason in the change's status (issue #81).
+#[test]
+fn a_human_rejects_through_the_cli_and_the_reason_reaches_the_worker() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo"]);
+    let hws = r.join("hws");
+    std::fs::create_dir_all(hws.join("src")).unwrap();
+    std::fs::write(
+        hws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "seed"]).contains("allow"));
+    e.settle();
+    e.run(
+        r,
+        &[
+            "session",
+            "start",
+            "--repo",
+            "demo",
+            "--agent",
+            "claude",
+            "--paths",
+            "src/**",
+            "--workspace",
+            "ws",
+        ],
+    );
+    let ws = r.join("ws");
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n",
+    )
+    .unwrap();
+    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    let p: serde_json::Value = serde_json::from_str(&e.run(
+        &ws,
+        &["propose", "-i", "double", "--accept-facts", "--json"],
+    ))
+    .unwrap();
+    assert_eq!(p["status"], "pending");
+    let seq = p["seq"].as_u64().unwrap().to_string();
+    let out = e
+        .cmd(r, &["reject", &seq, "--repo", "demo", "--reason", ""])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).contains("reason_required"),
+        "{}",
+        text(&out.stderr)
+    );
+    let rejected: serde_json::Value = serde_json::from_str(&e.run(
+        r,
+        &[
+            "reject",
+            &seq,
+            "--repo",
+            "demo",
+            "--reason",
+            "double is wrong, add one",
+            "--json",
+        ],
+    ))
+    .unwrap();
+    assert_eq!(rejected["target_seq"].as_u64().unwrap().to_string(), seq);
+    assert_eq!(rejected["change"], p["change"]);
+    assert_eq!(rejected["decision"]["outcome"], "allow");
+    let rec: serde_json::Value = serde_json::from_str(&e.run(
+        r,
+        &["change", p["change"].as_str().unwrap(), "--repo", "demo"],
+    ))
+    .unwrap();
+    assert_eq!(rec["status"]["status"], "rejected");
+    assert_eq!(
+        rec["status"]["reasons"][0],
+        "rejected: double is wrong, add one"
+    );
+    assert_eq!(
+        e.run(r, &["pending", "--repo", "demo", "--json"]).trim(),
+        "[]"
+    );
+    // The lease is free again: the worker leases, fixes and proposes.
+    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a + 1\n}\n",
+    )
+    .unwrap();
+    let p: serde_json::Value = serde_json::from_str(&e.run(
+        &ws,
+        &["propose", "-i", "add one", "--accept-facts", "--json"],
+    ))
+    .unwrap();
+    assert_eq!(p["status"], "pending", "{p}");
+}

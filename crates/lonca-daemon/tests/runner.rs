@@ -930,3 +930,174 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
     assert_eq!(d["files"][0]["added"], 35_000);
     assert_eq!(d["files"][1]["path"], "src/big2.rs");
 }
+
+/// Propose, reject with a reason, read the reason; the leases are free,
+/// the pending list empty; the next proposal integrates after approval.
+/// A proposal outlives its session's expiry; an ended session withdraws.
+#[test]
+fn a_rejection_carries_its_reason_to_the_worker_and_frees_the_leases() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let base = e.trunk();
+    // Unobserved session: every proposal escalates.
+    let token = e.session("s1", &["src/**"]);
+    e.lease(&token, "src/lib.rs#charge");
+    // A second lease set, on a symbol the change does not touch, outlives
+    // the rejection; only the covering set is released.
+    let other = e.lease(&token, "src/lib.rs#refund")["set"].clone();
+    let new = LIB.replacen("    a\n", "    a * 2\n", 1);
+    let r = e.propose(
+        &token,
+        &base,
+        vec![file("src/lib.rs", &new)],
+        &["src/lib.rs#charge"],
+    );
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let seq = r["seq"].as_u64().unwrap();
+    let change = r["change"].clone();
+
+    // A human change queued meanwhile is not the rejection's business.
+    let r = e.human_change(vec![file("notes.md", "queued\n")], "queued");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let d = e.human(Op::Reject {
+        target_seq: seq,
+        reason: "charge must not double; see the spec".into(),
+    });
+    assert_eq!(d["decision"]["outcome"], "allow", "{d}");
+    let rec = e.ok("change.get", Some("demo"), None, json!({"change": change}));
+    assert_eq!(rec["status"]["status"], "rejected");
+    assert_eq!(
+        rec["status"]["reasons"],
+        json!(["rejected: charge must not double; see the spec"])
+    );
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(st["pending"], json!([]));
+    assert_eq!(st["leases"].as_array().unwrap().len(), 1, "{st}");
+    assert_eq!(st["leases"][0]["set"], other);
+    assert_eq!(st["leases"][0]["items"][0]["symbol"], "src/lib.rs#refund");
+    assert_eq!(st["queue"].as_array().unwrap().len(), 1, "{st}");
+    assert_eq!(e.svc.process_all(), 1, "the queued change integrates");
+
+    // The worker reads the reason, fixes, leases again, proposes again.
+    e.lease(&token, "src/lib.rs#charge");
+    let fixed = LIB.replacen("    a\n", "    a + 1\n", 1);
+    let r = e.propose(
+        &token,
+        &base,
+        vec![file("src/lib.rs", &fixed)],
+        &["src/lib.rs#charge"],
+    );
+    assert_eq!(r["decision"]["outcome"], "escalate");
+    let seq2 = r["seq"].as_u64().unwrap();
+    // Reject needs a reason, a pending target, and a human.
+    let d = e.human(Op::Reject {
+        target_seq: seq,
+        reason: "late".into(),
+    });
+    assert_eq!(d["decision"]["reasons"][0], "nothing_pending");
+    let d = e.human(Op::Reject {
+        target_seq: seq2,
+        reason: "".into(),
+    });
+    assert_eq!(d["decision"]["reasons"][0], "reason_required");
+    let r = e.call(
+        "human.submit",
+        Some("demo"),
+        Some(&token),
+        e.sign(&Op::Reject {
+            target_seq: seq2,
+            reason: "x".into(),
+        }),
+    );
+    assert_eq!(r.unwrap_err().0, "forbidden");
+
+    // The session expires before the human decides: still approvable.
+    e.advance(3_600_001);
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(st["sessions"][0]["active"], false);
+    assert_eq!(st["pending"][0]["seq"], seq2);
+    let d = e.human(Op::Approve {
+        target_seq: seq2,
+        note: "ok".into(),
+    });
+    assert!(
+        d["decision"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x == "released"),
+        "{d}"
+    );
+    assert_eq!(e.svc.process_all(), 1);
+    assert_eq!(
+        e.store()
+            .read_file(&e.trunk(), "src/lib.rs")
+            .unwrap()
+            .unwrap(),
+        fixed.as_bytes()
+    );
+
+    // A session ended by its agent leaves its proposal for the human; a
+    // session revoked by a human takes it with it.
+    let base = e.trunk();
+    let t2 = e.session("s2", &["src/**"]);
+    e.lease(&t2, "src/lib.rs#refund");
+    let r = e.propose(
+        &t2,
+        &base,
+        vec![file(
+            "src/lib.rs",
+            &fixed.replacen(
+                "pub fn refund(a: u64) -> u64 {\n    a\n",
+                "pub fn refund(a: u64) -> u64 {\n    0\n",
+                1,
+            ),
+        )],
+        &["src/lib.rs#refund"],
+    );
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    e.ok("session.end", None, Some(&t2), json!({}));
+    let rec = e.ok(
+        "change.get",
+        Some("demo"),
+        None,
+        json!({"change": r["change"]}),
+    );
+    assert_eq!(rec["status"]["status"], "pending");
+    assert_eq!(
+        e.ok("status", Some("demo"), None, json!({}))["pending"][0]["seq"],
+        r["seq"]
+    );
+    let t3 = e.session("s3", &["src/**"]);
+    e.lease(&t3, "src/lib.rs#refund");
+    let r3 = e.propose(
+        &t3,
+        &base,
+        vec![file(
+            "src/lib.rs",
+            &fixed.replacen(
+                "pub fn refund(a: u64) -> u64 {\n    a\n",
+                "pub fn refund(a: u64) -> u64 {\n    1\n",
+                1,
+            ),
+        )],
+        &["src/lib.rs#refund"],
+    );
+    assert_eq!(r3["decision"]["outcome"], "escalate", "{r3}");
+    e.human(Op::CapRevoke {
+        session: "s3".into(),
+        reason: "done".into(),
+    });
+    let rec = e.ok(
+        "change.get",
+        Some("demo"),
+        None,
+        json!({"change": r3["change"]}),
+    );
+    assert_eq!(rec["status"]["status"], "withdrawn");
+    let pending = e.ok("status", Some("demo"), None, json!({}))["pending"].clone();
+    assert_eq!(pending.as_array().unwrap().len(), 1, "{pending}");
+    assert_eq!(pending[0]["seq"], r["seq"]);
+}

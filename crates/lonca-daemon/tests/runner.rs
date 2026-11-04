@@ -194,6 +194,49 @@ fn log_waits_for_the_next_entry_and_gives_up_on_time() {
     assert_eq!(ops.as_array().unwrap().len(), 1, "{ops}");
     assert_eq!(ops[0]["entry"]["op"]["op"], "freeze");
     assert_eq!(ops[0]["entry"]["seq"], next);
+    // Signalled, not polled: well under the 2 s poll slice.
+    assert!(
+        waited < 1_500,
+        "waited {waited} ms; the append was not signalled"
+    );
+
+    // The same for an entry the daemon's own checks append: a ref moved
+    // behind its back is logged by reconcile_all, which signals too.
+    let next = next + 1;
+    let svc = e.svc.clone();
+    let store = e.store();
+    let trunk = e.trunk();
+    let tree = store.empty_tree().unwrap();
+    let stray = store
+        .write_commit(&lonca_core::store::CommitSpec {
+            tree,
+            parents: vec![trunk],
+            author_name: "x".into(),
+            author_email: "x@y".into(),
+            time_ms: 0,
+            message: "stray\n".into(),
+            headers: vec![],
+        })
+        .unwrap();
+    let checker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        store.ref_force("refs/heads/main", &stray).unwrap();
+        svc.reconcile_all();
+    });
+    let t = Instant::now();
+    let ops = e.ok(
+        "log",
+        Some("demo"),
+        None,
+        json!({"from": next, "wait_ms": 20_000}),
+    );
+    let waited = t.elapsed().as_millis();
+    checker.join().unwrap();
+    assert_eq!(ops[0]["entry"]["op"]["op"], "import.unmediated", "{ops}");
+    assert!(
+        waited < 1_500,
+        "waited {waited} ms; reconcile_all did not signal"
+    );
     assert!(
         waited < 5000,
         "waited {waited} ms for an entry that came after 200"

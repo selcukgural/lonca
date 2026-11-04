@@ -185,6 +185,14 @@ fn agent_workflow_through_the_cli() {
         .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect();
+    // The review list names the change and its intent.
+    let pending = e.run(r, &["pending", "--repo", "demo"]);
+    assert!(
+        pending.contains(&format!("#{seq} change.propose agent:claude/"))
+            && pending.contains(" change ")
+            && pending.contains(" \"double\" ["),
+        "{pending}"
+    );
     assert!(
         e.run(r, &["approve", &seq, "--repo", "demo"])
             .contains("released")

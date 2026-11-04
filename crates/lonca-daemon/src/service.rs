@@ -67,6 +67,10 @@ pub const PROTOCOL: u32 = 1;
 
 /// Longest a `log` request with `wait_ms` is held.
 pub const LOG_WAIT_MAX_MS: i64 = 30_000;
+/// How often a held `log` request re-checks the log on its own, in case
+/// an appending path forgot to signal. Long on purpose: the signal is
+/// what makes the request return at once.
+pub const LOG_POLL_MS: u64 = 2_000;
 
 /// Length of a human session when `human.login` names none.
 pub const HUMAN_SESSION_DEFAULT_MS: i64 = 60 * 60 * 1000;
@@ -278,7 +282,7 @@ pub struct Service {
     wake: (Mutex<u64>, Condvar),
     /// Bumped whenever a log may have grown; `log` with `wait_ms` sleeps
     /// on it.
-    appended: (Mutex<u64>, Condvar),
+    appended: (Mutex<()>, Condvar),
 }
 
 impl Service {
@@ -324,7 +328,7 @@ impl Service {
                 workspaces: BTreeMap::new(),
             }),
             wake: (Mutex::new(0), Condvar::new()),
-            appended: (Mutex::new(0), Condvar::new()),
+            appended: (Mutex::new(()), Condvar::new()),
         });
         {
             let mut inner = svc.lock();
@@ -393,10 +397,11 @@ impl Service {
 
     /// Wakes `log` requests waiting for an entry. Called after anything
     /// that may have appended; a missed call costs a waiter at most one
-    /// poll slice, never the entry.
+    /// poll slice ([`LOG_POLL_MS`]), never the entry. The waiter re-reads
+    /// the log's state under the lock, so the signal carries no value.
     fn notify_appended(&self) {
         let (m, c) = &self.appended;
-        *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        let _held = m.lock().unwrap_or_else(|e| e.into_inner());
         c.notify_all();
     }
 
@@ -954,9 +959,9 @@ impl Service {
                 return Ok(json!([]));
             }
             let (m, c) = &self.appended;
-            let seen = m.lock().unwrap_or_else(|e| e.into_inner());
+            let held = m.lock().unwrap_or_else(|e| e.into_inner());
             let _ = c
-                .wait_timeout(seen, left.min(Duration::from_millis(250)))
+                .wait_timeout(held, left.min(Duration::from_millis(LOG_POLL_MS)))
                 .unwrap_or_else(|e| e.into_inner());
         };
         let ops = OpLog::new(&store).read_all().or_fail()?;

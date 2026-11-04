@@ -1345,11 +1345,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 &rev,
                 intent.as_deref().unwrap_or(""),
             )?;
-            let status = match r["decision"]["outcome"].as_str() {
-                Some("allow") => "queued",
-                Some("escalate") => "pending",
-                _ => "denied",
-            };
+            let status = ctx::proposal_status(&r);
             if as_json {
                 ctx::print_json(&json!({
                     "change": r["change"], "commit": r["commit"], "base": r["base"], "seq": r["seq"],
@@ -1439,11 +1435,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     (change, commit, r)
                 }
             };
-            let status = match r["decision"]["outcome"].as_str() {
-                Some("allow") => "queued",
-                Some("escalate") => "pending",
-                _ => "denied",
-            };
+            let status = ctx::proposal_status(&r);
             if as_json {
                 ctx::print_json(&json!({
                     "change": change, "commit": commit, "seq": r["seq"],

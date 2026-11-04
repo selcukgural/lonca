@@ -779,6 +779,12 @@ fn the_human_session_file_is_reused_renewed_and_ended() {
             0o600
         );
     }
+    // A command about no repository in particular (the queue) reuses the
+    // same session: it is enrolled somewhere, which is all that is asked.
+    e.run(r, &["queue"]);
+    e.run(r, &["queue"]);
+    assert_eq!(human_tokens(), 1);
+    assert_eq!(std::fs::read_to_string(&session).unwrap(), first);
     // A session about to expire (under the 30 s margin) is renewed.
     e.run(r, &["human", "login", "--ttl", "20s"]);
     assert_eq!(human_tokens(), 2);

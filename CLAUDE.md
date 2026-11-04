@@ -65,10 +65,12 @@ git diff main -- crates > /tmp/git.diff && cargo mutants --in-diff /tmp/git.diff
   mutants (cargo-mutants 27.1.0); use file globs or a test.
 - Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
   paths, no writes to `$HOME`. Parallel jobs (`-j`) run copies at once.
-- CI (`.github/workflows/mutants.yml`): on every PR the `mutants` job runs
-  `--in-diff` against the base branch and fails on any survivor; it is a
-  required check on `main`, so a PR waits for it. Weekly (and on demand)
+- CI (`.github/workflows/mutants.yml`): on every PR the mutants in the
+  diff against the base branch run over six shards (`mutants k/6`), each
+  failing on any survivor, and the `mutants` job that the ruleset
+  requires fails if any shard did; a PR waits for it. Survivors are in
+  the `mutants-diff-<k>` artifacts (`missed.txt`). Weekly (and on demand)
   the whole workspace runs in 8 shards; a survivor in a security-critical
-  file fails the shard. Results are uploaded as artifacts (`mutants.out`).
+  file fails the shard.
 - Every PR is opened with auto-merge (`gh pr merge --auto --merge`); it
   lands once every required check, mutants included, is green.

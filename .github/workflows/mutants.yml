@@ -20,15 +20,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mutants:
-    name: mutants
+  # On a pull request: the diff once, the mutants in it over six shards,
+  # and one job named `mutants` that the ruleset requires and that fails
+  # when any shard found a survivor. Each shard pays its own baseline
+  # build (a few minutes) and then a sixth of the mutants.
+  diff:
+    name: changed Rust
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Diff against the base branch
+        id: diff
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          git diff "origin/$BASE...HEAD" -- crates > git.diff
+          if [ -s git.diff ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no Rust changes; nothing to mutate"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.diff.outputs.changed == 'true'
+        with:
+          name: git-diff
+          path: git.diff
+          retention-days: 1
+
+  shard:
+    name: mutants ${{ matrix.shard }}/6
+    needs: diff
+    if: needs.diff.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
           persist-credentials: false
       - name: Rust toolchain
         run: |
@@ -43,30 +82,21 @@ jobs:
         uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-mutants@27.1.0
-      - name: Diff against the base branch
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: git-diff
+      - name: Mutants in the diff, shard ${{ matrix.shard }} of 6
         env:
-          BASE: ${{ github.base_ref }}
-        run: |
-          git diff "origin/$BASE...HEAD" -- crates > git.diff
-          if [ -s git.diff ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "no Rust changes; nothing to mutate"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-        id: diff
-      - name: Mutants in the diff
-        if: steps.diff.outputs.changed == 'true'
+          SHARD: ${{ matrix.shard }}
         run: |
           set +e
-          cargo mutants --in-diff git.diff --no-shuffle -j 2
+          cargo mutants --in-diff git.diff --shard "$SHARD/6" --no-shuffle -j 2
           rc=$?
           set -e
           # 0 all caught, 2 missed, 3 timeouts (counted as caught, see
           # CLAUDE.md); anything else is a run error.
           case $rc in 0|2|3) ;; *) echo "cargo mutants failed ($rc)"; exit 1 ;; esac
       - name: Survivors fail the check
-        if: steps.diff.outputs.changed == 'true'
         run: |
           if [ -s mutants.out/missed.txt ]; then
             echo "::error::mutants survived in the diff; kill each with a test or exclude it with a written reason (.cargo/mutants.toml)"
@@ -75,12 +105,28 @@ jobs:
           fi
           echo "caught: $(wc -l < mutants.out/caught.txt), timeouts: $(wc -l < mutants.out/timeout.txt), unviable: $(wc -l < mutants.out/unviable.txt)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && steps.diff.outputs.changed == 'true'
+        if: always()
         with:
-          name: mutants-diff
+          name: mutants-diff-${{ matrix.shard }}
           path: mutants.out
           retention-days: 7
           if-no-files-found: ignore
+
+  mutants:
+    name: mutants
+    needs: [diff, shard]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard caught its mutants
+        env:
+          DIFF: ${{ needs.diff.result }}
+          SHARDS: ${{ needs.shard.result }}
+        run: |
+          echo "diff: $DIFF, shards: $SHARDS"
+          case "$DIFF" in success) ;; *) echo "::error::the diff job failed"; exit 1 ;; esac
+          case "$SHARDS" in success|skipped) ;; *) echo "::error::a shard found survivors or failed"; exit 1 ;; esac
 
   full:
     name: full ${{ matrix.shard }}/8

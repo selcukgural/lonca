@@ -463,6 +463,7 @@ fn trees_are_fetched_in_pages() {
         vec![
             file("a.txt", "aaa\n"),
             file("big.bin", &big),
+            file("edge.bin", &"e".repeat(2304)),
             file("src/lib.rs", LIB),
         ],
         "seed",
@@ -570,6 +571,33 @@ fn trees_are_fetched_in_pages() {
     let err = call("blobs", json!({"commit": trunk, "paths": many})).unwrap_err();
     assert_eq!(err.0, "too_large");
     assert!(err.1.contains("fewer files"), "{err:?}");
+    // A file that encodes to exactly the budget (2304 bytes -> 3072) fits;
+    // one byte more in the page does not.
+    let ok = call("blobs", json!({"commit": trunk, "paths": ["edge.bin"]})).unwrap();
+    assert_eq!(ok[0]["size"], 2304);
+    let err = call(
+        "blobs",
+        json!({"commit": trunk, "paths": ["edge.bin", "a.txt"]}),
+    )
+    .unwrap_err();
+    assert_eq!(err.0, "too_large", "{err:?}");
+
+    // A redacted blob: listed with its size, never with its content.
+    let a_blob = manifest[0]["blob"].as_str().unwrap().to_string();
+    e.human(Op::Redact {
+        blob: GitId::parse(&a_blob).unwrap(),
+        reason: "secret".into(),
+    });
+    let page = e.ok(
+        "blobs",
+        Some("demo"),
+        None,
+        json!({"commit": trunk, "paths": ["a.txt", "src/lib.rs"]}),
+    );
+    assert_eq!(page[0]["path"], "a.txt");
+    assert_eq!(page[0]["size"], 4);
+    assert_eq!(page[0]["content_b64"], Value::Null, "{page}");
+    assert!(page[1]["content_b64"].is_string());
 
     // Importing a tree with a file above the change cap says so.
     let up = e.root.join("up.git");

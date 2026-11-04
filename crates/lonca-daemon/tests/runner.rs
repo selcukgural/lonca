@@ -605,6 +605,8 @@ fn trees_are_fetched_in_pages() {
     let work = e.root.join("work");
     git(&e.root, &["init", "-q", work.to_str().unwrap()]);
     std::fs::write(work.join("huge.bin"), vec![b'z'; 2 * 1024 * 1024 + 1]).unwrap();
+    // Exactly the cap is not above it.
+    std::fs::write(work.join("exact.bin"), vec![b'y'; 2 * 1024 * 1024]).unwrap();
     std::fs::write(work.join("small.txt"), "s\n").unwrap();
     git(&work, &["add", "."]);
     git(
@@ -633,7 +635,8 @@ fn trees_are_fetched_in_pages() {
         json!({"repo": "media", "human": "ayse", "human_key": key, "import_from": up}),
     );
     assert_eq!(prep["large_files"][0]["path"], "huge.bin");
-    assert_eq!(prep["tree_bytes"].as_u64().unwrap(), 2 * 1024 * 1024 + 3);
+    assert_eq!(prep["large_files"].as_array().unwrap().len(), 1, "{prep}");
+    assert_eq!(prep["tree_bytes"].as_u64().unwrap(), 4 * 1024 * 1024 + 3);
     let warnings = prep["warnings"].as_array().unwrap();
     assert_eq!(warnings.len(), 1, "{warnings:?}");
     assert!(

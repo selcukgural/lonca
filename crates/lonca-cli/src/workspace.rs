@@ -399,6 +399,34 @@ fn encoded_len(bytes: u64) -> u64 {
     bytes.div_ceil(3) * 4
 }
 
+/// Groups files, in order, into pages whose encoded size stays within
+/// `budget`; a page may hold exactly the budget. A file that alone does
+/// not fit is an error naming it.
+fn plan_pages(files: &[(String, u64)], budget: u64) -> Result<Vec<Vec<String>>> {
+    let mut pages: Vec<Vec<String>> = vec![];
+    let mut page: Vec<String> = vec![];
+    let mut used = 0u64;
+    for (path, size) in files {
+        let need = encoded_len(*size);
+        if need > budget {
+            bail!(
+                "{path} is {size} bytes, more than one fetch page holds ({budget} encoded); \
+                 keep such files out of the repository or raise the cap"
+            );
+        }
+        if used + need > budget && !page.is_empty() {
+            pages.push(std::mem::take(&mut page));
+            used = 0;
+        }
+        used += need;
+        page.push(path.clone());
+    }
+    if !page.is_empty() {
+        pages.push(page);
+    }
+    Ok(pages)
+}
+
 /// The files of a commit with their contents: the manifest in one call,
 /// then the contents in pages that stay under the budget. A file too
 /// large for one page is reported by path.
@@ -413,30 +441,12 @@ pub fn fetch(
         json!({"commit": commit, "with_content": false, "paths": paths}),
     )?;
     let mut files: Vec<TreeFile> = serde_json::from_value(v)?;
-    let budget = fetch_budget();
-    let mut pages: Vec<Vec<String>> = vec![];
-    let mut page: Vec<String> = vec![];
-    let mut used = 0u64;
-    for f in files.iter().filter(|f| f.mode != FileMode::Submodule) {
-        let need = encoded_len(f.size);
-        if need > budget {
-            bail!(
-                "{} is {} bytes, more than one fetch page holds ({budget} encoded); \
-                 keep such files out of the repository or raise the cap",
-                f.path,
-                f.size
-            );
-        }
-        if used + need > budget && !page.is_empty() {
-            pages.push(std::mem::take(&mut page));
-            used = 0;
-        }
-        used += need;
-        page.push(f.path.clone());
-    }
-    if !page.is_empty() {
-        pages.push(page);
-    }
+    let sizes: Vec<(String, u64)> = files
+        .iter()
+        .filter(|f| f.mode != FileMode::Submodule)
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    let pages = plan_pages(&sizes, fetch_budget())?;
     let mut contents: BTreeMap<String, Option<String>> = BTreeMap::new();
     for paths in pages {
         let v = call(client, "blobs", json!({"commit": commit, "paths": paths}))?;
@@ -486,7 +496,43 @@ fn write_file(root: &Path, f: &TreeFile) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::encoded_len;
+    use super::{encoded_len, plan_pages};
+
+    #[test]
+    fn pages_fill_to_the_budget_in_order_and_refuse_what_never_fits() {
+        let f = |n: &str, size: u64| (n.to_string(), size);
+        // 750 bytes encode to 1000: two fill a 2000 page exactly, the third
+        // starts the next page; a small file after it joins that page.
+        let files = [f("a", 750), f("b", 750), f("c", 750), f("d", 3)];
+        let pages = plan_pages(&files, 2000).unwrap();
+        assert_eq!(
+            pages,
+            vec![
+                vec!["a".to_string(), "b".into()],
+                vec!["c".into(), "d".into()]
+            ]
+        );
+        // One byte over the pair: each alone.
+        let files = [f("a", 751), f("b", 750)];
+        assert_eq!(
+            plan_pages(&files, 2000).unwrap(),
+            vec![vec!["a".to_string()], vec!["b".into()]]
+        );
+        // Many small files in one page; an empty list is no page.
+        let many: Vec<_> = (0..10).map(|i| f(&i.to_string(), 30)).collect();
+        assert_eq!(plan_pages(&many, 2000).unwrap().len(), 1);
+        assert!(plan_pages(&[], 2000).unwrap().is_empty());
+        // A file that alone exceeds the budget is named.
+        let err = plan_pages(&[f("x", 10), f("big.bin", 1501)], 2000).unwrap_err();
+        assert!(
+            err.to_string().starts_with("big.bin is 1501 bytes"),
+            "{err}"
+        );
+        assert_eq!(
+            plan_pages(&[f("edge", 1500)], 2000).unwrap(),
+            vec![vec!["edge".to_string()]]
+        );
+    }
 
     /// Base64 of n bytes is ceil(n / 3) * 4; the page budget depends on
     /// it, so an under-estimate would ask the daemon for pages it refuses.

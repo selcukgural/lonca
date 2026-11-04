@@ -34,8 +34,11 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      - name: Sandbox for the verifier tests
-        run: sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+      # No bubblewrap, on purpose: the same environment as the `test` job
+      # in ci.yml. On ubuntu-latest (24.04) AppArmor blocks bwrap's
+      # unprivileged user namespaces, every sandboxed verification fails,
+      # and the baseline run (not a mutant) fails in the concurrency test.
+      # Sandboxed verification in CI is #54 / #59.
       - name: cargo-mutants
         uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
@@ -96,8 +99,11 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      - name: Sandbox for the verifier tests
-        run: sudo apt-get update -q && sudo apt-get install -y -q bubblewrap
+      # No bubblewrap, on purpose: the same environment as the `test` job
+      # in ci.yml. On ubuntu-latest (24.04) AppArmor blocks bwrap's
+      # unprivileged user namespaces, every sandboxed verification fails,
+      # and the baseline run (not a mutant) fails in the concurrency test.
+      # Sandboxed verification in CI is #54 / #59.
       - name: cargo-mutants
         uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:

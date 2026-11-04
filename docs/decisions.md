@@ -324,6 +324,115 @@ fetch; no second format, and plain `git` can read a backup.
   bundle reader in `lonca-audit` (the auditor stays free of the `git`
   binary; verify a bundle by fetching it into a bare store first).
 
+## Daemon authentication
+
+Who may connect is decided by the socket (its mode, group and the uid
+list). That tells the daemon nothing about who is calling: in both modes
+agents run as the developer's uid. So every method now names the
+credential it needs, the dispatcher checks it before the handler runs,
+and a method that is not in the table does not exist (issue #51, OWASP
+A01/A07, zero trust: every request authenticated).
+
+| Method | Credential | What it does |
+|---|---|---|
+| `ping` | public | version and daemon key |
+| `human.login` | login | opens a human session from a presence signature |
+| `human.logout` | public | ends the human session whose token it carries |
+| `whoami` | any | who the token is |
+| `repo.list` | any human | the repositories the session is enrolled in |
+| `repo.prepare_init` | bootstrap | writes the genesis objects; may `git fetch` |
+| `repo.init` | bootstrap | submits the signed genesis |
+| `repo.restore` | bootstrap | fetches a backup into a new store |
+| `repo.backup` | human | writes a bundle of the repository |
+| `daemon.prepare_rotate` | any human | creates the next daemon key |
+| `status` | read | repository state |
+| `log` | read | the operation log |
+| `tree` | read | files of a commit, contents included |
+| `change.get` | read | one change record |
+| `human.prepare_change` | human | builds a commit for a human change |
+| `human.prepare_policy` | human | writes a policy commit |
+| `human.prepare_import` | human | `git fetch` from a remote |
+| `human.prepare_push` | human | the push operation to sign |
+| `human.submit` | human | a signed human operation; `human.recover` alone needs no session |
+| `lease.acquire` | agent | |
+| `lease.release` | agent | |
+| `lease.renew` | agent | |
+| `change.propose` | agent | |
+| `change.withdraw` | agent | |
+| `facts.preview` | agent | |
+| `negotiate` | agent | |
+| `cap.attenuate` | agent | |
+| `session.end` | agent | |
+| `hook.event` | agent | |
+| `hook.bind` | agent | |
+| `queue.run` | any human | drains every merge queue now |
+
+Credentials, from `Cred` in `service.rs` (the table above is checked
+against it by a test):
+
+- **public**: nothing.
+- **login**: a presence signature inside the request.
+- **agent**: an agent session token; the repository is the token's, and a
+  `repo` on the request that names another one is refused (`forbidden`).
+- **human**: a human session whose key is enrolled in the request's
+  repository.
+- **any human**: a human session enrolled in at least one repository.
+- **bootstrap**: *any human*, or no credential while the daemon serves no
+  repository. The first `lonca init` (or `lonca restore` on a new
+  machine) has no key to be checked against; the socket is the only
+  guard then, as it was for everything before. Once one repository
+  exists, creating another needs a human enrolled somewhere, and a new
+  human is enrolled by an existing one (`lonca human enroll`).
+- **read**: *agent* (for the token's repository) or *human*.
+- **any**: any live token.
+
+Without a token: `unauthenticated`. With a token of the wrong kind, for
+another repository, or for a human the repository does not know:
+`forbidden`. Unknown, ended and expired tokens: `unauthenticated`.
+
+- **Human sessions.** `human.login` carries a signature over a
+  `LoginIntent` (its own purpose string, so a login signature can not
+  pass as an operation signature or the other way round, plus the
+  human's name, the session length, a nonce and the time). The daemon
+  verifies it with the key the named repository holds for that human;
+  without a repository, with every key the daemon's repositories hold
+  for the name. Freshness is checked like any human signature (ten
+  minutes, one minute of skew), and a nonce opens one session. The
+  session is tied to the *key*, not to a repository: it is accepted
+  wherever that key is enrolled, and a rotation, revocation or recovery
+  ends it everywhere at once, because the check is made against the
+  current state on every request. Default length one hour, at most 24
+  (`--ttl`). The token is returned once; the daemon stores its SHA-256
+  like an agent token, and never logs it. Logins are not entries of the
+  operation log: a session writes nothing, every write still needs a
+  signature over the operation, and the human of the session must be
+  the signer (`forbidden` otherwise), so a session can not be used to
+  submit someone else's signed operation. One exception: a
+  `human.recover` submission needs no session, because the key that
+  would open one is the key that was lost; its recovery-key signature is
+  the credential, checked by `decide()` like any other.
+- **Interrupted key changes.** A rotation or recovery that stopped
+  halfway leaves the new key waiting next to the current one; some
+  repositories already know only the new key. The CLI therefore signs in
+  with the current key and, if that fails, with the waiting one.
+- **Agent reads go through the agent's token.** `status`, `log`, `tree`
+  and `change.get` answer an agent only for its own repository. Leaving
+  the token out no longer reads anything. The reads are still not
+  logged; making them observations (design §5.10) is left for the
+  provenance work.
+- **CLI.** `lonca human login [--repo] [--ttl]` opens a session and keeps
+  the token in `~/.config/lonca/humans/<name>.session` (0600); every
+  human command logs in by itself when there is no session or the
+  daemon refuses the one it has, so a file key never prompts and a
+  Secure Enclave key prompts once per session rather than once per
+  `lonca status`. `lonca human logout` ends it. The file is readable by
+  anything running as the developer, agents included: that is why the
+  session is short, and why it can only read, prepare and run the queue,
+  never sign.
+- **Not done:** a separate human socket in hardened mode (the issue's
+  optional point), logged reads, and a sweep of expired sessions beyond
+  the one done at each login (#53).
+
 ## Mutation testing
 
 Passing tests do not show that they would catch a flipped `>=` or a

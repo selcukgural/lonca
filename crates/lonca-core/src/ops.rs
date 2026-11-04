@@ -627,6 +627,40 @@ impl<'a> HumanIntent<'a> {
     }
 }
 
+/// What a human signs to open a human session (`human.login`). Its own
+/// purpose string keeps a login signature from ever passing as an
+/// operation signature, and the other way round.
+#[derive(Serialize)]
+pub struct LoginIntent<'a> {
+    pub purpose: &'static str,
+    /// The repository whose enrolment verifies the key; `None` lets the
+    /// daemon look in every repository.
+    pub repo: Option<&'a str>,
+    pub human: &'a str,
+    pub ttl_ms: i64,
+    pub nonce: &'a str,
+    pub issued_ms: i64,
+}
+
+impl<'a> LoginIntent<'a> {
+    pub fn new(
+        repo: Option<&'a str>,
+        human: &'a str,
+        ttl_ms: i64,
+        nonce: &'a str,
+        issued_ms: i64,
+    ) -> Self {
+        Self {
+            purpose: "lonca-human-login-v1",
+            repo,
+            human,
+            ttl_ms,
+            nonce,
+            issued_ms,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

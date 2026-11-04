@@ -161,16 +161,9 @@ fn forged_facts_are_caught() {
 
 #[test]
 fn forged_merge_is_caught() {
-    let e = busy_repo();
+    let mut e = busy_repo();
     let store = e.store();
-    let trunk = e.svc.handle(Request {
-        id: 1,
-        method: "status".into(),
-        repo: Some("demo".into()),
-        token: None,
-        params: json!({}),
-    });
-    let trunk: GitId = serde_json::from_value(trunk.result["trunk"].clone()).unwrap();
+    let trunk = e.trunk();
     let forged = forge(&e, "forged-merge.git", |entries| {
         let i = entries
             .iter_mut()

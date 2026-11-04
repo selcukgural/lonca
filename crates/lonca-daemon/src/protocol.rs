@@ -16,7 +16,7 @@ pub struct Request {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
-    /// Agent session token. Never logged.
+    /// Agent session token or human session token. Never logged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
     #[serde(default)]
@@ -84,6 +84,18 @@ pub struct FileChange {
 pub struct HumanSubmit {
     pub op: Op,
     pub sig: HumanSignature,
+}
+
+/// `human.login`: opens a human session. The signature is over a
+/// [`lonca_core::ops::LoginIntent`]; `repo` on the request names the
+/// repository whose enrolment verifies it, or is left out to try every
+/// repository the daemon serves.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HumanLogin {
+    pub sig: HumanSignature,
+    /// Session length; the daemon has a default and a ceiling.
+    #[serde(default)]
+    pub ttl_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

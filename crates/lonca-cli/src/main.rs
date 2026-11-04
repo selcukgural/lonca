@@ -96,6 +96,9 @@ enum Cmd {
         repo: Option<String>,
         #[arg(long)]
         json: bool,
+        /// The human whose session reads (default identity otherwise).
+        #[arg(long = "as")]
+        human: Option<String>,
     },
     /// Facts of the local changes in this workspace.
     Diff,
@@ -125,11 +128,15 @@ enum Cmd {
         change: String,
         #[arg(long)]
         repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
     },
     /// Operations waiting for human approval.
     Pending {
         #[arg(long)]
         repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
     },
     /// Approve an escalated operation.
     Approve {
@@ -151,6 +158,8 @@ enum Cmd {
         limit: Option<u64>,
         #[arg(long)]
         json: bool,
+        #[arg(long = "as")]
+        human: Option<String>,
     },
     /// Show or change the repository policy.
     #[command(subcommand)]
@@ -269,6 +278,24 @@ enum HumanCmd {
     },
     /// Print the default identity and public key.
     Whoami,
+    /// Open a human session: reads, prepares and `lonca queue` use it
+    /// until it expires. Every human command does this by itself when
+    /// needed; run it to choose the length or to sign in up front.
+    Login {
+        /// Verify against this repository's enrolment (default: any).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Session length, e.g. `30m`, `8h` (default 1h, at most 24h).
+        #[arg(long)]
+        ttl: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
+    /// End the human session and forget its token.
+    Logout {
+        #[arg(long = "as")]
+        human: Option<String>,
+    },
     /// Enroll another human (signed by you).
     Enroll {
         name: String,
@@ -437,6 +464,8 @@ enum PolicyCmd {
     Show {
         #[arg(long)]
         repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
     },
     Set {
         #[arg(long)]
@@ -476,7 +505,8 @@ fn human_name(h: Option<String>) -> Result<String> {
 /// pruned freely). Repositories on another daemon key are not listed by the
 /// daemon and must be recovered first.
 fn backup(repos: &[String], out: Option<&Path>) -> Result<()> {
-    let mut c = connect()?;
+    let human = ctx::default_human()?;
+    let mut c = human_client_any(&human)?;
     let repos: Vec<String> = if repos.is_empty() {
         serde_json::from_value(call(&mut c, "repo.list", json!({}))?)?
     } else {
@@ -489,7 +519,7 @@ fn backup(repos: &[String], out: Option<&Path>) -> Result<()> {
         std::fs::create_dir_all(out).with_context(|| format!("cannot create {}", out.display()))?;
     }
     for repo in &repos {
-        let mut c = human_client(repo)?;
+        let mut c = human_client(repo, &human)?;
         let r = call(&mut c, "repo.backup", json!({}))?;
         let mut path = PathBuf::from(r["path"].as_str().unwrap_or_default());
         if let Some(out) = out {
@@ -520,7 +550,7 @@ fn backup(repos: &[String], out: Option<&Path>) -> Result<()> {
 /// store or a remote into a new repository and replays its log.
 fn restore(repo: &str, from: &str) -> Result<()> {
     let from = source(from)?;
-    let mut c = connect()?;
+    let mut c = session_or_bootstrap(ctx::default_human().ok().as_deref())?;
     let r = call(&mut c, "repo.restore", json!({"repo": repo, "from": from}))?;
     println!(
         "{repo}: restored operations 0..={} (head {})",
@@ -571,10 +601,36 @@ fn repo_name(r: Option<String>) -> Result<String> {
     }
 }
 
-pub(crate) fn human_client(repo: &str) -> Result<Client> {
-    let mut c = connect()?;
-    c.repo = Some(repo.to_string());
-    Ok(c)
+/// A client acting for `human` on `repo`, with a human session.
+pub(crate) fn human_client(repo: &str, human: &str) -> Result<Client> {
+    ctx::human_client(Some(repo), human)
+}
+
+/// A client with a human session that is not about one repository
+/// (`repo.list`, `queue.run`, `daemon.prepare_rotate`).
+pub(crate) fn human_client_any(human: &str) -> Result<Client> {
+    ctx::human_client(None, human)
+}
+
+/// For `init` and `restore`: a human session when the human has one to
+/// open, else no credential, which the daemon accepts only while it
+/// serves no repository yet (bootstrap).
+fn session_or_bootstrap(human: Option<&str>) -> Result<Client> {
+    match human {
+        Some(h) => match human_client_any(h) {
+            Ok(c) => Ok(c),
+            Err(_) => connect(),
+        },
+        None => connect(),
+    }
+}
+
+/// The human a workspace was created for, else the default identity.
+fn workspace_human(ws: &Workspace) -> Result<String> {
+    match &ws.meta.human {
+        Some(h) => Ok(h.clone()),
+        None => ctx::default_human(),
+    }
 }
 
 /// Signs and submits a human operation; prints the decision.
@@ -705,6 +761,45 @@ fn run(cmd: Cmd) -> Result<()> {
             println!("{name}: {} {}", k.alg, k.public);
             Ok(())
         }
+        Cmd::Human(HumanCmd::Login { repo, ttl, human }) => {
+            let human = human_name(human)?;
+            let ttl = match ttl {
+                Some(t) => ctx::duration_ms(&t)?,
+                None => lonca_daemon::service::HUMAN_SESSION_DEFAULT_MS,
+            };
+            let mut c = connect()?;
+            c.repo = repo;
+            let s = ctx::login(&mut c, &human, ttl)?;
+            let who = call(&mut c, "whoami", json!({}))?;
+            let repos: Vec<&str> = who["repos"]
+                .as_array()
+                .map(|a| a.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            println!(
+                "{human}: signed in for {} (until {}); enrolled in: {}",
+                ctx::describe_ms(ttl),
+                s.expires_ms,
+                if repos.is_empty() {
+                    "no repository".to_string()
+                } else {
+                    repos.join(", ")
+                }
+            );
+            Ok(())
+        }
+        Cmd::Human(HumanCmd::Logout { human }) => {
+            let human = human_name(human)?;
+            if let Some(s) = ctx::read_session(&human)
+                && let Ok(mut c) = connect()
+            {
+                c.token = Some(s.token);
+                // A session the daemon no longer knows is already ended.
+                let _ = c.call("human.logout", json!({}));
+            }
+            ctx::clear_session(&human)?;
+            println!("{human}: signed out");
+            Ok(())
+        }
         Cmd::Human(HumanCmd::Enroll {
             name,
             alg,
@@ -713,7 +808,7 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         }) => {
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             submit(
                 &mut c,
                 &human,
@@ -737,7 +832,7 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         }) => {
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             submit(
                 &mut c,
                 &human,
@@ -777,7 +872,7 @@ fn run(cmd: Cmd) -> Result<()> {
         } => {
             let human = human_name(human)?;
             let key = ctx::human_public(&human)?;
-            let mut c = connect()?;
+            let mut c = session_or_bootstrap(Some(&human))?;
             let prep = call(
                 &mut c,
                 "repo.prepare_init",
@@ -803,7 +898,7 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         }) => {
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             let session = lonca_core::canonical::random_id("ses");
             let op = Op::SessionStart {
                 session: session.clone(),
@@ -846,7 +941,7 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         }) => {
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             submit(&mut c, &human, &repo, Op::CapRevoke { session, reason })?;
             Ok(())
         }
@@ -857,7 +952,7 @@ fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Workspace(WorkspaceCmd::Create { dir, repo, human }) => {
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             let ws = Workspace::create(&mut c, &ctx::absolute(&dir)?, &repo, None, Some(human))?;
             println!(
                 "workspace {} at {}",
@@ -868,11 +963,14 @@ fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Sync => {
             let mut ws = Workspace::current()?;
-            let mut c = connect()?;
-            match &ws.meta.session {
-                Some(_) => c.token = Some(ws.token()?),
-                None => c.repo = Some(ws.meta.repo.clone()),
-            }
+            let mut c = match &ws.meta.session {
+                Some(_) => {
+                    let mut c = connect()?;
+                    c.token = Some(ws.token()?);
+                    c
+                }
+                None => human_client(&ws.meta.repo, &workspace_human(&ws)?)?,
+            };
             let r = ws.sync(&mut c)?;
             println!(
                 "{} -> {}: {} updated, {} merged, {} conflicts",
@@ -890,18 +988,27 @@ fn run(cmd: Cmd) -> Result<()> {
         Cmd::Status {
             repo,
             json: as_json,
+            human,
         } => {
             let mut c = match repo {
-                Some(r) => human_client(&r)?,
+                Some(r) => human_client(&r, &human_name(human)?)?,
                 None => {
                     let ws =
                         Workspace::current().context("pass --repo or run inside a workspace")?;
-                    let mut c = connect()?;
                     match ws.meta.session {
-                        Some(_) => c.token = Some(ws.token()?),
-                        None => c.repo = Some(ws.meta.repo.clone()),
+                        Some(_) => {
+                            let mut c = connect()?;
+                            c.token = Some(ws.token()?);
+                            c
+                        }
+                        None => {
+                            let human = match human {
+                                Some(h) => h,
+                                None => workspace_human(&ws)?,
+                            };
+                            human_client(&ws.meta.repo, &human)?
+                        }
                     }
-                    c
                 }
             };
             let s = call(&mut c, "status", json!({}))?;
@@ -919,9 +1026,9 @@ fn run(cmd: Cmd) -> Result<()> {
                 println!("no local changes");
                 return Ok(());
             }
-            let mut c = connect()?;
             let facts = match &ws.meta.session {
                 Some(_) => {
+                    let mut c = connect()?;
                     c.token = Some(ws.token()?);
                     call(
                         &mut c,
@@ -930,8 +1037,8 @@ fn run(cmd: Cmd) -> Result<()> {
                     )?
                 }
                 None => {
-                    c.repo = Some(ws.meta.repo.clone());
-                    let human = ws.meta.human.clone().unwrap_or(ctx::default_human()?);
+                    let human = workspace_human(&ws)?;
+                    let mut c = human_client(&ws.meta.repo, &human)?;
                     call(
                         &mut c,
                         "human.prepare_change",
@@ -1035,8 +1142,8 @@ fn run(cmd: Cmd) -> Result<()> {
                     )?
                 }
                 None => {
-                    let human = ws.meta.human.clone().unwrap_or(ctx::default_human()?);
-                    c.repo = Some(ws.meta.repo.clone());
+                    let human = workspace_human(&ws)?;
+                    c = human_client(&ws.meta.repo, &human)?;
                     let prep = call(
                         &mut c,
                         "human.prepare_change",
@@ -1067,8 +1174,12 @@ fn run(cmd: Cmd) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Change { change, repo } => {
-            let mut c = human_client(&repo_name(repo)?)?;
+        Cmd::Change {
+            change,
+            repo,
+            human,
+        } => {
+            let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&call(
@@ -1079,8 +1190,8 @@ fn run(cmd: Cmd) -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Pending { repo } => {
-            let mut c = human_client(&repo_name(repo)?)?;
+        Cmd::Pending { repo, human } => {
+            let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
             let s = call(&mut c, "status", json!({}))?;
             for p in s["pending"].as_array().cloned().unwrap_or_default() {
                 println!(
@@ -1103,7 +1214,7 @@ fn run(cmd: Cmd) -> Result<()> {
         } => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             submit(
                 &mut c,
                 &human,
@@ -1120,8 +1231,9 @@ fn run(cmd: Cmd) -> Result<()> {
             from,
             limit,
             json: as_json,
+            human,
         } => {
-            let mut c = human_client(&repo_name(repo)?)?;
+            let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
             let ops = call(&mut c, "log", json!({"from": from, "limit": limit}))?;
             if as_json {
                 println!("{}", serde_json::to_string_pretty(&ops)?);
@@ -1153,9 +1265,9 @@ fn run(cmd: Cmd) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Policy(PolicyCmd::Show { repo }) => {
+        Cmd::Policy(PolicyCmd::Show { repo, human }) => {
             let repo = repo_name(repo)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human_name(human)?)?;
             let s = call(&mut c, "status", json!({}))?;
             let policy: GitId = serde_json::from_value(s["policy"].clone())?;
             for f in workspace::fetch(&mut c, &policy, None)? {
@@ -1174,7 +1286,7 @@ fn run(cmd: Cmd) -> Result<()> {
         }) => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             let prep = call(
                 &mut c,
                 "human.prepare_policy",
@@ -1195,7 +1307,7 @@ fn run(cmd: Cmd) -> Result<()> {
         } => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             let prep = call(&mut c, "human.prepare_push", json!({"remote": remote}))?;
             let r = submit(
                 &mut c,
@@ -1216,7 +1328,7 @@ fn run(cmd: Cmd) -> Result<()> {
         } => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             let prep = call(
                 &mut c,
                 "human.prepare_import",
@@ -1236,8 +1348,9 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         } => {
             let repo = repo_name(repo)?;
-            let mut c = human_client(&repo)?;
-            submit(&mut c, &human_name(human)?, &repo, Op::Freeze { reason })?;
+            let human = human_name(human)?;
+            let mut c = human_client(&repo, &human)?;
+            submit(&mut c, &human, &repo, Op::Freeze { reason })?;
             Ok(())
         }
         Cmd::Redact {
@@ -1247,14 +1360,10 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         } => {
             let repo = repo_name(repo)?;
-            let mut c = human_client(&repo)?;
+            let human = human_name(human)?;
+            let mut c = human_client(&repo, &human)?;
             let blob = GitId::parse(&blob)?;
-            submit(
-                &mut c,
-                &human_name(human)?,
-                &repo,
-                Op::Redact { blob, reason },
-            )?;
+            submit(&mut c, &human, &repo, Op::Redact { blob, reason })?;
             println!(
                 "note: the blob is withheld by Lonca; copies already pushed to other remotes are not removed."
             );
@@ -1266,14 +1375,15 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         } => {
             let repo = repo_name(repo)?;
-            let mut c = human_client(&repo)?;
-            submit(&mut c, &human_name(human)?, &repo, Op::Unfreeze { reason })?;
+            let human = human_name(human)?;
+            let mut c = human_client(&repo, &human)?;
+            submit(&mut c, &human, &repo, Op::Unfreeze { reason })?;
             Ok(())
         }
         Cmd::Undo { seq, repo, human } => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             undo::undo(&mut c, &human, &repo, seq)
         }
         Cmd::Revert {
@@ -1285,7 +1395,7 @@ fn run(cmd: Cmd) -> Result<()> {
         } => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
-            let mut c = human_client(&repo)?;
+            let mut c = human_client(&repo, &human)?;
             undo::revert(&mut c, &human, &repo, &actor, since_seq, apply)
         }
         Cmd::Backup { repo, out } => {
@@ -1294,7 +1404,7 @@ fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Restore { repo, from } => restore(&repo, &from),
         Cmd::Queue => {
-            let mut c = connect()?;
+            let mut c = human_client_any(&ctx::default_human()?)?;
             println!("{}", call(&mut c, "queue.run", json!({}))?);
             Ok(())
         }
@@ -1305,7 +1415,7 @@ fn run(cmd: Cmd) -> Result<()> {
             repo,
             json: as_json,
         } => {
-            let mut c = human_client(&repo_name(repo)?)?;
+            let mut c = human_client(&repo_name(repo)?, &ctx::default_human()?)?;
             let advice = advise::advise(&mut c, &change)?;
             if as_json {
                 println!("{}", serde_json::to_string_pretty(&advice)?);

@@ -2,7 +2,7 @@
 
 use lonca_core::canonical::canonical_bytes;
 use lonca_core::keys::verify_hex;
-use lonca_core::ops::{HumanIntent, HumanKey, HumanSignature, Op};
+use lonca_core::ops::{HumanIntent, HumanKey, HumanSignature, LoginIntent, Op};
 
 /// How far a signature's `issued_ms` may lie from the daemon's clock.
 pub const MAX_AGE_MS: i64 = 10 * 60 * 1000;
@@ -36,16 +36,70 @@ pub fn verify(
     sig: &HumanSignature,
     now_ms: i64,
 ) -> Result<(), &'static str> {
+    check_fresh(sig, now_ms)?;
+    let msg = intent_bytes(repo, op, &sig.nonce, sig.issued_ms);
+    verify_bytes(key, &msg, &sig.sig)
+}
+
+/// The age and nonce checks every human signature gets, before any key
+/// is looked up.
+pub fn check_fresh(sig: &HumanSignature, now_ms: i64) -> Result<(), &'static str> {
     if sig.issued_ms > now_ms + MAX_SKEW_MS || sig.issued_ms < now_ms - MAX_AGE_MS {
         return Err("stale_human_signature");
     }
     if sig.nonce.len() < 16 || sig.nonce.len() > 128 {
         return Err("bad_nonce");
     }
-    let msg = intent_bytes(repo, op, &sig.nonce, sig.issued_ms);
+    Ok(())
+}
+
+/// What a human signs to open a session: a different purpose string from
+/// operation intents, so neither signature can stand in for the other.
+pub fn login_bytes(
+    repo: Option<&str>,
+    human: &str,
+    ttl_ms: i64,
+    nonce: &str,
+    issued_ms: i64,
+) -> Vec<u8> {
+    canonical_bytes(&LoginIntent::new(repo, human, ttl_ms, nonce, issued_ms))
+}
+
+/// Signs a login with a file key (development signer: no user presence).
+pub fn sign_login_ed25519(
+    key: &lonca_core::keys::KeyPair,
+    human: &str,
+    repo: Option<&str>,
+    ttl_ms: i64,
+    now_ms: i64,
+) -> HumanSignature {
+    let nonce = lonca_core::canonical::random_id("nonce");
+    HumanSignature {
+        human: human.to_string(),
+        sig: key.sign_hex(&login_bytes(repo, human, ttl_ms, &nonce, now_ms)),
+        nonce,
+        issued_ms: now_ms,
+    }
+}
+
+/// Verifies a login signature against one enrolled key. `sig.human` is
+/// the name signed; the caller decides which key that name has.
+pub fn verify_login(
+    key: &HumanKey,
+    repo: Option<&str>,
+    ttl_ms: i64,
+    sig: &HumanSignature,
+    now_ms: i64,
+) -> Result<(), &'static str> {
+    check_fresh(sig, now_ms)?;
+    let msg = login_bytes(repo, &sig.human, ttl_ms, &sig.nonce, sig.issued_ms);
+    verify_bytes(key, &msg, &sig.sig)
+}
+
+fn verify_bytes(key: &HumanKey, msg: &[u8], sig_hex: &str) -> Result<(), &'static str> {
     let ok = match key.alg.as_str() {
-        "ed25519" => verify_hex(&key.public, &msg, &sig.sig),
-        "p256-se" => crate::human::p256::verify(&key.public, &msg, &sig.sig),
+        "ed25519" => verify_hex(&key.public, msg, sig_hex),
+        "p256-se" => crate::human::p256::verify(&key.public, msg, sig_hex),
         _ => false,
     };
     if ok {
@@ -82,6 +136,56 @@ pub mod p256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_login_signature_is_not_an_operation_signature() {
+        let kp = lonca_core::keys::KeyPair::generate();
+        let key = HumanKey {
+            alg: "ed25519".into(),
+            public: kp.public_hex(),
+        };
+        let now = 1_760_000_000_000;
+        let login = sign_login_ed25519(&kp, "ayse", Some("demo"), 3_600_000, now);
+        assert_eq!(
+            verify_login(&key, Some("demo"), 3_600_000, &login, now),
+            Ok(())
+        );
+        // Every field is bound: repo, ttl, name, and the purpose string.
+        assert!(verify_login(&key, None, 3_600_000, &login, now).is_err());
+        assert!(verify_login(&key, Some("demo"), 3_600_001, &login, now).is_err());
+        let mut renamed = login.clone();
+        renamed.human = "bora".into();
+        assert!(verify_login(&key, Some("demo"), 3_600_000, &renamed, now).is_err());
+        let op = Op::Freeze { reason: "x".into() };
+        assert_eq!(
+            verify(&key, "demo", &op, &login, now),
+            Err("bad_human_signature")
+        );
+        let signed = sign_ed25519(&kp, "ayse", "demo", &op, now);
+        assert_eq!(
+            verify_login(&key, Some("demo"), 3_600_000, &signed, now),
+            Err("bad_human_signature")
+        );
+        // Freshness is checked before the key.
+        assert_eq!(
+            verify_login(&key, Some("demo"), 3_600_000, &login, now + MAX_AGE_MS + 1),
+            Err("stale_human_signature")
+        );
+        let mut short = login.clone();
+        short.nonce = "short".into();
+        assert_eq!(
+            verify_login(&key, Some("demo"), 3_600_000, &short, now),
+            Err("bad_nonce")
+        );
+        let unknown = HumanKey {
+            alg: "rsa".into(),
+            public: kp.public_hex(),
+        };
+        assert_eq!(
+            verify_login(&unknown, Some("demo"), 3_600_000, &login, now),
+            Err("bad_human_signature")
+        );
+    }
 
     #[test]
     fn p256_software_key_round_trip() {

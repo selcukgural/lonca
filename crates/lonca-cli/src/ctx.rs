@@ -6,7 +6,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use lonca_core::keys::KeyPair;
 use lonca_core::ops::{HumanSignature, Op};
 use lonca_daemon::Client;
-use serde_json::Value;
+use lonca_daemon::service::HUMAN_SESSION_DEFAULT_MS;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 pub fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
@@ -208,6 +210,199 @@ pub fn sign(human: &str, repo: &str, op: &Op) -> Result<HumanSignature> {
     ))
 }
 
+// ---------------------------------------------------------------- human sessions
+
+/// A human session kept between commands (`<humans>/<name>.session`,
+/// 0600). Anything running as the developer can read it, agents
+/// included: that is why it is short, and why it can only read, prepare
+/// and run the queue, never sign (docs/decisions.md, "Daemon
+/// authentication").
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Session {
+    pub token: String,
+    pub expires_ms: i64,
+}
+
+pub fn session_path(name: &str) -> PathBuf {
+    humans_dir().join(format!("{name}.session"))
+}
+
+pub fn read_session(name: &str) -> Option<Session> {
+    let bytes = std::fs::read(session_path(name)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_session(name: &str, s: &Session) -> Result<()> {
+    std::fs::create_dir_all(humans_dir())?;
+    let p = session_path(name);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    use std::io::Write;
+    opts.open(&p)
+        .with_context(|| format!("cannot write {}", p.display()))?
+        .write_all(&serde_json::to_vec(s)?)?;
+    Ok(())
+}
+
+pub fn clear_session(name: &str) -> Result<()> {
+    match std::fs::remove_file(session_path(name)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// `1h`, `30m`, `90s`, else milliseconds.
+pub fn describe_ms(ms: i64) -> String {
+    if ms > 0 && ms % 3_600_000 == 0 {
+        format!("{}h", ms / 3_600_000)
+    } else if ms > 0 && ms % 60_000 == 0 {
+        format!("{}m", ms / 60_000)
+    } else if ms > 0 && ms % 1000 == 0 {
+        format!("{}s", ms / 1000)
+    } else {
+        format!("{ms}ms")
+    }
+}
+
+/// What the Touch ID prompt says for a login.
+pub fn describe_login(human: &str, repo: Option<&str>, ttl_ms: i64) -> String {
+    let scope = match repo {
+        Some(r) => format!(" to {r}"),
+        None => String::new(),
+    };
+    format!(
+        "Lonca: sign in as {human}{scope} for {} (reads and prepares only)",
+        describe_ms(ttl_ms)
+    )
+}
+
+/// The keys a human may sign in with: the current one, and the one a
+/// rotation or recovery left waiting (`<name>.next.se|key`) when it was
+/// interrupted after some repositories had already taken it.
+fn login_keys(human: &str) -> Vec<(PathBuf, bool)> {
+    let dir = humans_dir();
+    [
+        (se_key_path(human), true),
+        (human_key_path(human), false),
+        (dir.join(format!("{human}.next.se")), true),
+        (dir.join(format!("{human}.next.key")), false),
+    ]
+    .into_iter()
+    .filter(|(p, _)| p.exists())
+    .collect()
+}
+
+/// Signs a login intent with the key at `path`: the Secure Enclave
+/// helper (presence) or a file key.
+fn sign_login_with(
+    path: &Path,
+    secure_enclave: bool,
+    human: &str,
+    repo: Option<&str>,
+    ttl_ms: i64,
+) -> Result<HumanSignature> {
+    if secure_enclave {
+        let nonce = lonca_core::canonical::random_id("nonce");
+        let issued_ms = now_ms();
+        let msg = lonca_policy::human::login_bytes(repo, human, ttl_ms, &nonce, issued_ms);
+        let sig = run_helper(
+            &[
+                "sign",
+                &path.to_string_lossy(),
+                &describe_login(human, repo, ttl_ms),
+            ],
+            Some(&msg),
+        )?;
+        return Ok(HumanSignature {
+            human: human.to_string(),
+            nonce,
+            issued_ms,
+            sig,
+        });
+    }
+    let key = KeyPair::load(path).map_err(|e| anyhow!("human key {}: {e}", path.display()))?;
+    Ok(lonca_policy::human::sign_login_ed25519(
+        &key,
+        human,
+        repo,
+        ttl_ms,
+        now_ms(),
+    ))
+}
+
+/// Opens a human session on the daemon (against `c.repo` when set) and
+/// keeps it for the next commands. The client carries it from here on.
+/// Tries the current key first, then a waiting next key.
+pub fn login(c: &mut Client, human: &str, ttl_ms: i64) -> Result<Session> {
+    let repo = c.repo.clone();
+    let keys = login_keys(human);
+    if keys.is_empty() {
+        bail!(
+            "no key for {human} in {} (run `lonca human keygen {human}`, or `lonca human recover` with the recovery key)",
+            humans_dir().display()
+        );
+    }
+    c.token = None;
+    let mut last = None;
+    let mut r = Value::Null;
+    for (path, se) in keys {
+        let sig = sign_login_with(&path, se, human, repo.as_deref(), ttl_ms)?;
+        match call(c, "human.login", json!({"sig": sig, "ttl_ms": ttl_ms})) {
+            Ok(v) => {
+                r = v;
+                last = None;
+                break;
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    if let Some(e) = last {
+        return Err(e);
+    }
+    let s = Session {
+        token: r["token"]
+            .as_str()
+            .context("human.login returned no token")?
+            .to_string(),
+        expires_ms: r["expires_ms"].as_i64().unwrap_or(now_ms() + ttl_ms),
+    };
+    write_session(human, &s)?;
+    c.token = Some(s.token.clone());
+    Ok(s)
+}
+
+/// A client with a human session for `repo` (or, with none, for any
+/// repository the human is enrolled in): the kept session if the daemon
+/// still accepts it, else a fresh login. A file key never prompts; a
+/// Secure Enclave key prompts once per session.
+pub fn human_client(repo: Option<&str>, human: &str) -> Result<Client> {
+    let mut c = connect()?;
+    c.repo = repo.map(String::from);
+    if let Some(s) = read_session(human)
+        && s.expires_ms > now_ms() + 30_000
+    {
+        c.token = Some(s.token);
+        if let Ok(who) = c.call("whoami", json!({}))
+            && who["human"] == human
+            && let Some(repos) = who["repos"].as_array()
+            && match repo {
+                Some(r) => repos.iter().any(|x| x == r),
+                None => !repos.is_empty(),
+            }
+        {
+            return Ok(c);
+        }
+    }
+    login(&mut c, human, HUMAN_SESSION_DEFAULT_MS)?;
+    Ok(c)
+}
+
 /// Parses `90s`, `30m`, `2h`, `1d` or plain milliseconds.
 pub fn duration_ms(s: &str) -> Result<i64> {
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
@@ -234,6 +429,21 @@ pub fn absolute(p: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_login_prompt_names_the_human_the_repository_and_the_length() {
+        assert_eq!(
+            describe_login("ayse", Some("demo"), 3_600_000),
+            "Lonca: sign in as ayse to demo for 1h (reads and prepares only)"
+        );
+        assert_eq!(
+            describe_login("ayse", None, 90_000),
+            "Lonca: sign in as ayse for 90s (reads and prepares only)"
+        );
+        assert_eq!(describe_ms(30 * 60_000), "30m");
+        assert_eq!(describe_ms(1_500), "1500ms");
+        assert_eq!(describe_ms(0), "0ms");
+    }
 
     #[test]
     fn the_touch_id_prompt_names_the_repository_and_the_key_change() {

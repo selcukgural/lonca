@@ -24,7 +24,7 @@ fn sessions_with_tokens(e: &Env) -> Vec<String> {
     let text = std::fs::read_to_string(e.root.join("home/tokens.json")).unwrap();
     let map: serde_json::Map<String, Value> = serde_json::from_str(&text).unwrap();
     map.values()
-        .map(|v| v["session"].as_str().unwrap().to_string())
+        .filter_map(|v| v["session"].as_str().map(str::to_string))
         .collect()
 }
 
@@ -43,10 +43,18 @@ fn rotation_and_recovery_end_tokens_and_the_log_audits() {
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     refused(&mut e, &t1);
     assert!(sessions_with_tokens(&e).is_empty());
-    // The old key is refused from now on.
-    let r = e.human(Op::Freeze { reason: "x".into() });
+    // The old key is refused from now on: it opens no session, and a
+    // signature by it is denied.
+    let old = std::mem::replace(&mut e.human, new);
+    let op = Op::Freeze { reason: "x".into() };
+    let body = json!({"op": op, "sig": sign_ed25519(&old, "ayse", "demo", &op, e.now())});
+    let r = e.ok("human.submit", Some("demo"), None, body);
     assert_eq!(r["decision"]["reasons"][0], "bad_human_signature");
-    e.human = new;
+    let sig = sign_login_ed25519(&old, "ayse", None, 60_000, e.now());
+    let err = e
+        .anon("human.login", None, None, json!({"sig": sig}))
+        .unwrap_err();
+    assert_eq!(err.0, "unauthenticated", "{err:?}");
 
     let t2 = e.session("s2", &["src/**"]);
     let rec = KeyPair::generate();

@@ -4,7 +4,7 @@
 //! $LONCA_HOME/
 //!   daemon.key        ed25519 signing key (0600)
 //!   daemon.next.key   the key a rotation in progress moves to (0600)
-//!   tokens.json       sha256(session token) -> session (0600)
+//!   tokens.json       sha256(token) -> agent session or human session (0600)
 //!   lonca.sock        Unix socket
 //!   repos/<name>.git  bare Git stores
 //!   scratch/          verifier work trees
@@ -155,10 +155,21 @@ impl Home {
     }
 }
 
+/// What a token stands for. Agent entries predate human sessions and are
+/// stored without a tag; the two shapes share no required field, so an
+/// untagged enum reads both.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TokenEntry {
-    pub repo: String,
-    pub session: String,
+#[serde(untagged)]
+pub enum TokenEntry {
+    /// An agent session of one repository.
+    Agent { repo: String, session: String },
+    /// A human session (`human.login`): the human proved presence with
+    /// `key`, and the session is good wherever that key is enrolled.
+    Human {
+        human: String,
+        key: String,
+        expires_ms: i64,
+    },
 }
 
 /// Session tokens. Only their SHA-256 is stored, never the token itself.
@@ -182,14 +193,29 @@ impl Tokens {
     }
 
     pub fn issue(&mut self, repo: &str, session: &str) -> Result<String> {
-        let token = format!("lonca_{}", hex::encode(random_bytes::<32>()));
-        self.map.insert(
-            sha256_hex(token.as_bytes()),
-            TokenEntry {
+        self.insert(
+            "lonca_",
+            TokenEntry::Agent {
                 repo: repo.into(),
                 session: session.into(),
             },
-        );
+        )
+    }
+
+    pub fn issue_human(&mut self, human: &str, key: &str, expires_ms: i64) -> Result<String> {
+        self.insert(
+            "lonca_h_",
+            TokenEntry::Human {
+                human: human.into(),
+                key: key.into(),
+                expires_ms,
+            },
+        )
+    }
+
+    fn insert(&mut self, prefix: &str, entry: TokenEntry) -> Result<String> {
+        let token = format!("{prefix}{}", hex::encode(random_bytes::<32>()));
+        self.map.insert(sha256_hex(token.as_bytes()), entry);
         self.save()?;
         Ok(token)
     }
@@ -198,10 +224,33 @@ impl Tokens {
         self.map.get(&sha256_hex(token.as_bytes()))
     }
 
+    /// Drops one token (logout). Unknown tokens are not an error.
+    pub fn revoke(&mut self, token: &str) -> Result<()> {
+        if self.map.remove(&sha256_hex(token.as_bytes())).is_some() {
+            self.save()?;
+        }
+        Ok(())
+    }
+
     pub fn revoke_sessions(&mut self, repo: &str, sessions: &[String]) -> Result<()> {
         let before = self.map.len();
-        self.map
-            .retain(|_, e| !(e.repo == repo && sessions.contains(&e.session)));
+        self.map.retain(|_, e| match e {
+            TokenEntry::Agent { repo: r, session } => !(r == repo && sessions.contains(session)),
+            TokenEntry::Human { .. } => true,
+        });
+        if self.map.len() != before {
+            self.save()?;
+        }
+        Ok(())
+    }
+
+    /// Drops human sessions that have expired by `now_ms`.
+    pub fn sweep_expired(&mut self, now_ms: i64) -> Result<()> {
+        let before = self.map.len();
+        self.map.retain(|_, e| match e {
+            TokenEntry::Agent { .. } => true,
+            TokenEntry::Human { expires_ms, .. } => *expires_ms > now_ms,
+        });
         if self.map.len() != before {
             self.save()?;
         }
@@ -224,5 +273,57 @@ impl Tokens {
         f.write_all(&serde_json::to_vec_pretty(&self.map)?)?;
         f.sync_all()?;
         fs::rename(&tmp, path).map_err(Error::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_are_stored_as_hashes_and_both_kinds_survive_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        // A file written before human sessions existed.
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"{}\": {{\"repo\": \"demo\", \"session\": \"s0\"}}}}",
+                sha256_hex(b"lonca_old")
+            ),
+        )
+        .unwrap();
+        let mut t = Tokens::load(&path).unwrap();
+        let a = t.issue("demo", "s1").unwrap();
+        let h = t.issue_human("ayse", "ab", 2_000).unwrap();
+        assert!(a.starts_with("lonca_") && h.starts_with("lonca_h_"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains(&a) && !text.contains(&h), "{text}");
+        let t = Tokens::load(&path).unwrap();
+        assert_eq!(
+            t.lookup("lonca_old"),
+            Some(&TokenEntry::Agent {
+                repo: "demo".into(),
+                session: "s0".into()
+            })
+        );
+        assert_eq!(
+            t.lookup(&h),
+            Some(&TokenEntry::Human {
+                human: "ayse".into(),
+                key: "ab".into(),
+                expires_ms: 2_000
+            })
+        );
+        let mut t = t;
+        t.revoke_sessions("demo", &["s1".into()]).unwrap();
+        assert!(t.lookup(&a).is_none() && t.lookup(&h).is_some());
+        t.sweep_expired(1_999).unwrap();
+        assert!(t.lookup(&h).is_some());
+        t.sweep_expired(2_000).unwrap();
+        assert!(t.lookup(&h).is_none());
+        t.revoke("lonca_old").unwrap();
+        t.revoke("lonca_old").unwrap();
+        assert!(Tokens::load(&path).unwrap().lookup("lonca_old").is_none());
     }
 }

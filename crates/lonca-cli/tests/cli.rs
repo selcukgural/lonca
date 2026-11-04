@@ -448,7 +448,19 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
         "human", "revoke", "bora", "--repo", "demo", "--reason", "left", "--as", "ayse",
     ];
     assert!(e.run(r, &revoke).contains("allow"));
-    assert!(status_json(&e)["humans"]["bora"].is_null());
+    // `keygen bora` made bora the default identity; revoked, bora can not
+    // even read. Ayse can.
+    let out = e.cmd(r, &["status", "--repo", "demo"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains("login failed"),
+        "{}",
+        text(&out.stderr)
+    );
+    let st: serde_json::Value =
+        serde_json::from_str(&e.run(r, &["status", "--repo", "demo", "--json", "--as", "ayse"]))
+            .unwrap();
+    assert!(st["humans"]["bora"].is_null());
 
     // Bad names never reach a file path.
     let bad = e
@@ -458,26 +470,52 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
     assert!(!bad.status.success());
 }
 
-/// The P-256 base point: a valid SEC1 public key for a fake Secure Enclave.
-const FAKE_SE_PUBLIC: &str = "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5";
-
-/// A stand-in for the `lonca-se` helper that creates and reads key blobs
-/// but cannot sign.
+/// A stand-in for the `lonca-se` helper: one P-256 key made by `openssl`
+/// plays every Secure Enclave key. `keygen` and `public` print its SEC1
+/// point; `sign` signs stdin (ECDSA over SHA-256, DER) without asking
+/// for Touch ID. Returns the script and the public key (hex).
 #[cfg(unix)]
-fn fake_se(e: &Env) -> PathBuf {
+fn fake_se(e: &Env) -> (PathBuf, String) {
     use std::os::unix::fs::PermissionsExt;
+    let pem = e.root.join("fake-se.pem");
+    let out = Command::new("openssl")
+        .args([
+            "ecparam",
+            "-name",
+            "prime256v1",
+            "-genkey",
+            "-noout",
+            "-out",
+        ])
+        .arg(&pem)
+        .output()
+        .expect("openssl");
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let der = Command::new("openssl")
+        .args(["ec", "-pubout", "-outform", "DER", "-in"])
+        .arg(&pem)
+        .output()
+        .unwrap();
+    assert!(der.status.success(), "{}", text(&der.stderr));
+    // SubjectPublicKeyInfo ends with the 65-byte uncompressed point.
+    let point = &der.stdout[der.stdout.len() - 65..];
+    assert_eq!(point[0], 4);
+    let public = point.iter().map(|b| format!("{b:02x}")).collect::<String>();
     let p = e.root.join("fake-se");
     let script = format!(
         "#!/bin/sh\n\
          case \"$1\" in\n\
-         keygen) echo blob > \"$2\" && echo {FAKE_SE_PUBLIC} ;;\n\
-         public) test -f \"$2\" || {{ echo \"no key $2\" >&2; exit 1; }}; echo {FAKE_SE_PUBLIC} ;;\n\
+         keygen) echo blob > \"$2\" && echo {public} ;;\n\
+         public) test -f \"$2\" || {{ echo \"no key $2\" >&2; exit 1; }}; echo {public} ;;\n\
+         sign) test -f \"$2\" || {{ echo \"no key $2\" >&2; exit 1; }}; \
+         openssl dgst -sha256 -sign {} | od -An -v -tx1 | tr -d ' \\n' ;;\n\
          *) echo \"unsupported: $1\" >&2; exit 1 ;;\n\
-         esac\n"
+         esac\n",
+        pem.display()
     );
     std::fs::write(&p, script).unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    p
+    (p, public)
 }
 
 #[cfg(unix)]
@@ -485,7 +523,7 @@ fn fake_se(e: &Env) -> PathBuf {
 fn secure_enclave_keys_through_a_fake_helper() {
     let e = Env::new();
     let r = &e.root;
-    let se = fake_se(&e);
+    let (se, public) = fake_se(&e);
     let run_se = |args: &[&str]| {
         let out = e.cmd(r, args).env("LONCA_SE", &se).output().unwrap();
         assert!(
@@ -503,18 +541,40 @@ fn secure_enclave_keys_through_a_fake_helper() {
     assert!(e.run(r, &["init", "demo"]).contains("allow"));
     let out = run_se(&["human", "rotate", "--repo", "demo", "--secure-enclave"]);
     assert!(out.contains("allow"), "{out}");
-    let st = status_json(&e);
+    // The session opened with the file key died with the rotation; the
+    // next read signs in again, through the helper (Touch ID for real).
+    let st: serde_json::Value =
+        serde_json::from_str(&run_se(&["status", "--repo", "demo", "--json"])).unwrap();
     assert_eq!(st["humans"]["ayse"]["alg"], "p256-se");
-    assert_eq!(st["humans"]["ayse"]["public"], FAKE_SE_PUBLIC);
+    assert_eq!(st["humans"]["ayse"]["public"], public);
     assert!(r.join("humans/ayse.se").exists());
     assert!(!r.join("humans/ayse.key").exists());
     let out = run_se(&["human", "whoami"]);
-    assert_eq!(out.trim(), format!("ayse: p256-se {FAKE_SE_PUBLIC}"));
+    assert_eq!(out.trim(), format!("ayse: p256-se {public}"));
+    // Without the helper there is no way to sign in.
+    let out = e
+        .cmd(r, &["human", "logout"])
+        .env("LONCA_SE", &se)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let out = e.cmd(r, &["status", "--repo", "demo"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains("lonca-se helper not found"),
+        "{}",
+        text(&out.stderr)
+    );
+    let out = run_se(&["human", "login", "--ttl", "30m"]);
+    assert!(
+        out.contains("ayse: signed in for 30m") && out.contains("enrolled in: demo"),
+        "{out}"
+    );
 
     // A new Secure Enclave identity prints the helper's public key.
     let out = run_se(&["human", "keygen", "bora", "--secure-enclave"]);
     assert!(
-        out.starts_with(&format!("bora: p256-se {FAKE_SE_PUBLIC}\n")),
+        out.starts_with(&format!("bora: p256-se {public}\n")),
         "{out}"
     );
 }

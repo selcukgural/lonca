@@ -11,18 +11,19 @@ use base64::Engine;
 use lonca_core::canonical::random_id;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp};
-use lonca_core::ops::{Actor, BindChecks, Claim, Op};
+use lonca_core::ops::{Actor, BindChecks, Claim, HumanKey, Op};
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
-use lonca_policy::decide::level_for;
+use lonca_policy::decide::{level_for, valid_token};
+use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate};
 use lonca_verify::Verifier;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::home::{Home, Tokens};
+use crate::home::{Home, TokenEntry, Tokens};
 use crate::hooks;
 use crate::protocol::*;
 use crate::repo::{HUMAN_HEADER, POLICY_REF, RepoHandle, SESSION_HEADER, TRUNK_REF};
@@ -58,6 +59,129 @@ impl Default for Settings {
 }
 
 type Hr = std::result::Result<Value, (String, String)>;
+
+/// Length of a human session when `human.login` names none.
+pub const HUMAN_SESSION_DEFAULT_MS: i64 = 60 * 60 * 1000;
+/// The longest human session a login may ask for.
+pub const HUMAN_SESSION_MAX_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// What a request must carry before its method runs. Deny by default: a
+/// method not in [`METHODS`] does not exist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cred {
+    /// Nothing.
+    Public,
+    /// A presence signature inside the request (`human.login`).
+    Login,
+    /// An agent session token; the repository is the token's.
+    Agent,
+    /// A human session whose key is enrolled in the request's repository.
+    Human,
+    /// A human session whose key is enrolled in at least one repository.
+    AnyHuman,
+    /// `AnyHuman`, or nothing while the daemon serves no repository yet
+    /// (the first `lonca init` or `lonca restore`): there is no key to
+    /// check against, and the socket is the only guard, as it was.
+    Bootstrap,
+    /// `Agent` (for the token's repository) or `Human`.
+    Read,
+    /// Any live token, agent or human.
+    Any,
+}
+
+impl Cred {
+    /// The name used in `docs/decisions.md`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Cred::Public => "public",
+            Cred::Login => "login",
+            Cred::Agent => "agent",
+            Cred::Human => "human",
+            Cred::AnyHuman => "any human",
+            Cred::Bootstrap => "bootstrap",
+            Cred::Read => "read",
+            Cred::Any => "any",
+        }
+    }
+}
+
+/// Every method the daemon answers and what it requires. The table in
+/// `docs/decisions.md` ("Daemon authentication") repeats it; a test keeps
+/// the two equal.
+pub const METHODS: &[(&str, Cred)] = &[
+    ("ping", Cred::Public),
+    ("human.login", Cred::Login),
+    ("human.logout", Cred::Public),
+    ("whoami", Cred::Any),
+    ("repo.list", Cred::AnyHuman),
+    ("repo.prepare_init", Cred::Bootstrap),
+    ("repo.init", Cred::Bootstrap),
+    ("repo.restore", Cred::Bootstrap),
+    ("repo.backup", Cred::Human),
+    ("daemon.prepare_rotate", Cred::AnyHuman),
+    ("status", Cred::Read),
+    ("log", Cred::Read),
+    ("tree", Cred::Read),
+    ("change.get", Cred::Read),
+    ("human.prepare_change", Cred::Human),
+    ("human.prepare_policy", Cred::Human),
+    ("human.prepare_import", Cred::Human),
+    ("human.prepare_push", Cred::Human),
+    ("human.submit", Cred::Human),
+    ("lease.acquire", Cred::Agent),
+    ("lease.release", Cred::Agent),
+    ("lease.renew", Cred::Agent),
+    ("change.propose", Cred::Agent),
+    ("change.withdraw", Cred::Agent),
+    ("facts.preview", Cred::Agent),
+    ("negotiate", Cred::Agent),
+    ("cap.attenuate", Cred::Agent),
+    ("session.end", Cred::Agent),
+    ("hook.event", Cred::Agent),
+    ("hook.bind", Cred::Agent),
+    ("queue.run", Cred::AnyHuman),
+];
+
+/// Who sent a request, as far as its token says.
+#[derive(Clone, Debug)]
+enum Caller {
+    Anonymous,
+    Agent {
+        repo: String,
+        actor: Actor,
+    },
+    /// A human session: the name and the public key it was opened with.
+    Human {
+        human: String,
+        key: String,
+    },
+}
+
+/// A request that passed its method's credential check.
+struct Auth {
+    caller: Caller,
+    /// The repository the request acts on, when the method has one.
+    repo: Option<String>,
+}
+
+impl Auth {
+    fn repo(&self) -> std::result::Result<String, (String, String)> {
+        self.repo
+            .clone()
+            .ok_or_else(|| ("invalid".into(), "missing repo".into()))
+    }
+
+    /// A human session may only submit what its own human signed.
+    fn same_human(&self, signer: &str) -> std::result::Result<(), (String, String)> {
+        match &self.caller {
+            Caller::Human { human, .. } if human != signer => fail(
+                "forbidden",
+                format!("a session of {human} can not submit a signature by {signer}"),
+            ),
+            _ => Ok(()),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProxyVerdict {
@@ -126,6 +250,8 @@ struct Inner {
     /// They accept nothing but `daemon.recover`.
     foreign: BTreeMap<String, RepoHandle>,
     tokens: Tokens,
+    /// Nonces of recent logins, so a login signature opens one session.
+    login_nonces: BTreeMap<String, i64>,
     prepared: BTreeMap<String, Op>,
     /// (repo, session) -> workspace root, as reported at bind time.
     workspaces: BTreeMap<(String, String), PathBuf>,
@@ -178,6 +304,7 @@ impl Service {
                 repos,
                 foreign,
                 tokens,
+                login_nonces: BTreeMap::new(),
                 prepared: BTreeMap::new(),
                 workspaces: BTreeMap::new(),
             }),
@@ -257,28 +384,42 @@ impl Service {
 
     fn dispatch(&self, req: &Request) -> Hr {
         let p = &req.params;
+        let Some(&(_, cred)) = METHODS.iter().find(|(m, _)| *m == req.method) else {
+            return fail("unknown_method", format!("unknown method {}", req.method));
+        };
+        // The one human operation that needs no session: the key that
+        // would open one is the key that was lost. The recovery-key
+        // signature is checked by decide(), like any signature.
+        let cred = if req.method == "human.submit" && p["op"]["op"] == "human.recover" {
+            Cred::Public
+        } else {
+            cred
+        };
+        let auth = self.authorize(req, cred)?;
         match req.method.as_str() {
             "ping" => Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "daemon_key": self.public_key(),
                 "next_key": self.next_key(),
             })),
+            "human.login" => self.login(req, params(p)?),
+            "human.logout" => self.logout(req),
             "daemon.prepare_rotate" => self.prepare_rotate(),
-            "repo.list" => Ok(json!(self.lock().repos.keys().collect::<Vec<_>>())),
+            "repo.list" => self.repo_list(&auth),
             "repo.prepare_init" => self.prepare_init(params(p)?),
-            "repo.init" => self.init(params(p)?),
-            "repo.backup" => self.backup(req),
+            "repo.init" => self.init(&auth, params(p)?),
+            "repo.backup" => self.backup(&auth),
             "repo.restore" => self.restore(params(p)?),
-            "status" => self.status(req),
-            "log" => self.log(req, params(p)?),
-            "tree" => self.tree(req, params(p)?),
-            "change.get" => self.change_get(req, params(p)?),
-            "whoami" => self.whoami(req),
-            "human.prepare_change" => self.prepare_change(req, params(p)?),
-            "human.prepare_policy" => self.prepare_policy(req, params(p)?),
-            "human.prepare_import" => self.prepare_import(req, params(p)?),
-            "human.prepare_push" => self.prepare_push(req, params(p)?),
-            "human.submit" => self.human_submit(req, params(p)?),
+            "status" => self.status(&auth),
+            "log" => self.log(&auth, params(p)?),
+            "tree" => self.tree(&auth, params(p)?),
+            "change.get" => self.change_get(&auth, params(p)?),
+            "whoami" => self.whoami(&auth),
+            "human.prepare_change" => self.prepare_change(&auth, params(p)?),
+            "human.prepare_policy" => self.prepare_policy(&auth, params(p)?),
+            "human.prepare_import" => self.prepare_import(&auth, params(p)?),
+            "human.prepare_push" => self.prepare_push(&auth, params(p)?),
+            "human.submit" => self.human_submit(&auth, params(p)?),
             "lease.acquire" => self.lease_acquire(req, params(p)?),
             "lease.release" => {
                 let s: SetRef = params(p)?;
@@ -345,41 +486,227 @@ impl Service {
         }
     }
 
+    /// Resolves the request's token. A token that is unknown, ended or
+    /// expired is refused; no token is `Anonymous`, and the method's
+    /// credential decides whether that is enough.
+    fn caller(
+        inner: &Inner,
+        req: &Request,
+        now: i64,
+    ) -> std::result::Result<Caller, (String, String)> {
+        let Some(token) = req.token.as_deref() else {
+            return Ok(Caller::Anonymous);
+        };
+        match inner.tokens.lookup(token).cloned() {
+            None => fail("unauthenticated", "unknown session token"),
+            Some(TokenEntry::Agent { repo, session }) => {
+                let Some(r) = inner.repos.get(&repo) else {
+                    return fail("unauthenticated", "token for unknown repository");
+                };
+                let Some(s) = r.chain.state.sessions.get(&session) else {
+                    return fail("unauthenticated", "unknown session");
+                };
+                if s.ended.is_some() {
+                    return fail("unauthenticated", "session ended");
+                }
+                Ok(Caller::Agent {
+                    repo,
+                    actor: Actor::Agent {
+                        name: s.agent.clone(),
+                        session,
+                    },
+                })
+            }
+            Some(TokenEntry::Human {
+                human,
+                key,
+                expires_ms,
+            }) => {
+                if expires_ms <= now {
+                    return fail("unauthenticated", "human session expired");
+                }
+                Ok(Caller::Human { human, key })
+            }
+        }
+    }
+
     /// Resolves an agent token to (repo, actor).
     fn agent(
         inner: &Inner,
         req: &Request,
+        now: i64,
     ) -> std::result::Result<(String, Actor), (String, String)> {
-        let Some(token) = req.token.as_deref() else {
-            return fail("unauthenticated", "missing session token");
-        };
-        let Some(e) = inner.tokens.lookup(token).cloned() else {
-            return fail("unauthenticated", "unknown session token");
-        };
-        let Some(r) = inner.repos.get(&e.repo) else {
-            return fail("unauthenticated", "token for unknown repository");
-        };
-        let Some(s) = r.chain.state.sessions.get(&e.session) else {
-            return fail("unauthenticated", "unknown session");
-        };
-        if s.ended.is_some() {
-            return fail("unauthenticated", "session ended");
+        match Self::caller(inner, req, now)? {
+            Caller::Agent { repo, actor } => Ok((repo, actor)),
+            Caller::Human { .. } => fail("forbidden", "an agent session token is required"),
+            Caller::Anonymous => fail("unauthenticated", "missing session token"),
         }
-        Ok((
-            e.repo,
-            Actor::Agent {
-                name: s.agent.clone(),
-                session: e.session,
-            },
-        ))
     }
 
-    /// Repo name from the token if present, else from the request.
-    fn read_repo(inner: &Inner, req: &Request) -> std::result::Result<String, (String, String)> {
-        if req.token.is_some() {
-            return Ok(Self::agent(inner, req)?.0);
+    /// Is this human, with this key, enrolled in the repository? Foreign
+    /// repositories count: `daemon.recover` is a human operation there.
+    fn enrolled(inner: &Inner, human: &str, key: &str, repo: &str) -> bool {
+        inner
+            .repos
+            .get(repo)
+            .or_else(|| inner.foreign.get(repo))
+            .and_then(|r| r.chain.state.humans.get(human))
+            .is_some_and(|k| k.public == key)
+    }
+
+    /// The repositories a human session is enrolled in.
+    fn enrolled_repos(inner: &Inner, human: &str, key: &str) -> Vec<String> {
+        inner
+            .repos
+            .keys()
+            .chain(inner.foreign.keys())
+            .filter(|r| Self::enrolled(inner, human, key, r))
+            .cloned()
+            .collect()
+    }
+
+    /// No repository yet: nothing to check a human against.
+    fn bootstrap(inner: &Inner) -> bool {
+        inner.repos.values().all(|r| !r.initialized()) && inner.foreign.is_empty()
+    }
+
+    /// Checks the request's token against what the method requires and
+    /// settles which repository the request acts on.
+    fn authorize(&self, req: &Request, cred: Cred) -> std::result::Result<Auth, (String, String)> {
+        let inner = self.lock();
+        let caller = Self::caller(&inner, req, self.now())?;
+        const AGENT: &str = "an agent session token is required";
+        const HUMAN: &str = "a human session is required (lonca human login)";
+        const EITHER: &str =
+            "a session token is required: an agent's, or a human session (lonca human login)";
+        let repo = match (cred, &caller) {
+            (Cred::Public | Cred::Login, _) => req.repo.clone(),
+            (Cred::Any, Caller::Anonymous) => return fail("unauthenticated", EITHER),
+            (Cred::Any, Caller::Human { .. }) => req.repo.clone(),
+            (Cred::Agent | Cred::Read | Cred::Any, Caller::Agent { repo, .. }) => {
+                if req.repo.as_ref().is_some_and(|r| r != repo) {
+                    return fail("forbidden", "this session token is for another repository");
+                }
+                Some(repo.clone())
+            }
+            (Cred::Agent, Caller::Human { .. }) => return fail("forbidden", AGENT),
+            (Cred::Agent, Caller::Anonymous) => return fail("unauthenticated", AGENT),
+            (Cred::Human | Cred::Read, Caller::Human { human, key }) => {
+                let name = Self::repo_name(req)?;
+                if !Self::enrolled(&inner, human, key, &name) {
+                    return fail(
+                        "forbidden",
+                        format!("this human session is not enrolled in repository {name}"),
+                    );
+                }
+                Some(name)
+            }
+            (Cred::Read, Caller::Anonymous) => return fail("unauthenticated", EITHER),
+            (Cred::Human | Cred::AnyHuman | Cred::Bootstrap, Caller::Agent { .. }) => {
+                return fail("forbidden", HUMAN);
+            }
+            (Cred::AnyHuman | Cred::Bootstrap, Caller::Human { human, key }) => {
+                if Self::enrolled_repos(&inner, human, key).is_empty() {
+                    return fail(
+                        "forbidden",
+                        "this human session is not enrolled in any repository",
+                    );
+                }
+                req.repo.clone()
+            }
+            (Cred::Bootstrap, Caller::Anonymous) if Self::bootstrap(&inner) => req.repo.clone(),
+            (Cred::Human | Cred::AnyHuman | Cred::Bootstrap, Caller::Anonymous) => {
+                return fail("unauthenticated", HUMAN);
+            }
+        };
+        Ok(Auth { caller, repo })
+    }
+
+    // ---------------------------------------------------------------- human sessions
+
+    /// Opens a human session: the signature must verify with the key the
+    /// named repository (or, without one, any repository) holds for the
+    /// human. The token is returned once and stored as a hash.
+    fn login(&self, req: &Request, p: HumanLogin) -> Hr {
+        let ttl = p.ttl_ms.unwrap_or(HUMAN_SESSION_DEFAULT_MS);
+        if ttl <= 0 || ttl > HUMAN_SESSION_MAX_MS {
+            return fail(
+                "invalid",
+                format!("ttl_ms must be between 1 and {HUMAN_SESSION_MAX_MS}"),
+            );
         }
-        Self::repo_name(req)
+        let now = self.now();
+        check_fresh(&p.sig, now).map_err(|e| ("unauthenticated".to_string(), e.to_string()))?;
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        inner
+            .login_nonces
+            .retain(|_, issued| *issued >= now - MAX_AGE_MS - MAX_SKEW_MS);
+        if inner.login_nonces.contains_key(&p.sig.nonce) {
+            return fail("unauthenticated", "login signature already used");
+        }
+        let human = &p.sig.human;
+        let repo = req.repo.as_deref();
+        let mut keys: Vec<HumanKey> = Vec::new();
+        if valid_token(human, 64) {
+            let handles = inner.repos.values().chain(inner.foreign.values());
+            for r in handles.filter(|r| repo.is_none_or(|n| n == r.name)) {
+                if let Some(k) = r.chain.state.humans.get(human)
+                    && !keys.contains(k)
+                {
+                    keys.push(k.clone());
+                }
+            }
+        }
+        let Some(key) = keys
+            .iter()
+            .find(|k| verify_login(k, repo, ttl, &p.sig, now).is_ok())
+        else {
+            return fail(
+                "unauthenticated",
+                "login failed: no enrolled key of that human verifies this signature",
+            );
+        };
+        inner
+            .login_nonces
+            .insert(p.sig.nonce.clone(), p.sig.issued_ms);
+        inner.tokens.sweep_expired(now).or_fail()?;
+        let expires_ms = now + ttl;
+        let token = inner
+            .tokens
+            .issue_human(human, &key.public, expires_ms)
+            .or_fail()?;
+        Ok(json!({"token": token, "human": human, "expires_ms": expires_ms}))
+    }
+
+    /// Ends the human session whose token the request carries. Agents end
+    /// theirs with `session.end`, which is logged.
+    fn logout(&self, req: &Request) -> Hr {
+        let Some(token) = req.token.as_deref() else {
+            return fail("invalid", "missing token");
+        };
+        let mut inner = self.lock();
+        if matches!(inner.tokens.lookup(token), Some(TokenEntry::Agent { .. })) {
+            return fail("forbidden", "agents end their session with session.end");
+        }
+        inner.tokens.revoke(token).or_fail()?;
+        Ok(json!({"ended": true}))
+    }
+
+    /// The repositories the human session is enrolled in and this daemon
+    /// signs for. Foreign ones wait for `daemon.recover` and are not
+    /// listed, as before.
+    fn repo_list(&self, auth: &Auth) -> Hr {
+        let Caller::Human { human, key } = &auth.caller else {
+            return fail("forbidden", "a human session is required");
+        };
+        let inner = self.lock();
+        let repos: Vec<&String> = inner
+            .repos
+            .keys()
+            .filter(|r| Self::enrolled(&inner, human, key, r))
+            .collect();
+        Ok(json!(repos))
     }
 
     // ---------------------------------------------------------------- init
@@ -462,7 +789,7 @@ impl Service {
         Ok(json!({"op": op}))
     }
 
-    fn init(&self, p: HumanSubmit) -> Hr {
+    fn init(&self, auth: &Auth, p: HumanSubmit) -> Hr {
         let Op::RepoInit {
             repo,
             human,
@@ -473,6 +800,7 @@ impl Service {
         else {
             return fail("invalid", "expected repo.init");
         };
+        auth.same_human(&p.sig.human)?;
         let mut inner = self.lock();
         if inner.prepared.get(repo) != Some(&p.op) {
             return fail(
@@ -502,9 +830,9 @@ impl Service {
 
     // ---------------------------------------------------------------- reads
 
-    fn status(&self, req: &Request) -> Hr {
+    fn status(&self, auth: &Auth) -> Hr {
+        let name = auth.repo()?;
         let mut inner = self.lock();
-        let name = Self::read_repo(&inner, req)?;
         let now = self.now();
         let r = Self::repo(&mut inner, &name)?;
         let s = &r.chain.state;
@@ -551,9 +879,9 @@ impl Service {
         }))
     }
 
-    fn log(&self, req: &Request, q: LogQuery) -> Hr {
+    fn log(&self, auth: &Auth, q: LogQuery) -> Hr {
+        let name = auth.repo()?;
         let mut inner = self.lock();
-        let name = Self::read_repo(&inner, req)?;
         let r = Self::repo(&mut inner, &name)?;
         let store = r.store.clone();
         drop(inner);
@@ -563,9 +891,9 @@ impl Service {
         Ok(json!(out))
     }
 
-    fn tree(&self, req: &Request, q: TreeQuery) -> Hr {
+    fn tree(&self, auth: &Auth, q: TreeQuery) -> Hr {
+        let name = auth.repo()?;
         let mut inner = self.lock();
-        let name = Self::read_repo(&inner, req)?;
         let r = Self::repo(&mut inner, &name)?;
         let store = r.store.clone();
         let redacted = r.chain.state.redacted.clone();
@@ -599,9 +927,9 @@ impl Service {
         Ok(json!(out))
     }
 
-    fn change_get(&self, req: &Request, c: ChangeRef) -> Hr {
+    fn change_get(&self, auth: &Auth, c: ChangeRef) -> Hr {
+        let name = auth.repo()?;
         let mut inner = self.lock();
-        let name = Self::read_repo(&inner, req)?;
         let r = Self::repo(&mut inner, &name)?;
         match r.chain.state.changes.get(&c.change) {
             Some(rec) => Ok(json!(rec)),
@@ -609,22 +937,32 @@ impl Service {
         }
     }
 
-    fn whoami(&self, req: &Request) -> Hr {
+    fn whoami(&self, auth: &Auth) -> Hr {
         let inner = self.lock();
-        let (repo, actor) = Self::agent(&inner, req)?;
-        let r = inner.repos.get(&repo).expect("checked");
-        let s = r
-            .chain
-            .state
-            .sessions
-            .get(actor.session().unwrap_or_default());
-        Ok(json!({"repo": repo, "actor": actor.label(), "session": s}))
+        match &auth.caller {
+            Caller::Agent { repo, actor } => {
+                let r = inner.repos.get(repo).expect("checked");
+                let s = r
+                    .chain
+                    .state
+                    .sessions
+                    .get(actor.session().unwrap_or_default());
+                Ok(json!({"repo": repo, "actor": actor.label(), "session": s}))
+            }
+            Caller::Human { human, key } => Ok(json!({
+                "actor": Actor::Human { name: human.clone() }.label(),
+                "human": human,
+                "key": key,
+                "repos": Self::enrolled_repos(&inner, human, key),
+            })),
+            Caller::Anonymous => fail("unauthenticated", "missing session token"),
+        }
     }
 
     // ---------------------------------------------------------------- humans
 
-    fn prepare_change(&self, req: &Request, p: PrepareChange) -> Hr {
-        let name = Self::repo_name(req)?;
+    fn prepare_change(&self, auth: &Auth, p: PrepareChange) -> Hr {
+        let name = auth.repo()?;
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
         let now = self.now();
@@ -664,8 +1002,8 @@ impl Service {
         Ok(json!({"op": op, "facts": a.facts, "syntax_errors": a.syntax_errors}))
     }
 
-    fn prepare_policy(&self, req: &Request, p: PreparePolicy) -> Hr {
-        let name = Self::repo_name(req)?;
+    fn prepare_policy(&self, auth: &Auth, p: PreparePolicy) -> Hr {
+        let name = auth.repo()?;
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
         let parent = r.chain.state.policy.clone();
@@ -675,8 +1013,8 @@ impl Service {
         Ok(json!({"op": Op::PolicyUpdate { policy: commit }}))
     }
 
-    fn prepare_import(&self, req: &Request, p: PrepareRemote) -> Hr {
-        let name = Self::repo_name(req)?;
+    fn prepare_import(&self, auth: &Auth, p: PrepareRemote) -> Hr {
+        let name = auth.repo()?;
         validate_remote(&p.remote)?;
         let branch = p.branch.unwrap_or_else(|| "main".into());
         validate_branch(&branch)?;
@@ -715,8 +1053,8 @@ impl Service {
         Ok(json!({"op": Op::ImportExternal { remote: p.remote, commit, trunk_before: trunk }}))
     }
 
-    fn prepare_push(&self, req: &Request, p: PrepareRemote) -> Hr {
-        let name = Self::repo_name(req)?;
+    fn prepare_push(&self, auth: &Auth, p: PrepareRemote) -> Hr {
+        let name = auth.repo()?;
         validate_remote(&p.remote)?;
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
@@ -732,8 +1070,8 @@ impl Service {
     /// the operation log, policy, proposals), into the backups directory.
     /// Under the lock, so the bundle is the store at one point of the log.
     /// Not logged: a backup is a read, like `log` or `tree`.
-    fn backup(&self, req: &Request) -> Hr {
-        let name = Self::repo_name(req)?;
+    fn backup(&self, auth: &Auth) -> Hr {
+        let name = auth.repo()?;
         let dir = self.home.backups();
         std::fs::create_dir_all(&dir).map_err(|e| from_err(e.into()))?;
         set_mode(&dir, 0o750)?;
@@ -914,8 +1252,9 @@ impl Service {
         Ok(logged(&op))
     }
 
-    fn human_submit(&self, req: &Request, p: HumanSubmit) -> Hr {
-        let name = Self::repo_name(req)?;
+    fn human_submit(&self, auth: &Auth, p: HumanSubmit) -> Hr {
+        let name = auth.repo()?;
+        auth.same_human(&p.sig.human)?;
         if matches!(p.op, Op::DaemonRecover { .. }) {
             return self.daemon_recover(&name, p);
         }
@@ -1087,9 +1426,9 @@ impl Service {
         make: impl FnOnce(&Actor) -> std::result::Result<Op, (String, String)>,
     ) -> Hr {
         let mut guard = self.lock();
-        let (repo, actor) = Self::agent(&guard, req)?;
-        let op = make(&actor)?;
         let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let op = make(&actor)?;
         let r = Self::repo(&mut guard, &repo)?;
         Self::reconcile(r, now)?;
         let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
@@ -1112,8 +1451,8 @@ impl Service {
 
     fn propose(&self, req: &Request, p: ProposeChange) -> Hr {
         let mut guard = self.lock();
-        let (repo, actor) = Self::agent(&guard, req)?;
         let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
         let r = Self::repo(&mut guard, &repo)?;
         Self::reconcile(r, now)?;
         let session = actor.session().expect("agent").to_string();
@@ -1181,7 +1520,8 @@ impl Service {
 
     fn facts_preview(&self, req: &Request, p: FactsPreview) -> Hr {
         let mut guard = self.lock();
-        let (repo, actor) = Self::agent(&guard, req)?;
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
         let r = Self::repo(&mut guard, &repo)?;
         let max = r.policy().or_fail()?.config.changes.max_file_bytes;
         let change = ChangeId::random();
@@ -1194,7 +1534,7 @@ impl Service {
                 "preview@lonca.invalid",
                 ("lonca-preview", "1"),
                 "",
-                self.now(),
+                now,
                 max,
             )
             .or_fail()?;
@@ -1205,9 +1545,9 @@ impl Service {
     fn attenuate(&self, req: &Request, p: Attenuate) -> Hr {
         let child = random_id("ses");
         let mut guard = self.lock();
-        let (repo, actor) = Self::agent(&guard, req)?;
-        let parent = actor.session().expect("agent").to_string();
         let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let parent = actor.session().expect("agent").to_string();
         let inner = &mut *guard;
         let r = Self::repo(inner, &repo)?;
         let op = Op::CapAttenuate {
@@ -1228,9 +1568,9 @@ impl Service {
 
     fn agent_end(&self, req: &Request) -> Hr {
         let mut guard = self.lock();
-        let (repo, actor) = Self::agent(&guard, req)?;
-        let session = actor.session().expect("agent").to_string();
         let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
         let inner = &mut *guard;
         let r = Self::repo(inner, &repo)?;
         let op = Op::SessionEnd {
@@ -1248,9 +1588,9 @@ impl Service {
 
     fn hook_event(&self, req: &Request, ev: HookEvent) -> Hr {
         let mut guard = self.lock();
-        let (repo, actor) = Self::agent(&guard, req)?;
-        let session = actor.session().expect("agent").to_string();
         let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
         if !std::path::Path::new(&ev.workspace).is_absolute() {
             return fail("invalid", "workspace must be an absolute path");
@@ -1269,9 +1609,9 @@ impl Service {
 
     fn hook_bind(&self, req: &Request, b: HookBind) -> Hr {
         let mut guard = self.lock();
-        let (repo, actor) = Self::agent(&guard, req)?;
-        let session = actor.session().expect("agent").to_string();
         let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
         let ins = if b.harness == "claude-code" {
             hooks::inspect_claude_code(
@@ -1660,6 +2000,79 @@ pub fn is_ancestor(store: &Store, ancestor: &GitId, commit: &GitId) -> Result<bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rows of the method table in docs/decisions.md.
+    fn documented_methods() -> BTreeMap<String, String> {
+        let doc = include_str!("../../../docs/decisions.md");
+        let section = doc
+            .split("\n## ")
+            .find(|s| s.starts_with("Daemon authentication"))
+            .expect("a Daemon authentication section");
+        section
+            .lines()
+            .filter_map(|l| l.strip_prefix("| `"))
+            .map(|l| {
+                let (method, rest) = l.split_once("` | ").expect("| `method` | cred |");
+                let cred = rest.split(" |").next().unwrap_or_default().trim();
+                (method.to_string(), cred.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_decisions_doc_lists_every_method_with_its_credential() {
+        let documented = documented_methods();
+        for (m, c) in METHODS {
+            assert_eq!(
+                documented.get(*m).map(String::as_str),
+                Some(c.name()),
+                "{m} in docs/decisions.md"
+            );
+        }
+        assert_eq!(documented.len(), METHODS.len(), "{documented:?}");
+    }
+
+    /// Every method in the table has a handler, and nothing outside the
+    /// table does. Without a token the handler is reached only by public
+    /// and bootstrap methods; the rest answer `unauthenticated`.
+    #[test]
+    fn every_listed_method_is_dispatched_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = Service::open(
+            Home::new(dir.path().join("h")),
+            Settings {
+                managed_settings: dir.path().join("m.json"),
+                require_root_settings: false,
+                git: "git".into(),
+            },
+            Arc::new(|| 1_760_000_000_000),
+        )
+        .unwrap();
+        let call = |method: &str, token: Option<&str>| {
+            let r = svc.handle(Request {
+                id: 1,
+                method: method.into(),
+                repo: Some("demo".into()),
+                token: token.map(String::from),
+                params: json!({}),
+            });
+            r.error.map(|e| e.code).unwrap_or_default()
+        };
+        for (m, cred) in METHODS {
+            let code = call(m, None);
+            assert_ne!(code, "unknown_method", "{m}");
+            match cred {
+                Cred::Public | Cred::Login | Cred::Bootstrap => {
+                    assert_ne!(code, "unauthenticated", "{m}: {code}")
+                }
+                _ => assert_eq!(code, "unauthenticated", "{m}: {code}"),
+            }
+            // A token nobody issued is refused before any handler runs.
+            assert_eq!(call(m, Some("lonca_nobody")), "unauthenticated", "{m}");
+        }
+        assert_eq!(call("admin.everything", None), "unknown_method");
+        assert_eq!(call("", None), "unknown_method");
+    }
 
     #[test]
     fn every_error_keeps_its_message_under_a_stable_code() {

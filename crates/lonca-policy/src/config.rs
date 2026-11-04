@@ -857,6 +857,10 @@ mod env_tests {
             "GOFLAG",
             "PATHS",
             "LD_PRELOADX",
+            // Shorter than the pattern's two halves put together: the
+            // prefix and the suffix would have to overlap.
+            "CARGO_TARGET_RUNNER",
+            "CARGO_TARGET_LINKER",
         ] {
             assert!(!env_name_forbidden(name), "{name}");
         }

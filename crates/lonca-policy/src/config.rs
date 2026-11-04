@@ -49,6 +49,15 @@ required = false
 require_sandbox = false
 timeout_seconds = 900
 retries = 0
+# The commands run with an empty environment plus PATH, HOME (a scratch
+# home), LANG and LONCA_VERIFY. Names listed here are copied from the
+# daemon's environment at run time; `env` sets fixed values. Names that
+# change what runs (LD_PRELOAD, DYLD_*, RUSTC_WRAPPER, NODE_OPTIONS,
+# PYTHONPATH, GIT_*, ...) are refused. See docs/guide/verification.md.
+# env_passthrough = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR"]
+env_passthrough = []
+# env = { CARGO_NET_OFFLINE = "true" }
+env = {}
 
 [observation]
 # Sessions that nothing observes are treated like tainted sessions.
@@ -177,6 +186,65 @@ pub struct Verification {
     pub require_sandbox: bool,
     pub timeout_seconds: u64,
     pub retries: u32,
+    /// Environment variables copied from the daemon's environment into
+    /// the verifier's, by name. Deny by default: nothing else passes.
+    pub env_passthrough: Vec<String>,
+    /// Environment variables with fixed values.
+    pub env: std::collections::BTreeMap<String, String>,
+}
+
+/// Environment names (exact, or a prefix ending in `*`) that could change
+/// what a verification runs or where it loads code from. Refused in both
+/// `env_passthrough` and `env` at policy load (`env_forbidden:NAME`).
+pub const FORBIDDEN_ENV: &[&str] = &[
+    "PATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "DYLD_*",
+    "RUSTC",
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "RUSTFLAGS",
+    "CARGO_BUILD_RUSTC",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTFLAGS",
+    "CARGO_TARGET_*_RUNNER",
+    "CARGO_TARGET_*_LINKER",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PERL5OPT",
+    "RUBYOPT",
+    "GOFLAGS",
+    "GIT_*",
+    "BASH_ENV",
+    "ENV",
+    "SHELLOPTS",
+    "IFS",
+    "LONCA_*",
+];
+
+/// Why a name is refused, or `None` when it may be passed.
+pub fn env_name_forbidden(name: &str) -> bool {
+    FORBIDDEN_ENV.iter().any(|pat| match pat.split_once('*') {
+        None => *pat == name,
+        Some((prefix, suffix)) => {
+            name.len() >= prefix.len() + suffix.len()
+                && name.starts_with(prefix)
+                && name.ends_with(suffix)
+        }
+    })
+}
+
+/// A plausible environment variable name.
+pub fn valid_env_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -306,6 +374,8 @@ impl Default for Verification {
             require_sandbox: false,
             timeout_seconds: 900,
             retries: 0,
+            env_passthrough: vec![],
+            env: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -424,6 +494,29 @@ impl PolicyBundle {
             return Err(format!(
                 "{CONFIG_FILE}: observation.network must be taint or deny"
             ));
+        }
+        let v = &config.verification;
+        for name in v.env_passthrough.iter().chain(v.env.keys()) {
+            if !valid_env_name(name) {
+                return Err(format!(
+                    "{CONFIG_FILE}: verification: bad environment name {name:?}"
+                ));
+            }
+            if env_name_forbidden(name) {
+                return Err(format!("{CONFIG_FILE}: verification: env_forbidden:{name}"));
+            }
+        }
+        if v.env_passthrough.len() + v.env.len() > 64 {
+            return Err(format!(
+                "{CONFIG_FILE}: verification: at most 64 environment names"
+            ));
+        }
+        for value in v.env.values() {
+            if value.len() > 4096 || value.chars().any(|c| c == '\0') {
+                return Err(format!(
+                    "{CONFIG_FILE}: verification: env value too long or has NUL"
+                ));
+            }
         }
         let cedar = PolicySet::from_str(policy_text).map_err(|e| format!("{POLICY_FILE}: {e}"))?;
         for p in cedar.policies() {
@@ -669,5 +762,125 @@ mod tests {
             ".github/**",
             ".github/workflows/x.yml"
         ));
+    }
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+
+    /// The default config with its `env_passthrough` and `env` lines
+    /// replaced by the two lines of `verification`.
+    fn with(verification: &str) -> Result<PolicyBundle, String> {
+        let (pass, env) = verification.trim_end().split_once('\n').expect("two lines");
+        let config = DEFAULT_CONFIG
+            .replace("env_passthrough = []\n", &format!("{pass}\n"))
+            .replace("\nenv = {}\n", &format!("\n{env}\n"));
+        assert_ne!(
+            config, DEFAULT_CONFIG,
+            "the default lines must be there to replace"
+        );
+        PolicyBundle::parse(&config, DEFAULT_POLICY)
+    }
+
+    #[test]
+    fn verification_env_is_deny_by_default() {
+        let b = PolicyBundle::default_bundle();
+        assert!(b.config.verification.env_passthrough.is_empty());
+        assert!(b.config.verification.env.is_empty());
+        let b = with("env_passthrough = [\"HOME\", \"CARGO_HOME\"]\nenv = { CARGO_NET_OFFLINE = \"true\" }\n").unwrap();
+        assert_eq!(
+            b.config.verification.env_passthrough,
+            ["HOME", "CARGO_HOME"]
+        );
+        assert_eq!(b.config.verification.env["CARGO_NET_OFFLINE"], "true");
+    }
+
+    #[test]
+    fn names_that_change_what_runs_are_refused() {
+        for name in [
+            "PATH",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+            "RUSTC",
+            "RUSTC_WRAPPER",
+            "RUSTFLAGS",
+            "CARGO_BUILD_RUSTC",
+            "CARGO_BUILD_RUSTFLAGS",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
+            "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER",
+            "NODE_OPTIONS",
+            "NODE_PATH",
+            "PYTHONPATH",
+            "PYTHONSTARTUP",
+            "PERL5OPT",
+            "RUBYOPT",
+            "GOFLAGS",
+            "GIT_SSH_COMMAND",
+            "GIT_DIR",
+            "BASH_ENV",
+            "ENV",
+            "SHELLOPTS",
+            "IFS",
+            "LONCA_SOCKET",
+            "LONCA_VERIFY",
+        ] {
+            assert!(env_name_forbidden(name), "{name}");
+            let err = with(&format!("env_passthrough = [\"{name}\"]\nenv = {{}}\n"))
+                .err()
+                .expect("refused");
+            assert!(
+                err.contains(&format!("env_forbidden:{name}")),
+                "{name}: {err}"
+            );
+            let err = with(&format!(
+                "env_passthrough = []\nenv = {{ {name} = \"x\" }}\n"
+            ))
+            .err()
+            .expect("refused");
+            assert!(
+                err.contains(&format!("env_forbidden:{name}")),
+                "{name}: {err}"
+            );
+        }
+        for name in [
+            "HOME",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "TMPDIR",
+            "GOCACHE",
+            "GOPATH",
+            "VIRTUAL_ENV",
+            "CI",
+            "GOFLAG",
+            "PATHS",
+            "LD_PRELOADX",
+        ] {
+            assert!(!env_name_forbidden(name), "{name}");
+        }
+        for bad in ["", "1X", "A-B", "A B", "a.b"] {
+            assert!(!valid_env_name(bad), "{bad:?}");
+        }
+        let err = with("env_passthrough = [\"A-B\"]\nenv = {}\n")
+            .err()
+            .expect("refused");
+        assert!(err.contains("bad environment name"), "{err}");
+        let many: Vec<String> = (0..65).map(|i| format!("\"V{i}\"")).collect();
+        let err = with(&format!(
+            "env_passthrough = [{}]\nenv = {{}}\n",
+            many.join(", ")
+        ))
+        .err()
+        .expect("refused");
+        assert!(err.contains("at most 64"), "{err}");
+        let err = with(&format!(
+            "env_passthrough = []\nenv = {{ LONG = \"{}\" }}\n",
+            "v".repeat(4097)
+        ))
+        .err()
+        .expect("refused");
+        assert!(err.contains("too long"), "{err}");
     }
 }

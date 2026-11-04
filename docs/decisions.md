@@ -478,6 +478,24 @@ equal to `PROTOCOL`.
   session file is documented as an interface, since a runner that talks
   to the socket directly reuses it. No token in any output.
 
+## Verification environment
+
+The verifier cleared the environment except `PATH`, so `cargo` under
+rustup failed in 25 ms and the only way to verify a Rust crate was to
+write the developer's home paths into the signed policy (#82). Now
+`[verification] env_passthrough` names variables copied from the
+daemon's environment at run time and `env` sets fixed values; both are
+policy data, signed, deny by default. Names that change what runs or
+where code is loaded from (`PATH`, `LD_PRELOAD`, `DYLD_*`,
+`RUSTC_WRAPPER`, `RUSTFLAGS`, `NODE_OPTIONS`, `PYTHONPATH`, `GIT_*`,
+`LONCA_*`, …; `FORBIDDEN_ENV` in `config.rs`) are refused at policy
+load (`env_forbidden:NAME`), and the verifier skips them again if a
+policy object ever carries one. The sandbox profile is unchanged. The
+log of every check starts with the sandbox and the names that were
+set, never a value. `docs/guide/verification.md` has the environment
+and a starter block per language. Not done: the hardened profile
+pinning the list (#54), resource limits (#59).
+
 ## Reject, and a pending proposal whose session ends
 
 The only human decision on an escalated operation was `approve`; a

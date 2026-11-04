@@ -875,6 +875,22 @@ mod env_tests {
         .err()
         .expect("refused");
         assert!(err.contains("at most 64"), "{err}");
+        // Exactly 64 names, and a value of exactly 4096 bytes, are fine.
+        let sixty_four: Vec<String> = (0..64).map(|i| format!("\"V{i}\"")).collect();
+        assert!(
+            with(&format!(
+                "env_passthrough = [{}]\nenv = {{}}\n",
+                sixty_four.join(", ")
+            ))
+            .is_ok()
+        );
+        assert!(
+            with(&format!(
+                "env_passthrough = []\nenv = {{ LONG = \"{}\" }}\n",
+                "v".repeat(4096)
+            ))
+            .is_ok()
+        );
         let err = with(&format!(
             "env_passthrough = []\nenv = {{ LONG = \"{}\" }}\n",
             "v".repeat(4097)

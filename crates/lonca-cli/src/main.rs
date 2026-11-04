@@ -13,9 +13,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use lonca_core::GitId;
 use lonca_core::keys::KeyPair;
 use lonca_core::ops::{Claim, HumanKey, LeaseItem, LeaseKind, Op, OpKind, Scope};
+use lonca_core::{ChangeId, GitId};
 use lonca_daemon::Client;
 use serde_json::{Value, json};
 
@@ -89,7 +89,10 @@ enum Cmd {
     #[command(subcommand)]
     Workspace(WorkspaceCmd),
     /// Bring trunk into the current workspace, merging local edits.
-    Sync,
+    Sync {
+        #[arg(long)]
+        json: bool,
+    },
     /// Repository status.
     Status {
         #[arg(long)]
@@ -122,6 +125,8 @@ enum Cmd {
         deleted_files: Vec<String>,
         #[arg(long, value_delimiter = ',')]
         signature_changes: Vec<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Show a change.
     Change {
@@ -137,6 +142,8 @@ enum Cmd {
         repo: Option<String>,
         #[arg(long = "as")]
         human: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Approve an escalated operation.
     Approve {
@@ -147,6 +154,8 @@ enum Cmd {
         note: String,
         #[arg(long = "as")]
         human: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Operation log.
     Log {
@@ -277,7 +286,10 @@ enum HumanCmd {
         secure_enclave: bool,
     },
     /// Print the default identity and public key.
-    Whoami,
+    Whoami {
+        #[arg(long)]
+        json: bool,
+    },
     /// Open a human session: reads, prepares and `lonca queue` use it
     /// until it expires. Every human command does this by itself when
     /// needed; run it to choose the length or to sign in up front.
@@ -290,6 +302,8 @@ enum HumanCmd {
         ttl: Option<String>,
         #[arg(long = "as")]
         human: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// End the human session and forget its token.
     Logout {
@@ -410,6 +424,8 @@ enum SessionCmd {
         workspace: PathBuf,
         #[arg(long = "as")]
         human: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Revoke a session and everything derived from it.
     Revoke {
@@ -422,7 +438,10 @@ enum SessionCmd {
         human: Option<String>,
     },
     /// End the session of the current agent workspace.
-    End,
+    End {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -479,15 +498,25 @@ enum PolicyCmd {
     },
 }
 
+/// Exit codes: 0 done; 1 the daemon refused (its error code, or a denied
+/// decision, on stderr as `code: message`); 2 the daemon is unreachable;
+/// 3 usage and everything else that never reached the daemon.
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            let code = if e.use_stderr() { 3 } else { 0 };
+            let _ = e.print();
+            return ExitCode::from(code);
+        }
+    };
     match cli.cmd {
         Cmd::Hook => hook::run(),
         cmd => match run(cmd) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("lonca: {e:#}");
-                ExitCode::from(1)
+                ExitCode::from(ctx::exit_code(&e))
             }
         },
     }
@@ -755,13 +784,21 @@ fn run(cmd: Cmd) -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Human(HumanCmd::Whoami) => {
+        Cmd::Human(HumanCmd::Whoami { json: as_json }) => {
             let name = ctx::default_human()?;
             let k = ctx::human_public(&name)?;
+            if as_json {
+                return ctx::print_json(&json!({"human": name, "alg": k.alg, "public": k.public}));
+            }
             println!("{name}: {} {}", k.alg, k.public);
             Ok(())
         }
-        Cmd::Human(HumanCmd::Login { repo, ttl, human }) => {
+        Cmd::Human(HumanCmd::Login {
+            repo,
+            ttl,
+            human,
+            json: as_json,
+        }) => {
             let human = human_name(human)?;
             let ttl = match ttl {
                 Some(t) => ctx::duration_ms(&t)?,
@@ -775,6 +812,13 @@ fn run(cmd: Cmd) -> Result<()> {
                 .as_array()
                 .map(|a| a.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
+            if as_json {
+                // The token is in the file, never here.
+                return ctx::print_json(&json!({
+                    "human": human, "expires_ms": s.expires_ms,
+                    "session_file": ctx::session_path(&human), "repos": repos,
+                }));
+            }
             println!(
                 "{human}: signed in for {} (until {}); enrolled in: {}",
                 ctx::describe_ms(ttl),
@@ -896,17 +940,19 @@ fn run(cmd: Cmd) -> Result<()> {
             max_lines,
             workspace,
             human,
+            json: as_json,
         }) => {
             let human = human_name(human)?;
             let mut c = human_client(&repo, &human)?;
             let session = lonca_core::canonical::random_id("ses");
+            let expires_ms = ctx::now_ms() + ctx::duration_ms(&ttl)?;
             let op = Op::SessionStart {
                 session: session.clone(),
                 agent,
                 model,
                 task,
                 scope: Scope {
-                    paths,
+                    paths: paths.clone(),
                     symbols,
                     ops: vec![
                         OpKind::ChangePropose,
@@ -920,17 +966,29 @@ fn run(cmd: Cmd) -> Result<()> {
                     max_files,
                     max_lines,
                 },
-                expires_ms: ctx::now_ms() + ctx::duration_ms(&ttl)?,
+                expires_ms,
             };
-            let r = submit(&mut c, &human, &repo, op)?;
+            let r = if as_json {
+                let sig = ctx::sign(&human, &repo, &op)?;
+                call(&mut c, "human.submit", json!({"op": op, "sig": sig}))?
+            } else {
+                submit(&mut c, &human, &repo, op)?
+            };
+            ctx::denied(&r)?;
             let Some(token) = r["token"].as_str() else {
-                bail!("session was not started")
+                bail!("session was not started: {}", r["decision"]["outcome"])
             };
             let mut ac = connect()?;
             ac.token = Some(token.to_string());
             let dir = ctx::absolute(&workspace)?;
             let ws = Workspace::create(&mut ac, &dir, &repo, Some(session.clone()), None)?;
             ws.write_token(token)?;
+            if as_json {
+                return ctx::print_json(&json!({
+                    "session": session, "workspace": ws.root, "expires_ms": expires_ms,
+                    "paths": paths, "seq": r["seq"], "decision": r["decision"],
+                }));
+            }
             println!("session {session}; workspace {}", ws.root.display());
             Ok(())
         }
@@ -945,10 +1003,17 @@ fn run(cmd: Cmd) -> Result<()> {
             submit(&mut c, &human, &repo, Op::CapRevoke { session, reason })?;
             Ok(())
         }
-        Cmd::Session(SessionCmd::End) => {
-            let (mut c, _) = agent_client()?;
-            print_decision(&call(&mut c, "session.end", json!({}))?);
-            Ok(())
+        Cmd::Session(SessionCmd::End { json: as_json }) => {
+            let (mut c, ws) = agent_client()?;
+            let r = call(&mut c, "session.end", json!({}))?;
+            if as_json {
+                ctx::print_json(&json!({
+                    "session": ws.meta.session, "seq": r["seq"], "decision": r["decision"],
+                }))?;
+            } else {
+                print_decision(&r);
+            }
+            ctx::denied(&r)
         }
         Cmd::Workspace(WorkspaceCmd::Create { dir, repo, human }) => {
             let human = human_name(human)?;
@@ -961,7 +1026,7 @@ fn run(cmd: Cmd) -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Sync => {
+        Cmd::Sync { json: as_json } => {
             let mut ws = Workspace::current()?;
             let mut c = match &ws.meta.session {
                 Some(_) => {
@@ -972,6 +1037,17 @@ fn run(cmd: Cmd) -> Result<()> {
                 None => human_client(&ws.meta.repo, &workspace_human(&ws)?)?,
             };
             let r = ws.sync(&mut c)?;
+            if as_json {
+                let conflicts: Vec<Value> = r
+                    .conflicts
+                    .iter()
+                    .map(|p| json!({"path": p, "trunk_copy": format!("{p}.trunk")}))
+                    .collect();
+                return ctx::print_json(&json!({
+                    "base_before": r.from, "base_after": r.to,
+                    "updated": r.updated, "merged": r.merged, "conflicts": conflicts,
+                }));
+            }
             println!(
                 "{} -> {}: {} updated, {} merged, {} conflicts",
                 r.from.short(),
@@ -1098,15 +1174,17 @@ fn run(cmd: Cmd) -> Result<()> {
             deletes,
             deleted_files,
             signature_changes,
+            json: as_json,
         } => {
             let mut ws = Workspace::current()?;
             let changes = ws.changes()?;
             if changes.is_empty() {
                 bail!("no local changes");
             }
-            let mut c = connect()?;
-            let r = match &ws.meta.session {
+            // (change, commit, logged result)
+            let (change, commit, r) = match &ws.meta.session {
                 Some(_) => {
+                    let mut c = connect()?;
                     c.token = Some(ws.token()?);
                     let mut claim = Claim {
                         intent,
@@ -1135,15 +1213,18 @@ fn run(cmd: Cmd) -> Result<()> {
                             revert_of: None,
                         };
                     }
-                    call(
+                    let r = call(
                         &mut c,
                         "change.propose",
                         json!({"base": ws.meta.base, "files": changes, "claim": claim}),
-                    )?
+                    )?;
+                    let change: ChangeId = serde_json::from_value(r["change"].clone())?;
+                    let commit: GitId = serde_json::from_value(r["commit"].clone())?;
+                    (change, commit, r)
                 }
                 None => {
                     let human = workspace_human(&ws)?;
-                    c = human_client(&ws.meta.repo, &human)?;
+                    let mut c = human_client(&ws.meta.repo, &human)?;
                     let prep = call(
                         &mut c,
                         "human.prepare_change",
@@ -1151,28 +1232,34 @@ fn run(cmd: Cmd) -> Result<()> {
                     )?;
                     let op: Op = serde_json::from_value(prep["op"].clone())?;
                     let repo = ws.meta.repo.clone();
-                    let r = submit(&mut c, &human, &repo, op.clone())?;
-                    if let (Op::ChangePropose { change, commit, .. }, false) =
-                        (&op, r["decision"]["outcome"] == "deny")
-                    {
-                        ws.meta.submitted = Some((*change, commit.clone()));
-                        ws.save()?;
-                    }
-                    return Ok(());
+                    let Op::ChangePropose { change, commit, .. } = &op else {
+                        bail!("human.prepare_change did not return a change")
+                    };
+                    let (change, commit) = (*change, commit.clone());
+                    let sig = ctx::sign(&human, &repo, &op)?;
+                    let r = call(&mut c, "human.submit", json!({"op": op, "sig": sig}))?;
+                    (change, commit, r)
                 }
             };
-            print_decision(&r);
-            if let Some(ch) = r["change"].as_str() {
-                println!("change {ch}");
+            let status = match r["decision"]["outcome"].as_str() {
+                Some("allow") => "queued",
+                Some("escalate") => "pending",
+                _ => "denied",
+            };
+            if as_json {
+                ctx::print_json(&json!({
+                    "change": change, "commit": commit, "seq": r["seq"],
+                    "decision": r["decision"], "status": status,
+                }))?;
+            } else {
+                print_decision(&r);
+                println!("change {change}");
             }
-            if r["decision"]["outcome"] != "deny" {
-                ws.meta.submitted = Some((
-                    serde_json::from_value(r["change"].clone())?,
-                    serde_json::from_value(r["commit"].clone())?,
-                ));
+            if status != "denied" {
+                ws.meta.submitted = Some((change, commit));
                 ws.save()?;
             }
-            Ok(())
+            ctx::denied(&r)
         }
         Cmd::Change {
             change,
@@ -1190,9 +1277,16 @@ fn run(cmd: Cmd) -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Pending { repo, human } => {
+        Cmd::Pending {
+            repo,
+            human,
+            json: as_json,
+        } => {
             let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
             let s = call(&mut c, "status", json!({}))?;
+            if as_json {
+                return ctx::print_json(&s["pending"]);
+            }
             for p in s["pending"].as_array().cloned().unwrap_or_default() {
                 let change = p["change"]
                     .as_str()
@@ -1220,20 +1314,33 @@ fn run(cmd: Cmd) -> Result<()> {
             repo,
             note,
             human,
+            json: as_json,
         } => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
             let mut c = human_client(&repo, &human)?;
-            submit(
-                &mut c,
-                &human,
-                &repo,
-                Op::Approve {
-                    target_seq: seq,
-                    note,
-                },
-            )?;
-            Ok(())
+            let op = Op::Approve {
+                target_seq: seq,
+                note,
+            };
+            let r = if as_json {
+                // The change the pending entry is about, before it is released.
+                let st = call(&mut c, "status", json!({}))?;
+                let change = st["pending"]
+                    .as_array()
+                    .and_then(|a| a.iter().find(|p| p["seq"] == seq))
+                    .map(|p| p["change"].clone())
+                    .unwrap_or(Value::Null);
+                let sig = ctx::sign(&human, &repo, &op)?;
+                let r = call(&mut c, "human.submit", json!({"op": op, "sig": sig}))?;
+                ctx::print_json(&json!({
+                    "seq": r["seq"], "target_seq": seq, "change": change, "decision": r["decision"],
+                }))?;
+                r
+            } else {
+                submit(&mut c, &human, &repo, op)?
+            };
+            ctx::denied(&r)
         }
         Cmd::Log {
             repo,

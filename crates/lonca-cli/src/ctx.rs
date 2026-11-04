@@ -42,18 +42,105 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+// ---------------------------------------------------------------- errors and exit codes
+
+/// The daemon could not be reached. Exit code 2.
+#[derive(Debug)]
+pub struct Unreachable(pub String);
+
+impl std::fmt::Display for Unreachable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unreachable {}
+
+/// An error the daemon answered to a method: `method: code: message`.
+/// Exit code 1, or 2 when the connection itself failed (`io`).
+#[derive(Debug)]
+pub struct MethodError {
+    pub method: String,
+    pub code: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for MethodError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}: {}", self.method, self.code, self.message)
+    }
+}
+
+impl std::error::Error for MethodError {}
+
+/// An operation the daemon logged and refused (`outcome: deny`). The
+/// message carries the reason codes. Exit code 1.
+#[derive(Debug)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "denied: {}", self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// Exit codes a runner reads (docs/protocol.md, "CLI for runners"):
+/// 1 the daemon refused (an error code, or a denied decision), 2 the
+/// daemon is unreachable or answered nonsense, 3 everything that never
+/// reached the daemon (usage, no workspace, nothing to propose).
+pub fn exit_code(e: &anyhow::Error) -> u8 {
+    for cause in e.chain() {
+        if let Some(c) = cause.downcast_ref::<MethodError>() {
+            return if c.code == "io" { 2 } else { 1 };
+        }
+        if cause.downcast_ref::<Refused>().is_some() {
+            return 1;
+        }
+        if cause.downcast_ref::<Unreachable>().is_some() {
+            return 2;
+        }
+    }
+    3
+}
+
+/// Errors with a denied decision; prints nothing.
+pub fn denied(r: &Value) -> Result<()> {
+    if r["decision"]["outcome"] == "deny" {
+        let reasons: Vec<&str> = r["decision"]["reasons"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        bail!(Refused(reasons.join(", ")));
+    }
+    Ok(())
+}
+
 pub fn connect() -> Result<Client> {
     let s = socket();
-    Client::connect(&s).with_context(|| {
-        format!(
-            "cannot reach the Lonca daemon at {} (is `lonca daemon` running?)",
+    Client::connect(&s).map_err(|e| {
+        anyhow!(Unreachable(format!(
+            "cannot reach the Lonca daemon at {} (is `lonca daemon` running?): {e}",
             s.display()
-        )
+        )))
     })
 }
 
 pub fn call(c: &mut Client, method: &str, params: Value) -> Result<Value> {
-    c.call(method, params).map_err(|e| anyhow!("{method}: {e}"))
+    c.call(method, params).map_err(|e| {
+        anyhow!(MethodError {
+            method: method.to_string(),
+            code: e.0.code,
+            message: e.0.message,
+        })
+    })
+}
+
+/// One line of JSON on stdout, for runners.
+pub fn print_json(v: &Value) -> Result<()> {
+    println!("{}", serde_json::to_string(v)?);
+    Ok(())
 }
 
 pub fn default_human() -> Result<String> {

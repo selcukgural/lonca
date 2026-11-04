@@ -7,6 +7,9 @@ use lonca_core::ops::{HumanIntent, HumanKey, HumanSignature, LoginIntent, Op};
 /// How far a signature's `issued_ms` may lie from the daemon's clock.
 pub const MAX_AGE_MS: i64 = 10 * 60 * 1000;
 pub const MAX_SKEW_MS: i64 = 60 * 1000;
+/// Accepted nonce lengths (characters).
+pub const NONCE_MIN: usize = 16;
+pub const NONCE_MAX: usize = 128;
 
 pub fn intent_bytes(repo: &str, op: &Op, nonce: &str, issued_ms: i64) -> Vec<u8> {
     canonical_bytes(&HumanIntent::new(repo, op, nonce, issued_ms))
@@ -47,7 +50,7 @@ pub fn check_fresh(sig: &HumanSignature, now_ms: i64) -> Result<(), &'static str
     if sig.issued_ms > now_ms + MAX_SKEW_MS || sig.issued_ms < now_ms - MAX_AGE_MS {
         return Err("stale_human_signature");
     }
-    if sig.nonce.len() < 16 || sig.nonce.len() > 128 {
+    if sig.nonce.len() < NONCE_MIN || sig.nonce.len() > NONCE_MAX {
         return Err("bad_nonce");
     }
     Ok(())
@@ -172,7 +175,9 @@ mod tests {
             Err("stale_human_signature")
         );
         let mut short = login.clone();
-        short.nonce.truncate(15);
+        while short.nonce.len() >= NONCE_MIN {
+            short.nonce.pop();
+        }
         assert_eq!(
             verify_login(&key, Some("demo"), 3_600_000, &short, now),
             Err("bad_nonce")

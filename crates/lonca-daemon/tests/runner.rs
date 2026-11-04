@@ -645,4 +645,50 @@ fn trees_are_fetched_in_pages() {
             .unwrap()
             .starts_with("huge.bin is 2097153 bytes, above the change cap")
     );
+
+    // Under the small line cap the same tree is more than one page; a
+    // tree that encodes to exactly the page budget is not.
+    let prep = call(
+        "repo.prepare_init",
+        json!({"repo": "media-small", "human": "ayse", "human_key": key.clone(), "import_from": up}),
+    )
+    .unwrap();
+    let warnings: Vec<&str> = prep["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        warnings.iter().any(|w| w.contains("more than one page")),
+        "{warnings:?}"
+    );
+    let up2 = e.root.join("up2.git");
+    git(&e.root, &["init", "-q", "--bare", up2.to_str().unwrap()]);
+    let work2 = e.root.join("work2");
+    git(&e.root, &["init", "-q", work2.to_str().unwrap()]);
+    std::fs::write(work2.join("page.bin"), vec![b'p'; 2304]).unwrap();
+    git(&work2, &["add", "."]);
+    git(
+        &work2,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "x",
+        ],
+    );
+    git(&work2, &["branch", "-M", "main"]);
+    git(&work2, &["push", "-q", up2.to_str().unwrap(), "main"]);
+    let prep = call(
+        "repo.prepare_init",
+        json!({"repo": "page-exact", "human": "ayse", "human_key": key, "import_from": up2}),
+    )
+    .unwrap();
+    assert_eq!(prep["tree_bytes"], 2304);
+    assert_eq!(prep["warnings"], json!([]), "{prep}");
 }

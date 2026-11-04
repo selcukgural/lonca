@@ -12,6 +12,7 @@ set -eu
 PREFIX=/opt/lonca
 BIN_DIR=$PREFIX/bin
 HOME_DIR=/var/lib/lonca
+BACKUP_DIR=/var/lib/lonca-backups
 SOCKET=/run/lonca/lonca.sock
 UNIT=/etc/systemd/system/lonca.service
 MANAGED=/etc/claude-code/managed-settings.json
@@ -44,12 +45,12 @@ RuntimeDirectoryMode=0750
 StateDirectory=lonca
 StateDirectoryMode=0700
 UMask=0077
-ExecStart=$BIN_DIR/lonca daemon --home $HOME_DIR --socket-mode 660 --socket-group lonca --allow-uid $1 --proxy 127.0.0.1:$PROXY_PORT
+ExecStart=$BIN_DIR/lonca daemon --home $HOME_DIR --backups $BACKUP_DIR --socket-mode 660 --socket-group lonca --allow-uid $1 --proxy 127.0.0.1:$PROXY_PORT
 Restart=always
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=$HOME_DIR
+ReadWritePaths=$HOME_DIR $BACKUP_DIR
 PrivateTmp=true
 
 [Install]
@@ -101,6 +102,7 @@ getent passwd lonca >/dev/null || useradd --system --gid lonca --home-dir "$HOME
 usermod -a -G lonca "$dev_user"
 
 install -d -o root -g root -m 0755 "$PREFIX" "$BIN_DIR"
+install -d -o lonca -g lonca -m 0750 "$BACKUP_DIR"
 for b in lonca lonca-audit; do
     [ -x "$src_bin/$b" ] && install -o root -g root -m 0755 "$src_bin/$b" "$BIN_DIR/$b"
 done
@@ -117,4 +119,5 @@ fi
 systemctl daemon-reload
 systemctl enable --now lonca.service
 echo "Lonca installed. export LONCA_SOCKET=$SOCKET; log out and in to join group lonca."
+echo "Backups (lonca backup) go to $BACKUP_DIR, readable by group lonca."
 echo "sudo advice: use 'Defaults:$dev_user timestamp_timeout=0' or a non-sudo account for agents."

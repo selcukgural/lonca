@@ -1,6 +1,6 @@
 #!/bin/sh
-# Removes the hardened install. Repository stores in /Library/Lonca/home are
-# kept unless --purge is given.
+# Removes the hardened install. Repository stores in /Library/Lonca/home and
+# backups in /Library/Lonca/backups are kept unless --purge is given.
 set -eu
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 purge=0
@@ -18,4 +18,4 @@ if [ $purge = 1 ]; then
     dscl . -delete /Users/_lonca 2>/dev/null || true
     dscl . -delete /Groups/lonca 2>/dev/null || true
 fi
-echo "Lonca removed$( [ $purge = 1 ] && echo ' (including repository stores)' )."
+echo "Lonca removed$( [ $purge = 1 ] && echo ' (including repository stores and backups)' )."

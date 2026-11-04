@@ -753,6 +753,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 require_root_settings: !allow_user_owned_settings,
                 managed_settings: managed_settings.unwrap_or(defaults.managed_settings),
                 git: defaults.git,
+                line_cap: defaults.line_cap,
             };
             let svc =
                 lonca_daemon::Service::open(home.clone(), settings, lonca_daemon::system_clock())?;
@@ -957,6 +958,9 @@ fn run(cmd: Cmd) -> Result<()> {
                 json!({"repo": repo, "human": human, "human_key": key, "import_from": import, "branch": branch}),
             )?;
             let op: Op = serde_json::from_value(prep["op"].clone())?;
+            for w in prep["warnings"].as_array().into_iter().flatten() {
+                eprintln!("warning: {}", w.as_str().unwrap_or_default());
+            }
             let sig = ctx::sign(&human, &repo, &op)?;
             let r = call(&mut c, "repo.init", json!({"op": op, "sig": sig}))?;
             print_decision(&r);

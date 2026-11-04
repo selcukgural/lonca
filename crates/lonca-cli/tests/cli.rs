@@ -94,6 +94,7 @@ fn start_daemon(root: &Path, home: &Path, sock: &Path) {
         managed_settings: root.join("managed.json"),
         require_root_settings: false,
         git: "git".into(),
+        line_cap: lonca_daemon::protocol::MAX_LINE,
     };
     let svc = Service::open(Home::new(home), settings, lonca_daemon::system_clock()).unwrap();
     let listener = lonca_daemon::server::bind(sock).unwrap();
@@ -1130,4 +1131,168 @@ fn a_worker_with_a_scratch_directory_through_the_documented_hooks() {
     );
     let o = e.hook(&ws, &write(&ws.join("src/new.rs")));
     assert!(o.status.success() && o.stdout.is_empty());
+}
+
+/// A repository larger than one fetch page gets a workspace and syncs
+/// after a large file lands, and `init --import` warns about files above
+/// the change cap (issue #79). The page budget is lowered through
+/// `LONCA_FETCH_BUDGET`.
+#[test]
+fn large_trees_are_fetched_in_pages_and_import_warns() {
+    let e = Env::new();
+    let r = &e.root;
+    // A Git repository to import: one file above the 2 MiB change cap.
+    let work = r.join("work");
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::fs::write(work.join("huge.bin"), vec![b'h'; 2 * 1024 * 1024 + 1]).unwrap();
+    std::fs::write(
+        work.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    for i in 0..6 {
+        std::fs::write(work.join(format!("d{i}.txt")), "d".repeat(900)).unwrap();
+    }
+    let g = |args: &[&str]| {
+        let o = Command::new("git")
+            .current_dir(&work)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", text(&o.stderr));
+    };
+    g(&["init", "-q", "-b", "main"]);
+    g(&["add", "."]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "x",
+    ]);
+    e.run(r, &["human", "keygen", "ayse"]);
+    let out = e
+        .cmd(r, &["init", "demo", "--import", work.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("warning: huge.bin is 2097153 bytes, above the change cap"),
+        "{}",
+        text(&out.stderr)
+    );
+
+    // Pages of at most 2000 encoded bytes: the workspace still comes whole.
+    let budget = |c: &mut Command| {
+        c.env("LONCA_FETCH_BUDGET", "2000");
+    };
+    let mut c = e.cmd(
+        r,
+        &[
+            "session",
+            "start",
+            "--repo",
+            "demo",
+            "--agent",
+            "claude",
+            "--paths",
+            "src/**",
+            "--workspace",
+            "ws",
+            "--json",
+        ],
+    );
+    budget(&mut c);
+    let o = c.output().unwrap();
+    // huge.bin alone is above the page: named, and the workspace is refused.
+    assert!(!o.status.success());
+    assert!(
+        text(&o.stderr).contains("huge.bin is 2097153 bytes, more than one fetch page holds"),
+        "{}",
+        text(&o.stderr)
+    );
+    // Without the oversize file the pages work.
+    std::fs::remove_file(work.join("huge.bin")).unwrap();
+    g(&["add", "."]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "drop",
+    ]);
+    e.run(r, &["human", "keygen", "ayse"]);
+    let out = e
+        .cmd(r, &["init", "demo2", "--import", work.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        !text(&out.stderr).contains("warning"),
+        "{}",
+        text(&out.stderr)
+    );
+    let mut c = e.cmd(
+        r,
+        &[
+            "session",
+            "start",
+            "--repo",
+            "demo2",
+            "--agent",
+            "claude",
+            "--paths",
+            "src/**",
+            "--workspace",
+            "ws2",
+            "--json",
+        ],
+    );
+    budget(&mut c);
+    let o = c.output().unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let ws = r.join("ws2");
+    for i in 0..6 {
+        assert_eq!(
+            std::fs::read_to_string(ws.join(format!("d{i}.txt")))
+                .unwrap()
+                .len(),
+            900
+        );
+    }
+    assert!(ws.join("src/lib.rs").exists());
+
+    // A human adds a 1500-byte file to trunk; the agent syncs in pages.
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo2"]);
+    let hws = r.join("hws");
+    std::fs::write(hws.join("notes.md"), "n".repeat(1500)).unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "notes"]).contains("allow"));
+    for _ in 0..100 {
+        let s = e.run(r, &["status", "--repo", "demo2", "--json"]);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        if v["queue"].as_array().is_some_and(|q| q.is_empty()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let mut c = e.cmd(&ws, &["sync", "--json"]);
+    budget(&mut c);
+    let o = c.output().unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let synced: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(
+        synced["updated"],
+        serde_json::json!(["notes.md"]),
+        "{synced}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(ws.join("notes.md")).unwrap().len(),
+        1500
+    );
 }

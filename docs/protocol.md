@@ -194,9 +194,12 @@ daemon key (foreign, waiting for `daemon.recover`) are not listed.
 
 Names: letters, digits, `.`, `_`, `-`, at most 64. `import_from` is a
 remote the daemon fetches `branch` (default `main`) from: an absolute
-path, `https://`, `ssh://` or `user@host:path`. Result `{"op": op}`: the
-`repo.init` operation to sign. Errors: `invalid`, `conflict` (the
-repository exists), `git` (the fetch failed).
+path, `https://`, `ssh://` or `user@host:path`. Result `{"op": op,
+"warnings": [string], "large_files": [{"path", "size"}], "tree_bytes":
+integer}`: the `repo.init` operation to sign, and what a workspace of
+this tree will meet (files above the change cap, a tree above one
+page). Errors: `invalid`, `conflict` (the repository exists), `git`
+(the fetch failed).
 
 ### `repo.init`
 
@@ -335,11 +338,25 @@ An attestation: `{"check": "syntax" | "scope" | "claim_diff" | "merge"
 null}`. The files of a commit:
 
 ```json
-[{"path": string, "mode": file mode, "blob": id, "content_b64": string | null}]
+[{"path": string, "mode": file mode, "blob": id, "size": integer, "content_b64": string | null}]
 ```
 
-`content_b64` is set with `with_content`, except for submodules and
-redacted blobs. The whole answer is one line; see `MAX_LINE`.
+`size` is the blob's size in bytes (0 for a submodule). `content_b64`
+is set with `with_content`, except for submodules and redacted blobs;
+the whole answer is one line (`MAX_LINE`), so for a tree of any size
+fetch the manifest without contents and page them with `blobs`.
+
+### `blobs`
+
+*read.* `{"commit": id, "paths": [path]}`. One page of contents, the
+same shape as `tree` with `content_b64` set (null for a submodule or a
+redacted blob). Every path must be in the commit's tree (`not_found`
+otherwise: a page never mixes commits). The page must fit the line cap
+once encoded: the budget is three quarters of `MAX_LINE` (72 MiB) of
+base64; a page over it, or a single file over it, is `too_large` with
+the file named. Size pages from `tree`'s `size` field: base64 of `n`
+bytes is `ceil(n / 3) * 4`. `lonca-cli` does this in `fetch`
+(`LONCA_FETCH_BUDGET` lowers the budget for tests).
 
 ### `change.get`
 
@@ -483,7 +500,8 @@ within two seconds of a proposal; the call is for tests and scripts.
 | `unauthenticated` | no token, or one that is unknown, ended or expired; a login that did not verify |
 | `forbidden` | a token of the wrong kind, for another repository, or not enrolled; a signature by another human |
 | `unknown_method` | not in the table |
-| `not_found` | no such repository or change |
+| `not_found` | no such repository or change; a path not in the commit (`blobs`) |
+| `too_large` | a `blobs` page, or one file, does not fit the line cap |
 | `conflict` | the repository exists |
 | `denied` | a signed operation the log refused before anything was written (`repo.init`, recoveries) |
 | `foreign_key` | the repository is on another daemon key |
@@ -580,7 +598,8 @@ still needs a signature.
 
 - **1** (2026-11): this document. Additions since, same number:
   `scope.scratch`, `hook.bind.scratch`, `session start --scratch`
-  (#78). `ping.protocol`; `status.pending`
+  (#78); `tree[].size`, `blobs`, `repo.prepare_init.warnings` (#79).
+  `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,
   `created_ms`, `version` and `paths`; `log` takes `wait_ms`. Every

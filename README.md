@@ -225,6 +225,21 @@ reasons: [docs/decisions.md](docs/decisions.md).
   be exercised in automated tests (signature format is tested).
 - The advisor has been tested against a fake API only.
 
+## Documentation
+
+- [docs/protocol.md](docs/protocol.md): the daemon's protocol for
+  runners and other clients (methods, credentials, shapes, error codes,
+  the CLI's `--json` outputs and exit codes).
+- [docs/guide/runners.md](docs/guide/runners.md): running agents on
+  Lonca (Claude Code hooks, the MCP entry, scratch directories, taint).
+- [docs/guide/humans.md](docs/guide/humans.md): working as a human, from
+  a Lonca workspace or from a git checkout (`lonca fetch`,
+  `lonca propose --commit`).
+- [docs/guide/verification.md](docs/guide/verification.md): build and
+  test commands, their environment and sandbox, starters per language.
+- [docs/decisions.md](docs/decisions.md): decisions and deviations from
+  the design ([docs/design.md](docs/design.md), Turkish).
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

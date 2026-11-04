@@ -958,6 +958,9 @@ fn a_rejection_carries_its_reason_to_the_worker_and_frees_the_leases() {
     let seq = r["seq"].as_u64().unwrap();
     let change = r["change"].clone();
 
+    // A human change queued meanwhile is not the rejection's business.
+    let r = e.human_change(vec![file("notes.md", "queued\n")], "queued");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     let d = e.human(Op::Reject {
         target_seq: seq,
         reason: "charge must not double; see the spec".into(),
@@ -974,7 +977,8 @@ fn a_rejection_carries_its_reason_to_the_worker_and_frees_the_leases() {
     assert_eq!(st["leases"].as_array().unwrap().len(), 1, "{st}");
     assert_eq!(st["leases"][0]["set"], other);
     assert_eq!(st["leases"][0]["items"][0]["symbol"], "src/lib.rs#refund");
-    assert_eq!(e.svc.process_all(), 0);
+    assert_eq!(st["queue"].as_array().unwrap().len(), 1, "{st}");
+    assert_eq!(e.svc.process_all(), 1, "the queued change integrates");
 
     // The worker reads the reason, fixes, leases again, proposes again.
     e.lease(&token, "src/lib.rs#charge");

@@ -32,6 +32,10 @@ pub struct Meta {
     /// is integrated, files still equal to it are no longer local edits.
     #[serde(default)]
     pub submitted: Option<(lonca_core::ChangeId, GitId)>,
+    /// Scratch roots of the session, for information: the daemon holds
+    /// the authoritative list in the log and sends it at `hook.bind`.
+    #[serde(default)]
+    pub scratch_roots: Vec<String>,
 }
 
 pub struct Workspace {
@@ -132,6 +136,7 @@ impl Workspace {
                 human,
                 manifest,
                 submitted: None,
+                scratch_roots: vec![],
             },
         };
         ws.save()?;

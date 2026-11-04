@@ -1029,3 +1029,105 @@ fn runner_outputs_are_json_and_exit_codes_tell_failures_apart() {
         text(&out.stderr)
     );
 }
+
+/// The runner document's settings: a SessionStart event through
+/// `lonca hook` injects the rules and the scratch directory; writes to
+/// the scratch directory pass, writes elsewhere are denied (issue #78).
+#[test]
+fn a_worker_with_a_scratch_directory_through_the_documented_hooks() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    let scratch = r.join("claude-1-scratch");
+    let started: serde_json::Value = serde_json::from_str(&e.run(
+        r,
+        &[
+            "session",
+            "start",
+            "--repo",
+            "demo",
+            "--agent",
+            "claude",
+            "--paths",
+            "src/**",
+            "--workspace",
+            "claude-1",
+            "--scratch",
+            scratch.to_str().unwrap(),
+            "--json",
+        ],
+    ))
+    .unwrap();
+    let scratch = scratch.canonicalize().unwrap();
+    assert_eq!(
+        started["scratch"],
+        serde_json::json!([scratch.to_string_lossy()])
+    );
+    let ws = r.join("claude-1");
+    // A scratch directory inside its own workspace is refused.
+    let out = e
+        .cmd(
+            r,
+            &[
+                "session",
+                "start",
+                "--repo",
+                "demo",
+                "--agent",
+                "c",
+                "--paths",
+                "src/**",
+                "--workspace",
+                "w2",
+                "--scratch",
+                "w2/notes",
+            ],
+        )
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("overlaps the workspace"));
+
+    // The events as Claude Code sends them under the documented hooks block.
+    let start = format!(
+        r#"{{"hook_event_name":"SessionStart","session_id":"h1","cwd":"{}"}}"#,
+        ws.display()
+    );
+    let o = e.hook(&ws, &start);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let context = out["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        context.contains("governed by Lonca (repository demo"),
+        "{context}"
+    );
+    assert!(
+        context.contains(&scratch.to_string_lossy().to_string()),
+        "{context}"
+    );
+    assert!(context.contains("[taint]"), "{context}");
+    let write = |path: &std::path::Path| {
+        format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{{"file_path":"{}"}},"cwd":"{}"}}"#,
+            path.display(),
+            ws.display()
+        )
+    };
+    let o = e.hook(&ws, &write(&scratch.join("notes.md")));
+    assert!(
+        o.status.success() && o.stdout.is_empty(),
+        "{}",
+        text(&o.stdout)
+    );
+    let o = e.hook(&ws, &write(&r.join("elsewhere.md")));
+    assert!(
+        text(&o.stdout).contains("\"permissionDecision\":\"deny\""),
+        "{}",
+        text(&o.stdout)
+    );
+    let o = e.hook(&ws, &write(&ws.join("src/new.rs")));
+    assert!(o.status.success() && o.stdout.is_empty());
+}

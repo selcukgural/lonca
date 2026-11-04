@@ -59,6 +59,20 @@ network = "taint"
 # Let sandboxed commands reach loopback, private and link-local addresses.
 allow_private_network = false
 
+[taint]
+# Which observed tool calls mark a session tainted (content from outside
+# entered it; tainted changes need human review and may not touch
+# critical paths). Reads of untrusted paths and files outside the
+# workspace always taint.
+# Web fetches and searches.
+fetch = true
+# Shell commands that reach the network (curl, ssh, git fetch, ...).
+shell_network = true
+# MCP servers whose tools do not taint (by server name, as in
+# `mcp__<server>__<tool>`); every other server's tools do. Lonca's own
+# tools never taint.
+mcp_servers = []
+
 [approvals]
 # With fewer enrolled humans than a rule requires, require all of them.
 cap_to_enrolled_humans = true
@@ -120,6 +134,7 @@ pub struct Config {
     pub paths: Paths,
     pub verification: Verification,
     pub observation: Observation,
+    pub taint: Taint,
     pub approvals: Approvals,
     pub negotiation: Negotiation,
     pub reverts: Reverts,
@@ -170,6 +185,32 @@ pub struct Observation {
     pub unobserved_is_tainted: bool,
     pub network: String,
     pub allow_private_network: bool,
+}
+
+/// Which observations taint a session (`[taint]`). Policy data: the
+/// daemon's hook translation reads it when it marks an observation
+/// `external`; `decide()` only sees the result.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Taint {
+    pub fetch: bool,
+    pub shell_network: bool,
+    pub mcp_servers: Vec<String>,
+}
+
+impl Taint {
+    /// The server part of an MCP tool name, `mcp__<server>__<tool>`.
+    pub fn mcp_server(tool: &str) -> Option<&str> {
+        tool.strip_prefix("mcp__")?.split("__").next()
+    }
+
+    /// Does a call of this MCP tool taint?
+    pub fn mcp_taints(&self, tool: &str) -> bool {
+        match Self::mcp_server(tool) {
+            Some(server) => !self.mcp_servers.iter().any(|s| s == server),
+            None => true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -275,6 +316,16 @@ impl Default for Observation {
             unobserved_is_tainted: true,
             network: "taint".into(),
             allow_private_network: false,
+        }
+    }
+}
+
+impl Default for Taint {
+    fn default() -> Self {
+        Self {
+            fetch: true,
+            shell_network: true,
+            mcp_servers: vec![],
         }
     }
 }

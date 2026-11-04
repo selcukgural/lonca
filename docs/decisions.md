@@ -77,6 +77,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   `human.revoke`, `human.recovery_key`, `human.recover`; see "Human keys").
 - **Version 4** adds the daemon key operations (`daemon.rotate`,
   `daemon.recover`; see "Daemon keys").
+- **Version 5** adds `scope.scratch` on `session.start` and
+  `cap.attenuate` (see "Scratch roots and taint policy"). The field is
+  left out of the encoding when empty, so every earlier entry keeps its
+  bytes; an entry that names a root needs format 5.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -469,6 +473,41 @@ equal to `PROTOCOL`.
   commands keep collecting denials per repository as before. The human
   session file is documented as an interface, since a runner that talks
   to the socket directly reuses it. No token in any output.
+
+## Scratch roots and taint policy
+
+A runner's worker keeps notes, logs and throwaway files outside its
+workspace (imece: `--add-dir` to a scratch directory) and reads the web
+and its own MCP tools. Before #78 the first was denied and the second
+tainted the session for good, closing every critical path to it.
+
+- **Scratch roots** are part of the session's scope
+  (`session start --scratch DIR`, repeatable; `Scope.scratch`, log
+  format 5), so the auditor sees them and a child session can keep or
+  drop them, never add one (`scope_widening:scratch:…`). A root is an
+  absolute, normalized directory, at most eight per session
+  (`scope_invalid:scratch:…`). The hook translation checks the workspace
+  first, so a root inside the workspace exempts nothing; the CLI refuses
+  one that overlaps the workspace. Under a root, writes are allowed and
+  not observed (they are not facts and can not be proposed: proposals
+  come from the workspace tree), reads are observed and not external.
+  The hook program names the roots in its SessionStart text, taking them
+  from the daemon's `hook.bind` answer, never from a file in the
+  workspace, which an agent could edit; shell commands that mention
+  `.lonca/` are denied for the same reason.
+- **What taints is policy data.** `[taint]` in `lonca.toml`: `fetch`
+  (web fetches and searches), `shell_network` (curl, ssh, git fetch,
+  …), `mcp_servers` (an allow-list of servers whose tools do not
+  taint; every other server's tools do; Lonca's own never do). Defaults
+  keep the old behaviour. Reads of untrusted paths and of files outside
+  the workspace and the roots always taint. The daemon's hook
+  translation reads the policy when it sets `external` on an
+  observation; `decide()` sees only the result and stays pure. A policy
+  update that turns taint off does not clean a session already tainted.
+- **The runner document** `docs/guide/runners.md` says what a runner
+  installs and runs: the hooks block, the MCP entry, the environment,
+  how the hook finds the workspace, what SessionStart injects, and what
+  to do when a worker ends.
 
 ## Mutation testing
 

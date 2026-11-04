@@ -86,7 +86,11 @@ unknown method: `unknown_method`, whatever the token.
   "mode": "regular" | "executable" | "symlink" | "submodule" | null}`;
   `content_b64: null` deletes the file.
 - **scope**: `{"paths": [glob], "symbols": [string] | null, "ops":
-  [op kind], "max_files": integer | null, "max_lines": integer | null}`.
+  [op kind], "max_files": integer | null, "max_lines": integer | null,
+  "scratch": [absolute path]}`. `scratch` (optional, at most 8) names
+  directories outside the workspace the agent may write to: writes
+  there are allowed and not observed, reads there do not taint, nothing
+  there can be proposed. A child scope may keep or drop them, not add.
 - **lease item**: `{"symbol": "path#Qualified.name", "kind": "edit" |
   "insert" | "rename"}`; for `insert` the symbol is the container
   (`path#Type` or `path#<file>`).
@@ -462,7 +466,8 @@ entries.
 
 *agent.* `{"harness": string, "harness_session": string,
 "sudo_without_password": boolean, "workspace": absolute path | null}`.
-Logged, plus `"level"` (observation level) and `"notes"` ([string]).
+Logged, plus `"level"` (observation level), `"notes"` ([string]) and
+`"scratch"` ([absolute path], the session's scratch roots from the log).
 
 ### `queue.run`
 
@@ -536,8 +541,11 @@ Exit codes:
 `--json` shapes:
 
 - `session start --json`: `{"session", "workspace": absolute path,
-  "expires_ms", "paths": [glob], "seq", "decision"}`. The agent's token
-  is in `<workspace>/.lonca/session` (0600), nowhere else.
+  "expires_ms", "paths": [glob], "scratch": [absolute path], "seq",
+  "decision"}`. The agent's token is in `<workspace>/.lonca/session`
+  (0600), nowhere else. `--scratch DIR` (repeatable) names a directory
+  outside the workspace for the agent's notes and logs; see
+  `docs/guide/runners.md`.
 - `session end --json` (in the agent's workspace): `{"session", "seq",
   "decision"}`.
 - `sync --json`: `{"base_before": id, "base_after": id, "updated":
@@ -570,7 +578,9 @@ still needs a signature.
 
 ## Protocol numbers
 
-- **1** (2026-11): this document. `ping.protocol`; `status.pending`
+- **1** (2026-11): this document. Additions since, same number:
+  `scope.scratch`, `hook.bind.scratch`, `session start --scratch`
+  (#78). `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,
   `created_ms`, `version` and `paths`; `log` takes `wait_ms`. Every

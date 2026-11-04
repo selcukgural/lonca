@@ -1675,7 +1675,14 @@ impl Service {
             return fail("invalid", "workspace must be an absolute path");
         }
         let policy = r.policy().or_fail()?;
-        let (events, verdict) = hooks::translate(&ev, &policy);
+        let scratch = r
+            .chain
+            .state
+            .sessions
+            .get(&session)
+            .map(|s| s.scope.scratch.clone())
+            .unwrap_or_default();
+        let (events, verdict) = hooks::translate(&ev, &policy, &scratch);
         if !events.is_empty() {
             r.submit(
                 Submission::new(Actor::Daemon, Op::Observe { session, events }),
@@ -1718,7 +1725,7 @@ impl Service {
                 Submission::new(
                     Actor::Daemon,
                     Op::SessionBind {
-                        session,
+                        session: session.clone(),
                         checks,
                         level,
                     },
@@ -1729,6 +1736,16 @@ impl Service {
         let mut out = logged(&signed);
         out["level"] = json!(level);
         out["notes"] = json!(ins.notes);
+        // The roots the hook program names at SessionStart: from the log,
+        // never from a file the agent could edit.
+        out["scratch"] = json!(
+            r.chain
+                .state
+                .sessions
+                .get(&session)
+                .map(|s| s.scope.scratch.clone())
+                .unwrap_or_default()
+        );
         if let Some(ws) = b
             .workspace
             .filter(|w| std::path::Path::new(w).is_absolute())

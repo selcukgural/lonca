@@ -242,3 +242,211 @@ fn log_waits_for_the_next_entry_and_gives_up_on_time() {
         "waited {waited} ms for an entry that came after 200"
     );
 }
+
+fn log_len(e: &mut Env) -> usize {
+    e.ok("log", Some("demo"), None, json!({}))
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+/// A session with scratch roots: writes there are allowed and leave no
+/// entry, reads there do not taint, everything else outside is denied;
+/// a root is validated at session start and never widened by a child.
+#[test]
+fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let scratch = e.root.join("scratch");
+    let scratch_s = scratch.to_string_lossy().into_owned();
+    let scope = |roots: Vec<String>| Scope {
+        paths: vec!["src/**".into()],
+        symbols: None,
+        ops: vec![
+            OpKind::ChangePropose,
+            OpKind::LeaseAcquire,
+            OpKind::CapAttenuate,
+        ],
+        max_files: None,
+        max_lines: None,
+        scratch: roots,
+    };
+    let start = |id: &str, scope: Scope, now: i64| Op::SessionStart {
+        session: id.into(),
+        agent: "bot".into(),
+        model: None,
+        task: "T".into(),
+        scope,
+        expires_ms: now + 3_600_000,
+    };
+    // Refused roots: relative, with `..`, a trailing slash, too many.
+    for bad in ["scratch", "/tmp/../x", "/tmp/x/", "/", "/tmp/./x"] {
+        let r = e.human(start("sbad", scope(vec![bad.into()]), e.now()));
+        assert_eq!(r["decision"]["outcome"], "deny", "{bad}: {r}");
+        assert!(
+            r["decision"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|x| x.as_str().unwrap().starts_with("scope_invalid:scratch:")),
+            "{bad}: {r}"
+        );
+    }
+    let many: Vec<String> = (0..9).map(|i| format!("/tmp/s{i}")).collect();
+    let r = e.human(start("sbad", scope(many), e.now()));
+    assert_eq!(
+        r["decision"]["reasons"][0],
+        "scope_invalid:scratch:too_many"
+    );
+    // Exactly the maximum is fine.
+    let eight: Vec<String> = (0..8).map(|i| format!("/tmp/s{i}")).collect();
+    let r = e.human(start("s-eight", scope(eight), e.now()));
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+
+    let r = e.human(start("s1", scope(vec![scratch_s.clone()]), e.now()));
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let token = r["token"].as_str().unwrap().to_string();
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    let s1 = st["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "s1")
+        .unwrap();
+    assert_eq!(s1["taint"], Value::Null);
+    let bound = e.ok(
+        "hook.bind",
+        None,
+        Some(&token),
+        json!({"harness": "claude-code", "harness_session": "h", "sudo_without_password": false}),
+    );
+    assert_eq!(bound["scratch"], json!([scratch_s]));
+
+    let ws = e.root.join("ws");
+    let before = log_len(&mut e);
+    let event = |e: &mut Env, phase: &str, tool: &str, path: std::path::PathBuf| {
+        e.ok(
+            "hook.event",
+            None,
+            Some(&token),
+            json!({"hook_event_name": phase, "tool_name": tool, "tool_input": {"file_path": path}, "workspace": ws}),
+        )
+    };
+    // Writes under the root: allowed, no observation, no entry.
+    let v = event(&mut e, "PreToolUse", "Write", scratch.join("notes.md"));
+    assert_eq!(v["decision"], "allow", "{v}");
+    event(&mut e, "PostToolUse", "Write", scratch.join("notes.md"));
+    assert_eq!(log_len(&mut e), before, "scratch writes are not facts");
+    // A read there: observed, not external, no taint.
+    event(&mut e, "PreToolUse", "Read", scratch.join("notes.md"));
+    assert_eq!(log_len(&mut e), before + 1);
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    let s1 = st["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "s1")
+        .unwrap();
+    assert_eq!(s1["taint"], Value::Null, "{s1}");
+    // Outside both roots: denied, observed, and the session is tainted.
+    let elsewhere = e.root.join("elsewhere.txt");
+    let v = event(&mut e, "PreToolUse", "Write", elsewhere);
+    assert_eq!(v["decision"], "deny");
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    let s1 = st["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "s1")
+        .unwrap();
+    assert!(s1["taint"].is_string(), "{s1}");
+
+    // A child may keep a root or drop it, not add one.
+    let expires = e.now() + 60_000;
+    let child = |roots: Vec<String>| json!({"agent": "child", "scope": scope(roots), "expires_ms": expires});
+    let r = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&token),
+        child(vec![format!("{scratch_s}/sub")]),
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let r = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&token),
+        child(vec!["/tmp/other".into()]),
+    );
+    assert_eq!(
+        r["decision"]["reasons"][0], "scope_widening:scratch:/tmp/other",
+        "{r}"
+    );
+    let r = e.ok("cap.attenuate", None, Some(&token), child(vec![]));
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+}
+
+/// `[taint]` in lonca.toml says what taints: with fetches, network
+/// commands and an allow-listed MCP server switched off, a session that
+/// did all three stays clean; by default each of them taints.
+#[test]
+fn the_taint_policy_is_repository_data() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let ws = e.root.join("ws");
+    let calls = [
+        ("WebFetch", json!({"url": "https://docs.rs/serde"})),
+        ("Bash", json!({"command": "curl https://docs.rs"})),
+        ("mcp__imece__send", json!({})),
+    ];
+    let taint_of = |e: &mut Env, id: &str| {
+        let st = e.ok("status", Some("demo"), None, json!({}));
+        let s = st["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .unwrap()
+            .clone();
+        s["taint"].clone()
+    };
+    let t = e.session("s1", &["src/**"]);
+    for (tool, input) in &calls {
+        e.ok("hook.event", None, Some(&t), json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input, "workspace": ws}));
+    }
+    assert!(taint_of(&mut e, "s1").is_string(), "default taints");
+
+    let config = lonca_policy::config::DEFAULT_CONFIG
+        .replace("fetch = true", "fetch = false")
+        .replace("shell_network = true", "shell_network = false")
+        .replace("mcp_servers = []", "mcp_servers = [\"imece\"]");
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+    let t = e.session("s2", &["src/**"]);
+    for (tool, input) in &calls {
+        e.ok("hook.event", None, Some(&t), json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input, "workspace": ws}));
+    }
+    assert_eq!(taint_of(&mut e, "s2"), Value::Null);
+    // Another server still taints; so does a file outside the workspace.
+    e.ok("hook.event", None, Some(&t), json!({"hook_event_name": "PreToolUse", "tool_name": "mcp__github__get_issue", "tool_input": {}, "workspace": ws}));
+    assert!(taint_of(&mut e, "s2").is_string());
+    let t = e.session("s3", &["src/**"]);
+    e.ok("hook.event", None, Some(&t), json!({"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "/etc/hosts"}, "workspace": ws}));
+    assert!(taint_of(&mut e, "s3").is_string());
+    // An unknown key in [taint] does not parse.
+    let bad =
+        lonca_policy::config::DEFAULT_CONFIG.replace("fetch = true", "fetch = true\nweb = false");
+    assert!(
+        lonca_policy::config::PolicyBundle::parse(&bad, lonca_policy::config::DEFAULT_POLICY)
+            .is_err()
+    );
+}

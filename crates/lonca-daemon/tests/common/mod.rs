@@ -255,6 +255,7 @@ impl Env {
                 ],
                 max_files: None,
                 max_lines: None,
+                scratch: vec![],
             },
             expires_ms: self.now() + 3_600_000,
         };

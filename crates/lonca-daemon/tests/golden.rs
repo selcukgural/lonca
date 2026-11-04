@@ -71,7 +71,52 @@ fn golden_repo() -> Env {
     });
     human_keys(&mut e);
     daemon_keys(&mut e);
+    scratch_roots(&mut e);
     e
+}
+
+/// From format 5: a session whose scope names scratch roots, a child
+/// session narrowed to one of them, and an observation from each.
+fn scratch_roots(e: &mut Env) {
+    let allowed = |r: Value| assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let start = Op::SessionStart {
+        session: "s8".into(),
+        agent: "bot-s8".into(),
+        model: None,
+        task: "T-8".into(),
+        scope: Scope {
+            paths: vec!["notes.md".into()],
+            symbols: None,
+            ops: vec![OpKind::LeaseAcquire, OpKind::CapAttenuate],
+            max_files: None,
+            max_lines: None,
+            scratch: vec!["/tmp/golden/scratch".into(), "/tmp/golden/logs".into()],
+        },
+        expires_ms: e.now() + 3_600_000,
+    };
+    let r = e.human(start);
+    allowed(r.clone());
+    let t = r["token"].as_str().expect("token").to_string();
+    let r = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&t),
+        json!({"agent": "bot-s8-child", "scope": {"paths": ["notes.md"], "symbols": null, "ops": ["lease.acquire"], "max_files": null, "max_lines": null, "scratch": ["/tmp/golden/logs"]}, "expires_ms": e.now() + 60_000}),
+    );
+    allowed(r.clone());
+    let ws = e.root.join("ws");
+    e.ok(
+        "hook.event",
+        None,
+        Some(&t),
+        json!({"hook_event_name": "PostToolUse", "tool_name": "Write", "tool_input": {"file_path": "/tmp/golden/scratch/notes.txt"}, "workspace": ws}),
+    );
+    e.ok(
+        "hook.event",
+        None,
+        Some(&t),
+        json!({"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "/tmp/golden/logs/run.log"}, "workspace": ws}),
+    );
 }
 
 /// From format 4: the daemon key is rotated, a session starts, then the
@@ -120,11 +165,28 @@ fn human_keys(e: &mut Env) {
             ops: vec![OpKind::LeaseAcquire],
             max_files: None,
             max_lines: None,
+            scratch: vec![],
         },
         expires_ms: e.now() + 3_600_000,
     };
     let body = json!({"op": start, "sig": sign_ed25519(&bora, "bora", "demo", &start, e.now())});
-    allowed(e.ok("human.submit", Some("demo"), None, body));
+    // Bora submits on bora's own session (logins are not log entries).
+    let sig = sign_login_ed25519(&bora, "bora", None, 3_600_000, e.now());
+    let bora_session = e
+        .anon(
+            "human.login",
+            None,
+            None,
+            json!({"sig": sig, "ttl_ms": 3_600_000}),
+        )
+        .unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    allowed(
+        e.anon("human.submit", Some("demo"), Some(&bora_session), body)
+            .unwrap(),
+    );
     let t = e.session("s5", &["notes.md"]);
     e.lease(&t, "notes.md#<file>");
 
@@ -310,6 +372,74 @@ fn golden_v4_log_still_verifies_replays_and_audits() {
     let r = audit(&store, Options::default()).unwrap();
     assert_eq!(r.key_switches.len(), 2);
     assert_ne!(r.key_switches[0].key, r.key_switches[1].key);
+}
+
+/// A scope with scratch roots needs format 5: an older entry carrying one
+/// is refused by the chain check, like an operation type from a later
+/// format.
+#[test]
+fn scratch_roots_in_an_old_format_entry_are_refused() {
+    let mut e = Env::new();
+    e.init(None);
+    let start = Op::SessionStart {
+        session: "s1".into(),
+        agent: "bot".into(),
+        model: None,
+        task: "T".into(),
+        scope: Scope {
+            paths: vec!["src/**".into()],
+            symbols: None,
+            ops: vec![OpKind::LeaseAcquire],
+            max_files: None,
+            max_lines: None,
+            scratch: vec!["/tmp/s".into()],
+        },
+        expires_ms: e.now() + 60_000,
+    };
+    assert_eq!(e.human(start)["decision"]["outcome"], "allow");
+    assert_eq!(*formats(&e).last().unwrap(), 5);
+    rewrite_log(&e, |entries| {
+        for x in entries.iter_mut() {
+            x.format = 4;
+        }
+    });
+    let err = match open_service(&e) {
+        Ok(_) => panic!("a format 4 entry with scratch roots was accepted"),
+        Err(e) => e.to_string(),
+    };
+    assert!(err.contains("session.start needs log format 5"), "{err}");
+}
+
+#[test]
+fn golden_v5_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v5.bundle",
+        "fa1d0352acbfae3e47ec30f79d357055dccbd4326a1d989effd789f24655fa76",
+        5,
+    );
+    // The scratch roots are in the log, in order, and the child kept one.
+    let scratches: Vec<Vec<String>> = ops
+        .iter()
+        .filter_map(|o| match &o.entry.op {
+            Op::SessionStart { scope, .. } | Op::CapAttenuate { scope, .. }
+                if !scope.scratch.is_empty() =>
+            {
+                Some(scope.scratch.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        scratches,
+        [
+            vec!["/tmp/golden/scratch".to_string(), "/tmp/golden/logs".into()],
+            vec!["/tmp/golden/logs".to_string()]
+        ]
+    );
+    // The read under a scratch root was observed and did not taint.
+    let (_dir, store) = load("oplog-v5.bundle");
+    let state = lonca_policy::state::State::replay(&OpLog::new(&store).read_all().unwrap());
+    assert!(state.sessions["s8"].taint.is_none());
 }
 
 fn open_service(e: &Env) -> lonca_core::Result<Arc<Service>> {

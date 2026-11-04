@@ -78,6 +78,18 @@ jobs:
       # unprivileged user namespaces, every sandboxed verification fails,
       # and the baseline run (not a mutant) fails in the concurrency test.
       # Sandboxed verification in CI is #54 / #59.
+      # cargo-mutants builds up to two copies of the tree under /tmp; with
+      # this workspace's debug targets the runner's disk runs out (shard
+      # 2/6 of PR #88 died with ENOSPC). The preinstalled toolchains we
+      # never use are the space.
+      - name: Free disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift \
+            /usr/local/share/chromium /usr/local/lib/node_modules 2>/dev/null || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h / | tail -1
       - name: cargo-mutants
         uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
@@ -150,6 +162,18 @@ jobs:
       # unprivileged user namespaces, every sandboxed verification fails,
       # and the baseline run (not a mutant) fails in the concurrency test.
       # Sandboxed verification in CI is #54 / #59.
+      # cargo-mutants builds up to two copies of the tree under /tmp; with
+      # this workspace's debug targets the runner's disk runs out (shard
+      # 2/6 of PR #88 died with ENOSPC). The preinstalled toolchains we
+      # never use are the space.
+      - name: Free disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift \
+            /usr/local/share/chromium /usr/local/lib/node_modules 2>/dev/null || true
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h / | tail -1
       - name: cargo-mutants
         uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:

@@ -450,3 +450,168 @@ fn the_taint_policy_is_repository_data() {
             .is_err()
     );
 }
+
+/// `tree` carries sizes; `blobs` pages contents of one commit and
+/// refuses what does not fit a page or belong to the commit.
+#[test]
+fn trees_are_fetched_in_pages() {
+    use lonca_daemon::service::page_budget;
+    let mut e = Env::new();
+    e.init(None);
+    let big = "x".repeat(3000);
+    e.human_change(
+        vec![
+            file("a.txt", "aaa\n"),
+            file("big.bin", &big),
+            file("src/lib.rs", LIB),
+        ],
+        "seed",
+    );
+    e.svc.process_all();
+    let trunk = e.trunk();
+    let manifest = e.ok("tree", Some("demo"), None, json!({"commit": trunk}));
+    let sizes: Vec<(String, u64)> = manifest
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["path"].as_str().unwrap().to_string(),
+                f["size"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(sizes[0], ("a.txt".into(), 4));
+    assert_eq!(sizes[1], ("big.bin".into(), 3000));
+    assert!(manifest[0]["content_b64"].is_null());
+
+    let page = e.ok(
+        "blobs",
+        Some("demo"),
+        None,
+        json!({"commit": trunk, "paths": ["a.txt", "src/lib.rs"]}),
+    );
+    assert_eq!(page[0]["path"], "a.txt");
+    assert_eq!(page[0]["content_b64"], b64("aaa\n"));
+    assert_eq!(page[1]["size"], LIB.len());
+    assert_eq!(page.as_array().unwrap().len(), 2);
+    let err = e
+        .call(
+            "blobs",
+            Some("demo"),
+            None,
+            json!({"commit": trunk, "paths": ["nope.txt"]}),
+        )
+        .unwrap_err();
+    assert_eq!(err.0, "not_found", "{err:?}");
+    let err = e
+        .call(
+            "blobs",
+            Some("demo"),
+            None,
+            json!({"commit": trunk, "paths": []}),
+        )
+        .unwrap_err();
+    assert_eq!(err.0, "invalid");
+    // The same path at an earlier commit, where it does not exist yet.
+    let genesis = e.ok("log", Some("demo"), None, json!({"from": 0, "limit": 1}))[0]["entry"]["op"]
+        ["trunk"]
+        .clone();
+    let err = e
+        .call(
+            "blobs",
+            Some("demo"),
+            None,
+            json!({"commit": genesis, "paths": ["a.txt"]}),
+        )
+        .unwrap_err();
+    assert_eq!(err.0, "not_found", "{err:?}");
+
+    // A daemon with a small line cap: a page over the budget is refused,
+    // a file over it is refused by name, two small files fit.
+    let settings = Settings {
+        line_cap: 4096,
+        ..e.settings.clone()
+    };
+    let budget = page_budget(4096);
+    assert_eq!(budget, 3072);
+    let c = e.clock.clone();
+    let small = Service::open(
+        Home::new(e.root.join("home")),
+        settings,
+        Arc::new(move || c.fetch_add(1, Ordering::SeqCst)),
+    )
+    .unwrap();
+    let token = e.human_token.clone().unwrap();
+    let call = |method: &str, params: Value| {
+        let r = small.handle(Request {
+            id: 1,
+            method: method.into(),
+            repo: Some("demo".into()),
+            token: Some(token.clone()),
+            params,
+        });
+        if r.ok {
+            Ok(r.result)
+        } else {
+            Err(r.error.map(|e| (e.code, e.message)).unwrap())
+        }
+    };
+    let err = call("blobs", json!({"commit": trunk, "paths": ["big.bin"]})).unwrap_err();
+    assert_eq!(err.0, "too_large", "{err:?}");
+    assert!(err.1.contains("big.bin is 3000 bytes"), "{err:?}");
+    let ok = call(
+        "blobs",
+        json!({"commit": trunk, "paths": ["a.txt", "src/lib.rs"]}),
+    )
+    .unwrap();
+    assert_eq!(ok.as_array().unwrap().len(), 2);
+    let many: Vec<String> = (0..40).map(|_| "src/lib.rs".to_string()).collect();
+    let err = call("blobs", json!({"commit": trunk, "paths": many})).unwrap_err();
+    assert_eq!(err.0, "too_large");
+    assert!(err.1.contains("fewer files"), "{err:?}");
+
+    // Importing a tree with a file above the change cap says so.
+    let up = e.root.join("up.git");
+    git(&e.root, &["init", "-q", "--bare", up.to_str().unwrap()]);
+    let work = e.root.join("work");
+    git(&e.root, &["init", "-q", work.to_str().unwrap()]);
+    std::fs::write(work.join("huge.bin"), vec![b'z'; 2 * 1024 * 1024 + 1]).unwrap();
+    std::fs::write(work.join("small.txt"), "s\n").unwrap();
+    git(&work, &["add", "."]);
+    git(
+        &work,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "-m",
+            "x",
+        ],
+    );
+    git(&work, &["branch", "-M", "main"]);
+    git(&work, &["push", "-q", up.to_str().unwrap(), "main"]);
+    let key = HumanKey {
+        alg: "ed25519".into(),
+        public: e.human.public_hex(),
+    };
+    let prep = e.ok(
+        "repo.prepare_init",
+        None,
+        None,
+        json!({"repo": "media", "human": "ayse", "human_key": key, "import_from": up}),
+    );
+    assert_eq!(prep["large_files"][0]["path"], "huge.bin");
+    assert_eq!(prep["tree_bytes"].as_u64().unwrap(), 2 * 1024 * 1024 + 3);
+    let warnings = prep["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .starts_with("huge.bin is 2097153 bytes, above the change cap")
+    );
+}

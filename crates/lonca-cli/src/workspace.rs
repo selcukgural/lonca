@@ -385,6 +385,23 @@ pub struct SyncReport {
     pub conflicts: Vec<String>,
 }
 
+/// How many encoded bytes one `blobs` page may carry. `LONCA_FETCH_BUDGET`
+/// overrides it (tests); the default is the daemon's page budget for
+/// `MAX_LINE`.
+pub fn fetch_budget() -> u64 {
+    std::env::var("LONCA_FETCH_BUDGET")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| lonca_daemon::service::page_budget(lonca_daemon::protocol::MAX_LINE))
+}
+
+fn encoded_len(bytes: u64) -> u64 {
+    bytes.div_ceil(3) * 4
+}
+
+/// The files of a commit with their contents: the manifest in one call,
+/// then the contents in pages that stay under the budget. A file too
+/// large for one page is reported by path.
 pub fn fetch(
     client: &mut Client,
     commit: &GitId,
@@ -393,9 +410,47 @@ pub fn fetch(
     let v = call(
         client,
         "tree",
-        json!({"commit": commit, "with_content": true, "paths": paths}),
+        json!({"commit": commit, "with_content": false, "paths": paths}),
     )?;
-    Ok(serde_json::from_value(v)?)
+    let mut files: Vec<TreeFile> = serde_json::from_value(v)?;
+    let budget = fetch_budget();
+    let mut pages: Vec<Vec<String>> = vec![];
+    let mut page: Vec<String> = vec![];
+    let mut used = 0u64;
+    for f in files.iter().filter(|f| f.mode != FileMode::Submodule) {
+        let need = encoded_len(f.size);
+        if need > budget {
+            bail!(
+                "{} is {} bytes, more than one fetch page holds ({budget} encoded); \
+                 keep such files out of the repository or raise the cap",
+                f.path,
+                f.size
+            );
+        }
+        if used + need > budget && !page.is_empty() {
+            pages.push(std::mem::take(&mut page));
+            used = 0;
+        }
+        used += need;
+        page.push(f.path.clone());
+    }
+    if !page.is_empty() {
+        pages.push(page);
+    }
+    let mut contents: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for paths in pages {
+        let v = call(client, "blobs", json!({"commit": commit, "paths": paths}))?;
+        let got: Vec<TreeFile> = serde_json::from_value(v)?;
+        for f in got {
+            contents.insert(f.path, f.content_b64);
+        }
+    }
+    for f in &mut files {
+        if let Some(c) = contents.remove(&f.path) {
+            f.content_b64 = c;
+        }
+    }
+    Ok(files)
 }
 
 fn write_file(root: &Path, f: &TreeFile) -> Result<()> {

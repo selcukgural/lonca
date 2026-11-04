@@ -74,6 +74,7 @@ impl Env {
             managed_settings: root.join("managed-settings.json"),
             require_root_settings: false,
             git: "git".into(),
+            line_cap: lonca_daemon::protocol::MAX_LINE,
         };
         let svc = Self::open_service(&root, &settings, &clock);
         Env {

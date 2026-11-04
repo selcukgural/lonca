@@ -155,6 +155,13 @@ impl Store {
         Ok(id.detach().into())
     }
 
+    /// The size of a blob without reading it (the object header).
+    pub fn blob_size(&self, id: &GitId) -> Result<u64> {
+        let repo = self.local();
+        let header = repo.find_header(id.oid()?).map_err(git)?;
+        Ok(header.size())
+    }
+
     pub fn read_blob(&self, id: &GitId) -> Result<Vec<u8>> {
         let repo = self.local();
         let obj = repo.find_object(id.oid()?).map_err(git)?;

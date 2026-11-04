@@ -351,7 +351,8 @@ A01/A07, zero trust: every request authenticated).
 | `daemon.prepare_rotate` | any human | creates the next daemon key |
 | `status` | read | repository state |
 | `log` | read | the operation log |
-| `tree` | read | files of a commit, contents included |
+| `tree` | read | files of a commit, sizes; contents on request |
+| `blobs` | read | one page of file contents of a commit |
 | `change.get` | read | one change record |
 | `human.prepare_change` | human | builds a commit for a human change |
 | `human.prepare_policy` | human | writes a policy commit |
@@ -473,6 +474,25 @@ equal to `PROTOCOL`.
   commands keep collecting denials per repository as before. The human
   session file is documented as an interface, since a runner that talks
   to the socket directly reuses it. No token in any output.
+
+## Tree paging
+
+A workspace was one `tree` call with every file's content in one JSON
+line, so a repository whose tracked bytes exceed the line cap (96 MiB)
+could be imported but never worked on (#79). Now `tree` returns the
+manifest with sizes, and `blobs` returns the contents of named files of
+one commit as a page; the client sizes pages from the manifest to stay
+under the page budget (three quarters of the line cap, encoded). A page
+never mixes commits: `blobs` names the commit and refuses a path that is
+not in its tree. A file that alone does not fit a page is refused by
+name (`too_large`), as is a page that would overflow; the client refuses
+the file before asking. `repo.prepare_init` reports files above the
+change cap (`changes.max_file_bytes` of the default policy) and a tree
+above one page, and `lonca init` prints them as warnings, so the limit
+is met at import, not at the first session. Not done: a per-file cap on
+import, and a "not materialised" class of paths (Git LFS style), which
+is what a repository with large media needs; the warning names the
+files to move out.
 
 ## Scratch roots and taint policy
 

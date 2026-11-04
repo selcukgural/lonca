@@ -208,8 +208,19 @@ pub struct TreeFile {
     pub path: String,
     pub mode: FileMode,
     pub blob: GitId,
+    /// Blob size in bytes, so a client can page its fetches.
+    #[serde(default)]
+    pub size: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_b64: Option<String>,
+}
+
+/// `blobs`: the contents of some files of one commit, one page. The
+/// client sizes a page from `tree`'s sizes to stay under the line cap.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BlobsQuery {
+    pub commit: GitId,
+    pub paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

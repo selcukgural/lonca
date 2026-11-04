@@ -46,6 +46,9 @@ pub struct Settings {
     /// Require managed settings and the hook program to be root-owned.
     pub require_root_settings: bool,
     pub git: String,
+    /// The longest response line (`MAX_LINE` outside tests): `blobs`
+    /// refuses a page that would not fit.
+    pub line_cap: usize,
 }
 
 impl Default for Settings {
@@ -54,8 +57,20 @@ impl Default for Settings {
             managed_settings: hooks::default_managed_settings(),
             require_root_settings: true,
             git: "git".into(),
+            line_cap: MAX_LINE,
         }
     }
+}
+
+/// Bytes a page of blob contents may hold once base64-encoded, under a
+/// line cap: three quarters, leaving room for paths, ids and JSON.
+pub fn page_budget(line_cap: usize) -> u64 {
+    (line_cap as u64 / 4) * 3
+}
+
+/// The base64 size of `bytes` bytes.
+fn encoded_len(bytes: u64) -> u64 {
+    bytes.div_ceil(3) * 4
 }
 
 type Hr = std::result::Result<Value, (String, String)>;
@@ -138,6 +153,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("status", Cred::Read),
     ("log", Cred::Read),
     ("tree", Cred::Read),
+    ("blobs", Cred::Read),
     ("change.get", Cred::Read),
     ("human.prepare_change", Cred::Human),
     ("human.prepare_policy", Cred::Human),
@@ -451,6 +467,7 @@ impl Service {
             "status" => self.status(&auth),
             "log" => self.log(&auth, params(p)?),
             "tree" => self.tree(&auth, params(p)?),
+            "blobs" => self.blobs(&auth, params(p)?),
             "change.get" => self.change_get(&auth, params(p)?),
             "whoami" => self.whoami(&auth),
             "human.prepare_change" => self.prepare_change(&auth, params(p)?),
@@ -815,6 +832,40 @@ impl Service {
             }
         };
         let policy = r.write_default_policy(now).or_fail()?;
+        // What a workspace of this tree will meet: files above the change
+        // cap can never be proposed back, and a tree above one page is
+        // fetched in pages. Said now, not at the first session.
+        let max_file = lonca_policy::config::Config::default()
+            .changes
+            .max_file_bytes;
+        let budget = page_budget(self.settings.line_cap);
+        let mut large_files = Vec::new();
+        let mut tree_bytes = 0u64;
+        for (path, e) in r.store.commit_files(&trunk).or_fail()? {
+            if e.mode == lonca_core::FileMode::Submodule {
+                continue;
+            }
+            let size = r.store.blob_size(&e.blob).or_fail()?;
+            tree_bytes += size;
+            if size > max_file {
+                large_files.push(json!({"path": path, "size": size}));
+            }
+        }
+        let mut warnings: Vec<String> = large_files
+            .iter()
+            .map(|f| {
+                format!(
+                    "{} is {} bytes, above the change cap of {max_file}: a workspace gets it, a proposal can not change it",
+                    f["path"].as_str().unwrap_or_default(),
+                    f["size"]
+                )
+            })
+            .collect();
+        if encoded_len(tree_bytes) > budget {
+            warnings.push(format!(
+                "the tree is {tree_bytes} bytes, more than one page ({budget} encoded): workspaces fetch it in pages"
+            ));
+        }
         let op = Op::RepoInit {
             repo: p.repo.clone(),
             daemon_key: r.chain.public_key(),
@@ -824,7 +875,9 @@ impl Service {
             trunk,
         };
         inner.prepared.insert(p.repo, op.clone());
-        Ok(json!({"op": op}))
+        Ok(
+            json!({"op": op, "warnings": warnings, "large_files": large_files, "tree_bytes": tree_bytes}),
+        )
     }
 
     fn init(&self, auth: &Auth, p: HumanSubmit) -> Hr {
@@ -985,6 +1038,11 @@ impl Service {
             {
                 continue;
             }
+            let size = if e.mode == lonca_core::FileMode::Submodule {
+                0
+            } else {
+                store.blob_size(&e.blob).or_fail()?
+            };
             let content_b64 = if q.with_content
                 && e.mode != lonca_core::FileMode::Submodule
                 && !redacted.contains(&e.blob)
@@ -1000,6 +1058,76 @@ impl Service {
                 path,
                 mode: e.mode,
                 blob: e.blob,
+                size,
+                content_b64,
+            });
+        }
+        Ok(json!(out))
+    }
+
+    /// One page of file contents of a commit. Every path must be in the
+    /// commit's tree (a page never mixes commits), and the page must fit
+    /// the line cap once encoded; a single file that does not fit is
+    /// named, so the client can leave it out or ask for a bigger cap.
+    fn blobs(&self, auth: &Auth, q: BlobsQuery) -> Hr {
+        let name = auth.repo()?;
+        let mut inner = self.lock();
+        let r = Self::repo(&mut inner, &name)?;
+        let store = r.store.clone();
+        let redacted = r.chain.state.redacted.clone();
+        drop(inner);
+        if q.paths.is_empty() {
+            return fail("invalid", "blobs: no paths");
+        }
+        let files = store.commit_files(&q.commit).or_fail()?;
+        let budget = page_budget(self.settings.line_cap);
+        let mut total = 0u64;
+        let mut wanted = Vec::new();
+        for path in &q.paths {
+            let Some(e) = files.get(path) else {
+                return fail("not_found", format!("blobs: {path} is not in {}", q.commit));
+            };
+            let size = if e.mode == lonca_core::FileMode::Submodule {
+                0
+            } else {
+                store.blob_size(&e.blob).or_fail()?
+            };
+            let encoded = encoded_len(size);
+            if encoded > budget {
+                return fail(
+                    "too_large",
+                    format!(
+                        "blobs: {path} is {size} bytes, more than one page holds ({budget} encoded)"
+                    ),
+                );
+            }
+            total += encoded;
+            if total > budget {
+                return fail(
+                    "too_large",
+                    format!(
+                        "blobs: this page would exceed {budget} encoded bytes; ask for fewer files"
+                    ),
+                );
+            }
+            wanted.push((path.clone(), e.clone(), size));
+        }
+        let mut out = Vec::with_capacity(wanted.len());
+        for (path, e, size) in wanted {
+            let content_b64 =
+                if e.mode != lonca_core::FileMode::Submodule && !redacted.contains(&e.blob) {
+                    Some(
+                        base64::engine::general_purpose::STANDARD
+                            .encode(store.read_blob(&e.blob).or_fail()?),
+                    )
+                } else {
+                    None
+                };
+            out.push(TreeFile {
+                path,
+                mode: e.mode,
+                blob: e.blob,
+                size,
                 content_b64,
             });
         }
@@ -2201,6 +2329,7 @@ mod tests {
                 managed_settings: dir.path().join("m.json"),
                 require_root_settings: false,
                 git: "git".into(),
+                line_cap: MAX_LINE,
             },
             Arc::new(|| 1_760_000_000_000),
         )

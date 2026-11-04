@@ -1214,6 +1214,35 @@ fn a_checkout_fetches_trunk_as_a_bundle_and_learns_how_far_behind_it_is() {
         Value::Null
     );
 
+    // A daemon with a tiny line cap refuses a bundle that does not fit
+    // one page, by size.
+    let settings = Settings {
+        line_cap: 256,
+        ..e.settings.clone()
+    };
+    let c = e.clock.clone();
+    let small = Service::open(
+        Home::new(e.root.join("home")),
+        settings,
+        Arc::new(move || c.fetch_add(1, Ordering::SeqCst)),
+    )
+    .unwrap();
+    let token = e.human_token.clone().unwrap();
+    let r = small.handle(Request {
+        id: 1,
+        method: "trunk.bundle".into(),
+        repo: Some("demo".into()),
+        token: Some(token),
+        params: json!({"have": [t0]}),
+    });
+    let err = r.error.expect("refused");
+    assert_eq!(err.code, "too_large", "{}", err.message);
+    assert!(
+        err.message.contains("more than one page"),
+        "{}",
+        err.message
+    );
+
     // A redacted blob on trunk's history: no bundle.
     let files = e.ok("tree", Some("demo"), None, json!({"commit": t3}));
     let blob = files

@@ -1604,4 +1604,80 @@ fn a_git_checkout_fetches_and_proposes_through_the_daemon() {
         "{}",
         text(&out.stderr)
     );
+
+    // File modes travel: an executable stays executable; symlinks and
+    // submodules are refused by name.
+    std::fs::write(co.join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    g(&["add", "run.sh"]);
+    g(&["update-index", "--chmod=+x", "run.sh"]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "script",
+    ]);
+    let p: serde_json::Value =
+        serde_json::from_str(&e.run(&co, &["propose", "--commit", "HEAD", "--json"])).unwrap();
+    assert_eq!(p["status"], "queued", "{p}");
+    e.settle();
+    e.run(&co, &["fetch"]);
+    assert!(
+        g(&["ls-tree", "refs/lonca/trunk", "run.sh"]).starts_with("100755"),
+        "mode kept"
+    );
+    g(&["reset", "-q", "--hard", "refs/lonca/trunk"]);
+    std::os::unix::fs::symlink("README.md", co.join("link")).unwrap();
+    g(&["add", "link"]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "link",
+    ]);
+    let out = e
+        .cmd(&co, &["propose", "--commit", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("link: symlinks are not proposed"),
+        "{}",
+        text(&out.stderr)
+    );
+    g(&["reset", "-q", "--hard", "refs/lonca/trunk"]);
+    // A gitlink entry without a real submodule is enough to be refused.
+    g(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{first},vendor/dep"),
+    ]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "submodule",
+    ]);
+    let out = e
+        .cmd(&co, &["propose", "--commit", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("vendor/dep: submodules are not proposed"),
+        "{}",
+        text(&out.stderr)
+    );
 }

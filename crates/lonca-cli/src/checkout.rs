@@ -153,6 +153,15 @@ pub fn propose(
             });
             continue;
         }
+        // The mode first: a symlink or a submodule is refused before any
+        // content is read.
+        let mode_line = git(dir, &["ls-tree", &commit.to_string(), "--", path])?;
+        let mode = match mode_line.split_whitespace().next() {
+            Some("100755") => Some(lonca_core::FileMode::Executable),
+            Some("120000") => bail!("{path}: symlinks are not proposed from a checkout"),
+            Some("160000") => bail!("{path}: submodules are not proposed from a checkout"),
+            _ => Some(lonca_core::FileMode::Regular),
+        };
         let spec = format!("{commit}:{path}");
         let out = Command::new("git")
             .arg("-C")
@@ -165,13 +174,6 @@ pub fn propose(
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        let mode_line = git(dir, &["ls-tree", &commit.to_string(), "--", path])?;
-        let mode = match mode_line.split_whitespace().next() {
-            Some("100755") => Some(lonca_core::FileMode::Executable),
-            Some("120000") => bail!("{path}: symlinks are not proposed from a checkout"),
-            Some("160000") => bail!("{path}: submodules are not proposed from a checkout"),
-            _ => Some(lonca_core::FileMode::Regular),
-        };
         files.push(FileChange {
             path: path.to_string(),
             content_b64: Some(base64::engine::general_purpose::STANDARD.encode(&out.stdout)),

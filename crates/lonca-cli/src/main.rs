@@ -1194,8 +1194,17 @@ fn run(cmd: Cmd) -> Result<()> {
             let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
             let s = call(&mut c, "status", json!({}))?;
             for p in s["pending"].as_array().cloned().unwrap_or_default() {
+                let change = p["change"]
+                    .as_str()
+                    .map(|c| format!(" change {}", c.get(..12).unwrap_or(c)))
+                    .unwrap_or_default();
+                let intent = p["intent"]
+                    .as_str()
+                    .filter(|i| !i.is_empty())
+                    .map(|i| format!(" \"{i}\""))
+                    .unwrap_or_default();
                 println!(
-                    "#{} {} {} [{}/{}] {}",
+                    "#{} {} {}{change}{intent} [{}/{}] {}",
                     p["seq"],
                     p["op"].as_str().unwrap_or(""),
                     p["actor"].as_str().unwrap_or(""),

@@ -84,12 +84,16 @@ pub struct ChangeRecord {
     pub status: ChangeStatus,
     pub provenance: Provenance,
     pub proposed_seq: u64,
+    /// Time of the entry that proposed this version.
+    pub created_ms: i64,
     pub version: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Pending {
     pub seq: u64,
+    /// Time of the escalated entry.
+    pub time_ms: i64,
     pub actor: Actor,
     pub op: Op,
     pub facts: Option<Facts>,
@@ -243,6 +247,7 @@ impl State {
                         claim,
                         e.facts.clone().unwrap_or_default(),
                         e.seq,
+                        e.time_ms,
                         ChangeStatus::Pending { seq: e.seq },
                         false,
                     );
@@ -251,6 +256,7 @@ impl State {
                     e.seq,
                     Pending {
                         seq: e.seq,
+                        time_ms: e.time_ms,
                         actor: e.actor.clone(),
                         op: e.op.clone(),
                         facts: e.facts.clone(),
@@ -296,6 +302,7 @@ impl State {
         claim: &Claim,
         facts: Facts,
         seq: u64,
+        time_ms: i64,
         status: ChangeStatus,
         reviewed: bool,
     ) {
@@ -326,6 +333,7 @@ impl State {
                 status,
                 provenance,
                 proposed_seq: seq,
+                created_ms: time_ms,
                 version,
             },
         );
@@ -608,6 +616,7 @@ impl State {
                     claim,
                     facts.cloned().unwrap_or_default(),
                     seq,
+                    time_ms,
                     ChangeStatus::Queued,
                     reviewed,
                 );

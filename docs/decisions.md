@@ -433,6 +433,33 @@ another repository, or for a human the repository does not know:
   optional point), logged reads, and a sweep of expired sessions beyond
   the one done at each login (#53).
 
+## Runner-facing protocol
+
+A runner (imece first) talks to the daemon over the socket and must not
+read Lonca's crates to learn the shapes. `docs/protocol.md` is the
+contract (issue #76): the wire format, every method with its credential,
+params, result and error codes, the reason codes a runner acts on. A
+test keeps its method list equal to `METHODS` and its stated number
+equal to `PROTOCOL`.
+
+- **Protocol number** in `ping`. It goes up when a client must know:
+  a field removed or renamed, a type or error code changed, a method
+  removed. Additions do not move it, so a client written against
+  number N keeps working on every later daemon that still answers N,
+  and the document's last section says what each number changed.
+- **`status` fills a review list.** A pending entry names the change,
+  its base, intent, agent, task, when it was proposed and the files it
+  touches; a change entry carries its base, time, version and files.
+  All of it comes from state the log replays (`Pending.time_ms`,
+  `ChangeRecord.created_ms` are the entry times), nothing is read from
+  the store, and the reads stay unlogged.
+- **`log` waits.** `wait_ms` holds a `log` request with nothing past
+  `from` until an entry arrives or the time runs out (30 s cap). The
+  request waits on a condition variable, not on the daemon's lock:
+  every path that appends signals it, and the waiter also re-checks
+  every 250 ms, so a signal missed by a future path costs a quarter
+  second, never the entry. One open request replaces a timer.
+
 ## Mutation testing
 
 Passing tests do not show that they would catch a flipped `>=` or a

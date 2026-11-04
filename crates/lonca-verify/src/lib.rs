@@ -181,7 +181,7 @@ impl Verifier {
             let mut attempts = 0;
             let (result, details, log) = loop {
                 attempts += 1;
-                let run = self.exec(cmd, &root, Duration::from_secs(cfg.timeout_seconds));
+                let run = self.exec(cmd, &root, Duration::from_secs(cfg.timeout_seconds), cfg);
                 let done = run.0 == CheckResult::Pass || attempts > cfg.retries;
                 if done {
                     break run;
@@ -208,11 +208,18 @@ impl Verifier {
         sha256_hex(format!("{}\0{cmd}", self.sandbox.name()).as_bytes())
     }
 
+    /// Runs one command. The environment is cleared and rebuilt: PATH, a
+    /// scratch HOME, LANG, LONCA_VERIFY, then the names the policy passes
+    /// through (copied from the daemon's environment; absent ones are
+    /// skipped) and the fixed values it sets. The log starts with the
+    /// names that were set, never their values, so a failure explains
+    /// itself.
     fn exec(
         &self,
         cmd: &str,
         root: &Path,
         timeout: Duration,
+        cfg: &Verification,
     ) -> (CheckResult, BTreeMap<String, String>, String) {
         let tree = root.join("tree");
         let home = root.join("home");
@@ -273,13 +280,36 @@ impl Verifier {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let mut passed: Vec<String> = Vec::new();
+        for name in &cfg.env_passthrough {
+            if lonca_policy::config::env_name_forbidden(name) {
+                continue;
+            }
+            if let Some(v) = std::env::var_os(name) {
+                command.env(name, v);
+                passed.push(name.clone());
+            }
+        }
+        for (name, value) in &cfg.env {
+            if lonca_policy::config::env_name_forbidden(name) {
+                continue;
+            }
+            command.env(name, value);
+            passed.push(format!("{name}="));
+        }
+        let header = format!(
+            "lonca verify: sandbox {}, env PATH HOME LANG LONCA_VERIFY{}{}\n",
+            self.sandbox.name(),
+            if passed.is_empty() { "" } else { " " },
+            passed.join(" ")
+        );
         let started = Instant::now();
         let mut details = BTreeMap::new();
         let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
                 details.insert("error".into(), format!("spawn: {e}"));
-                return (CheckResult::Error, details, String::new());
+                return (CheckResult::Error, details, header);
             }
         };
         let mut so = child.stdout.take().expect("piped");
@@ -309,7 +339,7 @@ impl Verifier {
         let mut log = t_out.join().unwrap_or_default();
         log.extend(t_err.join().unwrap_or_default());
         let start = log.len().saturating_sub(OUTPUT_TAIL);
-        let log = String::from_utf8_lossy(&log[start..]).into_owned();
+        let log = format!("{header}{}", String::from_utf8_lossy(&log[start..]));
         details.insert(
             "duration_ms".into(),
             started.elapsed().as_millis().to_string(),
@@ -481,6 +511,114 @@ mod tests {
 
     fn dirs_home() -> PathBuf {
         PathBuf::from(std::env::var("HOME").unwrap())
+    }
+
+    /// Only listed names reach the command; fixed values too; forbidden
+    /// names never, even if a policy object carries them; the log says
+    /// which names were set and never a value.
+    #[test]
+    fn the_environment_is_deny_by_default_and_named_in_the_log() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        // SAFETY: tests in this module that read the environment run
+        // single-threaded with respect to this variable.
+        unsafe { std::env::set_var("PROBE_FOR_VERIFY_TEST", "s3cr3t-value") };
+        let probe = "test -n \"$PROBE_FOR_VERIFY_TEST\" && test \"$FIXED\" = 42";
+        let r = v
+            .run(&store, &files, &tree, &cfg(None, Some(probe)))
+            .unwrap();
+        assert_eq!(r[0].result, CheckResult::Fail, "nothing passes unasked");
+        let log = String::from_utf8(store.read_blob(r[0].log.as_ref().unwrap()).unwrap()).unwrap();
+        assert!(log.starts_with("lonca verify: sandbox "), "{log}");
+        assert!(log.contains("env PATH HOME LANG LONCA_VERIFY\n"), "{log}");
+
+        let mut c = cfg(None, Some(probe));
+        c.env_passthrough = vec![
+            "PROBE_FOR_VERIFY_TEST".into(),
+            "PROBE_ABSENT_FOR_VERIFY_TEST".into(),
+        ];
+        c.env.insert("FIXED".into(), "42".into());
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        let log = String::from_utf8(store.read_blob(r[0].log.as_ref().unwrap()).unwrap()).unwrap();
+        assert!(
+            log.contains("LONCA_VERIFY PROBE_FOR_VERIFY_TEST FIXED=\n"),
+            "{log}"
+        );
+        assert!(!log.contains("s3cr3t") && !log.contains("42"), "{log}");
+
+        // A forbidden name in a config object that skipped the parser.
+        let mut c = cfg(
+            None,
+            Some("test -z \"$LD_PRELOAD\" && test -z \"$RUSTFLAGS\""),
+        );
+        c.env_passthrough = vec!["LD_PRELOAD".into()];
+        c.env.insert("RUSTFLAGS".into(), "-C x".into());
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+    }
+
+    /// A Rust crate under rustup verifies with the passthrough list from
+    /// the guide and nothing else. Without a sandbox: the point is the
+    /// environment, and the sandbox has its own test.
+    #[test]
+    fn a_rust_crate_verifies_under_rustup_with_the_documented_passthrough() {
+        if std::process::Command::new("cargo")
+            .arg("--version")
+            .output()
+            .map(|o| !o.status.success())
+            .unwrap_or(true)
+        {
+            eprintln!("no cargo; skipping");
+            return;
+        }
+        let (dir, store, files, tree) = setup(&[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+            ),
+            (
+                "src/lib.rs",
+                "pub fn two() -> u32 { 2 }\n#[cfg(test)] mod t { #[test] fn ok() { assert_eq!(super::two(), 2); } }\n",
+            ),
+        ]);
+        let v = Verifier {
+            sandbox: Sandbox::None,
+            scratch: dir.path().join("scratch"),
+        };
+        let bare = v
+            .run(
+                &store,
+                &files,
+                &tree,
+                &cfg(Some("cargo build --offline"), None),
+            )
+            .unwrap();
+        let mut c = cfg(Some("cargo build --offline"), Some("cargo test --offline"));
+        c.timeout_seconds = 600;
+        c.env_passthrough = [
+            "HOME",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "RUSTUP_TOOLCHAIN",
+            "TMPDIR",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(
+            (r[0].result, r[1].result),
+            (CheckResult::Pass, CheckResult::Pass),
+            "{:?}",
+            r
+        );
+        if bare[0].result != CheckResult::Pass {
+            // Under rustup, the bare run is the failure the guide explains.
+            let log =
+                String::from_utf8(store.read_blob(bare[0].log.as_ref().unwrap()).unwrap()).unwrap();
+            assert!(log.contains("env PATH HOME LANG LONCA_VERIFY\n"), "{log}");
+        }
     }
 
     #[test]

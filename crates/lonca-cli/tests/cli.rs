@@ -593,3 +593,96 @@ fn daemon_keys_rotate_and_move_to_another_daemon_through_the_cli() {
     assert!(!again.status.success());
     assert!(text(&again.stdout).contains("use `lonca daemon-key rotate`"));
 }
+
+#[test]
+fn backup_and_restore_through_the_cli() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    e.run(r, &["init", "demo"]);
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo"]);
+    let hws = r.join("hws");
+    std::fs::create_dir_all(hws.join("src")).unwrap();
+    std::fs::write(hws.join("src/lib.rs"), "pub fn charge() {}\n").unwrap();
+    e.run(&hws, &["propose", "-i", "seed"]);
+    e.settle();
+    let head = status_json(&e)["head_hash"].as_str().unwrap().to_string();
+
+    // Every repository, then one copied out.
+    let out = e.run(r, &["backup"]);
+    let bundle = r.join("home/backups/demo-000002.bundle");
+    assert!(
+        out.contains(&format!(
+            "demo: {} (operations 0..=2, head {})",
+            bundle.display(),
+            &head[..16]
+        )),
+        "{out}"
+    );
+    assert!(bundle.exists());
+    let out = e.run(r, &["backup", "--repo", "demo", "--out", "off-site"]);
+    let copy = r.join("off-site/demo-000002.bundle");
+    assert!(out.contains(&format!("demo: {}", copy.display())), "{out}");
+    assert_eq!(
+        std::fs::read(&copy).unwrap(),
+        std::fs::read(&bundle).unwrap()
+    );
+
+    // The same daemon never replaces its repository.
+    let o = e
+        .cmd(
+            r,
+            &["restore", "demo", "--from", "off-site/demo-000002.bundle"],
+        )
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(
+        text(&o.stderr).contains("never replaces"),
+        "{}",
+        text(&o.stderr)
+    );
+
+    // Another machine: a new daemon without the key.
+    let home2 = r.join("home2");
+    let sock2 = r.join("s2");
+    start_daemon(r, &home2, &sock2);
+    let run2 =
+        |args: &[&str]| -> Output { e.cmd(r, args).env("LONCA_SOCKET", &sock2).output().unwrap() };
+    let o = run2(&["restore", "demo", "--from", "off-site/demo-000002.bundle"]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("restored operations 0..=2"), "{out}");
+    assert!(
+        out.contains("lonca daemon-key recover --repo demo"),
+        "{out}"
+    );
+    let o = run2(&["status", "--repo", "demo"]);
+    assert!(!o.status.success());
+    assert!(
+        text(&o.stderr).contains("foreign_key"),
+        "{}",
+        text(&o.stderr)
+    );
+    let o = run2(&["daemon-key", "recover", "--repo", "demo"]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let o = run2(&["status", "--repo", "demo", "--json"]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["trunk"], status_json(&e)["trunk"]);
+    assert_eq!(v["next_seq"], serde_json::json!(4));
+
+    // The round trip audits, key switch included.
+    let store = lonca_core::Store::open(&home2.join("repos/demo.git")).unwrap();
+    let rep = lonca_audit::audit(
+        &store,
+        lonca_audit::Options {
+            deep: true,
+            check_refs: true,
+        },
+    )
+    .unwrap();
+    assert!(rep.ok(), "{:#?}", rep.findings);
+    assert_eq!(rep.key_switches.len(), 1);
+    assert_eq!(rep.key_switches[0].kind, "daemon.recover");
+}

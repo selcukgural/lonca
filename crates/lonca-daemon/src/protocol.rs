@@ -98,6 +98,14 @@ pub struct PrepareInit {
     pub branch: Option<String>,
 }
 
+/// `repo.restore`: a new repository from a backup bundle, a bare store or
+/// a remote Lonca pushed to.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Restore {
+    pub repo: String,
+    pub from: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PrepareChange {
     pub base: GitId,

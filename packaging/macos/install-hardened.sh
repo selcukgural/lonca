@@ -11,6 +11,8 @@
 #   - installs lonca, lonca-audit and lonca-se root-owned in /Library/Lonca/bin
 #   - keeps daemon state in /Library/Lonca/home, owned by _lonca, mode 0700:
 #     agents running as the developer can not read the key or write the stores
+#   - writes `lonca backup` bundles to /Library/Lonca/backups, readable by
+#     group lonca, so the developer can copy them off the machine
 #   - runs the daemon from launchd as _lonca; its socket accepts the
 #     developer's uid only
 #   - installs Claude Code managed settings: Lonca hooks for every tool,
@@ -24,6 +26,7 @@ PREFIX=/Library/Lonca
 BIN_DIR=$PREFIX/bin
 HOME_DIR=$PREFIX/home
 RUN_DIR=$PREFIX/run
+BACKUP_DIR=$PREFIX/backups
 SOCKET=$RUN_DIR/lonca.sock
 PLIST=/Library/LaunchDaemons/dev.lonca.daemon.plist
 MANAGED_DIR="/Library/Application Support/ClaudeCode"
@@ -57,6 +60,7 @@ plist() {
     <string>$BIN_DIR/lonca</string>
     <string>daemon</string>
     <string>--home</string><string>$HOME_DIR</string>
+    <string>--backups</string><string>$BACKUP_DIR</string>
     <string>--socket-mode</string><string>660</string>
     <string>--socket-group</string><string>lonca</string>
     <string>--allow-uid</string><string>$1</string>
@@ -151,7 +155,7 @@ dseditgroup -o edit -a _lonca -t user lonca
 
 install -d -o root -g wheel -m 0755 "$PREFIX" "$BIN_DIR"
 install -d -o _lonca -g lonca -m 0700 "$HOME_DIR"
-install -d -o _lonca -g lonca -m 0750 "$RUN_DIR"
+install -d -o _lonca -g lonca -m 0750 "$RUN_DIR" "$BACKUP_DIR"
 for b in lonca lonca-audit lonca-se; do
     if [ -x "$src_bin/$b" ]; then
         install -o root -g wheel -m 0755 "$src_bin/$b" "$BIN_DIR/$b"
@@ -180,6 +184,7 @@ cat <<EOF
 Lonca daemon installed and started as _lonca.
   socket:  $SOCKET   (export LONCA_SOCKET=$SOCKET in your shell profile)
   state:   $HOME_DIR (unreadable for your account)
+  backups: $BACKUP_DIR (lonca backup; readable by group lonca)
   hooks:   $MANAGED
 
 Log out and in again (or run 'newgrp lonca') so your account joins group lonca.

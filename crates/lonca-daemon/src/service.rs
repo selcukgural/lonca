@@ -267,6 +267,8 @@ impl Service {
             "repo.list" => Ok(json!(self.lock().repos.keys().collect::<Vec<_>>())),
             "repo.prepare_init" => self.prepare_init(params(p)?),
             "repo.init" => self.init(params(p)?),
+            "repo.backup" => self.backup(req),
+            "repo.restore" => self.restore(params(p)?),
             "status" => self.status(req),
             "log" => self.log(req, params(p)?),
             "tree" => self.tree(req, params(p)?),
@@ -722,6 +724,123 @@ impl Service {
         Ok(
             json!({"op": Op::BridgePush { remote: p.remote, oplog_seq: s.next_seq - 1, oplog_hash: s.head_hash.clone() }}),
         )
+    }
+
+    // ---------------------------------------------------------------- backup, restore
+
+    /// Writes a Git bundle of the repository, every ref included (trunk,
+    /// the operation log, policy, proposals), into the backups directory.
+    /// Under the lock, so the bundle is the store at one point of the log.
+    /// Not logged: a backup is a read, like `log` or `tree`.
+    fn backup(&self, req: &Request) -> Hr {
+        let name = Self::repo_name(req)?;
+        let dir = self.home.backups();
+        std::fs::create_dir_all(&dir).map_err(|e| from_err(e.into()))?;
+        set_mode(&dir, 0o750)?;
+        let mut inner = self.lock();
+        let r = Self::repo(&mut inner, &name)?;
+        let seq = r.chain.state.next_seq - 1;
+        let file = dir.join(format!("{name}-{seq:06}.bundle"));
+        let tmp = dir.join(format!("{name}-{seq:06}.bundle.tmp"));
+        git(
+            &self.settings.git,
+            r.store.path(),
+            &["bundle", "create", "-q", &tmp.to_string_lossy(), "--all"],
+        )?;
+        set_mode(&tmp, 0o640)?;
+        std::fs::rename(&tmp, &file).map_err(|e| from_err(e.into()))?;
+        Ok(json!({
+            "repo": name,
+            "path": file,
+            "seq": seq,
+            "head_hash": r.chain.state.head_hash,
+            "daemon_key": r.chain.state.daemon_key,
+        }))
+    }
+
+    /// Creates a repository from a backup: a bundle, a bare store or a
+    /// remote Lonca pushed to. Trunk, the operation log, policy and
+    /// proposals are fetched; the log must verify and replay, else nothing
+    /// is kept. A store whose log is on another daemon key comes back
+    /// foreign, to be continued with `daemon.recover`. An existing
+    /// repository is never replaced: the log is append-only, and a restore
+    /// over it would be the rewrite the auditor exists to catch.
+    fn restore(&self, p: Restore) -> Hr {
+        if !lonca_policy::decide::valid_token(&p.repo, 64) {
+            return fail(
+                "invalid",
+                "repository names: letters, digits, '.', '_', '-'",
+            );
+        }
+        validate_remote(&p.from)?;
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        let path = self.home.repo_path(&p.repo);
+        if inner.repos.contains_key(&p.repo) || inner.foreign.contains_key(&p.repo) || path.exists()
+        {
+            return fail(
+                "conflict",
+                format!(
+                    "repository {} exists; a restore never replaces a repository. \
+                     Move its store away (as the daemon's user) or restore under another name",
+                    p.repo
+                ),
+            );
+        }
+        let fetched = Store::init_bare(&path).or_fail().and_then(|store| {
+            git(
+                &self.settings.git,
+                store.path(),
+                &[
+                    "fetch",
+                    "-q",
+                    "--no-tags",
+                    "--",
+                    &p.from,
+                    "+refs/heads/*:refs/heads/*",
+                    "+refs/lonca/*:refs/lonca/*",
+                ],
+            )?;
+            let r = RepoHandle::open(&p.repo, &path, &inner.keys.all()).or_fail()?;
+            if !r.initialized() {
+                return fail("invalid", "the source has no operation log");
+            }
+            // Human signatures bind the name the log was created under.
+            if r.chain.state.repo != p.repo {
+                return fail(
+                    "invalid",
+                    format!(
+                        "the source is a backup of repository {}; restore it under that name",
+                        r.chain.state.repo
+                    ),
+                );
+            }
+            Ok(r)
+        });
+        let mut r = match fetched {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&path);
+                return Err(e);
+            }
+        };
+        let foreign = r.foreign();
+        let out = json!({
+            "repo": p.repo,
+            "seq": r.chain.state.next_seq - 1,
+            "head_hash": r.chain.state.head_hash,
+            "daemon_key": r.chain.state.daemon_key,
+            "foreign": foreign,
+        });
+        if foreign {
+            inner.foreign.insert(p.repo, r);
+        } else {
+            // A backup taken between appending an entry and applying it has
+            // a trunk behind its log; the log says what trunk is.
+            Self::reconcile(&mut r, self.now())?;
+            inner.repos.insert(p.repo, r);
+        }
+        Ok(out)
     }
 
     // ---------------------------------------------------------------- daemon keys
@@ -1486,6 +1605,18 @@ fn validate_branch(b: &str) -> std::result::Result<(), (String, String)> {
     } else {
         fail("invalid", "invalid branch name")
     }
+}
+
+#[cfg(unix)]
+fn set_mode(p: &std::path::Path, mode: u32) -> std::result::Result<(), (String, String)> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
+        .map_err(|e| from_err(e.into()))
+}
+
+#[cfg(not(unix))]
+fn set_mode(_p: &std::path::Path, _mode: u32) -> std::result::Result<(), (String, String)> {
+    Ok(())
 }
 
 fn git(

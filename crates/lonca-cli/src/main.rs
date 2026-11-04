@@ -8,7 +8,7 @@ mod mcp;
 mod undo;
 mod workspace;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
@@ -40,6 +40,11 @@ enum Cmd {
         /// Daemon home (default: $LONCA_HOME or ~/.lonca).
         #[arg(long)]
         home: Option<PathBuf>,
+        /// Where `lonca backup` bundles are written (default: $LONCA_BACKUPS
+        /// or backups/ in the home). In hardened mode a directory the
+        /// developer's group can read.
+        #[arg(long)]
+        backups: Option<PathBuf>,
         /// Accept harness settings that are not root-owned (testing only).
         #[arg(long)]
         allow_user_owned_settings: bool,
@@ -150,6 +155,26 @@ enum Cmd {
     /// Show or change the repository policy.
     #[command(subcommand)]
     Policy(PolicyCmd),
+    /// Back up repositories: one Git bundle each, with every ref (trunk,
+    /// operation log, policy, proposals), written by the daemon into its
+    /// backups directory and optionally copied to --out.
+    Backup {
+        /// Repositories (comma-separated; default: every repository).
+        #[arg(long, value_delimiter = ',')]
+        repo: Vec<String>,
+        /// Copy each bundle into this directory.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Restore a repository from a backup bundle, a bare store or a Git
+    /// remote Lonca pushed to. Never replaces an existing repository.
+    Restore {
+        /// Name of the repository to create.
+        repo: String,
+        /// The bundle, bare store directory or remote URL.
+        #[arg(long)]
+        from: String,
+    },
     /// Push trunk, the operation log and policy to a Git remote.
     Push {
         remote: String,
@@ -446,6 +471,95 @@ fn human_name(h: Option<String>) -> Result<String> {
     }
 }
 
+/// `lonca backup`: the daemon writes a bundle per repository; with `--out`
+/// each is copied there (the daemon's copy stays; its directory may be
+/// pruned freely). Repositories on another daemon key are not listed by the
+/// daemon and must be recovered first.
+fn backup(repos: &[String], out: Option<&Path>) -> Result<()> {
+    let mut c = connect()?;
+    let repos: Vec<String> = if repos.is_empty() {
+        serde_json::from_value(call(&mut c, "repo.list", json!({}))?)?
+    } else {
+        repos.to_vec()
+    };
+    if repos.is_empty() {
+        bail!("no repositories to back up");
+    }
+    if let Some(out) = out {
+        std::fs::create_dir_all(out).with_context(|| format!("cannot create {}", out.display()))?;
+    }
+    for repo in &repos {
+        let mut c = human_client(repo)?;
+        let r = call(&mut c, "repo.backup", json!({}))?;
+        let mut path = PathBuf::from(r["path"].as_str().unwrap_or_default());
+        if let Some(out) = out {
+            let dest = out.join(path.file_name().unwrap_or_default());
+            std::fs::copy(&path, &dest)
+                .with_context(|| format!("cannot copy {} to {}", path.display(), dest.display()))?;
+            path = dest;
+        }
+        println!(
+            "{repo}: {} (operations 0..={}, head {})",
+            path.display(),
+            r["seq"],
+            r["head_hash"]
+                .as_str()
+                .unwrap_or_default()
+                .get(..16)
+                .unwrap_or_default()
+        );
+    }
+    println!(
+        "Verify a backup before trusting it: git init --bare x.git && git -C x.git fetch <bundle> \
+         '+refs/*:refs/*' && lonca-audit verify x.git"
+    );
+    Ok(())
+}
+
+/// `lonca restore`: the daemon fetches the Lonca refs from a bundle, a bare
+/// store or a remote into a new repository and replays its log.
+fn restore(repo: &str, from: &str) -> Result<()> {
+    let from = source(from)?;
+    let mut c = connect()?;
+    let r = call(&mut c, "repo.restore", json!({"repo": repo, "from": from}))?;
+    println!(
+        "{repo}: restored operations 0..={} (head {})",
+        r["seq"],
+        r["head_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .get(..16)
+            .unwrap_or_default()
+    );
+    if r["foreign"].as_bool() == Some(true) {
+        println!(
+            "its log is on daemon key {}, which this daemon does not hold: run \
+             `lonca daemon-key recover --repo {repo}` as an enrolled human to continue it.",
+            r["daemon_key"]
+                .as_str()
+                .unwrap_or_default()
+                .get(..16)
+                .unwrap_or_default()
+        );
+    } else {
+        println!("ready; sessions in the log continue only if their tokens survived.");
+    }
+    println!("Audit it: lonca-audit verify <home>/repos/{repo}.git");
+    Ok(())
+}
+
+/// A restore source as the daemon must see it: URLs (`https://`, `ssh://`,
+/// `user@host:path`) unchanged, everything else an absolute path.
+fn source(from: &str) -> Result<String> {
+    if from.contains("://") || (from.contains('@') && from.contains(':')) {
+        Ok(from.to_string())
+    } else {
+        Ok(ctx::absolute(Path::new(from))?
+            .to_string_lossy()
+            .into_owned())
+    }
+}
+
 /// Repository from the flag, else from the current workspace.
 fn repo_name(r: Option<String>) -> Result<String> {
     match r {
@@ -499,6 +613,7 @@ fn run(cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Daemon {
             home,
+            backups,
             allow_user_owned_settings,
             managed_settings,
             proxy,
@@ -510,6 +625,10 @@ fn run(cmd: Cmd) -> Result<()> {
             let home = home
                 .map(lonca_daemon::Home::new)
                 .unwrap_or_else(lonca_daemon::Home::from_env);
+            let home = match backups {
+                Some(b) => home.with_backups(b),
+                None => home,
+            };
             let defaults = lonca_daemon::Settings::default();
             let settings = lonca_daemon::Settings {
                 require_root_settings: !allow_user_owned_settings,
@@ -1169,6 +1288,11 @@ fn run(cmd: Cmd) -> Result<()> {
             let mut c = human_client(&repo)?;
             undo::revert(&mut c, &human, &repo, &actor, since_seq, apply)
         }
+        Cmd::Backup { repo, out } => {
+            let out = out.map(|o| ctx::absolute(&o)).transpose()?;
+            backup(&repo, out.as_deref())
+        }
+        Cmd::Restore { repo, from } => restore(&repo, &from),
         Cmd::Queue => {
             let mut c = connect()?;
             println!("{}", call(&mut c, "queue.run", json!({}))?);
@@ -1278,5 +1402,22 @@ fn print_status(s: &Value) {
     let pending = s["pending"].as_array().map(|a| a.len()).unwrap_or(0);
     if pending > 0 {
         println!("pending approvals: {pending} (lonca pending)");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source;
+
+    #[test]
+    fn a_restore_source_is_a_url_or_an_absolute_path() {
+        for url in ["https://h/x.git", "ssh://h/x.git", "git@h:x.git"] {
+            assert_eq!(source(url).unwrap(), url);
+        }
+        assert_eq!(source("/abs/x.bundle").unwrap(), "/abs/x.bundle");
+        let cwd = std::env::current_dir().unwrap();
+        for rel in ["x.bundle", "a@b", "a:b"] {
+            assert_eq!(source(rel).unwrap(), cwd.join(rel).to_string_lossy());
+        }
     }
 }

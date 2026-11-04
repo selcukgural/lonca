@@ -269,6 +269,61 @@ belongs to `_lonca`.
   `lonca daemon-key recover --repo a,b`. The Touch ID prompt names the
   first 16 hex digits of the new key, as `lonca daemon` prints its key.
 
+## Backup and restore
+
+Everything a repository is lives in its bare store under the daemon's home:
+trunk, the operation log, the policy and every proposal are refs of one
+Git repository. So the backup format is a Git bundle and the restore is a
+fetch; no second format, and plain `git` can read a backup.
+
+- **`repo.backup`** (`lonca backup`) writes `git bundle create --all` of
+  the store into the backups directory, under the daemon's lock so the
+  bundle is the store at one point of the log, named
+  `<repo>-<seq>.bundle`. It is a read, like `log` or `tree`, and is not
+  logged. In hardened mode the home is unreadable for the developer, so
+  the bundles go to a directory of their own (`--backups`, group
+  `lonca`, dir 0750, files 0640) and `lonca backup --out` copies them
+  wherever the developer wants.
+- **`lonca push` is the other backup.** It sends trunk, the log, policy and
+  proposals; the remote is a complete, CI-audited copy. A restore accepts
+  it as a source. The bundle exists for the offline case and for what was
+  never pushed.
+- **`repo.restore`** (`lonca restore <name> --from <bundle|dir|url>`)
+  creates `repos/<name>.git`, fetches `refs/heads/*` and `refs/lonca/*`
+  from the source, and opens the store like any other at startup: the
+  chain must verify, every key switch must replay, the symbol engine
+  must be known. If anything fails the directory is removed. Then
+  `reconcile()` puts trunk and policy where the log says; a copy taken
+  between appending an entry and applying it is repaired that way,
+  without an `import.unmediated` entry, because the found trunk is in the
+  log's history.
+- **A restore never replaces a repository.** Not an initialised one, not a
+  foreign one, not a prepared one, not a directory that merely exists.
+  The log is append-only, and a restore over a longer log would be the
+  rewrite the auditor and the remote anchor exist to catch. The human
+  moves the old store away as the daemon's user; the tooling does not
+  delete stores.
+- **The name is the log's.** `repo.init` records the name and human
+  signatures bind it (`intent_bytes(repo, ...)`), so a store restored under
+  another name could not accept any human operation. The restore refuses
+  the mismatch and names the right name.
+- **Keys do not travel with the data.** A restore into the daemon that
+  made the backup (same `daemon.key`) is live at once. Into another
+  daemon it comes back foreign and waits for `daemon.recover`, signed by
+  an enrolled human: the switch is in the log for every auditor. The
+  daemon key is therefore not part of a backup, and a lost key is not a
+  lost repository. Human keys are the human's (`~/.config/lonca/humans`);
+  a Secure Enclave key can not be backed up, which is what the recovery
+  key is for ("Human keys").
+- **Not restored:** session token hashes (the sessions in the log stay
+  active until they expire or are revoked, but nobody holds their tokens;
+  `daemon.recover` ends them anyway), freeze flags (run the auditor
+  again), scratch and workspaces.
+- **Not done:** scheduled backups (a launchd/cron line calling
+  `lonca backup` is enough), pruning of the backups directory, and a
+  bundle reader in `lonca-audit` (the auditor stays free of the `git`
+  binary; verify a bundle by fetching it into a bare store first).
+
 ## Mutation testing
 
 Passing tests do not show that they would catch a flipped `>=` or a

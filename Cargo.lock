@@ -2247,6 +2247,7 @@ dependencies = [
  "base64",
  "clap",
  "ignore",
+ "lonca-audit",
  "lonca-core",
  "lonca-daemon",
  "lonca-policy",

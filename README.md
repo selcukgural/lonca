@@ -147,12 +147,50 @@ sudo's credential cache. `--render DIR` shows the generated files without
 installing anything.
 
 Repositories created in cooperative mode move with their history: stop
-the cooperative daemon, copy each store into the hardened daemon's
-`repos/` (as `_lonca`, e.g. `git clone --mirror`), and run
-`lonca daemon-key recover --repo <name>` as an enrolled human. The same
-command continues a repository whose `daemon.key` was lost;
-`lonca daemon-key rotate` replaces a key that is still there. See
-[docs/decisions.md](docs/decisions.md), "Daemon keys".
+the cooperative daemon, restore each store into the hardened daemon
+(`lonca restore`, below), and run `lonca daemon-key recover --repo <name>`
+as an enrolled human. The same command continues a repository whose
+`daemon.key` was lost; `lonca daemon-key rotate` replaces a key that is
+still there. See [docs/decisions.md](docs/decisions.md), "Daemon keys".
+
+## Backup, restore and moving to another machine
+
+A repository is its bare store: trunk, the operation log, the policy and
+every proposal are refs of one Git repository, so a backup is a Git bundle
+and a restore is a fetch.
+
+```sh
+lonca backup --out /Volumes/usb/lonca     # one bundle per repository
+lonca restore demo --from /Volumes/usb/lonca/demo-000412.bundle
+lonca daemon-key recover --repo demo      # only if this daemon's key is new
+lonca-audit verify ~/.lonca/repos/demo.git
+```
+
+- **What is backed up:** the bundle written by the daemon (every ref, at
+  one point of the log), or the remote `lonca push` sends trunk, the log,
+  policy and proposals to. A pushed remote is a complete backup and is
+  audited in CI; `lonca backup` also works offline and before any push.
+- **What is not:** the daemon key (`daemon.key`; a restore on another key
+  is continued with `lonca daemon-key recover`, which every auditor sees),
+  session token hashes (`tokens.json`; sessions in a restored log need new
+  tokens, that is new sessions), freeze flags, the verifier's scratch
+  directory and agent workspaces (`lonca session start` recreates them).
+  Human keys live in `~/.config/lonca/humans`, not in the daemon's home:
+  back up file keys separately; a Secure Enclave key never leaves its Mac,
+  so set a recovery key (`lonca human recovery-key --out`) and keep it off
+  the machine.
+- **A restore never replaces a repository.** The log is append-only; a
+  restore over a longer log would be the rewrite the auditor exists to
+  catch. Move the broken store away first (as the daemon's user) or audit
+  the backup elsewhere. The name must be the one the log was created
+  under, because human signatures bind it.
+- **Permissions:** the daemon writes bundles with mode 0640 into
+  `~/.lonca/backups` (hardened mode: `/Library/Lonca/backups` or
+  `/var/lib/lonca-backups`, readable by group `lonca`). A restored store
+  belongs to the daemon's user; the source must be readable by it.
+- **Verify a backup without restoring it:**
+  `git init --bare x.git && git -C x.git fetch demo-000412.bundle
+  '+refs/*:refs/*' && lonca-audit verify x.git`.
 
 ## Repository layout
 

@@ -8,10 +8,13 @@
 //!   lonca.sock        Unix socket
 //!   repos/<name>.git  bare Git stores
 //!   scratch/          verifier work trees
+//!   backups/          bundles written by `repo.backup` (or $LONCA_BACKUPS)
 //! ```
 //!
 //! In hardened mode the directory belongs to a dedicated system user, so
 //! agents running as the developer can not read the key or write the stores.
+//! The backups directory is the one place the developer's group may read,
+//! so it lives outside the home there (`--backups`).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -26,16 +29,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug)]
 pub struct Home {
     pub root: PathBuf,
+    backups: Option<PathBuf>,
 }
 
 impl Home {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            backups: None,
+        }
     }
 
-    /// `$LONCA_HOME`, else `~/.lonca`.
+    /// `$LONCA_HOME`, else `~/.lonca`; backups in `$LONCA_BACKUPS` if set.
     pub fn from_env() -> Self {
-        match std::env::var_os("LONCA_HOME") {
+        let home = match std::env::var_os("LONCA_HOME") {
             Some(p) => Self::new(p),
             None => {
                 let home = std::env::var_os("HOME")
@@ -43,7 +50,24 @@ impl Home {
                     .unwrap_or_else(|| PathBuf::from("."));
                 Self::new(home.join(".lonca"))
             }
+        };
+        match std::env::var_os("LONCA_BACKUPS") {
+            Some(p) => home.with_backups(p),
+            None => home,
         }
+    }
+
+    /// Where `repo.backup` writes its bundles instead of `backups/` in the
+    /// home: in hardened mode a directory the developer's group can read.
+    pub fn with_backups(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.backups = Some(dir.into());
+        self
+    }
+
+    pub fn backups(&self) -> PathBuf {
+        self.backups
+            .clone()
+            .unwrap_or_else(|| self.root.join("backups"))
     }
 
     pub fn ensure(&self) -> Result<()> {

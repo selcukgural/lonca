@@ -24,4 +24,5 @@ similar = "3.2.0"
 ureq = { version = "3.4.2", features = ["json"] }
 
 [dev-dependencies]
+lonca-audit = { path = "../lonca-audit" }
 tempfile = "3.27.0"

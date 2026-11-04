@@ -219,6 +219,7 @@ Sertleştirilmiş mod şu varsayıma dayanır: agent kullanıcının hesabıyla 
 - **İmza:** Tüm kayıtları daemon imzalar. İnsan kaynaklı kayıtlar ek olarak insanın kullanıcı varlığı gerektiren imzasını taşır (§5.4).
 - **Çapa:** Log başının hash'i her push'ta uzak depoya gider. Yerelde geçmiş yeniden yazılırsa bir sonraki karşılaştırmada ortaya çıkar. İsteğe bağlı olarak ikinci bir tanık (ayrı repo veya şeffaflık günlüğü) kullanılabilir.
 - **Saklama:** Log'un referans verdiği nesneler GC ile silinmez, çünkü undo bunlara ihtiyaç duyar.
+- **Yedekleme:** Depo tek bir Git deposudur (trunk, log, politika ve öneriler ref'lerdir); yedek bir Git bundle'ıdır (`lonca backup`, daemon kilit altında yazar), push edilmiş uzak depo da tam bir yedektir. Geri yükleme (`lonca restore`) ref'leri çeker, zinciri doğrular, log'un dediği yere trunk'ı koyar ve mevcut bir depoyu asla ezmez. Anahtarlar veriyle taşınmaz: başka bir daemon'a gelen depo `daemon.recover` bekler (`docs/decisions.md`, "Backup and restore").
 - **Format sürümü:** Her kayıt bir format sürümü taşır; sürüm hash ve imzaya dahildir. Alanı olmayan eski kayıtlar sürüm 0 sayılır. Bilinmeyen sürüm reddedilir, sürüm zincir boyunca azalmaz (`docs/decisions.md`, "Log format versions"). Öneri ve entegrasyon kayıtları, olguları ve birleştirmeyi hesaplayan sembol motorunun sürümünü de taşır; auditor o sürümle yeniden hesaplar ("Symbol engine versions").
 - **Atomiklik:** Daemon tek yazıcıdır. Lease edinme ve token rotasyonu gibi durum değişiklikleri sıralı ve atomik olarak uygulanır.
 
@@ -585,6 +586,7 @@ Faz 0'da kapananlar (gerekçeleri `docs/decisions.md`'de): temel **gitoxide + ke
 | §5.13 Auditor | Tamam | Karar, Facts ve merge yeniden hesaplama; yayımlanmış log karşılaştırması; dondurma bayrağı. Karar kodunu paylaşıyor (açık soru duruyor). |
 | §5.14 AI Danışman | Tamam | `lonca advise`; günlük bütçe; diff kırpılmıyor, büyükse reddediliyor. Yalnızca sahte API'ye karşı test edildi. |
 | §3.1–3.3 Sertleştirilmiş mod | Tamam, sahada denenmedi | Kurulum betikleri (macOS/Linux), peer uid kontrolü, sudo kontrolü, managed settings denetimi. Betikler `--render` ile ve Lonca'nın kendi denetleyicisiyle test edildi; gerçek `sudo` kurulumu çalıştırılmadı. |
+| Yedekleme / taşıma | Tamam | `lonca backup` (bundle), `lonca restore` (bundle, ayna veya push edilmiş uzak depo), anahtarsız geri yükleme `daemon.recover` ile; zamanlanmış yedek ve budama yok. |
 | İzole mod | Yapılmadı | Container tabanlı agent çalıştırma. |
 | Ekip sunucusu | Yapılmadı | Tasarım açık soru olarak duruyor. |
 

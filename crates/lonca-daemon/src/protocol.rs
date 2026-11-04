@@ -218,6 +218,10 @@ pub struct LogQuery {
     pub from: u64,
     #[serde(default)]
     pub limit: Option<u64>,
+    /// With nothing past `from`, hold the request this long (capped at
+    /// [`crate::service::LOG_WAIT_MAX_MS`]) for an entry to arrive.
+    #[serde(default)]
+    pub wait_ms: Option<i64>,
 }
 
 /// A harness hook event (Claude Code's hook input, reduced to what Lonca uses).

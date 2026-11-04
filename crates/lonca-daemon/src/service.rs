@@ -60,6 +60,14 @@ impl Default for Settings {
 
 type Hr = std::result::Result<Value, (String, String)>;
 
+/// The runner-facing protocol number (`docs/protocol.md`). It goes up
+/// when a shape changes in a way a client must know about; adding a
+/// field does not count.
+pub const PROTOCOL: u32 = 1;
+
+/// Longest a `log` request with `wait_ms` is held.
+pub const LOG_WAIT_MAX_MS: i64 = 30_000;
+
 /// Length of a human session when `human.login` names none.
 pub const HUMAN_SESSION_DEFAULT_MS: i64 = 60 * 60 * 1000;
 /// The longest human session a login may ask for.
@@ -268,6 +276,9 @@ pub struct Service {
     settings: Settings,
     inner: Mutex<Inner>,
     wake: (Mutex<u64>, Condvar),
+    /// Bumped whenever a log may have grown; `log` with `wait_ms` sleeps
+    /// on it.
+    appended: (Mutex<u64>, Condvar),
 }
 
 impl Service {
@@ -313,6 +324,7 @@ impl Service {
                 workspaces: BTreeMap::new(),
             }),
             wake: (Mutex::new(0), Condvar::new()),
+            appended: (Mutex::new(0), Condvar::new()),
         });
         {
             let mut inner = svc.lock();
@@ -379,11 +391,27 @@ impl Service {
         c.notify_all();
     }
 
+    /// Wakes `log` requests waiting for an entry. Called after anything
+    /// that may have appended; a missed call costs a waiter at most one
+    /// poll slice, never the entry.
+    fn notify_appended(&self) {
+        let (m, c) = &self.appended;
+        *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        c.notify_all();
+    }
+
     pub fn handle(&self, req: Request) -> Response {
-        match self.dispatch(&req) {
+        let r = match self.dispatch(&req) {
             Ok(v) => Response::ok(req.id, v),
             Err((code, msg)) => Response::err(req.id, &code, msg),
+        };
+        if !matches!(
+            req.method.as_str(),
+            "ping" | "status" | "log" | "tree" | "change.get" | "whoami" | "repo.list"
+        ) {
+            self.notify_appended();
         }
+        r
     }
 
     fn dispatch(&self, req: &Request) -> Hr {
@@ -403,6 +431,7 @@ impl Service {
         match req.method.as_str() {
             "ping" => Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),
+                "protocol": PROTOCOL,
                 "daemon_key": self.public_key(),
                 "next_key": self.next_key(),
             })),
@@ -857,12 +886,35 @@ impl Service {
         let changes: Vec<Value> = s
             .changes
             .values()
-            .map(|c| json!({"change": c.change, "actor": c.actor.label(), "status": c.status, "provenance": c.provenance, "commit": c.commit, "intent": c.claim.intent}))
+            .map(|c| {
+                json!({
+                    "change": c.change, "actor": c.actor.label(), "status": c.status, "provenance": c.provenance,
+                    "commit": c.commit, "base": c.base, "intent": c.claim.intent, "created_ms": c.created_ms,
+                    "version": c.version, "paths": touched_paths(&c.facts),
+                })
+            })
             .collect();
+        // One call fills a review list: what the operation is, whose, on
+        // which change, since when, touching what.
         let pending: Vec<Value> = s
             .pending
             .values()
-            .map(|p| json!({"seq": p.seq, "actor": p.actor.label(), "op": p.op.kind().as_str(), "reasons": p.reasons, "approvals": p.approvals, "required": p.required}))
+            .map(|p| {
+                let session = p.actor.session().and_then(|id| s.sessions.get(id));
+                let (change, base, intent) = match &p.op {
+                    Op::ChangePropose {
+                        change, base, claim, ..
+                    } => (Some(*change), Some(base.clone()), Some(claim.intent.clone())),
+                    _ => (None, None, None),
+                };
+                json!({
+                    "seq": p.seq, "created_ms": p.time_ms, "actor": p.actor.label(), "op": p.op.kind().as_str(),
+                    "reasons": p.reasons, "approvals": p.approvals, "required": p.required,
+                    "change": change, "base": base, "intent": intent,
+                    "agent": session.map(|x| &x.agent), "task": session.map(|x| &x.task),
+                    "paths": p.facts.as_ref().map(touched_paths).unwrap_or_default(),
+                })
+            })
             .collect();
         // Public keys only: which key each human signs with, and the
         // recovery key if one is set.
@@ -883,12 +935,30 @@ impl Service {
         }))
     }
 
+    /// The log from `from`. With `wait_ms` and nothing past `from`, the
+    /// request is held (not the lock) until an entry arrives or the time
+    /// runs out, so a client follows the log with one open request.
     fn log(&self, auth: &Auth, q: LogQuery) -> Hr {
         let name = auth.repo()?;
-        let mut inner = self.lock();
-        let r = Self::repo(&mut inner, &name)?;
-        let store = r.store.clone();
-        drop(inner);
+        let wait = q.wait_ms.unwrap_or(0).clamp(0, LOG_WAIT_MAX_MS);
+        let deadline = std::time::Instant::now() + Duration::from_millis(wait as u64);
+        let store = loop {
+            let mut inner = self.lock();
+            let r = Self::repo(&mut inner, &name)?;
+            if r.chain.state.next_seq > q.from {
+                break r.store.clone();
+            }
+            drop(inner);
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Ok(json!([]));
+            }
+            let (m, c) = &self.appended;
+            let seen = m.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = c
+                .wait_timeout(seen, left.min(Duration::from_millis(250)))
+                .unwrap_or_else(|e| e.into_inner());
+        };
         let ops = OpLog::new(&store).read_all().or_fail()?;
         let limit = q.limit.unwrap_or(u64::MAX) as usize;
         let out: Vec<&SignedOp> = ops.iter().skip(q.from as usize).take(limit).collect();
@@ -1745,6 +1815,8 @@ impl Service {
         } else {
             "network access is denied by repository policy".into()
         };
+        drop(guard);
+        self.notify_appended();
         ProxyVerdict {
             allow,
             allow_private,
@@ -1798,6 +1870,11 @@ impl Service {
     pub fn reconcile_all(&self) {
         let now = self.now();
         let mut inner = self.lock();
+        let before: Vec<u64> = inner
+            .repos
+            .values()
+            .map(|r| r.chain.state.next_seq)
+            .collect();
         for r in inner.repos.values_mut().filter(|r| r.initialized()) {
             let _ = Self::reconcile(r, now);
             // The auditor's only write: a flag file asking for a freeze.
@@ -1817,6 +1894,15 @@ impl Service {
                 }
                 let _ = std::fs::remove_file(&flag);
             }
+        }
+        let after: Vec<u64> = inner
+            .repos
+            .values()
+            .map(|r| r.chain.state.next_seq)
+            .collect();
+        drop(inner);
+        if before != after {
+            self.notify_appended();
         }
     }
 
@@ -1875,6 +1961,8 @@ impl Service {
         {
             r.store.ref_cas(TRUNK_REF, m, Some(&trunk))?;
         }
+        drop(inner);
+        self.notify_appended();
         Ok(Some(signed))
     }
 
@@ -1917,6 +2005,21 @@ impl Service {
             }
         })
     }
+}
+
+/// The files a change touches, as its facts say: added, modified and
+/// deleted, sorted, each once.
+fn touched_paths(f: &lonca_core::ops::Facts) -> Vec<String> {
+    let mut paths: Vec<String> = f
+        .added_files
+        .iter()
+        .chain(&f.modified_files)
+        .chain(&f.deleted_files)
+        .cloned()
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// Remotes: absolute paths, https://, ssh:// or scp-like `user@host:path`.
@@ -2021,6 +2124,34 @@ mod tests {
                 (method.to_string(), cred.to_string())
             })
             .collect()
+    }
+
+    /// `docs/protocol.md` is the runner's contract: every method has a
+    /// `### \`method\`` section, nothing else does, and the number it
+    /// states is the one `ping` returns. The number is pinned here so a
+    /// change to it is a conscious one, made with a note in the document.
+    #[test]
+    fn the_protocol_doc_lists_every_method_and_states_the_number() {
+        let doc = include_str!("../../../docs/protocol.md");
+        let sections: Vec<&str> = doc
+            .lines()
+            .filter_map(|l| l.strip_prefix("### `"))
+            .map(|l| l.trim_end_matches('`'))
+            .collect();
+        for (m, _) in METHODS {
+            assert!(
+                sections.contains(m),
+                "{m} has no section in docs/protocol.md"
+            );
+        }
+        assert_eq!(sections.len(), METHODS.len(), "{sections:?}");
+        assert_eq!(PROTOCOL, 1);
+        assert!(
+            doc.contains(&format!("**Protocol number: {PROTOCOL}.**")),
+            "docs/protocol.md must state the current protocol number"
+        );
+        assert!(doc.contains(&format!("\n- **{PROTOCOL}** (")));
+        assert!(doc.contains("capped at 30 000") && LOG_WAIT_MAX_MS == 30_000);
     }
 
     #[test]

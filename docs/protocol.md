@@ -514,9 +514,11 @@ a recovery the log refused, `git`.
 
 *agent.* `{"set": string | null, "items": [lease item], "intent":
 string, "ttl_ms": integer}`. Logged, plus `"set"`: the lease set's id
-(generated when not given). Denied with
+(generated when not given). `intent` says what the agent is doing and why,
+and is required: blank is denied `intent_required`. Denied with
 `lease_held:<symbol>:<session>:<intent>` when another session holds an
-item, a pinned one included. The intent is free text and comes last, so
+item, a pinned one included, and `lease_wanted:<session>` when a waiting
+interest goes first. The intent is free text and comes last, so
 read `"details"` instead of splitting the reason: [detail], one per held
 item however many requested items run into it, empty when nothing is
 in the way. `"advice"` says the same in a sentence for a model: who is on
@@ -542,15 +544,21 @@ runs out by its TTL.
 
 ### `lease.interest`
 
-*agent.* `{"items": [lease item], "intent": string | null}`. Say you are
+*agent.* `{"items": [lease item], "intent": string}`. Say you are
 waiting for symbols another session holds. Nothing is held and nothing
-waits. When what conflicts is freed, the oldest interest gets a
+waits. `intent` is required, as for `lease.acquire`. For
+`leases.interest_block_ms` from then (`status.interests[].blocks_until_ms`)
+other sessions' new leases that conflict with it are denied
+`lease_wanted:<session>`, and their `details` carry code `lease_wanted`, the
+waiter, its intent and that time as `expires_ms`; what a session already holds
+or has reserved is not new. After that the interest stays in line.
+When what conflicts is freed, the oldest interest gets a
 reservation for `leases.reservation_ms`: `status.reservations`, an
 `events` entry, and until `until_ms` every other session's `lease.acquire`
 is denied `lease_reserved:<session>`. An unused window passes to the next
 interest. Logged, plus `"details"` as for `lease.acquire`. Denied
-`lease_free` for what nobody holds (acquire it) and `interest_exists` when
-the session already waits for it.
+`lease_free` for what nobody holds or waits for (acquire it) and
+`interest_exists` when the session already waits for it.
 
 ### `events`
 
@@ -737,8 +745,12 @@ The `reasons` of a decision. The ones a runner acts on:
 - `lease_hold_limit`: the set has been held too long and someone is
   waiting; finish or let it run out, then acquire again.
 - `lease_reserved:<session>`: freed and held for that session for a
-  moment; `details` says until when. `lease_free`: nobody holds it, acquire
-  instead of waiting.
+  moment; `details` says until when. `lease_wanted:<session>`: that session
+  waits for something that conflicts and goes first; `details` says what for
+  and until when, so settle it with `negotiate` or get in line. `lease_free`:
+  nobody holds it, acquire instead of waiting.
+- `intent_required`: a lease or an interest with a blank `intent`. Say what
+  you are doing and why.
 - `claim_mismatch:<field>` (`edits`, `adds`, `deletes`, `deleted_files`,
   `signature_changes`, `tests`): the claim does not match the facts;
   `facts.preview` says what the facts are.
@@ -890,7 +902,9 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `hook.stop`, `phase: "stop"` in `hook.input`, `files` on `session.end` and
   `status.sessions[].unproposed` (#121); `inbox`, `message` on a `message`
   event, `advice` on `lease.acquire`, `change.propose` and `facts.preview`,
-  `"output"` after a tool call in `hook.input`.
+  `"output"` after a tool call in `hook.input`; `lease_wanted` and
+  `intent_required`, `status.interests[].blocks_until_ms`. A blank `intent`
+  on `lease.acquire` or `lease.interest`, accepted before, is now denied.
   `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,

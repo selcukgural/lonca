@@ -599,7 +599,8 @@ enum LeaseCmd {
         symbols: Vec<String>,
         #[arg(long, default_value = "edit")]
         kind: String,
-        #[arg(long, short, default_value = "")]
+        /// What you are doing and why; others read it
+        #[arg(long, short)]
         intent: String,
         #[arg(long, default_value = "10m")]
         ttl: String,
@@ -619,13 +620,15 @@ enum LeaseCmd {
         json: bool,
     },
     /// Wait for symbols others hold: when they are freed, the oldest
-    /// interest gets a short reservation. Holds nothing, blocks nobody.
+    /// interest gets a short reservation. Holds nothing, and for a while
+    /// no new lease can be taken that conflicts with it.
     Interest {
         #[arg(required = true)]
         symbols: Vec<String>,
         #[arg(long, default_value = "edit")]
         kind: String,
-        #[arg(long, short, default_value = "")]
+        /// What you are doing and why; others read it
+        #[arg(long, short)]
         intent: String,
         #[arg(long)]
         json: bool,
@@ -2204,6 +2207,7 @@ fn lease_need_lines(report: &Value) -> Vec<String> {
             d["symbol"].as_str().unwrap_or("")
         );
         match (d["code"].as_str(), d["holder_session"].as_str()) {
+            (Some("lease_wanted"), Some(holder)) => format!("{what}: {holder} goes first"),
             (_, Some(holder)) => format!("{what}: held by {holder}"),
             (Some("held_by_you"), None) => format!("{what}: yours"),
             _ => format!("{what}: free"),
@@ -2256,13 +2260,15 @@ mod tests {
             {"code": "held_by_you", "needed_kind": "edit", "symbol": "a#f"},
             {"code": "free", "needed_kind": "insert", "symbol": "a#<file>"},
             {"code": "lease_held", "needed_kind": "rename", "symbol": "a#g", "holder_session": "s2"},
+            {"code": "lease_wanted", "needed_kind": "edit", "symbol": "a#T", "holder_session": "s3"},
         ]});
         assert_eq!(
             lease_need_lines(&report),
             [
                 "edit a#f: yours",
                 "insert a#<file>: free",
-                "rename a#g: held by s2"
+                "rename a#g: held by s2",
+                "edit a#T: s3 goes first"
             ]
         );
     }

@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::ChangeId;
 use lonca_core::GitId;
-use lonca_core::oplog::{FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS, GENESIS_PREV, SignedOp};
+use lonca_core::oplog::{
+    FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS, GENESIS_PREV, SignedOp,
+};
 use lonca_core::ops::{
     Actor, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind, ObservationLevel, Op,
     Outcome, Scope,
@@ -80,6 +82,10 @@ pub struct LeaseSet {
     pub acquired_ms: i64,
     /// Sessions denied by this set, with the time of their last try.
     pub interest: BTreeMap<String, i64>,
+    /// Set by the first interest that runs into this set: no interest that
+    /// runs into it stops new leases past this time, so the cap of
+    /// `leases.interest_block_ms` is per set, not per interest.
+    pub stop_until_ms: Option<i64>,
     /// The session this set goes back to when its holder ends: it was
     /// delegated with `cap.attenuate`.
     pub delegated_from: Option<String>,
@@ -94,6 +100,10 @@ pub struct Interest {
     /// `leases.reservation_ms` when it was registered: the fold has no
     /// policy, and the decision carries it.
     pub window_ms: i64,
+    /// Until when no other session can take a new lease that conflicts
+    /// with `items`. Zero for an interest of an older format: it stops
+    /// nobody.
+    pub blocks_until_ms: i64,
 }
 
 /// For a while after a set is freed, only `session` can acquire `items`.
@@ -102,6 +112,11 @@ pub struct Reservation {
     pub session: String,
     pub items: Vec<LeaseItem>,
     pub until_ms: i64,
+}
+
+/// Something in `a` conflicts with something in `b`.
+fn clash(a: &[LeaseItem], b: &[LeaseItem]) -> bool {
+    a.iter().any(|x| b.iter().any(|y| leases_conflict(x, y)))
 }
 
 impl LeaseSet {
@@ -245,6 +260,8 @@ pub const LEASES_KEPT: &str = "leases_kept";
 pub const HEARTBEAT_TIMEOUT: &str = "heartbeat_timeout=";
 /// On a `lease.interest` decision: `leases.reservation_ms`.
 pub const RESERVATION_WINDOW: &str = "reservation_ms=";
+/// On a `lease.interest` decision: `leases.interest_block_ms`.
+pub const INTEREST_BLOCK: &str = "interest_block_ms=";
 
 impl State {
     pub fn new() -> Self {
@@ -370,9 +387,11 @@ impl State {
                         .iter()
                         .any(|b| i.items.iter().any(|a| leases_conflict(a, b)))
             };
+            let mut older = self.interests.range(..seq).map(|(_, o)| o);
             if self.session_present(&i.session, now_ms)
                 && !self.held_against(&i.session, &i.items, now_ms)
                 && !out.iter().any(reserved)
+                && !older.any(|o| self.stops(o, &i.session, &i.items, now_ms))
             {
                 out.push(Reservation {
                     session: i.session.clone(),
@@ -385,9 +404,69 @@ impl State {
         (out, served)
     }
 
-    pub fn held_or_reserved(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
+    /// `interest`, of another session, stands in the way of new leases on
+    /// `items` at `now_ms`.
+    fn stops(&self, interest: &Interest, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
+        interest.session != session
+            && interest.blocks_until_ms > now_ms
+            && self.session_present(&interest.session, now_ms)
+            && clash(&interest.items, items)
+    }
+
+    /// Of `items`, what `session` does not have yet: neither held (a partial
+    /// release acquires the rest again) nor reserved for it.
+    pub fn new_items(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> Vec<LeaseItem> {
+        let reservations = self.reservations_at(now_ms);
+        let reserved = |i: &LeaseItem| {
+            let mut mine = reservations.iter().filter(|r| r.session == session);
+            mine.any(|r| {
+                r.items
+                    .iter()
+                    .any(|b| symbols::covers(&b.symbol, &i.symbol))
+            })
+        };
+        let new = items
+            .iter()
+            .filter(|i| !self.holds(session, i, now_ms) && !reserved(i));
+        new.cloned().collect()
+    }
+
+    /// The waiting interests of other sessions that stop new leases on
+    /// `items`, oldest first. An interest that has its reservation at
+    /// `now_ms` is not here: it is a reservation now.
+    pub fn wanted_against(
+        &self,
+        session: &str,
+        items: &[LeaseItem],
+        now_ms: i64,
+    ) -> Vec<&Interest> {
+        let new = self.new_items(session, items, now_ms);
+        let served = self.settled(now_ms).1;
+        // An interest goes first over those younger than it, so a younger
+        // one does not stop it.
+        let behind = |seq: &u64, i: &Interest| {
+            let mut older = self.interests.range(..seq).map(|(_, o)| o);
+            older.any(|o| o.session == session && clash(&o.items, &i.items))
+        };
+        let waiting = self.interests.iter();
+        let waiting = waiting.filter(|(seq, _)| !served.contains(seq));
+        let stopping =
+            waiting.filter(|(seq, i)| self.stops(i, session, &new, now_ms) && !behind(seq, i));
+        stopping.map(|(_, i)| i).collect()
+    }
+
+    /// Something other sessions have or are first in line for conflicts
+    /// with `items`: there is something to wait for.
+    pub fn taken(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
         self.held_against(session, items, now_ms)
             || self.reserved_against(session, items, now_ms).is_some()
+            || !self.wanted_against(session, items, now_ms).is_empty()
+    }
+
+    /// `session` holds exactly `item` at `now_ms`.
+    pub fn holds(&self, session: &str, item: &LeaseItem, now_ms: i64) -> bool {
+        self.active_leases(now_ms)
+            .any(|h| h.lease.session == session && h.items.contains(&item))
     }
 
     /// `session` already waits for something that overlaps `items`.
@@ -441,7 +520,9 @@ impl State {
         }
     }
 
-    /// What was waited for is in hand.
+    /// What was waited for is in hand. Part of it does not end the wait of
+    /// an interest of format 12 on: it keeps its place, and its session can
+    /// not register a new one to start the cap again.
     fn acquired(&mut self, session: &str, items: &[LeaseItem]) {
         let overlaps = |theirs: &[LeaseItem]| {
             theirs.iter().any(|b| {
@@ -452,8 +533,75 @@ impl State {
         };
         self.reservations
             .retain(|r| r.session != session || !overlaps(&r.items));
+        let in_hand = |i: &Interest| {
+            if i.blocks_until_ms == 0 {
+                return overlaps(&i.items);
+            }
+            let covered = |b: &LeaseItem| {
+                let mut got = items.iter();
+                got.any(|a| symbols::covers(&a.symbol, &b.symbol))
+            };
+            i.items.iter().all(covered)
+        };
         self.interests
-            .retain(|_, i| i.session != session || !overlaps(&i.items));
+            .retain(|_, i| i.session != session || !in_hand(i));
+    }
+
+    /// When an interest in `items` stops stopping others, at most `limit`:
+    /// nothing that runs into the same set or an older interest goes past
+    /// what they got, so a line of interests does not stretch the cap. Sets
+    /// that had no such time get this one.
+    fn block_end(&mut self, session: &str, items: &[LeaseItem], now_ms: i64, limit: i64) -> i64 {
+        let sets: Vec<&LeaseSet> = self
+            .active_leases(now_ms)
+            .filter(|h| h.lease.session != session)
+            .filter(|h| {
+                h.items
+                    .iter()
+                    .any(|b| items.iter().any(|a| leases_conflict(a, b)))
+            })
+            .map(|h| h.lease)
+            .collect();
+        let names: Vec<String> = sets.iter().map(|l| l.set.clone()).collect();
+        let earlier = sets.iter().filter_map(|l| l.stop_until_ms);
+        let older = self.interests.values().filter(|i| clash(&i.items, items));
+        let older = older.map(|i| i.blocks_until_ms);
+        let end = earlier.chain(older).fold(limit, i64::min);
+        for set in names {
+            if let Some(l) = self.leases.get_mut(&set) {
+                l.stop_until_ms.get_or_insert(end);
+            }
+        }
+        end
+    }
+
+    /// A new set over what the session holds goes on being wanted, as its
+    /// hold goes on: a fresh id resets neither the hold limit nor the cap.
+    fn carry_wanted(&mut self, set: &str, now_ms: i64) {
+        let Some(new) = self.leases.get(set) else {
+            return;
+        };
+        let overlapping = |h: &ActiveLease| {
+            h.lease.session == new.session
+                && h.lease.set != set
+                && h.items.iter().any(|b| {
+                    let mut items = new.items.iter();
+                    items.any(|a| symbols::overlaps(&a.symbol, &b.symbol))
+                })
+        };
+        let mut interest = BTreeMap::new();
+        let mut stop_until_ms = None;
+        for h in self.active_leases(now_ms).filter(overlapping) {
+            for (session, at) in &h.lease.interest {
+                let last = interest.entry(session.clone()).or_insert(*at);
+                *last = (*last).max(*at);
+            }
+            stop_until_ms = stop_until_ms.into_iter().chain(h.lease.stop_until_ms).min();
+        }
+        if let Some(l) = self.leases.get_mut(set) {
+            l.interest = interest;
+            l.stop_until_ms = stop_until_ms;
+        }
     }
 
     fn descendants(&self, root: &str) -> Vec<String> {
@@ -495,15 +643,22 @@ impl State {
             s.unproposed = None;
         }
         match e.decision.outcome {
-            Outcome::Allow => self.effects(
-                &e.actor,
-                &e.op,
-                e.facts.as_ref(),
-                e.seq,
-                e.time_ms,
-                &e.decision.reasons,
-                false,
-            ),
+            Outcome::Allow => {
+                self.effects(
+                    &e.actor,
+                    &e.op,
+                    e.facts.as_ref(),
+                    e.seq,
+                    e.time_ms,
+                    &e.decision.reasons,
+                    false,
+                );
+                if let Op::LeaseAcquire { set, .. } = &e.op
+                    && e.format >= FORMAT_LEASE_INTENT
+                {
+                    self.carry_wanted(set, e.time_ms);
+                }
+            }
             Outcome::Escalate => {
                 if let Op::ChangePropose {
                     change,
@@ -570,7 +725,7 @@ impl State {
                     && e.decision
                         .reasons
                         .iter()
-                        .all(|r| r.starts_with("lease_held:"))
+                        .all(|r| r.starts_with("lease_held:") || r.starts_with("lease_wanted:"))
                 {
                     self.register_interest(session, items, e.time_ms);
                 }
@@ -1058,6 +1213,7 @@ impl State {
                             pins: BTreeMap::new(),
                             acquired_ms,
                             interest: BTreeMap::new(),
+                            stop_until_ms: None,
                             delegated_from: None,
                         },
                     );
@@ -1066,18 +1222,21 @@ impl State {
             }
             Op::LeaseInterest { items, intent } => {
                 if let Some(session) = actor.session() {
-                    let window_ms = reasons
-                        .iter()
-                        .find_map(|r| r.strip_prefix(RESERVATION_WINDOW))
-                        .and_then(|n| n.parse().ok())
-                        .unwrap_or_default();
+                    let value = |key: &str| -> Option<i64> {
+                        let found = reasons.iter().find_map(|r| r.strip_prefix(key));
+                        found.and_then(|n| n.parse().ok())
+                    };
+                    let block = value(INTEREST_BLOCK);
+                    let end = block.map(|ms| time_ms + ms);
+                    let end = end.map(|e| self.block_end(session, items, time_ms, e));
                     self.interests.insert(
                         seq,
                         Interest {
                             session: session.to_string(),
                             items: items.clone(),
                             intent: intent.clone(),
-                            window_ms,
+                            window_ms: value(RESERVATION_WINDOW).unwrap_or_default(),
+                            blocks_until_ms: end.unwrap_or_default(),
                         },
                     );
                     self.register_interest(session, items, time_ms);
@@ -1285,6 +1444,7 @@ impl State {
                             l.session = to.clone();
                             l.acquired_ms = time_ms;
                             l.interest.clear();
+                            l.stop_until_ms = None;
                             l.delegated_from = None;
                         }
                     }

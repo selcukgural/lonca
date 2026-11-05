@@ -17,6 +17,8 @@ use crate::symbols;
 
 pub const LEASE_HELD: &str = "lease_held";
 pub const LEASE_RESERVED: &str = "lease_reserved";
+/// Nobody holds it, but a session is waiting for it and goes first.
+pub const LEASE_WANTED: &str = "lease_wanted";
 pub const LEASE_MISSING: &str = "lease_missing";
 /// The session holds what a change needs.
 pub const HELD_BY_YOU: &str = "held_by_you";
@@ -116,8 +118,35 @@ pub fn lease_reserved(
     out
 }
 
+/// The waiting interests of other sessions that stop `wanted`, with what
+/// they said they need it for. `expires_ms` is when they stop stopping it.
+pub fn lease_wanted(
+    state: &State,
+    session: &str,
+    wanted: &[LeaseItem],
+    now_ms: i64,
+) -> Vec<Detail> {
+    let new = state.new_items(session, wanted, now_ms);
+    let mut out = Vec::new();
+    for i in state.wanted_against(session, wanted, now_ms) {
+        for a in &new {
+            for b in i.items.iter().filter(|b| leases_conflict(a, b)) {
+                out.push(Detail {
+                    holder_session: Some(i.session.clone()),
+                    holder_agent: state.sessions.get(&i.session).map(|s| s.agent.clone()),
+                    intent: Some(i.intent.clone()),
+                    expires_ms: Some(i.blocks_until_ms),
+                    ..Detail::free(LEASE_WANTED, &b.symbol, a.kind)
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Every lease the facts need, and where it stands: `held_by_you`, `free`,
-/// or one `lease_held` per holder.
+/// or one `lease_held` per holder and one `lease_wanted` per session that
+/// goes first.
 pub fn lease_report(state: &State, session: &str, facts: &Facts, now_ms: i64) -> Vec<Detail> {
     let leases: Vec<ActiveLease> = state
         .active_leases(now_ms)
@@ -135,7 +164,9 @@ pub fn lease_report(state: &State, session: &str, facts: &Facts, now_ms: i64) ->
             symbol: need.symbol.clone(),
             kind,
         };
-        let blockers = lease_held(state, session, std::slice::from_ref(&item), now_ms);
+        let wanted = std::slice::from_ref(&item);
+        let mut blockers = lease_held(state, session, wanted, now_ms);
+        blockers.extend(lease_wanted(state, session, wanted, now_ms));
         if blockers.is_empty() {
             out.push(Detail::free(FREE, &need.symbol, kind));
         }
@@ -150,7 +181,11 @@ pub fn lease_missing(state: &State, session: &str, facts: &Facts, now_ms: i64) -
     let missing = report.into_iter().filter(|d| d.code != HELD_BY_YOU);
     missing
         .map(|d| Detail {
-            code: LEASE_MISSING,
+            code: if d.code == LEASE_WANTED {
+                LEASE_WANTED
+            } else {
+                LEASE_MISSING
+            },
             ..d
         })
         .collect()
@@ -163,6 +198,9 @@ fn holder_sentence(session: &str, of: &[&Detail]) -> String {
     let agent = of[0].holder_agent.as_deref().unwrap_or("Another agent");
     let intent = of.iter().find_map(|d| d.intent.as_deref());
     let mut out = match intent {
+        Some(intent) if of[0].code == LEASE_WANTED => format!(
+            "{agent} (session {session}) is waiting for {symbols} and goes first: {intent:?}."
+        ),
         Some(intent) => format!("{agent} (session {session}) is on {symbols}: {intent:?}."),
         None => format!("{symbols} is reserved for {agent} (session {session})."),
     };
@@ -176,10 +214,11 @@ fn holder_sentence(session: &str, of: &[&Detail]) -> String {
 /// text from `details`, so it is derived and never logged, like them. `None`
 /// when nobody stands in the way.
 pub fn advice(details: &[Detail]) -> Option<String> {
-    let mut holders: BTreeMap<&str, Vec<&Detail>> = BTreeMap::new();
+    let mut holders: BTreeMap<(&str, bool), Vec<&Detail>> = BTreeMap::new();
     for d in details {
         if let Some(session) = &d.holder_session {
-            holders.entry(session).or_default().push(d);
+            let key = (session.as_str(), d.code == LEASE_WANTED);
+            holders.entry(key).or_default().push(d);
         }
     }
     if holders.is_empty() {
@@ -187,7 +226,7 @@ pub fn advice(details: &[Detail]) -> Option<String> {
     }
     let mut out: Vec<String> = holders
         .iter()
-        .map(|(session, of)| holder_sentence(session, of))
+        .map(|((session, _), of)| holder_sentence(session, of))
         .collect();
     out.push("Do not edit these. Settle it between you: tell that agent what you need and why with negotiate, to_session as above. Or lease_interest puts you next. Go on with other work meanwhile.".into());
     Some(out.join(" "))
@@ -238,6 +277,20 @@ mod tests {
         assert!(text.contains("bot (session s2) is on a.rs#h"), "{text}");
         assert_eq!(text.matches("Settle it between you").count(), 1, "{text}");
         assert!(!text.contains("merge queue"), "{text}");
+    }
+
+    #[test]
+    fn who_waits_is_told_apart_from_who_holds() {
+        let wanted = Detail {
+            code: LEASE_WANTED,
+            ..held("a.rs#Type", "s1")
+        };
+        let text = advice(&[held("a.rs#f", "s1"), wanted]).unwrap();
+        assert!(text.contains("is on a.rs#f: \"fix\"."), "{text}");
+        assert!(
+            text.contains("is waiting for a.rs#Type and goes first: \"fix\"."),
+            "{text}"
+        );
     }
 
     #[test]

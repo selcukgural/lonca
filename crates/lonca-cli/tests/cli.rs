@@ -272,10 +272,18 @@ fn agent_workflow_through_the_cli() {
         "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund() {}\n",
     )
     .unwrap();
-    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
     e.run(
         &ws,
-        &["lease", "acquire", "src/lib.rs#<file>", "--kind", "insert"],
+        &[
+            "lease",
+            "acquire",
+            "-i",
+            "fix",
+            "src/lib.rs#<file>",
+            "--kind",
+            "insert",
+        ],
     );
     let out = e.run(&ws, &["propose", "-i", "double", "--accept-facts"]);
     // The session tried to write outside the workspace: it is tainted.
@@ -1032,7 +1040,7 @@ fn runner_outputs_are_json_and_exit_codes_tell_failures_apart() {
         "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n",
     )
     .unwrap();
-    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
     let out = e
         .cmd(
             &ws,
@@ -1539,7 +1547,7 @@ fn a_human_rejects_through_the_cli_and_the_reason_reaches_the_worker() {
         "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n",
     )
     .unwrap();
-    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
     let p: serde_json::Value = serde_json::from_str(&e.run(
         &ws,
         &["propose", "-i", "double", "--accept-facts", "--json"],
@@ -1593,7 +1601,7 @@ fn a_human_rejects_through_the_cli_and_the_reason_reaches_the_worker() {
         "[]"
     );
     // The lease is free again: the worker leases, fixes and proposes.
-    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
     std::fs::write(
         ws.join("src/lib.rs"),
         "pub fn charge(a: u64) -> u64 {\n    a + 1\n}\n",
@@ -2041,7 +2049,14 @@ fn lease_commands_exit_one_on_denial_and_speak_json() {
     assert!(set.starts_with("lse_"), "{held}");
 
     // Denied: JSON on stdout says who stands in the way, stderr the reason.
-    let args = ["lease", "acquire", "src/lib.rs#charge", "--json"];
+    let args = [
+        "lease",
+        "acquire",
+        "-i",
+        "fix",
+        "src/lib.rs#charge",
+        "--json",
+    ];
     let denied = parse(&refused(&e, &ws2, &args, "lease_held:src/lib.rs#charge"));
     assert_eq!(denied["decision"]["outcome"], "deny");
     let d = &denied["details"][0];
@@ -2051,7 +2066,7 @@ fn lease_commands_exit_one_on_denial_and_speak_json() {
     assert_eq!(d["set"], set.as_str());
     assert_eq!(d["pinned_to"], serde_json::Value::Null);
     // Without --json the denial exits the same way and names no set.
-    let args = ["lease", "acquire", "src/lib.rs#charge"];
+    let args = ["lease", "acquire", "-i", "fix", "src/lib.rs#charge"];
     let out = refused(&e, &ws2, &args, "lease_held");
     assert!(!out.contains("lease set"), "{out}");
 
@@ -2087,12 +2102,29 @@ fn lease_commands_exit_one_on_denial_and_speak_json() {
     let proposed = parse(&e.run(&ws, &args));
     assert_eq!(proposed["status"], "pending", "{proposed}");
     assert_eq!(proposed["details"], json!([]));
-    let args = ["lease", "acquire", "src/lib.rs#charge", "--json"];
+    let args = [
+        "lease",
+        "acquire",
+        "-i",
+        "fix",
+        "src/lib.rs#charge",
+        "--json",
+    ];
     let denied = parse(&refused(&e, &ws2, &args, "lease_held"));
     assert_eq!(denied["details"][0]["pinned_to"], proposed["change"]);
 
     // A set nobody pinned goes with an answer in JSON too.
-    let got = parse(&e.run(&ws2, &["lease", "acquire", "src/lib.rs#refund", "--json"]));
+    let got = parse(&e.run(
+        &ws2,
+        &[
+            "lease",
+            "acquire",
+            "-i",
+            "fix",
+            "src/lib.rs#refund",
+            "--json",
+        ],
+    ));
     let free = got["set"].as_str().unwrap();
     let released = parse(&e.run(&ws2, &["lease", "release", free, "--json"]));
     assert_eq!(released["set"], free);
@@ -2114,7 +2146,17 @@ fn a_human_operation_that_is_denied_exits_one() {
     refused(&e, r, &args, "unknown_session");
 
     // Undoing a lease that is gone: the compensating release is refused.
-    let got = parse(&e.run(&ws, &["lease", "acquire", "src/lib.rs#charge", "--json"]));
+    let got = parse(&e.run(
+        &ws,
+        &[
+            "lease",
+            "acquire",
+            "-i",
+            "fix",
+            "src/lib.rs#charge",
+            "--json",
+        ],
+    ));
     let seq = got["seq"].as_u64().unwrap().to_string();
     e.run(&ws, &["lease", "release", got["set"].as_str().unwrap()]);
     let args = ["undo", &seq, "--repo", "demo"];
@@ -2282,7 +2324,7 @@ fn an_expired_sessions_edit_lands_under_its_continuation() {
     std::thread::sleep(std::time::Duration::from_millis(1100));
 
     // The session is over, and it hears so.
-    let args = ["lease", "acquire", "src/lib.rs#charge"];
+    let args = ["lease", "acquire", "-i", "fix", "src/lib.rs#charge"];
     refused(&e, &w1, &args, "session_inactive");
     let out = e
         .cmd(&w1, &["session", "heartbeat", "--json"])
@@ -2317,7 +2359,17 @@ fn an_expired_sessions_edit_lands_under_its_continuation() {
     assert_ne!(token, old_token);
     assert!(!c.to_string().contains(token.trim()));
 
-    let held = e.run(&w1, &["lease", "acquire", "src/lib.rs#charge", "--json"]);
+    let held = e.run(
+        &w1,
+        &[
+            "lease",
+            "acquire",
+            "-i",
+            "fix",
+            "src/lib.rs#charge",
+            "--json",
+        ],
+    );
     assert_eq!(parse(&held)["decision"]["outcome"], "allow", "{held}");
     let args = ["propose", "-i", "double", "--accept-facts", "--json"];
     let proposed = parse(&e.run(&w1, &args));
@@ -2346,7 +2398,7 @@ fn continuing_a_live_session_leaves_one_session_and_a_pending_change_stands() {
         "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n",
     )
     .unwrap();
-    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
     let args = ["propose", "-i", "double", "--accept-facts", "--json"];
     let proposed = parse(&e.run(&ws, &args));
     assert_eq!(proposed["status"], "pending", "{proposed}");
@@ -2383,7 +2435,7 @@ fn continuing_a_live_session_leaves_one_session_and_a_pending_change_stands() {
         "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a * 3\n}\n",
     )
     .unwrap();
-    e.run(&ws, &["lease", "acquire", "src/lib.rs#refund"]);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#refund"]);
     let args = ["propose", "-i", "more", "--accept-facts", "--json"];
     let next = parse(&e.run(&ws, &args));
     assert_eq!(next["status"], "pending", "{next}");
@@ -2526,7 +2578,7 @@ fn mcp_status_shows_the_change_the_workspace_proposed_under_its_old_session() {
         "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n",
     )
     .unwrap();
-    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
     let args = ["propose", "-i", "double", "--accept-facts", "--json"];
     let proposed = parse(&e.run(&ws, &args));
     e.run(r, &session_args("src/**", &["--continue", "ws"]));
@@ -2714,10 +2766,17 @@ fn a_worker_waits_for_a_lease_and_hears_when_it_is_free() {
     e.run(r, &session_args("src/**", &["--workspace", "w2"]));
     let w2 = r.join("w2");
     let sym = "src/lib.rs#charge";
-    let held = parse(&e.run(&ws, &["lease", "acquire", sym, "--json"]));
+    let held = parse(&e.run(&ws, &["lease", "acquire", "-i", "fix", sym, "--json"]));
     let set = held["set"].as_str().unwrap();
 
-    let args = ["lease", "interest", "src/lib.rs#refund", "--json"];
+    let args = [
+        "lease",
+        "interest",
+        "-i",
+        "fix",
+        "src/lib.rs#refund",
+        "--json",
+    ];
     let free = parse(&refused(&e, &w2, &args, "lease_free"));
     assert_eq!(free["decision"]["outcome"], "deny");
 
@@ -2750,7 +2809,7 @@ fn a_worker_waits_for_a_lease_and_hears_when_it_is_free() {
     assert_eq!(inbox["events"], json!([]), "{inbox}");
 
     // The text form of an interest prints the decision.
-    let args = ["lease", "interest", sym];
+    let args = ["lease", "interest", "-i", "fix", sym];
     let out = e.cmd(&ws, &args).output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert!(text(&out.stdout).contains("allow"), "{}", text(&out.stdout));
@@ -3527,7 +3586,7 @@ fn an_agents_workspace_is_a_repository_that_means_what_lonca_diff_means() {
     git_in(&ws, &["commit", "-qam", "checkpoint"]);
     assert_eq!(git_in(&ws, &["diff"]), "");
     assert_eq!(e.run(&ws, &["diff"]), facts);
-    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
     let out = e.run(&ws, &["propose", "-i", "bump", "--accept-facts"]);
     assert!(out.contains("escalate"), "{out}");
     let seq: String = out
@@ -3955,4 +4014,66 @@ fn mcp_tells_an_agent_what_another_one_asked_with_the_answer_of_any_tool() {
     assert!(news.contains("in thread t1"), "{news}");
     assert!(news.contains("needs it"), "{news}");
     assert_eq!(mcp.news("status", json!({})), None);
+}
+
+/// The command line asks for the reason itself, before the daemon would.
+#[test]
+fn a_lease_on_the_command_line_needs_an_intent() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    for sub in ["acquire", "interest"] {
+        let args = ["lease", sub, "src/lib.rs#charge"];
+        let out = e.cmd(&ws, &args).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success());
+        assert!(err.contains("--intent"), "{err}");
+    }
+}
+
+/// `lease_release` with items acquires the rest under a new set: a session
+/// waiting for them does not get in the way of what the holder keeps.
+#[test]
+fn a_partial_release_goes_through_while_another_session_waits() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let second = [
+        "session",
+        "start",
+        "--repo",
+        "demo",
+        "--agent",
+        "codex",
+        "--paths",
+        "src/**",
+        "--workspace",
+        "ws2",
+    ];
+    e.run(&e.root, &second);
+    let ws2 = e.root.join("ws2");
+    let mut mcp = Mcp::start(&e, &ws);
+    let items = json!([
+        {"symbol": "src/lib.rs#charge", "kind": "edit"},
+        {"symbol": "src/lib.rs#refund", "kind": "edit"},
+    ]);
+    let (err, got) = mcp.tool("lease_acquire", json!({"items": items, "intent": "both"}));
+    assert!(!err, "{got}");
+    let set = got["set"].as_str().unwrap().to_string();
+    let args = [
+        "lease",
+        "interest",
+        "-i",
+        "fix",
+        "src/lib.rs#charge",
+        "--json",
+    ];
+    let waits = parse(&e.run(&ws2, &args));
+    assert_eq!(waits["decision"]["outcome"], "allow", "{waits}");
+
+    let (err, part) = mcp.tool(
+        "lease_release",
+        json!({"set": set, "items": [{"symbol": "src/lib.rs#refund", "kind": "edit"}]}),
+    );
+    assert!(!err, "{part}");
+    assert_eq!(part["decision"]["outcome"], "allow", "{part}");
+    assert_eq!(part["kept"][0]["symbol"], "src/lib.rs#charge");
 }

@@ -27,6 +27,12 @@ max_items = 64
 # queue. On integration the pinned items are released (true) or go back to
 # the TTL of their set (false).
 release_on_integrate = true
+# A session that has sent a heartbeat keeps its leases only while it goes
+# on: this long after the last one they are free. Sessions that never sent
+# one live by the TTL alone. Pinned items ignore this.
+heartbeat_timeout_ms = 300000
+# Past this long a set can not be renewed while another session wants it.
+max_hold_minutes = 120
 
 [changes]
 max_files = 200
@@ -168,6 +174,11 @@ pub struct Leases {
     /// Integration releases the items pinned to the change; otherwise they
     /// go back to the TTL of their set.
     pub release_on_integrate: bool,
+    /// How long after a session's last heartbeat its leases stay alive.
+    pub heartbeat_timeout_ms: i64,
+    /// How long a set can be held by renewing while another session wants
+    /// it.
+    pub max_hold_minutes: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -331,6 +342,8 @@ impl Default for Leases {
             max_ttl_minutes: 30,
             max_items: 64,
             release_on_integrate: true,
+            heartbeat_timeout_ms: 300_000,
+            max_hold_minutes: 120,
         }
     }
 }
@@ -496,6 +509,12 @@ impl PolicyBundle {
         ) {
             return Err(format!(
                 "{CONFIG_FILE}: integrity.on_unmediated must be restore or freeze"
+            ));
+        }
+        if config.leases.heartbeat_timeout_ms <= 0 || config.leases.max_hold_minutes <= 0 {
+            return Err(format!(
+                "{CONFIG_FILE}: leases.heartbeat_timeout_ms and leases.max_hold_minutes \
+                 must be positive"
             ));
         }
         if !matches!(config.observation.network.as_str(), "taint" | "deny") {

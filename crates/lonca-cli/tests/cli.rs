@@ -1,9 +1,11 @@
 //! The `lonca` binary against an in-process daemon on a real socket.
 
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio};
 
 use lonca_daemon::{Home, Service, Settings};
+use serde_json::json;
 
 struct Env {
     _dir: tempfile::TempDir,
@@ -104,6 +106,95 @@ fn start_daemon(root: &Path, home: &Path, sock: &Path) {
 
 fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).into_owned()
+}
+
+/// `lonca mcp` over stdio: one JSON-RPC line each way.
+struct Mcp {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    next_id: u64,
+}
+
+impl Mcp {
+    fn start(e: &Env, ws: &Path) -> Mcp {
+        let mut child = e
+            .cmd(ws, &["mcp"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut m = Mcp {
+            child,
+            stdin,
+            stdout,
+            next_id: 0,
+        };
+        m.request("initialize", json!({"protocolVersion": "2025-06-18"}));
+        m
+    }
+
+    fn request(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        self.next_id += 1;
+        let req = json!({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params});
+        writeln!(self.stdin, "{req}").unwrap();
+        let mut line = String::new();
+        self.stdout.read_line(&mut line).unwrap();
+        let resp: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(resp["id"], self.next_id, "{resp}");
+        resp["result"].clone()
+    }
+
+    /// Calls a tool; the first value says whether it is an MCP error.
+    fn tool(&mut self, name: &str, args: serde_json::Value) -> (bool, serde_json::Value) {
+        let r = self.request("tools/call", json!({"name": name, "arguments": args}));
+        let body = r["content"][0]["text"].as_str().unwrap();
+        let value = serde_json::from_str(body).unwrap_or_else(|_| json!(body));
+        (r["isError"] == true, value)
+    }
+}
+
+impl Drop for Mcp {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A repository with one seeded file and an agent session in `ws`.
+fn agent_workspace(e: &Env) -> PathBuf {
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo"]);
+    let hws = r.join("hws");
+    std::fs::create_dir_all(hws.join("src")).unwrap();
+    std::fs::write(
+        hws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "seed"]).contains("allow"));
+    e.settle();
+    e.run(
+        r,
+        &[
+            "session",
+            "start",
+            "--repo",
+            "demo",
+            "--agent",
+            "claude",
+            "--paths",
+            "src/**",
+            "--workspace",
+            "ws",
+        ],
+    );
+    r.join("ws")
 }
 
 #[test]
@@ -1685,4 +1776,64 @@ fn a_git_checkout_fetches_and_proposes_through_the_daemon() {
         "{}",
         text(&out.stderr)
     );
+}
+
+/// Over the MCP stdio loop: the worker renews a set by a tool call, and
+/// the server reports the session alive with no call at all.
+#[test]
+fn an_mcp_worker_renews_its_lease_and_the_server_beats_for_it() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let mut mcp = Mcp::start(&e, &ws);
+
+    let tools = mcp.request("tools/list", json!({}));
+    let names: Vec<&str> = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"lease_renew"), "{names:?}");
+
+    let (err, got) = mcp.tool(
+        "lease_acquire",
+        json!({"symbols": ["src/lib.rs#charge"], "intent": "work", "ttl_minutes": 5}),
+    );
+    assert!(!err, "{got}");
+    assert_eq!(got["decision"]["outcome"], "allow", "{got}");
+    let set = got["set"].as_str().unwrap().to_string();
+    let expires = || status_json(&e)["leases"][0]["expires_ms"].as_i64().unwrap();
+    let before = expires();
+
+    let (err, renewed) = mcp.tool("lease_renew", json!({"set": set, "ttl_minutes": 20}));
+    assert!(!err, "{renewed}");
+    assert_eq!(renewed["decision"]["outcome"], "allow", "{renewed}");
+    assert!(expires() >= before + 15 * 60_000);
+
+    let (err, kept) = mcp.tool("lease_renew", json!({"set": set}));
+    assert!(!err, "{kept}");
+    let default = expires();
+    assert!(default < before + 15 * 60_000, "ten minutes from now");
+
+    let (_, denied) = mcp.tool("lease_renew", json!({"set": set, "ttl_minutes": 999}));
+    assert_eq!(denied["decision"]["outcome"], "deny", "{denied}");
+    assert_eq!(denied["decision"]["reasons"][0], "lease_ttl");
+    assert_eq!(expires(), default);
+
+    let mut seen = serde_json::Value::Null;
+    for _ in 0..100 {
+        seen = status_json(&e)["sessions"][0]["last_seen_ms"].clone();
+        if !seen.is_null() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(seen.is_i64(), "no heartbeat from lonca mcp");
+
+    let out = e.run(&ws, &["session", "heartbeat", "--json"]);
+    let beat: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(beat["timeout_ms"], 300_000, "{beat}");
+    assert_eq!(beat["leases"][0]["set"], set.as_str());
+    assert!(beat["seq"].is_u64());
+    assert!(e.run(&ws, &["session", "heartbeat"]).contains("allow"));
 }

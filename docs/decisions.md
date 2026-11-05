@@ -87,6 +87,9 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   them: a proposal pins its leases, and every entry prunes dead lease
   sets (see "Pinned leases"). Entries of older formats do neither, so an
   old log replays to the state and the decisions it always had.
+- **Version 8** again adds no field: a heartbeat keeps a session's leases
+  alive and its absence ends them, a denied acquire registers interest,
+  and a renewal has a hold limit (see "Lease liveness").
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -377,6 +380,7 @@ A01/A07, zero trust: every request authenticated).
 | `negotiate` | agent | |
 | `cap.attenuate` | agent | |
 | `session.end` | agent | |
+| `session.heartbeat` | agent | |
 | `hook.event` | agent | |
 | `hook.bind` | agent | |
 | `queue.run` | any human | drains every merge queue now |
@@ -583,6 +587,52 @@ ran out.
 - **A worker's view.** After its change integrates a worker leases again
   before editing the same symbols; a `lease_release` on a set that was
   released this way answers `unknown_lease_set`.
+
+## Lease liveness
+
+The design says a lease is freed when its holder drops, but nothing
+measured that: an agent that crashed kept its symbols for the TTL, MCP
+agents could not renew at all, and renewing had no limit (#39).
+
+- **Heartbeats are log entries.** `session.heartbeat` writes an `observe`
+  entry with `ObsKind::Heartbeat`; `decide()` adds
+  `heartbeat_timeout=<ms>` to its decision, and `State::apply` records
+  when and for how long. The policy value is in the decision because the
+  fold has no policy; the auditor recomputes it, like `approvals=N`. Both
+  times are entry times, so liveness replays.
+- **A session that started beating must go on.** Its leases are alive
+  only while `now - seen <= timeout`. A session with no heartbeat yet
+  lives by the TTL as before, so a hook-only worker needs nothing new.
+- **A lost lease stays lost.** The prune at the start of every entry
+  removes a lost session's sets before the entry's own effect, so a late
+  heartbeat records the session and revives nothing. Otherwise a session
+  that came back would hold a symbol someone else took in the meantime.
+- **`lonca mcp` beats and renews.** A thread on its own connection beats
+  every `timeout / 3` and renews sets that would not outlast two more
+  beats. The process ends when the harness closes stdin, which is what
+  makes a crashed agent's leases free: the signal is the harness, not
+  the model, so a long turn holds its leases and a dead one does not.
+  The `lease_renew` tool is there for a longer TTL.
+  `lonca session heartbeat` serves a runner that does not use `lonca mcp`.
+- **Pins win.** A pinned item ignores the timeout: the work is in the
+  queue, whoever proposed it.
+- **Hold limit.** `leases.max_hold_minutes` (default 120) limits what
+  renewing can do, not what a lease is: past it a renewal is denied with
+  `lease_hold_limit`, but only while another session wants the set, and
+  otherwise it is allowed. Time is counted from `acquired_ms`; a new set
+  over symbols the session already holds keeps the old time, so a fresh
+  id does not start the hold again.
+- **Interest**, until `lease.interest` exists (#42), is a denied
+  `lease.acquire`: every reason `lease_held:`, not a scope or item error,
+  so a session can not hold back work it may not do. It counts for
+  `leases.max_ttl_minutes` after the denial and only while the session
+  that asked is active: a session still waiting asks again.
+- **Why a format version.** Heartbeats, interest and the limit change
+  later decisions; they apply to entries of format 8 and later. Interest
+  recorded in the state stays a derived value and is never an input from
+  a client.
+- **Limits are positive**: `parse` refuses `heartbeat_timeout_ms` or
+  `max_hold_minutes` at or below zero.
 
 ## Reject, and a pending proposal whose session ends
 

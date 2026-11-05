@@ -1278,3 +1278,62 @@ fn a_checkout_fetches_trunk_as_a_bundle_and_learns_how_far_behind_it_is() {
         .unwrap_err();
     assert_eq!(err.0, "redacted");
 }
+
+/// A heartbeat is logged, recorded and answered with what a client needs:
+/// the timeout, the longest TTL, its own leases on the daemon's clock.
+#[test]
+fn a_heartbeat_keeps_leases_and_stopping_frees_them() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let a = e.session("a", &["src/**"]);
+    let b = e.session("b", &["src/**"]);
+    let set = e.lease(&a, "src/lib.rs#charge")["set"].clone();
+    e.lease(&b, "src/lib.rs#refund");
+    let session = |e: &mut Env, id: &str| {
+        let s = e.ok("status", Some("demo"), None, json!({}));
+        let all = s["sessions"].as_array().unwrap();
+        all.iter().find(|x| x["id"] == id).unwrap().clone()
+    };
+    assert_eq!(session(&mut e, "a")["last_seen_ms"], Value::Null);
+
+    let before = e.ok("status", Some("demo"), None, json!({}))["next_seq"].clone();
+    let r = e.ok("session.heartbeat", None, Some(&a), json!({}));
+    assert_eq!(r["seq"], before);
+    assert_eq!(r["decision"]["outcome"], "allow");
+    assert_eq!(r["decision"]["reasons"][0], "heartbeat_timeout=300000");
+    assert_eq!(r["timeout_ms"], 300_000);
+    assert_eq!(r["max_ttl_ms"], 1_800_000);
+    let now = r["now_ms"].as_i64().unwrap();
+    assert!(now > 0);
+    assert_eq!(
+        r["leases"].as_array().unwrap().len(),
+        1,
+        "only its own: {r}"
+    );
+    assert_eq!(r["leases"][0]["set"], set);
+    let left = r["leases"][0]["expires_ms"].as_i64().unwrap() - now;
+    assert!(left > 590_000 && left < 600_000, "{left}");
+    assert_eq!(session(&mut e, "a")["last_seen_ms"], now);
+
+    e.advance(300_001);
+    let free = e.lease(&b, "src/lib.rs#charge");
+    assert_eq!(free["decision"]["outcome"], "allow", "{free}");
+    let r = e.ok("session.heartbeat", None, Some(&a), json!({}));
+    assert_eq!(r["leases"], json!([]));
+
+    // A human session has no heartbeat, and no token has none.
+    assert_eq!(
+        e.call("session.heartbeat", Some("demo"), None, json!({}))
+            .unwrap_err()
+            .0,
+        "forbidden"
+    );
+    assert_eq!(
+        e.anon("session.heartbeat", Some("demo"), None, json!({}))
+            .unwrap_err()
+            .0,
+        "unauthenticated"
+    );
+}

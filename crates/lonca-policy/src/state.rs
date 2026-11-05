@@ -8,14 +8,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::ChangeId;
 use lonca_core::GitId;
-use lonca_core::oplog::{FORMAT_LEASE_PINS, GENESIS_PREV, SignedOp};
+use lonca_core::oplog::{FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS, GENESIS_PREV, SignedOp};
 use lonca_core::ops::{
     Actor, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind, ObservationLevel, Op,
     Outcome, Scope,
 };
 use serde::Serialize;
 
+use crate::decide::leases_conflict;
 use crate::symbols;
+
+/// When a session last reported itself alive, and for how long that holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Heartbeat {
+    pub seen_ms: i64,
+    pub timeout_ms: i64,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Session {
@@ -33,6 +41,8 @@ pub struct Session {
     pub ended: Option<String>,
     pub writes: BTreeSet<String>,
     pub shell_seen: bool,
+    /// `None` until the first heartbeat: such a session lives by its TTL.
+    pub heartbeat: Option<Heartbeat>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -46,6 +56,10 @@ pub struct LeaseSet {
     /// can not release them, and they conflict for every other session
     /// until the change leaves the queue. Always a subset of `items`.
     pub pins: BTreeMap<ChangeId, Vec<LeaseItem>>,
+    /// Since when the session has held these symbols, without a gap.
+    pub acquired_ms: i64,
+    /// Sessions denied by this set, with the time of their last try.
+    pub interest: BTreeMap<String, i64>,
 }
 
 impl LeaseSet {
@@ -181,6 +195,8 @@ pub const RELEASED: &str = "released";
 /// On an integration's decision: `leases.release_on_integrate` is off, the
 /// items pinned to the change go back to the TTL of their set.
 pub const LEASES_KEPT: &str = "leases_kept";
+/// On a heartbeat's decision, followed by `leases.heartbeat_timeout_ms`.
+pub const HEARTBEAT_TIMEOUT: &str = "heartbeat_timeout=";
 
 impl State {
     pub fn new() -> Self {
@@ -225,8 +241,24 @@ impl State {
         false
     }
 
+    /// The session has reported heartbeats and stopped: it dropped out.
+    pub fn session_lost(&self, id: &str, now_ms: i64) -> bool {
+        let beat = self.sessions.get(id).and_then(|s| s.heartbeat);
+        beat.is_some_and(|h| now_ms - h.seen_ms > h.timeout_ms)
+    }
+
     fn lease_alive(&self, l: &LeaseSet, now_ms: i64) -> bool {
-        l.expires_ms > now_ms && self.session_active(&l.session, now_ms)
+        l.expires_ms > now_ms
+            && self.session_active(&l.session, now_ms)
+            && !self.session_lost(&l.session, now_ms)
+    }
+
+    /// Another active session asked for what `l` holds in the last
+    /// `window_ms`.
+    pub fn contended(&self, l: &LeaseSet, now_ms: i64, window_ms: i64) -> bool {
+        l.interest
+            .iter()
+            .any(|(s, at)| now_ms - at <= window_ms && self.session_active(s, now_ms))
     }
 
     pub fn active_leases(&self, now_ms: i64) -> impl Iterator<Item = ActiveLease<'_>> {
@@ -334,6 +366,35 @@ impl State {
                     self.queue.retain(|q| q != change);
                     self.unpin(*change, false);
                 }
+                // Refused for holding nothing but what others hold: this
+                // session is waiting for them.
+                if let Op::LeaseAcquire { items, .. } = &e.op
+                    && let Some(session) = e.actor.session()
+                    && e.format >= FORMAT_LEASE_LIVENESS
+                    && e.decision
+                        .reasons
+                        .iter()
+                        .all(|r| r.starts_with("lease_held:"))
+                {
+                    self.register_interest(session, items, e.time_ms);
+                }
+            }
+        }
+    }
+
+    fn register_interest(&mut self, session: &str, items: &[LeaseItem], now_ms: i64) {
+        let conflicts = |held: &ActiveLease| {
+            let mine = || items.iter();
+            held.items
+                .iter()
+                .any(|b| mine().any(|a| leases_conflict(a, b)))
+        };
+        let sets = self.active_leases(now_ms);
+        let sets = sets.filter(|h| h.lease.session != session && conflicts(h));
+        let sets: Vec<String> = sets.map(|h| h.lease.set.clone()).collect();
+        for set in sets {
+            if let Some(l) = self.leases.get_mut(&set) {
+                l.interest.insert(session.to_string(), now_ms);
             }
         }
     }
@@ -663,6 +724,7 @@ impl State {
                         ended: None,
                         writes: BTreeSet::new(),
                         shell_seen: false,
+                        heartbeat: None,
                     },
                 );
             }
@@ -699,6 +761,7 @@ impl State {
                             ended: None,
                             writes: BTreeSet::new(),
                             shell_seen: false,
+                            heartbeat: None,
                         },
                     );
                 }
@@ -713,6 +776,20 @@ impl State {
                 ttl_ms,
             } => {
                 if let Some(session) = actor.session() {
+                    // A new set over what the session holds continues the
+                    // hold: a fresh id does not reset the limit.
+                    let overlapping = self.active_leases(time_ms).filter(|h| {
+                        h.lease.session == session
+                            && h.items.iter().any(|b| {
+                                items
+                                    .iter()
+                                    .any(|a| symbols::overlaps(&a.symbol, &b.symbol))
+                            })
+                    });
+                    let acquired_ms = overlapping
+                        .map(|h| h.lease.acquired_ms)
+                        .min()
+                        .unwrap_or(time_ms);
                     self.leases.insert(
                         set.clone(),
                         LeaseSet {
@@ -722,6 +799,8 @@ impl State {
                             intent: intent.clone(),
                             expires_ms: time_ms + ttl_ms,
                             pins: BTreeMap::new(),
+                            acquired_ms,
+                            interest: BTreeMap::new(),
                         },
                     );
                 }
@@ -839,7 +918,17 @@ impl State {
                 }
             }
             Op::Observe { session, events } => {
+                let timeout = reasons
+                    .iter()
+                    .find_map(|r| r.strip_prefix(HEARTBEAT_TIMEOUT))
+                    .and_then(|n| n.parse().ok());
                 if let Some(s) = self.sessions.get_mut(session) {
+                    if let Some(timeout_ms) = timeout {
+                        s.heartbeat = Some(Heartbeat {
+                            seen_ms: time_ms,
+                            timeout_ms,
+                        });
+                    }
                     for ev in events {
                         match &ev.kind {
                             ObsKind::Write { path } => {

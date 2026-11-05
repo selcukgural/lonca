@@ -492,6 +492,12 @@ enum SessionCmd {
         #[arg(long = "as")]
         human: Option<String>,
     },
+    /// Report the session of the current agent workspace alive. `lonca mcp`
+    /// does this by itself; for agents that do not run it.
+    Heartbeat {
+        #[arg(long)]
+        json: bool,
+    },
     /// End the session of the current agent workspace.
     End {
         #[arg(long)]
@@ -1099,6 +1105,19 @@ fn run(cmd: Cmd) -> Result<()> {
             let mut c = human_client(&repo, &human)?;
             submit(&mut c, &human, &repo, Op::CapRevoke { session, reason })?;
             Ok(())
+        }
+        Cmd::Session(SessionCmd::Heartbeat { json: as_json }) => {
+            let (mut c, ws) = agent_client()?;
+            let r = call(&mut c, "session.heartbeat", json!({}))?;
+            if as_json {
+                ctx::print_json(&json!({
+                    "session": ws.meta.session, "seq": r["seq"], "timeout_ms": r["timeout_ms"],
+                    "leases": r["leases"],
+                }))?;
+            } else {
+                print_decision(&r);
+            }
+            ctx::denied(&r)
         }
         Cmd::Session(SessionCmd::End { json: as_json }) => {
             let (mut c, ws) = agent_client()?;

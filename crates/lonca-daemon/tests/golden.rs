@@ -74,7 +74,24 @@ fn golden_repo() -> Env {
     scratch_roots(&mut e);
     rejection(&mut e);
     pins(&mut e);
+    liveness(&mut e);
     e
+}
+
+/// From format 8: a session beats and stops, its lease goes at the
+/// timeout; a denied acquire is on record as interest.
+fn liveness(e: &mut Env) {
+    let a = e.session("s12", &["pins.md"]);
+    let b = e.session("s13", &["pins.md"]);
+    e.lease(&a, "pins.md#<file>");
+    let r = e.ok("session.heartbeat", None, Some(&a), json!({}));
+    assert_eq!(r["decision"]["reasons"][0], "heartbeat_timeout=300000");
+    assert_eq!(e.lease(&b, "pins.md#<file>")["decision"]["outcome"], "deny");
+    e.advance(300_001);
+    assert_eq!(
+        e.lease(&b, "pins.md#<file>")["decision"]["outcome"],
+        "allow"
+    );
 }
 
 /// From format 7: a proposal pins its lease past the TTL, the human
@@ -554,6 +571,22 @@ fn golden_v7_log_still_verifies_replays_and_audits() {
     assert!(lease.pins.is_empty());
     assert!(s.queue.is_empty());
     assert!(ops.iter().any(|o| o.entry.format == 7));
+}
+
+#[test]
+fn golden_v8_log_still_verifies_replays_and_audits() {
+    check_golden(
+        "oplog-v8.bundle",
+        "79046d371007a8b39e9434318f28ea1bfe3d7d1782a7ab7b95bac1f57d420083",
+        8,
+    );
+    let (_dir, store) = load("oplog-v8.bundle");
+    let s = lonca_policy::state::State::replay(&OpLog::new(&store).read_all().unwrap());
+    let beat = s.sessions["s12"].heartbeat.expect("heartbeat recorded");
+    assert_eq!(beat.timeout_ms, 300_000);
+    assert!(s.sessions["s13"].heartbeat.is_none());
+    let holders: Vec<&str> = s.leases.values().map(|l| l.session.as_str()).collect();
+    assert_eq!(holders, ["s11", "s13"]);
 }
 
 #[test]

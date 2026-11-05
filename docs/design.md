@@ -283,7 +283,7 @@ Agent'lar dosya değil **sembol** (fonksiyon, sınıf, metod) düzeyinde kiralam
 | `rename` / `delete` | Sembol ve bilinen referansları | Geniş kapsam; politika onayı gerektirebilir |
 
 - **Edinme beklemesiz ve hepsi-ya-hiçtir.** Talep edilen kümenin bir parçası bile başkasında tutuluyorsa hiçbiri verilmez. Yanıtta sahip, niyeti ve bitiş zamanı döner. Bekleyerek kilit tutma olmadığı için deadlock oluşmaz. Agent bekleyebilir, müzakere açabilir veya başka işe geçebilir.
-- **Süre:** Kiralama süreli ve yenilenebilirdir. Sahibi düşerse (heartbeat kesilirse) serbest kalır.
+- **Süre:** Kiralama süreli ve yenilenebilirdir. Sahibi düşerse (heartbeat kesilirse) serbest kalır: `leases.heartbeat_timeout_ms` geçince kiralama biter ve geç gelen heartbeat onu geri getirmez. Hiç heartbeat göndermemiş oturumlar yalnızca süreyle yaşar. Yenileme `leases.max_hold_minutes` sınırını, başka bir oturum beklerken geçemez (`lease_hold_limit`).
 - **Değişikliğe bağlama (pin):** Bir öneri izin aldığında veya insana yükseltildiğinde, gerçeklerinin ihtiyaç duyduğu kalemler `change-id`'ye bağlanır. Bağlı kalem süresi dolsa da serbest kalmaz, sahibi de bırakamaz ve herkes için çakışır. Değişiklik kuyruktan çıkınca (entegre, çakışma, red, geri çekme, iptal) bağ kalkar; entegrasyonda kalemler varsayılan olarak bırakılır (`leases.release_on_integrate`). Kümenin geri kalanı kendi süresiyle devam eder.
 - **Görünürlük:** Herkes tüm kiralamaları ve niyetleri görebilir ("agent:Y bu hatayı çözüyor").
 - **İmza değişikliği:** Bir sembolün dışa açık imzası değişirse (parametreler, dönüş tipi, görünürlük; tree-sitter ile tespit edilir) değişiklik genişletilmiş doğrulamaya düşer. Bilinen çağıranların lease sahiplerine bildirim gider ve merge queue'da tam test koşulur. Kesin çağıran analizi (LSP veya derleyici) sonraki fazdadır.
@@ -582,7 +582,7 @@ Faz 0'da kapananlar (gerekçeleri `docs/decisions.md`'de): temel **gitoxide + ke
 | §5.8 Merge Queue | Tamam (seri) | Kilit dışında merge + doğrulama; toplu (spekülatif) doğrulama yapılmadı. 20 agent / tek dosya testi 1 saniyenin altında geçiyor. |
 | §5.9 Verification | Tamam / kısmi | Sözdizimi, build, test, beyan–diff, test silme/atlama eskalasyonu. Değişen testlerde eski test paketini yeni koda karşı koşmak yapılmadı. |
 | §5.10 Köken / taint | Tamam | Hook gözlemleri, `unobserved` = kirli, gözlem–etki tutarlılığı, müzakerede yayılma, ağ proxy'si (lsof ile atıf). Kirliliği içerik düzeyinde taşıma (okunan kirli içerik) kısmen: değişikliklerin köken etiketi var, okuyanı kirletme yalnızca "güvenilmeyen yollar" üzerinden. |
-| §5.11 MCP + CLI | Tamam | `lonca mcp` (9 araç), `lonca hook`, kapsamlı CLI. |
+| §5.11 MCP + CLI | Tamam | `lonca mcp` (10 araç), `lonca hook`, kapsamlı CLI. |
 | §5.12 Müzakere | Tamam | Yapısal mesajlar, tur sınırı, `yield` ile kiralama devri. |
 | §5.13 Auditor | Tamam | Karar, Facts ve merge yeniden hesaplama; yayımlanmış log karşılaştırması; dondurma bayrağı. Karar kodunu paylaşıyor (açık soru duruyor). |
 | §5.14 AI Danışman | Tamam | `lonca advise`; günlük bütçe; diff kırpılmıyor, büyükse reddediliyor. Yalnızca sahte API'ye karşı test edildi. |

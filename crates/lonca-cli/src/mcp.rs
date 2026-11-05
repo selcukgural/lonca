@@ -4,6 +4,7 @@
 //! workspace's session token.
 
 use std::io::{BufRead, Write};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use lonca_core::ops::{Claim, LeaseItem, LeaseKind, NegotiationMsg, TestDelta};
@@ -21,6 +22,7 @@ fn tools() -> Value {
         {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method).", "inputSchema": s(json!({"path": {"type": "string", "description": "file path relative to the workspace root"}}), &["path"])},
         {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). A denial lists who holds the symbol and why.", "inputSchema": s(json!({"symbols": list, "kind": {"type": "string", "enum": ["edit", "insert", "rename"]}, "intent": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["symbols", "intent"])},
         {"name": "lease_release", "description": "Release a lease set you hold. Items pinned to a change in flight stay until the change leaves the queue; integration releases them without this call.", "inputSchema": s(json!({"set": {"type": "string"}}), &["set"])},
+        {"name": "lease_renew", "description": "Extend a lease set you hold, for ttl_minutes from now. While this server runs it renews your sets for you, so call this only to ask for a longer TTL. Past the hold limit a renewal is denied (lease_hold_limit) while another session wants the symbols.", "inputSchema": s(json!({"set": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["set"])},
         {"name": "preview", "description": "Facts of your local changes as Lonca computes them: symbols edited/added/deleted, signature changes, test changes, files. Use this to write an accurate claim.", "inputSchema": s(json!({}), &[])},
         {"name": "propose", "description": "Submit your local changes. The claim must list exactly the symbols you changed (compare with preview); a mismatch is refused. Integration happens in the merge queue after build/test verification.", "inputSchema": s(json!({
             "intent": {"type": "string"}, "edits": list, "adds": list, "deletes": list, "deleted_files": list, "signature_changes": list,
@@ -30,6 +32,65 @@ fn tools() -> Value {
         {"name": "sync", "description": "Bring trunk into the workspace, keeping and merging your local edits.", "inputSchema": s(json!({}), &[])},
         {"name": "negotiate", "description": "Message another session about leases: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Bounded number of rounds.", "inputSchema": s(json!({"thread": {"type": "string"}, "to_session": {"type": "string"}, "message": {"type": "object", "description": "e.g. {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"} or {\"type\":\"yield\",\"set\":\"lse_...\"}"}}), &["thread", "to_session", "message"])},
     ])
+}
+
+const DEFAULT_TTL_MINUTES: i64 = 10;
+/// How long the heartbeat waits to try again after a failed call.
+const RETRY_BEAT_MS: i64 = 30_000;
+
+/// A tool's `ttl_minutes`, or the default.
+fn ttl_ms(args: &Value) -> i64 {
+    args["ttl_minutes"].as_i64().unwrap_or(DEFAULT_TTL_MINUTES) * 60_000
+}
+
+/// Three chances before the timeout a heartbeat's answer names.
+fn beat_interval_ms(beat: &Value) -> i64 {
+    beat["timeout_ms"]
+        .as_i64()
+        .map_or(RETRY_BEAT_MS, |t| (t / 3).max(1_000))
+}
+
+/// The TTL an automatic renewal asks for: the default, within the policy.
+fn renewal_ttl_ms(beat: &Value) -> i64 {
+    let max = beat["max_ttl_ms"].as_i64().unwrap_or(i64::MAX);
+    ttl_ms(&Value::Null).min(max)
+}
+
+/// The sets of a heartbeat's answer that would run out before the next
+/// two beats. A set that has run out is left alone: only a pin holds it.
+fn due_for_renewal(beat: &Value, interval_ms: i64) -> Vec<String> {
+    let now = beat["now_ms"].as_i64().unwrap_or(0);
+    let left = |l: &Value| l["expires_ms"].as_i64().unwrap_or(0) - now;
+    beat["leases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|l| left(l) > 0 && left(l) <= 2 * interval_ms)
+        .filter_map(|l| l["set"].as_str().map(String::from))
+        .collect()
+}
+
+/// One heartbeat; renews what is due. Returns how long to wait.
+fn beat(c: &mut Client) -> Result<i64> {
+    let r = ctx::call(c, "session.heartbeat", json!({}))?;
+    let interval = beat_interval_ms(&r);
+    let ttl = renewal_ttl_ms(&r);
+    for set in due_for_renewal(&r, interval) {
+        // Denied means the hold limit, or the set just ended: the agent
+        // finds out when it next uses the lease.
+        let _ = ctx::call(c, "lease.renew", json!({"set": set, "ttl_ms": ttl}));
+    }
+    Ok(interval)
+}
+
+/// The heartbeat of this server, on its own connection. It stops with the
+/// process, which ends when the harness closes stdin: that is what makes
+/// a crashed agent's leases free.
+fn keep_alive(mut c: Client) {
+    loop {
+        let wait = beat(&mut c).unwrap_or(RETRY_BEAT_MS);
+        std::thread::sleep(Duration::from_millis(wait as u64));
+    }
 }
 
 struct Server {
@@ -100,7 +161,7 @@ impl Server {
                     .into_iter()
                     .map(|symbol| LeaseItem { symbol, kind })
                     .collect();
-                let ttl = args["ttl_minutes"].as_i64().unwrap_or(10) * 60_000;
+                let ttl = ttl_ms(args);
                 ctx::call(
                     c,
                     "lease.acquire",
@@ -108,6 +169,10 @@ impl Server {
                 )
             }
             "lease_release" => ctx::call(c, "lease.release", json!({"set": args["set"]})),
+            "lease_renew" => {
+                let ttl = ttl_ms(args);
+                ctx::call(c, "lease.renew", json!({"set": args["set"], "ttl_ms": ttl}))
+            }
             "preview" => {
                 let changes = self.ws.changes()?;
                 if changes.is_empty() {
@@ -174,6 +239,9 @@ pub fn run() -> Result<()> {
     let ws = Workspace::current()?;
     let mut client = ctx::connect()?;
     client.token = Some(ws.token()?);
+    let mut heart = ctx::connect()?;
+    heart.token = client.token.clone();
+    std::thread::spawn(move || keep_alive(heart));
     let mut server = Server { ws, client };
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -224,7 +292,43 @@ pub fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::tools;
+    use super::{beat_interval_ms, due_for_renewal, renewal_ttl_ms, tools, ttl_ms};
+    use serde_json::json;
+
+    #[test]
+    fn the_heartbeat_beats_three_times_per_timeout_and_at_most_once_a_second() {
+        let interval = |timeout_ms: i64| beat_interval_ms(&json!({"timeout_ms": timeout_ms}));
+        assert_eq!(interval(300_000), 100_000);
+        assert_eq!(interval(3_000), 1_000);
+        assert_eq!(interval(2_999), 1_000);
+        assert_eq!(interval(1), 1_000);
+        assert_eq!(beat_interval_ms(&json!({})), 30_000, "retry");
+    }
+
+    #[test]
+    fn a_ttl_is_given_in_minutes_and_defaults_to_ten() {
+        assert_eq!(ttl_ms(&json!({"ttl_minutes": 3})), 180_000);
+        assert_eq!(ttl_ms(&json!({})), 600_000);
+    }
+
+    #[test]
+    fn an_automatic_renewal_stays_within_the_policy() {
+        assert_eq!(renewal_ttl_ms(&json!({"max_ttl_ms": 1_800_000})), 600_000);
+        assert_eq!(renewal_ttl_ms(&json!({"max_ttl_ms": 300_000})), 300_000);
+        assert_eq!(renewal_ttl_ms(&json!({})), 600_000);
+    }
+
+    #[test]
+    fn sets_are_renewed_when_two_beats_would_outlast_them() {
+        let beat = json!({"now_ms": 1000, "leases": [
+            {"set": "over", "expires_ms": 1000},
+            {"set": "next", "expires_ms": 1001},
+            {"set": "edge", "expires_ms": 3000},
+            {"set": "later", "expires_ms": 3001},
+        ]});
+        assert_eq!(due_for_renewal(&beat, 1000), ["next", "edge"]);
+        assert!(due_for_renewal(&json!({}), 1000).is_empty());
+    }
 
     /// The tool list is what a worker's harness sees; every tool the
     /// server dispatches is in it, and change_status tells a worker what
@@ -243,6 +347,7 @@ mod tests {
             "symbols",
             "lease_acquire",
             "lease_release",
+            "lease_renew",
             "preview",
             "propose",
             "change_status",

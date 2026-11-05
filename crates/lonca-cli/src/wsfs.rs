@@ -27,6 +27,22 @@ pub const SECRET: u32 = 0o600;
 /// can claim any size.
 const MAX_FILE: u64 = lonca_daemon::protocol::MAX_LINE as u64;
 
+const ROOT: OFlags = OFlags::RDONLY
+    .union(OFlags::DIRECTORY)
+    .union(OFlags::CLOEXEC);
+const DIR: OFlags = ROOT.union(OFlags::NOFOLLOW);
+/// NONBLOCK: a FIFO must not hang the reader.
+const READ: OFlags = OFlags::RDONLY
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::NONBLOCK)
+    .union(OFlags::CLOEXEC);
+/// EXCL: a symlink at the name is refused, not followed.
+const CREATE: OFlags = OFlags::WRONLY
+    .union(OFlags::CREATE)
+    .union(OFlags::EXCL)
+    .union(OFlags::CLOEXEC);
+const EXEC: Mode = Mode::XUSR.union(Mode::XGRP).union(Mode::XOTH);
+
 /// A regular file of the workspace.
 pub struct Local {
     pub bytes: Vec<u8>,
@@ -60,17 +76,15 @@ fn refused(dir: &OwnedFd, name: &str, rel: &str, e: Errno) -> anyhow::Error {
 /// The directory holding `rel`, reached with no symlink on the way. Without
 /// `create`, `None` means there is no such directory.
 fn parent(root: &Path, rel: &str, dirs: &[&str], create: bool) -> Result<Option<OwnedFd>> {
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
     // The root is the caller's own: it may well lie behind a symlink.
-    let mut dir = openat(CWD, root, flags, Mode::empty())
+    let mut dir = openat(CWD, root, ROOT, Mode::empty())
         .with_context(|| format!("opening {}", root.display()))?;
-    let flags = flags | OFlags::NOFOLLOW;
     for name in dirs {
-        let mut next = openat(&dir, *name, flags, Mode::empty());
+        let mut next = openat(&dir, *name, DIR, Mode::empty());
         if create && matches!(next, Err(Errno::NOENT)) {
             mkdirat(&dir, *name, Mode::from_raw_mode(0o755))
                 .map_err(|e| refused(&dir, name, rel, e))?;
-            next = openat(&dir, *name, flags, Mode::empty());
+            next = openat(&dir, *name, DIR, Mode::empty());
         }
         dir = match next {
             Ok(fd) => fd,
@@ -94,9 +108,7 @@ fn read_within(root: &Path, rel: &str, cap: u64) -> Result<Option<Local>> {
     let Some(dir) = parent(root, rel, &dirs, false)? else {
         return Ok(None);
     };
-    // NONBLOCK: a FIFO must not hang the reader.
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let fd = match openat(&dir, leaf, flags, Mode::empty()) {
+    let fd = match openat(&dir, leaf, READ, Mode::empty()) {
         Ok(fd) => fd,
         Err(Errno::NOENT) => return Ok(None),
         Err(e) => return Err(refused(&dir, leaf, rel, e)),
@@ -116,8 +128,7 @@ fn read_within(root: &Path, rel: &str, cap: u64) -> Result<Option<Local>> {
     }
     let mut bytes = Vec::new();
     File::from(fd).take(cap).read_to_end(&mut bytes)?;
-    let executable =
-        Mode::from_raw_mode(stat.st_mode).intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH);
+    let executable = Mode::from_raw_mode(stat.st_mode).intersects(EXEC);
     Ok(Some(Local { bytes, executable }))
 }
 
@@ -128,8 +139,7 @@ pub fn write(root: &Path, rel: &str, bytes: &[u8], mode: u32) -> Result<()> {
     let dir = parent(root, rel, &dirs, true)?.context("no directory after creating it")?;
     let mode = Mode::from_raw_mode(mode as _);
     let tmp = lonca_core::canonical::random_id(".lonca-tmp");
-    let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let fd = openat(&dir, &tmp, flags, mode).map_err(|e| refused(&dir, &tmp, rel, e))?;
+    let fd = openat(&dir, &tmp, CREATE, mode).map_err(|e| refused(&dir, &tmp, rel, e))?;
     let written = fchmod(&fd, mode)
         .map_err(std::io::Error::from)
         .and_then(|()| File::from(fd).write_all(bytes))

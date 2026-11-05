@@ -83,6 +83,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   bytes; an entry that names a root needs format 5.
 - **Version 6** adds `reject` (see "Reject, and a pending proposal whose
   session ends").
+- **Version 7** changes what entries mean for leases and adds nothing to
+  them: a proposal pins its leases, and every entry prunes dead lease
+  sets (see "Pinned leases"). Entries of older formats do neither, so an
+  old log replays to the state and the decisions it always had.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -534,6 +538,51 @@ log of every check starts with the sandbox and the names that were
 set, never a value. `docs/guide/verification.md` has the environment
 and a starter block per language. Not done: the hardened profile
 pinning the list (#54), resource limits (#59).
+
+## Pinned leases
+
+A lease was checked when a change was proposed and forgotten after that
+(#38). A proposal escalated to a human outlived its TTL, the next agent
+leased the same symbol and did work that was certain to conflict; and
+integration released nothing, so symbols stayed blocked until the TTL
+ran out.
+
+- **Pin.** A proposal that is allowed or escalated pins the items of its
+  session that its facts need (the same rule as `lease_missing`:
+  `symbols::lease_needs`) to the change. A pinned item does not expire,
+  survives the end or expiry of its session, can not be released or
+  yielded by its holder, and conflicts for every other session. Its
+  holder still holds it, so it can propose on top of its own change. The
+  rest of the set keeps its TTL. `status.leases[].pinned` shows pins.
+- **Unpin.** When the change leaves the queue: integrated, conflicted,
+  rejected, failed verification, withdrawn. A revocation (`cap.revoke`,
+  a human's key change) drops the sets, pins included, because it
+  withdraws the work; `session.end` and a daemon recovery leave the work
+  standing, so the pins stay with it. A change that conflicted or failed
+  verification, or was withdrawn, gives the item back to the TTL of its
+  set: the holder may sync and propose again if the set is alive, and
+  past the TTL the item is free. A human's `reject` also releases the
+  sets that cover what the change touched, as before.
+- **`leases.release_on_integrate`** (default `true`): integration
+  releases the pinned items. With `false` they go back to the TTL of
+  their set. `State::apply` has no policy, so the switch is carried in
+  the decision (`leases_kept`), like `approvals=N`, and the auditor
+  recomputes it. An item that another change of the session still needs
+  stays pinned to that one.
+- **Pruning.** Every entry from format 7 on first removes the lease sets
+  that are dead at its time: expired or with a dead session. Only the
+  pinned items of such a set stay, until their change leaves. Pruning
+  runs before the entry's own effects and uses only the entry's time.
+  One effect: a renew of an expired set is usually `unknown_lease_set`
+  rather than `lease_expired`, and a set id is free again once pruned.
+- **Why a format version.** No field changed, but pins and pruning
+  change later decisions: an old log in which a second session leased a
+  symbol under a change in flight must still replay as allowed. Pins and
+  pruning apply to entries of format 7 and later. A change proposed
+  before the upgrade stays unpinned.
+- **A worker's view.** After its change integrates a worker leases again
+  before editing the same symbols; a `lease_release` on a set that was
+  released this way answers `unknown_lease_set`.
 
 ## Reject, and a pending proposal whose session ends
 

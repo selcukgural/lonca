@@ -254,7 +254,9 @@ with a signed `daemon.rotate` through `human.submit`.
   "level": "unobserved" | "hooks" | "hooks_sandbox" | "isolated",
   "taint": string | null, "active": boolean, "expires_ms": time}`.
 - **lease**: `{"set", "session", "items": [lease item], "intent",
-  "expires_ms"}`; only active leases.
+  "expires_ms", "pinned": [{"change": change id, "items": [lease
+  item]}]}`; only what is held now. `items` are the set's live items:
+  past `expires_ms`, or once the session is gone, only the pinned ones.
 - **change**: `{"change": change id, "actor": label, "status": change
   status, "provenance": "human" | "clean" | "tainted" | "unobserved" |
   "reviewed", "commit": id, "base": id, "intent": string, "created_ms":
@@ -470,17 +472,21 @@ a recovery the log refused, `git`.
 
 *agent.* `{"set": string | null, "items": [lease item], "intent":
 string, "ttl_ms": integer}`. Logged, plus `"set"`: the lease set's id
-(generated when not given). Denied with `lease_held:<symbol>:<session>:<expires_ms>`
-when another session holds an item.
+(generated when not given). Denied with
+`lease_held:<symbol>:<session>:<intent>` when another session holds an
+item, a pinned one included. The intent is free text and comes last.
 
 ### `lease.release`
 
-*agent.* `{"set": string}`. Logged.
+*agent.* `{"set": string}`. Logged. Items pinned to a change in flight
+stay until the change leaves the queue; the rest of the set ends.
 
 ### `lease.renew`
 
 *agent.* `{"set": string, "ttl_ms": integer | null}` (default 600 000).
-Logged.
+Logged. An expired set is removed from the state by the next log entry,
+so a late renew is denied with `lease_expired` or `unknown_lease_set`;
+both mean: acquire again.
 
 ### `change.propose`
 
@@ -565,7 +571,7 @@ within two seconds of a proposal; the call is for tests and scripts.
 
 The `reasons` of a decision. The ones a runner acts on:
 
-- `lease_missing:<symbol>`, `lease_held:<symbol>:<session>:<expires_ms>`,
+- `lease_missing:<symbol>`, `lease_held:<symbol>:<session>:<intent>`,
   `lease_expired`, `invalid_lease_set`, `unknown_lease_set`,
   `not_own_lease`: acquire or renew the lease, then propose again.
 - `claim_mismatch:<field>` (`edits`, `adds`, `deletes`, `deleted_files`,

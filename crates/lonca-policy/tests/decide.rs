@@ -1947,7 +1947,15 @@ fn a_lost_daemon_key_is_recovered_with_a_human_signature() {
         h.chain.state.sessions["s1"].ended.as_deref(),
         Some("revoked: daemon key recovered")
     );
-    assert!(h.chain.state.leases.is_empty());
+    // Its lease is pinned to the queued change, nothing else is left.
+    assert_eq!(h.chain.state.leases.len(), 1);
+    assert!(
+        h.chain
+            .state
+            .leases
+            .values()
+            .all(|l| l.pins.contains_key(&c))
+    );
     assert_eq!(h.chain.state.queue, vec![c]);
     let trunk = h.chain.state.trunk.clone().unwrap();
     let d = h.daemon(
@@ -2202,5 +2210,485 @@ fn a_human_rejects_an_escalated_proposal_with_a_reason() {
     let d = h.human("ayse", approve(pending_seq(&h, c2)));
     assert!(d.reasons.contains(&"released".to_string()), "{d:?}");
     assert_eq!(h.chain.state.changes[&c2].status, ChangeStatus::Queued);
+    h.assert_replay();
+}
+
+// ------------------------------------------------------------- lease pins
+
+fn integrate(h: &mut H, change: ChangeId, merged: Option<GitId>, conflicts: &[&str]) -> Decision {
+    let trunk_before = h.chain.state.trunk.clone().unwrap();
+    h.daemon(
+        Op::ChangeIntegrate {
+            change,
+            trunk_before,
+            merged,
+            conflicts: conflicts.iter().map(|c| c.to_string()).collect(),
+        },
+        vec![pass(CheckKind::Build), pass(CheckKind::Tests)],
+    )
+}
+
+fn release(set: &str) -> Op {
+    Op::LeaseRelease { set: set.into() }
+}
+
+/// The symbols held at the harness's clock by `session`.
+fn held(h: &H, session: &str) -> Vec<String> {
+    let mut out: Vec<String> = h
+        .chain
+        .state
+        .active_leases(h.now + 1)
+        .filter(|l| l.lease.session == session)
+        .flat_map(|l| l.items.into_iter().map(|i| i.symbol.clone()))
+        .collect();
+    out.sort();
+    out
+}
+
+/// The scenario of the design: the lease outlives its TTL while the human
+/// thinks, nobody else can take the symbol, and integration frees it.
+#[test]
+fn a_pinned_lease_outlives_its_ttl_until_the_change_integrates() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+    assert_eq!(h.chain.state.leases["l1"].pins[&c].len(), 1);
+
+    h.now += 11 * MIN;
+    let d = h.lease("b", "l2", &[(f, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{f}:a:")), "{d:?}");
+    assert!(!h.chain.state.leases.contains_key("l2"));
+    // The holder can not free it by hand either.
+    assert!(h.agent("a", release("l1")).is_allow());
+    assert_eq!(held(&h, "a"), [f]);
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+
+    assert!(h.human("ayse", approve(pending_seq(&h, c))).is_allow());
+    assert_eq!(h.chain.state.changes[&c].status, ChangeStatus::Queued);
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    assert!(integrate(&mut h, c, Some(gid('e')), &[]).is_allow());
+    assert!(h.chain.state.leases.is_empty());
+    assert!(h.lease("b", "l2", &[(f, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+/// Only what the change needs is pinned; the rest of the set keeps its
+/// TTL, can be released, and can be renewed.
+#[test]
+fn integration_releases_the_pinned_items_and_the_rest_keeps_its_ttl() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.wrote("a", "src/a.rs");
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    assert!(
+        h.lease("a", "l1", &[(f, LeaseKind::Edit), (g, LeaseKind::Edit)])
+            .is_allow()
+    );
+    let c = ChangeId::random();
+    assert!(h.propose("a", c, edit(f)).is_allow());
+    let l = &h.chain.state.leases["l1"];
+    assert_eq!(l.pins[&c].len(), 1);
+    assert_eq!(l.pins[&c][0].symbol, f);
+    let expires = l.expires_ms;
+    assert!(integrate(&mut h, c, Some(gid('e')), &[]).is_allow());
+    let l = &h.chain.state.leases["l1"];
+    assert_eq!(l.items.len(), 1);
+    assert_eq!(l.items[0].symbol, g);
+    assert!(l.pins.is_empty());
+    assert_eq!(l.expires_ms, expires);
+    h.now += 11 * MIN;
+    assert_eq!(held(&h, "a"), Vec::<String>::new());
+    h.assert_replay();
+}
+
+/// An item two changes need stays until the last of them leaves.
+#[test]
+fn an_item_two_changes_need_stays_until_both_have_left() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.wrote("a", "src/a.rs");
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let (c1, c2) = (ChangeId::random(), ChangeId::random());
+    assert!(h.propose("a", c1, edit(f)).is_allow());
+    assert!(h.propose("a", c2, edit(f)).is_allow());
+    assert!(integrate(&mut h, c1, Some(gid('e')), &[]).is_allow());
+    assert_eq!(held(&h, "a"), [f]);
+    assert!(h.chain.state.leases["l1"].pins.contains_key(&c2));
+    assert!(integrate(&mut h, c2, Some(gid('f')), &[]).is_allow());
+    assert!(h.chain.state.leases.is_empty());
+    h.assert_replay();
+}
+
+/// `leases.release_on_integrate = false`: the item goes back to the TTL
+/// of its set, and the holder goes on working on it.
+#[test]
+fn release_on_integrate_can_be_turned_off() {
+    let config = DEFAULT_CONFIG.replace(
+        "release_on_integrate = true",
+        "release_on_integrate = false",
+    );
+    let mut h = H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap());
+    h.start_observed("a", &["src/**"]);
+    h.wrote("a", "src/a.rs");
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert!(h.propose("a", c, edit(f)).is_allow());
+    let d = integrate(&mut h, c, Some(gid('e')), &[]);
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(d.reasons, ["leases_kept"]);
+    assert!(h.chain.state.leases["l1"].pins.is_empty());
+    assert_eq!(held(&h, "a"), [f]);
+    h.now += 11 * MIN;
+    assert_eq!(held(&h, "a"), Vec::<String>::new());
+    h.assert_replay();
+}
+
+/// A conflicted change unpins: the item is the holder's again for what
+/// is left of the TTL, so it can sync and propose; then it runs out.
+#[test]
+fn a_conflicted_change_unpins_and_the_ttl_goes_on() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    h.wrote("a", "src/a.rs");
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert!(h.propose("a", c, edit(f)).is_allow());
+    assert!(denied_with(
+        &integrate(&mut h, c, None, &[f]),
+        "merge_conflict"
+    ));
+    assert!(matches!(
+        h.chain.state.changes[&c].status,
+        ChangeStatus::Conflicted { .. }
+    ));
+    let l = &h.chain.state.leases["l1"];
+    assert!(l.pins.is_empty());
+    assert_eq!(l.items.len(), 1, "unpinned, not released");
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    h.now += 11 * MIN;
+    assert!(h.lease("b", "l2", &[(f, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+
+    // Past the TTL of the set the pin was all that held the item.
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+    h.now += 11 * MIN;
+    assert!(h.human("ayse", approve(pending_seq(&h, c))).is_allow());
+    assert!(denied_with(
+        &integrate(&mut h, c, None, &[f]),
+        "merge_conflict"
+    ));
+    assert!(h.lease("b", "l2", &[(f, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+/// Withdrawing, rejecting and revoking all free what was pinned.
+#[test]
+fn every_way_out_of_the_queue_unpins() {
+    let f = "src/a.rs#f";
+    let setup = || {
+        let mut h = H::new();
+        h.start("a", &["src/**"]);
+        h.start_observed("b", &["src/**"]);
+        assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+        let c = ChangeId::random();
+        assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+        h.now += 11 * MIN;
+        (h, c)
+    };
+    let free = |h: &mut H| {
+        assert!(h.lease("b", "l2", &[(f, LeaseKind::Edit)]).is_allow());
+        assert!(!h.chain.state.leases.contains_key("l1"));
+        h.assert_replay();
+    };
+
+    let (mut h, c) = setup();
+    assert!(h.agent("a", Op::ChangeWithdraw { change: c }).is_allow());
+    assert!(h.chain.state.leases["l1"].pins.is_empty());
+    free(&mut h);
+
+    let (mut h, c) = setup();
+    assert!(h.human("ayse", reject(pending_seq(&h, c), "no")).is_allow());
+    free(&mut h);
+
+    let (mut h, c) = setup();
+    assert!(
+        h.human(
+            "ayse",
+            Op::CapRevoke {
+                session: "a".into(),
+                reason: "off".into()
+            }
+        )
+        .is_allow()
+    );
+    assert_eq!(h.chain.state.changes[&c].status, ChangeStatus::Withdrawn);
+    free(&mut h);
+}
+
+/// A session that ends or expires leaves its work waiting for the human;
+/// the pins stay with the work, the rest of the sets goes.
+#[test]
+fn pins_outlive_the_end_of_their_session() {
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    for ended in [true, false] {
+        let mut h = H::new();
+        h.start("a", &["src/**"]);
+        h.start_observed("b", &["src/**"]);
+        assert!(
+            h.lease("a", "l1", &[(f, LeaseKind::Edit), (g, LeaseKind::Edit)])
+                .is_allow()
+        );
+        let c = ChangeId::random();
+        assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+        if ended {
+            let end = Op::SessionEnd {
+                session: "a".into(),
+                reason: "done".into(),
+            };
+            assert!(h.agent("a", end).is_allow());
+        } else {
+            h.now += 121 * MIN;
+            h.start_observed("b2", &["src/**"]);
+        }
+        let other = if ended { "b" } else { "b2" };
+        assert!(denied_with(
+            &h.lease(other, "l2", &[(f, LeaseKind::Edit)]),
+            "lease_held"
+        ));
+        assert!(h.lease(other, "l3", &[(g, LeaseKind::Edit)]).is_allow());
+        assert_eq!(h.chain.state.leases["l1"].items.len(), 1);
+        assert!(h.human("ayse", approve(pending_seq(&h, c))).is_allow());
+        assert!(integrate(&mut h, c, Some(gid('e')), &[]).is_allow());
+        assert!(!h.chain.state.leases.contains_key("l1"));
+        assert!(h.lease(other, "l2", &[(f, LeaseKind::Edit)]).is_allow());
+        h.assert_replay();
+    }
+}
+
+/// A yield gives up what its holder may give up, and no more.
+#[test]
+fn a_yield_can_not_give_away_a_pinned_item() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    h.wrote("a", "src/a.rs");
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    assert!(
+        h.lease("a", "l1", &[(f, LeaseKind::Edit), (g, LeaseKind::Edit)])
+            .is_allow()
+    );
+    let c = ChangeId::random();
+    assert!(h.propose("a", c, edit(f)).is_allow());
+    let d = h.agent(
+        "a",
+        Op::Negotiate {
+            thread: "t1".into(),
+            to_session: "b".into(),
+            message: NegotiationMsg::Yield { set: "l1".into() },
+        },
+    );
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(held(&h, "a"), [f]);
+    assert!(h.lease("b", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    assert!(denied_with(
+        &h.lease("b", "l3", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    h.assert_replay();
+}
+
+/// A session whose TTL ran out still holds what it pinned: it can build
+/// on its own change, and nothing else of the set.
+#[test]
+fn a_pinned_item_counts_as_held_by_its_holder() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    assert!(
+        h.lease("a", "l1", &[(f, LeaseKind::Edit), (g, LeaseKind::Edit)])
+            .is_allow()
+    );
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+    h.now += 11 * MIN;
+    assert_eq!(held(&h, "a"), [f]);
+    assert_eq!(
+        h.propose("a", ChangeId::random(), edit(f)).outcome,
+        Outcome::Escalate
+    );
+    assert!(denied_with(
+        &h.propose("a", ChangeId::random(), edit(g)),
+        &format!("lease_missing:{g}")
+    ));
+    h.assert_replay();
+}
+
+/// Each need pins the items that satisfy it: a deletion's rename lease,
+/// the insert lease of a container, the file lease of a deleted file; not
+/// an item of the wrong kind or of another session.
+#[test]
+fn pins_follow_the_lease_rules_of_the_facts() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("o", &["src/**"]);
+    h.wrote("a", "src/a.rs");
+    h.wrote("a", "src/b.rs");
+    h.wrote("a", "src/c.rs");
+    let (del, cont, dfile) = ("src/a.rs#d", "src/a.rs#T", "src/c.rs#<file>");
+    assert!(
+        h.lease(
+            "a",
+            "l1",
+            &[
+                (del, LeaseKind::Rename),
+                (cont, LeaseKind::Insert),
+                (dfile, LeaseKind::Rename),
+                ("src/b.rs#other", LeaseKind::Edit),
+            ]
+        )
+        .is_allow()
+    );
+    assert!(
+        h.lease("a", "l2", &[("src/b.rs#e", LeaseKind::Insert)])
+            .is_allow()
+    );
+    assert!(
+        h.lease("o", "l3", &[("src/a.rs#T", LeaseKind::Insert)])
+            .is_allow()
+    );
+    let c = ChangeId::random();
+    let f = Facts {
+        deletes: vec![del.into()],
+        adds: vec!["src/a.rs#T.m".into()],
+        deleted_files: vec!["src/c.rs".into()],
+        modified_files: vec!["src/a.rs".into()],
+        lines_added: 1,
+        ..Default::default()
+    };
+    assert!(h.propose("a", c, f).is_allow());
+    let s = &h.chain.state;
+    let mut pinned: Vec<&str> = s.leases["l1"].pins[&c]
+        .iter()
+        .map(|i| i.symbol.as_str())
+        .collect();
+    pinned.sort();
+    assert_eq!(pinned, [cont, del, dfile]);
+    assert!(s.leases["l2"].pins.is_empty(), "no need of this set");
+    assert!(s.leases["l3"].pins.is_empty(), "another session's");
+    h.assert_replay();
+}
+
+/// Expired sets leave the state with the next entry, whatever the entry,
+/// and a replay arrives at the same leases.
+#[test]
+fn expired_sets_are_pruned_and_replay_gives_the_same_state() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    h.now += 10 * MIN - 2;
+    assert!(
+        h.lease("b", "l2", &[("src/a.rs#g", LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert!(h.chain.state.leases.contains_key("l1"), "one ms left");
+    h.now += 1;
+    assert!(h.lease("b", "l3", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(!h.chain.state.leases.contains_key("l1"));
+    // A denied entry prunes as well, and a set id is free again.
+    h.now += 11 * MIN;
+    assert!(denied_with(
+        &h.agent("a", release("nope")),
+        "unknown_lease_set"
+    ));
+    assert!(h.chain.state.leases.is_empty());
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let replayed = State::replay(&h.log);
+    assert_eq!(
+        replayed.leases.keys().collect::<Vec<_>>(),
+        h.chain.state.leases.keys().collect::<Vec<_>>()
+    );
+    h.assert_replay();
+}
+
+/// A set whose session expired goes the same way as an expired one.
+#[test]
+fn sets_of_dead_sessions_are_pruned() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    let renew = Op::LeaseRenew {
+        set: "l1".into(),
+        ttl_ms: 30 * MIN,
+    };
+    assert!(
+        h.lease("a", "l1", &[("src/a.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.now += 9 * MIN;
+    assert!(h.agent("a", renew.clone()).is_allow());
+    for _ in 0..3 {
+        h.now += 29 * MIN;
+        assert!(h.agent("a", renew.clone()).is_allow());
+    }
+    assert!(h.chain.state.leases["l1"].expires_ms > h.now + 25 * MIN);
+    h.now += 25 * MIN;
+    h.start_observed("b", &["src/**"]);
+    assert!(h.chain.state.leases.is_empty(), "session a is over");
+    h.assert_replay();
+}
+
+/// The meaning changed with format 7: an older entry pins nothing and
+/// prunes nothing, so an old log replays to what it always did.
+#[test]
+fn entries_of_an_older_format_neither_pin_nor_prune() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(
+        h.lease("a", "l2", &[("src/a.rs#g", LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert_eq!(
+        h.propose("a", ChangeId::random(), edit(f)).outcome,
+        Outcome::Escalate
+    );
+    h.now += 11 * MIN;
+    assert!(denied_with(
+        &h.agent("a", release("nope")),
+        "unknown_lease_set"
+    ));
+    let mut old = h.log.clone();
+    assert!(old.iter().all(|o| o.entry.format == 7));
+    for o in &mut old {
+        o.entry.format = 6;
+    }
+    let s = State::replay(&old);
+    assert_eq!(s.leases.len(), 2, "not pruned");
+    assert!(s.leases.values().all(|l| l.pins.is_empty()), "not pinned");
+    assert_eq!(s.active_leases(h.now).count(), 0);
     h.assert_replay();
 }

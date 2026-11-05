@@ -28,8 +28,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// written out; version 2 adds `symbols_engine`; version 3 adds the human
 /// key operations; version 4 adds the daemon key operations; version 5
 /// adds `scope.scratch` on `session.start` and `cap.attenuate`; version 6
-/// adds `reject`.
-pub const FORMAT_CURRENT: u32 = 6;
+/// adds `reject`; version 7 changes what `change.propose` means for
+/// leases (they are pinned to the change) and prunes dead lease sets.
+pub const FORMAT_CURRENT: u32 = 7;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -42,6 +43,10 @@ pub const FORMAT_DAEMON_KEYS: u32 = 4;
 pub const FORMAT_SCRATCH: u32 = 5;
 /// The first format with `reject`.
 pub const FORMAT_REJECT: u32 = 6;
+/// The first format whose entries pin leases to the changes they propose
+/// and prune dead lease sets. No new field: the meaning of existing entries
+/// changes, so a replay must apply it to these entries and no older ones.
+pub const FORMAT_LEASE_PINS: u32 = 7;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

@@ -830,6 +830,7 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
     // A failing check: result fail, exit 1, the output kept.
     let base = e.trunk();
     e.wrote(&token, "src/lib.rs");
+    e.lease(&token, "src/lib.rs#charge");
     let bad = new.replacen("    a * 2\n", "    a * 3\n", 1);
     let r = e.propose(
         &token,
@@ -1070,20 +1071,27 @@ fn a_rejection_carries_its_reason_to_the_worker_and_frees_the_leases() {
         e.ok("status", Some("demo"), None, json!({}))["pending"][0]["seq"],
         r["seq"]
     );
+    // What the ended session proposed still holds its symbols, past the
+    // TTL of the lease, and status says why.
     let t3 = e.session("s3", &["src/**"]);
-    e.lease(&t3, "src/lib.rs#refund");
+    e.advance(601_000);
+    let denied = e.lease(&t3, "src/lib.rs#refund");
+    assert_eq!(denied["decision"]["outcome"], "deny", "{denied}");
+    let leases = e.ok("status", Some("demo"), None, json!({}))["leases"].clone();
+    assert_eq!(leases.as_array().unwrap().len(), 1, "{leases}");
+    assert_eq!(leases[0]["session"], "s2");
+    assert_eq!(leases[0]["items"][0]["symbol"], "src/lib.rs#refund");
+    assert_eq!(leases[0]["pinned"][0]["change"], r["change"], "{leases}");
+    assert_eq!(leases[0]["pinned"][0]["items"], leases[0]["items"]);
+    e.lease(&t3, "src/lib.rs#charge");
     let r3 = e.propose(
         &t3,
         &base,
         vec![file(
             "src/lib.rs",
-            &fixed.replacen(
-                "pub fn refund(a: u64) -> u64 {\n    a\n",
-                "pub fn refund(a: u64) -> u64 {\n    1\n",
-                1,
-            ),
+            &fixed.replacen("    a + 1\n", "    a + 2\n", 1),
         )],
-        &["src/lib.rs#refund"],
+        &["src/lib.rs#charge"],
     );
     assert_eq!(r3["decision"]["outcome"], "escalate", "{r3}");
     e.human(Op::CapRevoke {

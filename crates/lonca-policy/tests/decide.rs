@@ -3996,3 +3996,30 @@ fn a_lease_names_a_valid_symbol_inside_the_sessions_symbols() {
     assert!(d.is_allow(), "{d:?}");
     h.assert_replay();
 }
+
+/// The bounds of a lease request, on both sides of each.
+#[test]
+fn a_lease_request_may_be_as_long_as_the_limits_and_no_longer() {
+    let request = |h: &mut H, set: &str, n: usize, intent: usize| {
+        let items = (0..n).map(|i| LeaseItem {
+            symbol: format!("src/{set}.rs#f{i}"),
+            kind: LeaseKind::Edit,
+        });
+        let op = Op::LeaseAcquire {
+            set: set.into(),
+            items: items.collect(),
+            intent: "x".repeat(intent),
+            ttl_ms: 10 * MIN,
+        };
+        h.agent("a", op)
+    };
+    let mut h = three_sessions();
+    let d = request(&mut h, "many", 65, 1);
+    assert!(denied_with(&d, "lease_item_count"), "{d:?}");
+    assert!(request(&mut h, "many", 64, 1).is_allow());
+    let d = request(&mut h, "long", 1, 501);
+    assert!(denied_with(&d, "intent_too_long"), "{d:?}");
+    assert!(request(&mut h, "long", 1, 500).is_allow());
+    assert!(request(&mut h, "one", 1, 0).is_allow());
+    h.assert_replay();
+}

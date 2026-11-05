@@ -3923,3 +3923,29 @@ fn a_lease_handed_over_is_in_the_inbox() {
     assert_eq!(for_session(&h.chain.state, "b", tail, h.now), []);
     h.assert_replay();
 }
+
+/// A reservation stands in the way of what conflicts with it, and of
+/// nothing else: two freed symbols serve two sessions at once.
+#[test]
+fn reservations_of_different_symbols_do_not_stand_in_each_others_way() {
+    let mut h = three_sessions();
+    h.start("d", &["src/**"]);
+    let g = "src/a.rs#g";
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("c", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    assert!(interest(&mut h, "d", g).is_allow());
+    assert!(h.agent("a", release("l1")).is_allow());
+    assert!(h.agent("c", release("l2")).is_allow());
+    let holders: Vec<String> = h
+        .chain
+        .state
+        .reservations_at(h.now)
+        .into_iter()
+        .map(|r| r.session)
+        .collect();
+    assert_eq!(holders, ["b", "d"]);
+    assert!(h.lease("d", "l3", &[(g, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("b", "l4", &[(F, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}

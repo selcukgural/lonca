@@ -107,16 +107,19 @@ fn session_over(e: &anyhow::Error) -> bool {
 /// session is over, or with the process, which ends when the harness
 /// closes stdin: that is what makes a crashed agent's leases free.
 fn keep_alive(mut c: Client, ended: Arc<AtomicBool>) {
-    loop {
-        let wait = match beat(&mut c) {
-            Ok(wait) => wait,
-            Err(e) if session_over(&e) => {
-                ended.store(true, Ordering::SeqCst);
-                return;
-            }
-            Err(_) => RETRY_BEAT_MS,
-        };
+    while let Some(wait) = next_beat(beat(&mut c)) {
         std::thread::sleep(Duration::from_millis(wait as u64));
+    }
+    ended.store(true, Ordering::SeqCst);
+}
+
+/// How long to wait after a beat, or `None` when the session is over. A
+/// failure that says nothing of the session is tried again.
+fn next_beat(beat: Result<i64>) -> Option<i64> {
+    match beat {
+        Ok(wait) => Some(wait),
+        Err(e) if session_over(&e) => None,
+        Err(_) => Some(RETRY_BEAT_MS),
     }
 }
 
@@ -423,8 +426,9 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LeaseItem, LeaseKind, anyhow, beat_interval_ms, ctx, due_for_renewal, error_body,
-        remainder, renewal_ttl_ms, requested_items, session_over, tools, ttl_ms,
+        LeaseItem, LeaseKind, RETRY_BEAT_MS, anyhow, beat_interval_ms, ctx, due_for_renewal,
+        error_body, next_beat, remainder, renewal_ttl_ms, requested_items, session_over, tools,
+        ttl_ms,
     };
     use serde_json::json;
 
@@ -518,6 +522,9 @@ mod tests {
         assert!(session_over(&said("unauthenticated")));
         assert!(!session_over(&said("io")), "the daemon may come back");
         assert!(!session_over(&anyhow!("no answer")));
+        assert_eq!(next_beat(Ok(1234)), Some(1234));
+        assert_eq!(next_beat(Err(said("session_inactive"))), None);
+        assert_eq!(next_beat(Err(said("io"))), Some(RETRY_BEAT_MS));
     }
 
     #[test]

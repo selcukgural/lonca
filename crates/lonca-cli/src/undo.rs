@@ -289,10 +289,14 @@ pub fn revert(
         println!("(dry run; pass --apply to submit these compensating operations)");
         return Ok(());
     }
+    // One refused step does not stop the others; the command still ends
+    // with the refusal, so a runner sees it in the exit code.
+    let mut first_failure = None;
     for (seq, what) in plan {
         if let Err(e) = undo(c, human, repo, seq) {
             println!("#{seq} ({what}) not undone: {e:#}");
+            first_failure.get_or_insert(e);
         }
     }
-    Ok(())
+    first_failure.map_or(Ok(()), Err)
 }

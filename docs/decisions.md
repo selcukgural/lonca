@@ -94,6 +94,9 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   session"). The field is left out of the encoding when empty, so every
   earlier entry keeps its bytes; an entry that names a session needs
   format 9.
+- **Version 10** adds `lease.interest`, `to` on a yield and `leases` on
+  `cap.attenuate` (see "The lease queue"). The fields are left out of the
+  encoding when empty.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -378,6 +381,8 @@ A01/A07, zero trust: every request authenticated).
 | `lease.acquire` | agent | |
 | `lease.release` | agent | |
 | `lease.renew` | agent | |
+| `lease.interest` | agent | |
+| `events` | agent | |
 | `change.propose` | agent | |
 | `change.withdraw` | agent | |
 | `facts.preview` | agent | |
@@ -805,6 +810,59 @@ approval, and a tainted session may not touch it.
 - **`paths.untrusted` is unchanged.** Design §5.10 names imported issue text
   as an example, but nothing imports issue text yet, so there is no path
   to list. The hardened profile (#54) starts from this list.
+
+## The lease queue
+
+Leases never wait, and that stays. But an agent that was denied had to poll
+`status`, the fastest poller won, a yield could be taken by a third session
+before the counterparty that negotiated for it, and a parent had to release
+a symbol and race everyone to hand it to a sub-agent (#42).
+
+- **`lease.interest {items, intent}`** is a request to be next. It holds
+  nothing and blocks nobody, so it adds no hold-and-wait and no deadlock. It
+  takes the `lease.acquire` right, on the same scope and symbols as an acquire,
+  and it needs something to wait for: an interest in a free symbol is refused
+  (`lease_free`), or it would be a way to reserve anything. A session waits
+  for overlapping items once (`interest_exists`).
+- **When what conflicts is gone, the oldest interest gets a reservation** for
+  `leases.reservation_ms` (default 60 s). In that window another session's
+  acquire is `lease_reserved:<session>`. Age is the interest's sequence number.
+  Interests are served whole: one blocked item keeps the whole interest
+  waiting, as an acquire is all or nothing.
+- **The window opens at an entry.** Time frees a set too, and nothing is
+  written when it does, so the fold settles reservations at the start of each
+  entry, from that entry's time. `decide()` calls the same pure function
+  (`State::reservations_at`) for the same time, so it sees what the fold of
+  that entry will record, and nothing reads a clock. The value of
+  `reservation_ms` reaches the fold through the decision
+  (`reservation_ms=N`), like `approvals=N`.
+- **A window that is not used passes on**, to the next interest, with its own
+  window. A session that ended, expired or stopped beating leaves the queue
+  and gives its window up. A reservation is consumed by the acquire, and an
+  interest registered this way also counts as someone wanting the set, for
+  `leases.max_hold_minutes`.
+- **A yield with `to`** moves the set in that entry, so nobody can step in
+  between. `to` must be the `to_session` of the message, whose scope must cover
+  the set. The set is a new hold for the receiver. A yield without `to` frees
+  the set as before, and the queue serves it.
+- **`cap.attenuate` with `leases`** hands sets to the child. The child holds
+  them until it ends, and then they go back to the parent if the parent is
+  still there. A revocation of the parent reaches the child and the sets. Only
+  whole sets move, which is less than the issue's "or a subset of their
+  items": a worker that wants part of a set releases the rest first.
+- **A set that moves is whole, alive and unpinned** (`lease_pinned`,
+  `lease_expired`): a pin stays with its change. Both handovers check
+  `scope.paths` only, like a lease's own scope check would on the path; symbol
+  patterns of the receiver are not re-checked.
+- **`events {from}`** is the inbox: a change integrated, conflicted or failed
+  in verification, approved or rejected, a message, a lease received, a
+  reservation. A failed integration is logged as a denial, so the inbox reads
+  those entries too. It is derived from
+  the log and the state for the caller and never written, so the single-writer
+  rule holds. Changes of earlier sessions of the workspace count as the
+  caller's. A notification of a signature change is left to #43, which needs it.
+- **No gate on the format.** A log without interests has no reservations, so
+  older entries replay untouched.
 
 ## Reject, and a pending proposal whose session ends
 

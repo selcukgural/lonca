@@ -33,6 +33,9 @@ release_on_integrate = true
 heartbeat_timeout_ms = 300000
 # Past this long a set can not be renewed while another session wants it.
 max_hold_minutes = 120
+# When a set is freed, the oldest registered interest in it has this long to
+# acquire it before anyone else can.
+reservation_ms = 60000
 
 [changes]
 max_files = 200
@@ -193,6 +196,7 @@ pub struct Leases {
     /// How long a set can be held by renewing while another session wants
     /// it.
     pub max_hold_minutes: i64,
+    pub reservation_ms: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -359,6 +363,7 @@ impl Default for Leases {
             release_on_integrate: true,
             heartbeat_timeout_ms: 300_000,
             max_hold_minutes: 120,
+            reservation_ms: 60_000,
         }
     }
 }
@@ -530,10 +535,13 @@ impl PolicyBundle {
                 "{CONFIG_FILE}: integrity.on_unmediated must be restore or freeze"
             ));
         }
-        if config.leases.heartbeat_timeout_ms <= 0 || config.leases.max_hold_minutes <= 0 {
+        if config.leases.heartbeat_timeout_ms <= 0
+            || config.leases.max_hold_minutes <= 0
+            || config.leases.reservation_ms <= 0
+        {
             return Err(format!(
-                "{CONFIG_FILE}: leases.heartbeat_timeout_ms and leases.max_hold_minutes \
-                 must be positive"
+                "{CONFIG_FILE}: leases.heartbeat_timeout_ms, leases.max_hold_minutes and \
+                 leases.reservation_ms must be positive"
             ));
         }
         if !matches!(config.observation.network.as_str(), "taint" | "deny") {

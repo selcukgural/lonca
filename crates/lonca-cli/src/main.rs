@@ -311,6 +311,14 @@ enum Cmd {
         #[arg(long = "as")]
         human: Option<String>,
     },
+    /// What happened that this session should know of (agent workspaces).
+    Events {
+        /// The sequence number to start from: `next` of the last answer.
+        #[arg(long, default_value_t = 0)]
+        from: u64,
+        #[arg(long)]
+        json: bool,
+    },
     /// Run the merge queue now.
     Queue,
     /// Check the setup: daemon, socket, hooks, sandbox, humans, logs.
@@ -561,6 +569,18 @@ enum LeaseCmd {
         set: String,
         #[arg(long, default_value = "10m")]
         ttl: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait for symbols others hold: when they are freed, the oldest
+    /// interest gets a short reservation. Holds nothing, blocks nobody.
+    Interest {
+        #[arg(required = true)]
+        symbols: Vec<String>,
+        #[arg(long, default_value = "edit")]
+        kind: String,
+        #[arg(long, short, default_value = "")]
+        intent: String,
         #[arg(long)]
         json: bool,
     },
@@ -816,6 +836,17 @@ pub(crate) fn print_decision(r: &Value) {
     } else {
         println!("{seq}{outcome}: {}", reasons.join(", "));
     }
+}
+
+fn lease_items(symbols: Vec<String>, kind: &str) -> Result<Vec<LeaseItem>> {
+    let kind = match kind {
+        "edit" => LeaseKind::Edit,
+        "insert" => LeaseKind::Insert,
+        "rename" => LeaseKind::Rename,
+        k => bail!("unknown lease kind {k}"),
+    };
+    let items = symbols.into_iter();
+    Ok(items.map(|symbol| LeaseItem { symbol, kind }).collect())
 }
 
 fn agent_client() -> Result<(Client, Workspace)> {
@@ -1382,6 +1413,16 @@ fn run(cmd: Cmd) -> Result<()> {
                     }
                     return Ok(());
                 }
+                LeaseCmd::Interest {
+                    symbols,
+                    kind,
+                    intent,
+                    json: as_json,
+                } => {
+                    let items = lease_items(symbols, &kind)?;
+                    let params = json!({"items": items, "intent": intent});
+                    (call(&mut c, "lease.interest", params)?, as_json)
+                }
                 LeaseCmd::Acquire {
                     symbols,
                     kind,
@@ -1389,16 +1430,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     ttl,
                     json: as_json,
                 } => {
-                    let kind = match kind.as_str() {
-                        "edit" => LeaseKind::Edit,
-                        "insert" => LeaseKind::Insert,
-                        "rename" => LeaseKind::Rename,
-                        k => bail!("unknown lease kind {k}"),
-                    };
-                    let items: Vec<LeaseItem> = symbols
-                        .into_iter()
-                        .map(|symbol| LeaseItem { symbol, kind })
-                        .collect();
+                    let items = lease_items(symbols, &kind)?;
                     let r = call(
                         &mut c,
                         "lease.acquire",
@@ -1437,6 +1469,21 @@ fn run(cmd: Cmd) -> Result<()> {
                 print_decision(&r);
             }
             ctx::denied(&r)
+        }
+        Cmd::Events {
+            from,
+            json: as_json,
+        } => {
+            let (mut c, _) = agent_client()?;
+            let r = call(&mut c, "events", json!({"from": from}))?;
+            if as_json {
+                return ctx::print_json(&r);
+            }
+            for e in r["events"].as_array().into_iter().flatten() {
+                println!("{e}");
+            }
+            println!("next {}", r["next"]);
+            Ok(())
         }
         Cmd::Fetch {
             repo,

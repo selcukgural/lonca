@@ -1565,3 +1565,121 @@ fn a_continuation_replaces_the_token_of_the_session_it_ends() {
     assert_eq!(r["token"], Value::Null);
     e.ok("session.heartbeat", None, Some(&b), json!({}));
 }
+
+/// The queue through the daemon: an interest, its reservation in `status`
+/// and `events`, details that say whose it is (issue #42).
+#[test]
+fn the_oldest_interest_gets_the_freed_set_and_hears_of_it() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let a = e.session("a", &["src/**"]);
+    let b = e.session("b", &["src/**"]);
+    let c = e.session("c", &["src/**"]);
+    let sym = "src/lib.rs#charge";
+    let item = json!([{"symbol": sym, "kind": "edit"}]);
+    let set = e.lease(&a, sym)["set"].clone();
+
+    let free = e.ok(
+        "lease.interest",
+        None,
+        Some(&a),
+        json!({"items": [{"symbol": "src/lib.rs#refund", "kind": "edit"}]}),
+    );
+    assert_eq!(free["decision"]["reasons"][0], "lease_free", "{free}");
+    let r = e.ok(
+        "lease.interest",
+        None,
+        Some(&b),
+        json!({"items": item, "intent": "next"}),
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(r["decision"]["reasons"][0], "reservation_ms=60000");
+    assert_eq!(r["details"][0]["holder_session"], "a", "{r}");
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(s["interests"][0]["session"], "b", "{s}");
+    assert_eq!(s["interests"][0]["intent"], "next");
+    assert_eq!(s["interests"][0]["seq"], r["seq"]);
+    assert_eq!(s["reservations"], json!([]));
+
+    e.ok("lease.release", None, Some(&a), json!({ "set": set }));
+    let d = e.lease(&c, sym);
+    assert_eq!(d["decision"]["outcome"], "deny", "{d}");
+    assert_eq!(d["decision"]["reasons"][0], "lease_reserved:b");
+    assert_eq!(d["details"][0]["code"], "lease_reserved", "{d}");
+    assert_eq!(d["details"][0]["holder_session"], "b");
+    assert_eq!(d["details"][0]["holder_agent"], "bot-b");
+    assert_eq!(d["details"][0]["symbol"], sym);
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    let until = s["reservations"][0]["until_ms"].as_i64().unwrap();
+    assert_eq!(s["reservations"][0]["session"], "b", "{s}");
+    assert_eq!(until, d["details"][0]["expires_ms"].as_i64().unwrap());
+
+    let inbox = e.ok("events", None, Some(&b), json!({}));
+    assert_eq!(inbox["events"][0]["kind"], "reserved", "{inbox}");
+    assert_eq!(inbox["events"][0]["until_ms"], until);
+    assert_eq!(inbox["next"], s["next_seq"]);
+    let theirs = e.ok("events", None, Some(&c), json!({}));
+    assert_eq!(theirs["events"], json!([]), "{theirs}");
+    assert_eq!(
+        code(e.call("events", Some("demo"), None, json!({}))),
+        "forbidden"
+    );
+
+    let got = e.lease(&b, sym);
+    assert_eq!(got["decision"]["outcome"], "allow", "{got}");
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(s["reservations"], json!([]));
+    assert_eq!(s["interests"], json!([]));
+}
+
+/// What happened to a session's changes and messages, from `from` on.
+#[test]
+fn the_inbox_is_derived_from_the_log() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let base = e.trunk();
+    let a = e.session("a", &["src/**"]);
+    let b = e.session("b", &["src/**"]);
+    let sym = "src/lib.rs#charge";
+    e.lease(&a, sym);
+    let proposed = e.propose(
+        &a,
+        &base,
+        vec![file(
+            "src/lib.rs",
+            &LIB.replacen("    a\n", "    a * 3\n", 1),
+        )],
+        &[sym],
+    );
+    assert_eq!(proposed["decision"]["outcome"], "escalate", "{proposed}");
+    let seq = proposed["seq"].as_u64().unwrap();
+    e.human(Op::Reject {
+        target_seq: seq,
+        reason: "say more".into(),
+    });
+    let inbox = e.ok("events", None, Some(&a), json!({}));
+    let rejected = &inbox["events"][0];
+    assert_eq!(rejected["kind"], "rejected", "{inbox}");
+    assert_eq!(rejected["target_seq"], seq);
+    assert_eq!(rejected["reason"], "say more");
+
+    let next = inbox["next"].clone();
+    let later = e.ok("events", None, Some(&a), json!({ "from": next }));
+    assert_eq!(later["events"], json!([]), "{later}");
+
+    e.ok(
+        "negotiate",
+        None,
+        Some(&a),
+        json!({"thread": "t", "to_session": "b",
+               "message": {"type": "counter", "note": "hello"}}),
+    );
+    let mine = e.ok("events", None, Some(&b), json!({ "from": next }));
+    assert_eq!(mine["events"][0]["kind"], "message", "{mine}");
+    assert_eq!(mine["events"][0]["from"], "a");
+    assert_eq!(mine["events"][0]["thread"], "t");
+}

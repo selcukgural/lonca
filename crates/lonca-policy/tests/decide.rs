@@ -782,6 +782,7 @@ fn attenuation_only_narrows_and_revocation_cascades() {
         agent: "sub".into(),
         scope,
         expires_ms: exp,
+        leases: vec![],
     };
     let exp = h.now + 60 * MIN;
     let wide = Scope {
@@ -1079,12 +1080,30 @@ fn negotiation_yields_leases_spreads_taint_and_is_bounded() {
     );
     // s1 can only yield its own lease.
     assert!(denied_with(
-        &h.agent("s2", msg("s1", NegotiationMsg::Yield { set: "l1".into() })),
+        &h.agent(
+            "s2",
+            msg(
+                "s1",
+                NegotiationMsg::Yield {
+                    set: "l1".into(),
+                    to: None,
+                }
+            )
+        ),
         "not_own_lease"
     ));
     assert!(
-        h.agent("s1", msg("s2", NegotiationMsg::Yield { set: "l1".into() }))
-            .is_allow()
+        h.agent(
+            "s1",
+            msg(
+                "s2",
+                NegotiationMsg::Yield {
+                    set: "l1".into(),
+                    to: None,
+                }
+            )
+        )
+        .is_allow()
     );
     assert!(h.lease("s2", "l2", &[(f, LeaseKind::Edit)]).is_allow());
 
@@ -1445,6 +1464,7 @@ fn revocation_by_another_human_cascades_and_is_final() {
         agent: "sub".into(),
         scope: narrow,
         expires_ms: h.now + 60 * MIN,
+        leases: vec![],
     };
     assert!(h.agent("s2", child).is_allow());
     assert!(
@@ -2532,7 +2552,10 @@ fn a_yield_can_not_give_away_a_pinned_item() {
         Op::Negotiate {
             thread: "t1".into(),
             to_session: "b".into(),
-            message: NegotiationMsg::Yield { set: "l1".into() },
+            message: NegotiationMsg::Yield {
+                set: "l1".into(),
+                to: None,
+            },
         },
     );
     assert!(d.is_allow(), "{d:?}");
@@ -3245,6 +3268,7 @@ fn continuing_is_refused_for_what_is_not_a_single_root_session_in_scope() {
         agent: "bot".into(),
         scope: h.chain.state.sessions["p"].scope.clone(),
         expires_ms: h.now + 10 * MIN,
+        leases: vec![],
     };
     assert!(h.agent("p", attenuate).is_allow());
     let d = h.continue_as("e", "kid", &["src/**"], false);
@@ -3406,4 +3430,596 @@ fn agent_instructions_and_tool_config_are_critical() {
         assert!(denied_with(&d, "tainted_critical_path"), "{path}: {d:?}");
         h.assert_replay();
     }
+}
+
+// -------------------------------------------------------- the lease queue
+
+fn interest(h: &mut H, session: &str, sym: &str) -> Decision {
+    let op = Op::LeaseInterest {
+        items: vec![LeaseItem {
+            symbol: sym.into(),
+            kind: LeaseKind::Edit,
+        }],
+        intent: "waiting".into(),
+    };
+    h.agent(session, op)
+}
+
+const F: &str = "src/a.rs#f";
+
+fn three_sessions() -> H {
+    let mut h = H::new();
+    for s in ["a", "b", "c"] {
+        h.start(s, &["src/**"]);
+    }
+    h
+}
+
+/// The oldest interest is served: what was a race for the fastest poller
+/// is a queue (issue #42).
+#[test]
+fn a_freed_lease_goes_to_the_oldest_interest_for_a_window() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    h.now += MIN;
+    assert!(interest(&mut h, "c", F).is_allow());
+    assert_eq!(h.chain.state.interests.len(), 2);
+    assert!(h.chain.state.leases.len() == 1, "interest holds nothing");
+
+    assert!(h.agent("a", release("l1")).is_allow());
+    assert!(h.chain.state.reservations.is_empty(), "no entry since");
+    // The window opens at the next entry, whoever writes it.
+    let d = h.lease("c", "l2", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_reserved:b"), "{d:?}");
+    let until = h.log.last().unwrap().entry.time_ms + 60_000;
+    assert_eq!(
+        h.chain.state.reservations,
+        [lonca_policy::state::Reservation {
+            session: "b".into(),
+            items: vec![LeaseItem {
+                symbol: F.into(),
+                kind: LeaseKind::Edit
+            }],
+            until_ms: until,
+        }]
+    );
+    assert_eq!(h.chain.state.interests.len(), 1, "c still waits");
+
+    // One millisecond before the window closes it still holds.
+    h.now = until - 3;
+    let d = h.lease("c", "l2", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_reserved:b"), "{d:?}");
+    assert_eq!(h.log.last().unwrap().entry.time_ms, until - 2);
+
+    assert!(h.lease("b", "l3", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.chain.state.reservations.is_empty());
+    // What b waited for is in hand; c goes on waiting behind it.
+    let waiting: Vec<&str> = h
+        .chain
+        .state
+        .interests
+        .values()
+        .map(|i| i.session.as_str())
+        .collect();
+    assert_eq!(waiting, ["c"]);
+    h.assert_replay();
+}
+
+/// A window that nobody used passes to the next in the queue.
+#[test]
+fn a_window_that_ran_out_passes_on() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    assert!(interest(&mut h, "c", F).is_allow());
+    assert!(h.agent("a", release("l1")).is_allow());
+    let d = h.lease("c", "l2", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_reserved:b"), "{d:?}");
+
+    // The entry at the very end of the window is past it.
+    let until = h.chain.state.reservations[0].until_ms;
+    h.now = until - 1;
+    assert!(h.lease("c", "l2", &[(F, LeaseKind::Edit)]).is_allow());
+    assert_eq!(h.log.last().unwrap().entry.time_ms, until);
+    h.now += MIN;
+    assert!(h.agent("c", release("l2")).is_allow());
+    assert!(h.lease("b", "l3", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.chain.state.interests.is_empty());
+    h.assert_replay();
+}
+
+/// A lease that expires serves the queue too: time alone frees a set, and
+/// the window opens at the first entry after that.
+#[test]
+fn an_expired_lease_serves_the_queue_at_the_next_entry() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    h.now += 11 * MIN;
+    let d = h.lease("c", "l2", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_reserved:b"), "{d:?}");
+    assert_eq!(h.chain.state.reservations[0].until_ms, h.now + 60_000);
+    assert!(h.lease("b", "l3", &[(F, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+/// A session that went away waits for nothing and blocks nobody.
+#[test]
+fn an_ended_session_leaves_the_queue_and_gives_up_its_window() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    assert!(interest(&mut h, "c", F).is_allow());
+    let end = Op::SessionEnd {
+        session: "b".into(),
+        reason: "done".into(),
+    };
+    assert!(h.agent("b", end).is_allow());
+    assert_eq!(
+        h.chain.state.interests.len(),
+        2,
+        "settled at the next entry"
+    );
+    assert!(h.agent("a", release("l1")).is_allow());
+    assert_eq!(h.chain.state.interests.len(), 1, "b has left the queue");
+    assert!(h.lease("c", "l2", &[(F, LeaseKind::Edit)]).is_allow());
+
+    // A reservation of a session that ended stands in nobody's way.
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    assert!(h.agent("a", release("l1")).is_allow());
+    let d = h.lease("c", "l2", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_reserved:b"), "{d:?}");
+    let end = Op::SessionEnd {
+        session: "b".into(),
+        reason: "done".into(),
+    };
+    assert!(h.agent("b", end).is_allow());
+    assert!(h.lease("c", "l2", &[(F, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+#[test]
+fn an_interest_needs_something_to_wait_for_and_the_right_to_acquire() {
+    let mut h = three_sessions();
+    let d = interest(&mut h, "b", F);
+    assert!(denied_with(&d, "lease_free"), "{d:?}");
+    assert!(h.chain.state.interests.is_empty());
+
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(
+        denied_with(&interest(&mut h, "a", F), "lease_free"),
+        "own set"
+    );
+    assert!(interest(&mut h, "b", F).is_allow());
+    let d = interest(&mut h, "b", F);
+    assert!(denied_with(&d, "interest_exists"), "{d:?}");
+
+    // Waiting behind a reservation is waiting too.
+    assert!(h.agent("a", release("l1")).is_allow());
+    assert!(interest(&mut h, "c", F).is_allow());
+
+    // Scope and shape, as for an acquire.
+    let d = interest(&mut h, "c", "docs/a.md#<file>");
+    assert!(denied_with(&d, "scope_path:docs"), "{d:?}");
+    let d = interest(&mut h, "c", "src/a.rs");
+    assert!(denied_with(&d, "invalid_symbol"), "{d:?}");
+    let empty = Op::LeaseInterest {
+        items: vec![],
+        intent: String::new(),
+    };
+    let d = h.agent("c", empty);
+    assert!(denied_with(&d, "lease_item_count"), "{d:?}");
+    let long = Op::LeaseInterest {
+        items: vec![LeaseItem {
+            symbol: "src/b.rs#g".into(),
+            kind: LeaseKind::Edit,
+        }],
+        intent: "x".repeat(501),
+    };
+    let d = h.agent("c", long);
+    assert!(denied_with(&d, "intent_too_long"), "{d:?}");
+
+    let mut no_acquire = H::new();
+    let mut op = no_acquire.start_op("s", &["src/**"], None);
+    if let Op::SessionStart { scope, .. } = &mut op {
+        scope.ops.retain(|k| *k != OpKind::LeaseAcquire);
+    }
+    assert!(no_acquire.human("ayse", op).is_allow());
+    let d = interest(&mut no_acquire, "s", F);
+    assert!(denied_with(&d, "scope_op:lease.acquire"), "{d:?}");
+    h.assert_replay();
+}
+
+/// An interest counts as someone wanting the set, for the hold limit.
+#[test]
+fn an_interest_holds_back_a_renewal_past_the_limit() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    assert!(h.chain.state.leases["l1"].interest.contains_key("b"));
+    h.assert_replay();
+}
+
+fn msg_to(to: &str, thread: &str, set: &str, target: Option<&str>) -> Op {
+    Op::Negotiate {
+        thread: thread.into(),
+        to_session: to.into(),
+        message: NegotiationMsg::Yield {
+            set: set.into(),
+            to: target.map(String::from),
+        },
+    }
+}
+
+/// With `to` a yield is a handover in one entry: nobody can step between.
+#[test]
+fn a_yield_to_a_session_moves_the_set_at_once() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "c", F).is_allow());
+    h.now += MIN;
+    let d = h.agent("a", msg_to("b", "t1", "l1", Some("b")));
+    assert!(d.is_allow(), "{d:?}");
+    let l = &h.chain.state.leases["l1"];
+    assert_eq!(l.session, "b");
+    assert_eq!(l.acquired_ms, h.now, "a new hold");
+    assert!(l.interest.is_empty());
+    let d = h.lease("c", "l2", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_held"), "{d:?}");
+    assert_eq!(held(&h, "b"), [F]);
+    h.assert_replay();
+}
+
+#[test]
+fn a_yield_goes_only_to_the_counterparty_with_a_scope_that_covers_it() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start("b", &["src/**"]);
+    h.start("narrow", &["docs/**"]);
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let d = h.agent("a", msg_to("b", "t1", "l1", Some("narrow")));
+    assert!(denied_with(&d, "yield_to_another_session"), "{d:?}");
+    let d = h.agent("a", msg_to("narrow", "t2", "l1", Some("narrow")));
+    assert!(denied_with(&d, "scope_path:src/a.rs"), "{d:?}");
+    let d = h.agent("b", msg_to("a", "t3", "l1", Some("a")));
+    assert!(denied_with(&d, "not_own_lease"), "{d:?}");
+
+    // What is pinned stays with its change; a set that ran out has nothing
+    // left to give.
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(F)).outcome, Outcome::Escalate);
+    let d = h.agent("a", msg_to("b", "t4", "l1", Some("b")));
+    assert!(denied_with(&d, "lease_pinned"), "{d:?}");
+    h.assert_replay();
+
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start("b", &["src/**"]);
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    h.now += 10 * MIN;
+    let d = h.agent("a", msg_to("b", "t1", "l1", Some("b")));
+    assert!(denied_with(&d, "lease_expired"), "{d:?}");
+    h.assert_replay();
+}
+
+fn child_op(h: &H, parent: &str, child: &str, leases: &[&str]) -> Op {
+    let mut scope = h.chain.state.sessions[parent].scope.clone();
+    scope.paths = vec!["src/**".into()];
+    Op::CapAttenuate {
+        parent: parent.into(),
+        child: child.into(),
+        agent: "sub".into(),
+        scope,
+        expires_ms: h.now + 10 * MIN,
+        leases: leases.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// A lease handed to a sub-agent is the sub-agent's while it lasts, and
+/// comes back without a race.
+#[test]
+fn a_delegated_lease_comes_back_when_the_child_ends() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let op = child_op(&h, "a", "kid", &["l1"]);
+    assert!(h.agent("a", op).is_allow());
+    let l = &h.chain.state.leases["l1"];
+    assert_eq!(l.session, "kid");
+    assert_eq!(l.delegated_from.as_deref(), Some("a"));
+    assert_eq!(held(&h, "kid"), [F]);
+    let d = h.lease("b", "l2", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_held"), "{d:?}");
+
+    let end = Op::SessionEnd {
+        session: "kid".into(),
+        reason: "done".into(),
+    };
+    assert!(h.agent("kid", end).is_allow());
+    let l = &h.chain.state.leases["l1"];
+    assert_eq!(l.session, "a");
+    assert_eq!(l.delegated_from, None);
+    assert_eq!(held(&h, "a"), [F]);
+    h.assert_replay();
+}
+
+/// Revoking the parent takes everything derived from it; revoking only
+/// the child gives the lease back.
+#[test]
+fn a_revocation_cascades_over_delegated_leases() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let op = child_op(&h, "a", "kid", &["l1"]);
+    assert!(h.agent("a", op).is_allow());
+    let revoke = Op::CapRevoke {
+        session: "a".into(),
+        reason: "no".into(),
+    };
+    assert!(h.human("ayse", revoke).is_allow());
+    assert!(
+        h.chain.state.leases.is_empty(),
+        "{:?}",
+        h.chain.state.leases
+    );
+    assert!(h.lease("b", "l2", &[(F, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let op = child_op(&h, "a", "kid", &["l1"]);
+    assert!(h.agent("a", op).is_allow());
+    let revoke = Op::CapRevoke {
+        session: "kid".into(),
+        reason: "no".into(),
+    };
+    assert!(h.human("ayse", revoke).is_allow());
+    assert_eq!(h.chain.state.leases["l1"].session, "a");
+    h.assert_replay();
+}
+
+#[test]
+fn a_delegation_needs_the_parents_own_live_set_within_the_childs_scope() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let op = child_op(&h, "b", "kid", &["l1"]);
+    let d = h.agent("b", op);
+    assert!(denied_with(&d, "not_own_lease"), "{d:?}");
+
+    let mut narrow = child_op(&h, "a", "kid", &["l1"]);
+    if let Op::CapAttenuate { scope, .. } = &mut narrow {
+        scope.paths = vec!["src/other/**".into()];
+    }
+    let d = h.agent("a", narrow);
+    assert!(denied_with(&d, "scope_path:src/a.rs"), "{d:?}");
+    assert_eq!(h.chain.state.leases["l1"].session, "a");
+    h.assert_replay();
+}
+
+fn acquire_for(h: &mut H, set: &str, ttl_ms: i64) -> Decision {
+    let op = Op::LeaseAcquire {
+        set: set.into(),
+        items: vec![LeaseItem {
+            symbol: F.into(),
+            kind: LeaseKind::Edit,
+        }],
+        intent: "ttl".into(),
+        ttl_ms,
+    };
+    h.agent("a", op)
+}
+
+/// The bounds of a lease's TTL, on both sides of each.
+#[test]
+fn a_lease_ttl_is_positive_and_within_the_maximum() {
+    let mut h = three_sessions();
+    let max = 30 * MIN;
+    for ttl in [0, -1, max + 1] {
+        let d = acquire_for(&mut h, "l1", ttl);
+        assert!(denied_with(&d, "lease_ttl"), "{ttl}: {d:?}");
+    }
+    assert!(acquire_for(&mut h, "l1", max).is_allow());
+    assert!(acquire_for(&mut h, "l2", 1).is_allow());
+    h.assert_replay();
+}
+
+/// The inbox reports what happened to the session's own work, its earlier
+/// sessions' included, and nobody else's.
+#[test]
+fn an_integration_is_news_for_the_workspace_that_proposed_it() {
+    use lonca_policy::events::{Event, for_session};
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(F)).outcome, Outcome::Escalate);
+    assert!(h.continue_as("a2", "a", &["src/**"], false).is_allow());
+    let approved = pending_seq(&h, c);
+    assert!(h.human("ayse", approve(approved)).is_allow());
+    assert!(integrate(&mut h, c, Some(gid('e')), &[]).is_allow());
+    let integrated = h.log.last().unwrap().entry.seq;
+
+    let events = |h: &H, s: &str| for_session(&h.chain.state, s, &h.log, h.now);
+    let want = vec![
+        Event::Approved {
+            seq: integrated - 1,
+            target_seq: approved,
+        },
+        Event::Integrated {
+            seq: integrated,
+            change: c,
+        },
+    ];
+    assert_eq!(events(&h, "a"), want);
+    assert_eq!(events(&h, "a2"), want, "the workspace's earlier session");
+    assert_eq!(events(&h, "b"), []);
+
+    let g = "src/a.rs#g";
+    assert!(h.lease("a2", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    let c2 = ChangeId::random();
+    assert_eq!(h.propose("a2", c2, edit(g)).outcome, Outcome::Escalate);
+    assert!(h.human("ayse", approve(pending_seq(&h, c2))).is_allow());
+    let d = integrate(&mut h, c2, None, &["src/a.rs#g"]);
+    assert!(denied_with(&d, "merge_conflict"), "{d:?}");
+    let conflicted = h.log.last().unwrap().entry.seq;
+    assert_eq!(
+        events(&h, "a2").last(),
+        Some(&Event::Conflicted {
+            seq: conflicted,
+            change: c2,
+            conflicts: vec!["src/a.rs#g".into()],
+        })
+    );
+
+    // It merged and the decision refused it: not a conflict, not a landing.
+    assert!(h.lease("a2", "l3", &[(g, LeaseKind::Edit)]).is_allow());
+    let c3 = ChangeId::random();
+    assert_eq!(h.propose("a2", c3, edit(g)).outcome, Outcome::Escalate);
+    assert!(h.human("ayse", approve(pending_seq(&h, c3))).is_allow());
+    let d = integrate(&mut h, c3, Some(gid('f')), &["x"]);
+    assert!(denied_with(&d, "conflicts_with_merge"), "{d:?}");
+    let failed = h.log.last().unwrap().entry.seq;
+    assert_eq!(
+        events(&h, "a2").last(),
+        Some(&Event::Failed {
+            seq: failed,
+            change: c3,
+            reasons: vec!["conflicts_with_merge".into()],
+        })
+    );
+    assert_eq!(events(&h, "b"), [], "not news for anyone else");
+    h.assert_replay();
+}
+
+/// A yield and a delegation arrive as leases received; the message of a
+/// yield arrives too.
+#[test]
+fn a_lease_handed_over_is_in_the_inbox() {
+    use lonca_policy::events::{Event, for_session};
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.agent("a", msg_to("b", "t1", "l1", Some("b"))).is_allow());
+    let seq = h.log.last().unwrap().entry.seq;
+    let got = for_session(&h.chain.state, "b", &h.log, h.now);
+    assert_eq!(
+        got,
+        [
+            Event::LeaseReceived {
+                seq,
+                set: "l1".into(),
+                from: Some("a".into()),
+            },
+            Event::Message {
+                seq,
+                thread: "t1".into(),
+                from: Some("a".into()),
+            },
+        ]
+    );
+    let op = child_op(&h, "b", "kid", &["l1"]);
+    assert!(h.agent("b", op).is_allow());
+    let seq = h.log.last().unwrap().entry.seq;
+    assert_eq!(
+        for_session(&h.chain.state, "kid", &h.log, h.now),
+        [Event::LeaseReceived {
+            seq,
+            set: "l1".into(),
+            from: Some("b".into()),
+        }]
+    );
+    // From the middle of the log, the sequence numbers stay right.
+    let tail = &h.log[seq as usize..];
+    assert_eq!(for_session(&h.chain.state, "b", tail, h.now), []);
+    h.assert_replay();
+}
+
+/// A reservation stands in the way of what conflicts with it, and of
+/// nothing else: two freed symbols serve two sessions at once.
+#[test]
+fn reservations_of_different_symbols_do_not_stand_in_each_others_way() {
+    let mut h = three_sessions();
+    h.start("d", &["src/**"]);
+    let g = "src/a.rs#g";
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("c", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    assert!(interest(&mut h, "d", g).is_allow());
+    assert!(h.agent("a", release("l1")).is_allow());
+    assert!(h.agent("c", release("l2")).is_allow());
+    let holders: Vec<String> = h
+        .chain
+        .state
+        .reservations_at(h.now)
+        .into_iter()
+        .map(|r| r.session)
+        .collect();
+    assert_eq!(holders, ["b", "d"]);
+    assert!(h.lease("d", "l3", &[(g, LeaseKind::Edit)]).is_allow());
+    assert_eq!(h.chain.state.reservations.len(), 1, "b's stands");
+    assert_eq!(h.chain.state.reservations[0].session, "b");
+    assert!(h.lease("b", "l4", &[(F, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+fn start_with_symbols(h: &mut H, session: &str, symbols: &[&str]) {
+    let mut op = h.start_op(session, &["src/**"], None);
+    if let Op::SessionStart { scope, .. } = &mut op {
+        scope.symbols = Some(symbols.iter().map(|s| s.to_string()).collect());
+    }
+    assert!(h.human("ayse", op).is_allow());
+}
+
+/// What a lease request asks for, the same for an acquire and an interest.
+#[test]
+fn a_lease_names_a_valid_symbol_inside_the_sessions_symbols() {
+    let mut h = H::new();
+    h.start("a", &["**"]);
+    for bad in ["src/a.rs#", "../a.rs#f", "src/a.rs"] {
+        let d = h.lease("a", "l", &[(bad, LeaseKind::Edit)]);
+        assert!(denied_with(&d, "invalid_symbol"), "{bad}: {d:?}");
+    }
+
+    start_with_symbols(&mut h, "some", &["Client.*"]);
+    let inside = "src/a.rs#Client.charge";
+    assert!(
+        h.lease("some", "l1", &[(inside, LeaseKind::Edit)])
+            .is_allow()
+    );
+    let d = h.lease("some", "l2", &[("src/a.rs#other", LeaseKind::Edit)]);
+    assert!(denied_with(&d, "scope_symbol:src/a.rs#other"), "{d:?}");
+    // A pseudo-symbol is more than any name: only `*` reaches it.
+    let d = h.lease("some", "l3", &[("src/a.rs#<file>", LeaseKind::Insert)]);
+    assert!(denied_with(&d, "scope_symbol:"), "{d:?}");
+
+    start_with_symbols(&mut h, "all", &["*"]);
+    let d = h.lease("all", "l4", &[("src/b.rs#<file>", LeaseKind::Insert)]);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// The bounds of a lease request, on both sides of each.
+#[test]
+fn a_lease_request_may_be_as_long_as_the_limits_and_no_longer() {
+    let request = |h: &mut H, set: &str, n: usize, intent: usize| {
+        let items = (0..n).map(|i| LeaseItem {
+            symbol: format!("src/{set}.rs#f{i}"),
+            kind: LeaseKind::Edit,
+        });
+        let op = Op::LeaseAcquire {
+            set: set.into(),
+            items: items.collect(),
+            intent: "x".repeat(intent),
+            ttl_ms: 10 * MIN,
+        };
+        h.agent("a", op)
+    };
+    let mut h = three_sessions();
+    let d = request(&mut h, "many", 65, 1);
+    assert!(denied_with(&d, "lease_item_count"), "{d:?}");
+    assert!(request(&mut h, "many", 64, 1).is_allow());
+    let d = request(&mut h, "long", 1, 501);
+    assert!(denied_with(&d, "intent_too_long"), "{d:?}");
+    assert!(request(&mut h, "long", 1, 500).is_allow());
+    assert!(request(&mut h, "one", 1, 0).is_allow());
+    h.assert_replay();
 }

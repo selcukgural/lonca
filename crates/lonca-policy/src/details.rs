@@ -16,6 +16,7 @@ use crate::state::{ActiveLease, State};
 use crate::symbols;
 
 pub const LEASE_HELD: &str = "lease_held";
+pub const LEASE_RESERVED: &str = "lease_reserved";
 pub const LEASE_MISSING: &str = "lease_missing";
 /// The session holds what a change needs.
 pub const HELD_BY_YOU: &str = "held_by_you";
@@ -84,6 +85,31 @@ pub fn lease_held(state: &State, session: &str, wanted: &[LeaseItem], now_ms: i6
                 if seen.insert((held.lease.set.clone(), b.symbol.clone())) {
                     out.push(Detail::held(state, &held, b, a.kind));
                 }
+            }
+        }
+    }
+    out
+}
+
+/// The reservations of other sessions in the way of `wanted`.
+pub fn lease_reserved(
+    state: &State,
+    session: &str,
+    wanted: &[LeaseItem],
+    now_ms: i64,
+) -> Vec<Detail> {
+    let reservations = state.reservations_at(now_ms);
+    let theirs = reservations.iter().filter(|r| r.session != session);
+    let mut out = Vec::new();
+    for r in theirs {
+        for a in wanted {
+            for b in r.items.iter().filter(|b| leases_conflict(a, b)) {
+                out.push(Detail {
+                    holder_session: Some(r.session.clone()),
+                    holder_agent: state.sessions.get(&r.session).map(|s| s.agent.clone()),
+                    expires_ms: Some(r.until_ms),
+                    ..Detail::free(LEASE_RESERVED, &b.symbol, a.kind)
+                });
             }
         }
     }

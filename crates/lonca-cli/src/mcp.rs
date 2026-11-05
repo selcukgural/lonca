@@ -30,6 +30,8 @@ fn tools() -> Value {
         {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method).", "inputSchema": s(json!({"path": {"type": "string", "description": "file path relative to the workspace root"}}), &["path"])},
         {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it, their intent, and when it expires (or the change it is pinned to).", "inputSchema": s(json!({"items": items, "symbols": list, "kind": kind, "intent": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["intent"])},
         {"name": "lease_needed", "description": "The leases your local changes need, computed by Lonca: for each symbol the kind needed and whether you hold it, it is free, or who holds it. `acquire` lists the free ones as items for lease_acquire.", "inputSchema": s(json!({}), &[])},
+        {"name": "lease_interest", "description": "Say you are waiting for symbols another session holds. It holds nothing and never waits: go on with other work. When they are freed you get a short reservation (see `events`) and only you can acquire them; the oldest interest goes first. Refused (`lease_free`) for what nobody holds: acquire that.", "inputSchema": s(json!({"items": items, "symbols": list, "kind": kind, "intent": {"type": "string"}}), &["intent"])},
+        {"name": "events", "description": "What happened that you should know of: a lease reserved for you, a lease handed to you, your change integrated, conflicted, approved or rejected, a message from another session. Pass `from` as `next` of the last answer.", "inputSchema": s(json!({"from": {"type": "integer"}}), &[])},
         {"name": "lease_release", "description": "Release a lease set you hold, or only the items you name: the rest stays yours, under a new set id with the time it had left. Items pinned to a change in flight stay until the change leaves the queue; integration releases them without this call.", "inputSchema": s(json!({"set": {"type": "string"}, "items": items}), &["set"])},
         {"name": "lease_renew", "description": "Extend a lease set you hold, for ttl_minutes from now. While this server runs it renews your sets for you, so call this only to ask for a longer TTL. Past the hold limit a renewal is denied (lease_hold_limit) while another session wants the symbols.", "inputSchema": s(json!({"set": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["set"])},
         {"name": "preview", "description": "Facts of your local changes as Lonca computes them: symbols edited/added/deleted, signature changes, test changes, files. Use this to write an accurate claim.", "inputSchema": s(json!({}), &[])},
@@ -39,7 +41,7 @@ fn tools() -> Value {
         }), &["intent"])},
         {"name": "change_status", "description": "Status of a proposed change (queued, pending review, integrated, conflicted, rejected with reasons: a human's `rejected: ...` reason says what to fix before you sync and propose again), with the evidence of its last integration attempt (build and test logs).", "inputSchema": s(json!({"change": {"type": "string"}}), &["change"])},
         {"name": "sync", "description": "Bring trunk into the workspace, keeping and merging your local edits.", "inputSchema": s(json!({}), &[])},
-        {"name": "negotiate", "description": "Message another session about leases: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Bounded number of rounds.", "inputSchema": s(json!({"thread": {"type": "string"}, "to_session": {"type": "string"}, "message": {"type": "object", "description": "e.g. {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"} or {\"type\":\"yield\",\"set\":\"lse_...\"}"}}), &["thread", "to_session", "message"])},
+        {"name": "negotiate", "description": "Message another session about leases: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Bounded number of rounds.", "inputSchema": s(json!({"thread": {"type": "string"}, "to_session": {"type": "string"}, "message": {"type": "object", "description": "e.g. {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"} or {\"type\":\"yield\",\"set\":\"lse_...\",\"to\":\"<to_session>\"}; with `to` the set moves to that session at once, without it the set is freed"}}), &["thread", "to_session", "message"])},
     ])
 }
 
@@ -283,6 +285,18 @@ impl Server {
                 )
             }
             "lease_needed" => lease_needed(c, &self.ws),
+            "lease_interest" => {
+                let items = requested_items(args)?;
+                ctx::call(
+                    c,
+                    "lease.interest",
+                    json!({"items": items, "intent": args["intent"]}),
+                )
+            }
+            "events" => {
+                let from = args["from"].as_u64().unwrap_or(0);
+                ctx::call(c, "events", json!({"from": from}))
+            }
             "lease_release" => match args.get("items") {
                 Some(items) => {
                     let set = args["set"].as_str().unwrap_or_default();

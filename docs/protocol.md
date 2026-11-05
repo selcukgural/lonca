@@ -340,10 +340,11 @@ Operation kinds (`op.op`) and their fields:
 | `session.start` | `session`, `agent`, `model`, `task`, `scope`, `expires_ms` |
 | `session.bind` | `session`, `checks`, `level` |
 | `session.end` / `cap.revoke` / `taint` | `session`, `reason` |
-| `cap.attenuate` | `parent`, `child`, `agent`, `scope`, `expires_ms` |
+| `cap.attenuate` | `parent`, `child`, `agent`, `scope`, `expires_ms`, `leases` (when not empty) |
 | `lease.acquire` | `set`, `items`, `intent`, `ttl_ms` |
 | `lease.release` | `set` |
 | `lease.renew` | `set`, `ttl_ms` |
+| `lease.interest` | `items`, `intent` |
 | `change.propose` | `change`, `commit`, `base`, `claim` |
 | `change.withdraw` | `change` |
 | `change.integrate` | `change`, `trunk_before`, `merged` (id or null), `conflicts` |
@@ -522,6 +523,35 @@ it (it was denied an overlapping `lease.acquire` within the last
 `leases.max_ttl_minutes`): stop renewing, propose or release; the set
 runs out by its TTL.
 
+### `lease.interest`
+
+*agent.* `{"items": [lease item], "intent": string | null}`. Say you are
+waiting for symbols another session holds. Nothing is held and nothing
+waits. When what conflicts is freed, the oldest interest gets a
+reservation for `leases.reservation_ms`: `status.reservations`, an
+`events` entry, and until `until_ms` every other session's `lease.acquire`
+is denied `lease_reserved:<session>`. An unused window passes to the next
+interest. Logged, plus `"details"` as for `lease.acquire`. Denied
+`lease_free` for what nobody holds (acquire it) and `interest_exists` when
+the session already waits for it.
+
+### `events`
+
+*agent.* `{"from": integer | null}`, a sequence number. Read-only.
+
+```json
+{"events": [event], "next": integer}
+```
+
+Pass `next` as the next `from`. An event has a `kind`:
+`integrated` (`seq`, `change`), `conflicted` (`seq`, `change`,
+`conflicts`), `failed` (`seq`, `change`, `reasons`: verification refused
+it), `approved` (`seq`, `target_seq`), `rejected` (`seq`,
+`target_seq`, `reason`), `message` (`seq`, `thread`, `from`),
+`lease_received` (`seq`, `set`, `from`), and `reserved` (`items`,
+`until_ms`), which is the state now and is reported on every call while
+it lasts.
+
 ### `change.propose`
 
 *agent.* `{"change": change id | null, "base": id, "files": [file
@@ -551,14 +581,18 @@ where each lease the facts need stands: `held_by_you`, `free`, or one
 
 *agent.* `{"thread": string, "to_session": string, "message":
 {"type": "claim" | "yield" | "counter" | "accept" | "decline", …}}`
-(`claim`: `symbols`, `reason`; `yield`: `set`; `counter` and `decline`:
-`note`). Logged.
+(`claim`: `symbols`, `reason`; `yield`: `set`, `to`; `counter` and
+`decline`: `note`). Logged. `yield` with `to` (which must be `to_session`)
+moves the set to that session in this entry; without it the set is freed.
+Denied `yield_to_another_session`, `lease_pinned`, `lease_expired`,
+`scope_path:<path>`.
 
 ### `cap.attenuate`
 
-*agent.* `{"agent": string, "scope": scope, "expires_ms": time}`.
-A child session with a narrower scope. Logged, plus `"session"` and
-`"token"` when allowed.
+*agent.* `{"agent": string, "scope": scope, "expires_ms": time, "leases":
+[string] | null}`. A child session with a narrower scope. `leases` hands
+lease sets to it until it ends; they go back to the parent then. Logged,
+plus `"session"` and `"token"` when allowed.
 
 ### `session.end`
 
@@ -629,6 +663,9 @@ The `reasons` of a decision. The ones a runner acts on:
   `not_own_lease`: acquire or renew the lease, then propose again.
 - `lease_hold_limit`: the set has been held too long and someone is
   waiting; finish or let it run out, then acquire again.
+- `lease_reserved:<session>`: freed and held for that session for a
+  moment; `details` says until when. `lease_free`: nobody holds it, acquire
+  instead of waiting.
 - `claim_mismatch:<field>` (`edits`, `adds`, `deletes`, `deleted_files`,
   `signature_changes`, `tests`): the claim does not match the facts;
   `facts.preview` says what the facts are.
@@ -706,6 +743,8 @@ Exit codes:
   <set> --json` (in the agent's workspace): `{"seq", "decision", "set",
   "details": [detail]}`. A denied `acquire`'s `set` names nothing; read
   `details` for who holds what.
+- `lease interest SYMBOL… --json`: the same shape; `set` is `null`.
+- `events --from N --json`: the `events` result.
 - `init --json`: `{"repo", "trunk", "seq", "decision", "warnings":
   [string]}`. The warnings are those of `repo.prepare_init`; with
   `--json` they are not repeated on stderr.

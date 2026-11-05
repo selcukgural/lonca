@@ -210,6 +210,22 @@ pub struct Attenuate {
     pub agent: String,
     pub scope: Scope,
     pub expires_ms: i64,
+    /// Lease sets handed to the child until it ends.
+    #[serde(default)]
+    pub leases: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeaseInterest {
+    pub items: Vec<LeaseItem>,
+    #[serde(default)]
+    pub intent: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Events {
+    #[serde(default)]
+    pub from: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

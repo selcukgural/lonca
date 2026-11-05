@@ -76,7 +76,51 @@ fn golden_repo() -> Env {
     pins(&mut e);
     liveness(&mut e);
     continuation(&mut e);
+    queue(&mut e);
     e
+}
+
+/// From format 10: an interest gets the freed set, a yield moves a set in
+/// one entry, a delegated set comes back when the child ends.
+fn queue(e: &mut Env) {
+    let allowed = |r: Value| assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let a = e.session("s16", &["queue.md"]);
+    let b = e.session("s17", &["queue.md"]);
+    let item = json!([{"symbol": "queue.md#<file>", "kind": "edit"}]);
+    let set = e.lease(&a, "queue.md#<file>")["set"].clone();
+    allowed(e.ok(
+        "lease.interest",
+        None,
+        Some(&b),
+        json!({"items": item, "intent": "next"}),
+    ));
+    allowed(e.ok("lease.release", None, Some(&a), json!({ "set": set })));
+    let set = e.lease(&b, "queue.md#<file>");
+    allowed(set.clone());
+    let set = set["set"].clone();
+    allowed(e.ok(
+        "negotiate",
+        None,
+        Some(&b),
+        json!({"thread": "q1", "to_session": "s16",
+               "message": {"type": "yield", "set": set, "to": "s16"}}),
+    ));
+    let scope = json!({"paths": ["queue.md"], "symbols": null, "ops": ["lease.release"],
+                       "max_files": null, "max_lines": null});
+    let expires = e.now() + 600_000;
+    let child = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&a),
+        json!({"agent": "sub", "scope": scope, "expires_ms": expires, "leases": [set]}),
+    );
+    allowed(child.clone());
+    allowed(e.ok(
+        "session.end",
+        None,
+        Some(child["token"].as_str().expect("token")),
+        json!({}),
+    ));
 }
 
 /// From format 9: a session with a change in flight is continued; the
@@ -644,6 +688,24 @@ fn golden_v9_log_still_verifies_replays_and_audits() {
     assert_eq!(s.sessions["s14"].continued_by.as_deref(), Some("s15"));
     assert_eq!(s.sessions["s15"].continued_from.as_deref(), Some("s14"));
     assert!(s.sessions["s15"].ended.is_none());
+}
+
+#[test]
+fn golden_v10_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v10.bundle",
+        "b2c546223ec30380f0f8b3824c237c944f7430e058d81fd025997f3f9e471f45",
+        10,
+    );
+    let kinds: BTreeSet<&str> = ops.iter().map(|o| o.entry.op.kind().as_str()).collect();
+    assert!(kinds.contains("lease.interest"), "{kinds:?}");
+    let (_dir, store) = load("oplog-v10.bundle");
+    let s = lonca_policy::state::State::replay(&OpLog::new(&store).read_all().unwrap());
+    assert!(s.interests.is_empty(), "served");
+    assert!(s.reservations.is_empty(), "consumed");
+    let queue: Vec<_> = s.leases.values().filter(|l| l.session == "s16").collect();
+    assert_eq!(queue.len(), 1, "yielded to s16, delegated, given back");
+    assert_eq!(queue[0].delegated_from, None);
 }
 
 #[test]

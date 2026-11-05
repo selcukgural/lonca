@@ -276,7 +276,7 @@ const RULES: &str = "\
 - Check your changes with {tool}preview, then submit with {tool}propose. Its arguments are `intent` (what you did and why, in a sentence) and, each copied from `facts` in what preview reports: `edits` (existing symbols whose body you changed), `adds` (symbols you added), `deletes` (symbols you deleted), `deleted_files` (files you deleted), `signature_changes` (symbols whose signature you changed), `tests` (test counts: added, modified, deleted, skipped). There is no other argument: symbols go in those lists by what happened to them. A claim that differs from the facts is denied (claim_mismatch:<field>).
 - After your change integrates, run {tool}sync before continuing. Integration releases the leases the change needed: lease a symbol again before editing it again.
 - If a symbol is leased by another agent, ask it with {tool}negotiate or wait.
-- Editing a file is not delivering it: nothing reaches the repository until you propose it.
+- Editing a file is not delivering it: nothing reaches the repository until you propose it. A git commit here stays here: `git status` and `git diff` show your edits, only {tool}propose delivers them.
 - Reading untrusted paths or files outside this workspace taints the session; whether web fetches, network commands and other MCP servers do is the repository's policy ([taint] in lonca.toml). Tainted changes need human review.";
 
 /// The most names of files [`stop_message`] writes out.

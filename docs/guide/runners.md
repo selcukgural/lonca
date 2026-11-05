@@ -19,9 +19,9 @@ page is the harness side.
          --scratch /work/claude-1-scratch --json
    ```
 
-   The workspace is a plain directory with the files of trunk and
-   `.lonca/workspace.json`; `.lonca/session` holds the agent's token
-   (0600). The scratch directory is where the worker keeps notes, logs
+   The workspace holds the files of trunk and `.lonca/workspace.json`;
+   `.lonca/session` holds the agent's token (0600). It is a git repository
+   as well (see "Git in a workspace"). The scratch directory is where the worker keeps notes, logs
    and throwaway files: writes there are allowed and are not facts,
    nothing there can be proposed. It must lie outside the workspace.
    The roots are recorded in the session's scope in the log.
@@ -48,6 +48,32 @@ page is the harness side.
 5. **The worker ends.** In the workspace, `lonca session end --json`
    ends the session and its token. A session a runner forgets expires
    at its TTL; `lonca session revoke <id>` ends one from outside.
+
+## Git in a workspace
+
+`session start` makes the workspace a repository with one commit, `lonca base
+<trunk commit>`, on `main`, so `git status`, `git diff` and tools that want a
+repository work. Lonca writes it without running `git`, so no `git` is needed
+and your git config plays no part. There is no remote and no hook; `.lonca/`
+and the files `lonca harness setup` wrote are excluded.
+
+- `git diff` shows the local edits, the same as `lonca diff` until the agent
+  commits. `lonca sync` moves the repository to the new base: `main`, `HEAD` and
+  the index. What was committed or staged is then a local edit again, and a
+  branch is left behind, but no file changes. A sync that can not do this (the
+  agent replaced part of `.git`) still syncs and says so: `git_warning` with
+  `--json`, a warning otherwise.
+- A commit is local. `lonca propose` sends what differs from the base, whether
+  it was committed or not, and nothing is proposed from `.git`.
+- `git clean -x` removes `.lonca/` as well: that ends the workspace.
+- `--no-git` keeps a plain directory. Setting it up costs about 1.5 s per
+  10,000 files; a workspace left by an older Lonca stays plain when continued.
+
+An agent can write to `.git`, so treat its config as you would that of a
+repository you cloned from a stranger: a `git` command you run in there, outside
+the agent's sandbox, runs what that config says. `lonca fetch` and `propose
+--commit` refuse to run in a workspace for this reason, and `lonca sync` never
+reads it.
 
 ## A worker that outlives its session
 
@@ -112,7 +138,8 @@ tools, and the hooks.
 - Codex's hooks need a person's review with `/hooks`, or
   `--dangerously-bypass-hook-trust`, which also runs any other hook left
   unreviewed: your choice, and Lonca does not add it. Without them the rules
-  and the MCP server still work. Add `--skip-git-repo-check`.
+  and the MCP server still work. In a `--no-git` workspace, add
+  `--skip-git-repo-check`.
 - A name with no profile gets the rules and how to start `lonca mcp`, for you
   to put where that harness reads them. `lonca rules` prints the rules
   anywhere.

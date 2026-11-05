@@ -14,6 +14,7 @@ use lonca_daemon::protocol::FileChange;
 use serde_json::{Value, json};
 
 use crate::ctx::{self, call};
+use crate::workspace::Workspace;
 
 pub const TRUNK_REF: &str = "refs/lonca/trunk";
 
@@ -47,6 +48,11 @@ fn rev(dir: &Path, r: &str) -> Option<GitId> {
 /// The repository a checkout belongs to: `--repo`, else the checkout's
 /// `lonca.repo` git config (set by the first `lonca fetch --repo`).
 pub fn repo_name(dir: &Path, flag: Option<String>) -> Result<String> {
+    // An agent's workspace is a repository too, and an agent writes its
+    // config: `git` must not run there.
+    if Workspace::find(dir).is_some() {
+        bail!("this is a Lonca workspace: use `lonca sync` and `lonca propose`");
+    }
     git(dir, &["rev-parse", "--git-dir"])
         .context("not a git checkout; pass --into or cd into one")?;
     if let Some(r) = flag {

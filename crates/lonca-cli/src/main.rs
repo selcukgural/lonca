@@ -4,6 +4,7 @@ mod advise;
 mod checkout;
 mod ctx;
 mod doctor;
+mod gitdir;
 mod hook;
 mod keys;
 mod mcp;
@@ -534,6 +535,9 @@ enum SessionCmd {
         /// not.
         #[arg(long = "continue", conflicts_with = "workspace")]
         continue_dir: Option<PathBuf>,
+        /// Keep the workspace a plain directory: no `.git`.
+        #[arg(long, conflicts_with = "continue_dir")]
+        no_git: bool,
         /// With --continue: allow a scope wider than the old session's.
         #[arg(long)]
         widen: bool,
@@ -1178,6 +1182,7 @@ fn run(cmd: Cmd) -> Result<()> {
             max_lines,
             workspace,
             continue_dir,
+            no_git,
             widen,
             scratch,
             harness,
@@ -1241,7 +1246,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 None => {
                     let mut ac = connect()?;
                     ac.token = Some(token.to_string());
-                    Workspace::create(&mut ac, &dir, &repo, Some(session.clone()), None)?
+                    Workspace::create(&mut ac, &dir, &repo, Some(session.clone()), None, !no_git)?
                 }
             };
             // The token first: it is what the workspace runs on.
@@ -1351,7 +1356,8 @@ fn run(cmd: Cmd) -> Result<()> {
         }) => {
             let human = human_name(human)?;
             let mut c = human_client(&repo, &human)?;
-            let ws = Workspace::create(&mut c, &ctx::absolute(&dir)?, &repo, None, Some(human))?;
+            let dir = ctx::absolute(&dir)?;
+            let ws = Workspace::create(&mut c, &dir, &repo, None, Some(human), false)?;
             if as_json {
                 return ctx::print_json(&json!({
                     "workspace": ws.root, "repo": repo, "base": ws.meta.base,
@@ -1390,6 +1396,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 return ctx::print_json(&json!({
                     "base_before": r.from, "base_after": r.to,
                     "updated": r.updated, "merged": r.merged, "conflicts": conflicts,
+                    "git_warning": r.git_warning,
                 }));
             }
             println!(
@@ -1405,6 +1412,9 @@ fn run(cmd: Cmd) -> Result<()> {
                 for s in r.symbols_of(p) {
                     println!("    {s}");
                 }
+            }
+            if let Some(w) = &r.git_warning {
+                eprintln!("warning: .git still shows the old base: {w}");
             }
             Ok(())
         }

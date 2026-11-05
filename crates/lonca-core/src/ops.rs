@@ -82,6 +82,8 @@ pub enum OpKind {
     LeaseRelease,
     #[serde(rename = "lease.renew")]
     LeaseRenew,
+    #[serde(rename = "lease.interest")]
+    LeaseInterest,
     #[serde(rename = "change.propose")]
     ChangePropose,
     #[serde(rename = "change.withdraw")]
@@ -132,6 +134,7 @@ impl OpKind {
             OpKind::LeaseAcquire => "lease.acquire",
             OpKind::LeaseRelease => "lease.release",
             OpKind::LeaseRenew => "lease.renew",
+            OpKind::LeaseInterest => "lease.interest",
             OpKind::ChangePropose => "change.propose",
             OpKind::ChangeWithdraw => "change.withdraw",
             OpKind::ChangeIntegrate => "change.integrate",
@@ -161,6 +164,7 @@ impl OpKind {
                 | OpKind::LeaseAcquire
                 | OpKind::LeaseRelease
                 | OpKind::LeaseRenew
+                | OpKind::LeaseInterest
                 | OpKind::Negotiate
                 | OpKind::CapAttenuate
         )
@@ -362,9 +366,13 @@ pub enum NegotiationMsg {
         mine: Vec<String>,
         yours: Vec<String>,
     },
-    /// Give up the named lease set in favour of the receiver.
+    /// Give up the named lease set in favour of the receiver. With `to` the
+    /// set moves to that session in this entry, so nobody can take it in
+    /// between; without, it is freed.
     Yield {
         set: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<String>,
     },
     Counter {
         note: String,
@@ -457,6 +465,10 @@ pub enum Op {
         agent: String,
         scope: Scope,
         expires_ms: i64,
+        /// Lease sets the parent hands to the child; they come back when
+        /// the child ends.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        leases: Vec<String>,
     },
     #[serde(rename = "cap.revoke")]
     CapRevoke { session: String, reason: String },
@@ -471,6 +483,13 @@ pub enum Op {
     LeaseRelease { set: String },
     #[serde(rename = "lease.renew")]
     LeaseRenew { set: String, ttl_ms: i64 },
+    /// Holds nothing and blocks nobody: when what conflicts with `items` is
+    /// freed, the oldest interest gets a short reservation.
+    #[serde(rename = "lease.interest")]
+    LeaseInterest {
+        items: Vec<LeaseItem>,
+        intent: String,
+    },
     #[serde(rename = "change.propose")]
     ChangePropose {
         change: ChangeId,
@@ -554,6 +573,7 @@ impl Op {
             Op::LeaseAcquire { .. } => OpKind::LeaseAcquire,
             Op::LeaseRelease { .. } => OpKind::LeaseRelease,
             Op::LeaseRenew { .. } => OpKind::LeaseRenew,
+            Op::LeaseInterest { .. } => OpKind::LeaseInterest,
             Op::ChangePropose { .. } => OpKind::ChangePropose,
             Op::ChangeWithdraw { .. } => OpKind::ChangeWithdraw,
             Op::ChangeIntegrate { .. } => OpKind::ChangeIntegrate,

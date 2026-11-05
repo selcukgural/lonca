@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 
 use lonca_core::oplog::FORMAT_LEASE_LIVENESS;
+use lonca_core::ops::OpKind;
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, Facts,
     HumanKey, HumanSignature, LeaseItem, LeaseKind, NegotiationMsg, ObsKind, ObservationLevel, Op,
@@ -26,7 +27,10 @@ use lonca_core::paths::{
 };
 
 use crate::config::{CVal, CedarOutcome, PolicyBundle};
-use crate::state::{ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, LEASES_KEPT, RELEASED, State};
+use crate::state::{
+    ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, LEASES_KEPT, RELEASED, RESERVATION_WINDOW,
+    Session, State,
+};
 use crate::symbols;
 
 pub struct Ctx<'a> {
@@ -153,6 +157,91 @@ fn is_key_op(op: &Op) -> bool {
             | Op::DaemonRotate { .. }
             | Op::DaemonRecover { .. }
     )
+}
+
+/// What a lease request and an interest in one have in common.
+fn check_lease_request(
+    s: &Session,
+    items: &[LeaseItem],
+    intent: &str,
+    max_items: usize,
+    v: &mut Verdict,
+) {
+    if items.is_empty() || items.len() > max_items {
+        v.deny("lease_item_count");
+    }
+    if intent.len() > 500 {
+        v.deny("intent_too_long");
+    }
+    for item in items {
+        let Some((path, name)) = symbols::split(&item.symbol) else {
+            v.deny(format!("invalid_symbol:{}", item.symbol));
+            continue;
+        };
+        if validate_repo_path(path).is_err() || name.is_empty() {
+            v.deny(format!("invalid_symbol:{}", item.symbol));
+            continue;
+        }
+        if !s.scope.paths.iter().any(|p| path_matches(p, path)) {
+            v.deny(format!("scope_path:{path}"));
+        }
+        if let Some(pats) = &s.scope.symbols {
+            let ok = if name.starts_with('<') {
+                pats.iter().any(|p| p == "*")
+            } else {
+                pats.iter().any(|p| symbol_matches(p, name))
+            };
+            if !ok {
+                v.deny(format!("scope_symbol:{}", item.symbol));
+            }
+        }
+    }
+}
+
+/// A set moves whole, while it is alive, unpinned (a pin stays with its
+/// change), and only to a session whose scope covers what is in it.
+fn check_handover(state: &State, own: &str, set: &str, scope: &Scope, t: i64, v: &mut Verdict) {
+    let Some(l) = state.leases.get(set).filter(|l| l.session == own) else {
+        v.deny("not_own_lease");
+        return;
+    };
+    if !l.pins.is_empty() {
+        v.deny("lease_pinned");
+    }
+    if !state.active_leases(t).any(|h| h.lease.set == set) {
+        v.deny("lease_expired");
+    }
+    for item in &l.items {
+        let path = symbols::split(&item.symbol).map(|(path, _)| path);
+        let path = path.unwrap_or_default();
+        if !scope.paths.iter().any(|p| path_matches(p, path)) {
+            v.deny(format!("scope_path:{path}"));
+        }
+    }
+}
+
+fn check_yield(
+    state: &State,
+    own: &str,
+    set: &str,
+    to: Option<&str>,
+    to_session: &str,
+    t: i64,
+    v: &mut Verdict,
+) {
+    let Some(to) = to else {
+        if state.leases.get(set).map(|l| l.session.as_str()) != Some(own) {
+            v.deny("not_own_lease");
+        }
+        return;
+    };
+    if to != to_session {
+        v.deny("yield_to_another_session");
+    }
+    match state.sessions.get(to) {
+        Some(receiver) => check_handover(state, own, set, &receiver.scope, t, v),
+        None => v.deny("unknown_session"),
+    }
 }
 
 /// A session can be continued once, by one successor, and only a session
@@ -486,6 +575,11 @@ pub fn decide(
                 if !k.agent_grantable() {
                     return Decision::deny(format!("not_grantable:{}", k.as_str()));
                 }
+                // Waiting for a lease takes the right to acquire it.
+                let k = match k {
+                    OpKind::LeaseInterest => OpKind::LeaseAcquire,
+                    k => k,
+                };
                 if !s.scope.ops.contains(&k) {
                     return Decision::deny(format!("scope_op:{}", k.as_str()));
                 }
@@ -608,10 +702,14 @@ pub fn decide(
             agent,
             scope,
             expires_ms,
+            leases,
         } => {
             let own = actor.session().unwrap_or_default();
             if parent != own {
                 v.deny("not_own_session");
+            }
+            for set in leases {
+                check_handover(state, own, set, scope, t, &mut v);
             }
             if !valid_token(child, 64) || !valid_token(agent, 64) {
                 v.deny("invalid_name");
@@ -640,37 +738,12 @@ pub fn decide(
             if !valid_token(set, 64) || state.leases.contains_key(set) {
                 v.deny("invalid_lease_set");
             }
-            if items.is_empty() || items.len() > cfg.leases.max_items {
-                v.deny("lease_item_count");
-            }
             if *ttl_ms <= 0 || *ttl_ms > cfg.leases.max_ttl_minutes * 60_000 {
                 v.deny("lease_ttl");
             }
-            if intent.len() > 500 {
-                v.deny("intent_too_long");
-            }
-            for item in items {
-                let Some((path, name)) = symbols::split(&item.symbol) else {
-                    v.deny(format!("invalid_symbol:{}", item.symbol));
-                    continue;
-                };
-                if validate_repo_path(path).is_err() || name.is_empty() {
-                    v.deny(format!("invalid_symbol:{}", item.symbol));
-                    continue;
-                }
-                if !s.scope.paths.iter().any(|p| path_matches(p, path)) {
-                    v.deny(format!("scope_path:{path}"));
-                }
-                if let Some(pats) = &s.scope.symbols {
-                    let ok = if name.starts_with('<') {
-                        pats.iter().any(|p| p == "*")
-                    } else {
-                        pats.iter().any(|p| symbol_matches(p, name))
-                    };
-                    if !ok {
-                        v.deny(format!("scope_symbol:{}", item.symbol));
-                    }
-                }
+            check_lease_request(s, items, intent, cfg.leases.max_items, &mut v);
+            if let Some(holder) = state.reserved_against(own, items, t) {
+                v.deny(format!("lease_reserved:{holder}"));
             }
             for held in state.active_leases(t) {
                 if held.lease.session == own {
@@ -687,6 +760,26 @@ pub fn decide(
                     }
                 }
             }
+        }
+        Op::LeaseInterest { items, intent } => {
+            let own = actor.session().unwrap_or_default();
+            check_lease_request(
+                &state.sessions[own],
+                items,
+                intent,
+                cfg.leases.max_items,
+                &mut v,
+            );
+            // Nothing to wait for means nothing to hold: an interest in a
+            // free symbol would be a way to reserve it.
+            if !state.held_or_reserved(own, items, t) {
+                v.deny("lease_free");
+            }
+            if state.waiting(own, items) {
+                v.deny("interest_exists");
+            }
+            v.info
+                .push(format!("{RESERVATION_WINDOW}{}", cfg.leases.reservation_ms));
         }
         Op::LeaseRelease { set } => match state.leases.get(set) {
             None => v.deny("unknown_lease_set"),
@@ -896,10 +989,8 @@ pub fn decide(
                     }
                 }
             }
-            if let NegotiationMsg::Yield { set } = message
-                && state.leases.get(set).map(|l| l.session.as_str()) != Some(own)
-            {
-                v.deny("not_own_lease");
+            if let NegotiationMsg::Yield { set, to } = message {
+                check_yield(state, own, set, to.as_deref(), to_session, t, &mut v);
             }
         }
         Op::Redact { blob, reason } => {

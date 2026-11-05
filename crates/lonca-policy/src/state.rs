@@ -65,6 +65,28 @@ pub struct LeaseSet {
     pub acquired_ms: i64,
     /// Sessions denied by this set, with the time of their last try.
     pub interest: BTreeMap<String, i64>,
+    /// The session this set goes back to when its holder ends: it was
+    /// delegated with `cap.attenuate`.
+    pub delegated_from: Option<String>,
+}
+
+/// A session waiting for what others hold. It holds nothing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Interest {
+    pub session: String,
+    pub items: Vec<LeaseItem>,
+    pub intent: String,
+    /// `leases.reservation_ms` when it was registered: the fold has no
+    /// policy, and the decision carries it.
+    pub window_ms: i64,
+}
+
+/// For a while after a set is freed, only `session` can acquire `items`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Reservation {
+    pub session: String,
+    pub items: Vec<LeaseItem>,
+    pub until_ms: i64,
 }
 
 impl LeaseSet {
@@ -178,6 +200,10 @@ pub struct State {
     /// (time, symbols) of integrated reverts, for revert-rate rules.
     pub reverts: Vec<(i64, Vec<String>)>,
     pub threads: BTreeMap<String, Thread>,
+    /// Waiting sessions by the sequence number of their request: the
+    /// oldest is served first.
+    pub interests: BTreeMap<u64, Interest>,
+    pub reservations: Vec<Reservation>,
     pub redacted: BTreeSet<GitId>,
     pub anchors: Vec<(String, u64, String)>,
     /// Sequence number the next entry must carry.
@@ -202,6 +228,8 @@ pub const RELEASED: &str = "released";
 pub const LEASES_KEPT: &str = "leases_kept";
 /// On a heartbeat's decision, followed by `leases.heartbeat_timeout_ms`.
 pub const HEARTBEAT_TIMEOUT: &str = "heartbeat_timeout=";
+/// On a `lease.interest` decision: `leases.reservation_ms`.
+pub const RESERVATION_WINDOW: &str = "reservation_ms=";
 
 impl State {
     pub fn new() -> Self {
@@ -293,6 +321,126 @@ impl State {
         })
     }
 
+    /// A session that can still act: not ended, not expired, still beating.
+    fn session_present(&self, id: &str, now_ms: i64) -> bool {
+        self.session_active(id, now_ms) && !self.session_lost(id, now_ms)
+    }
+
+    fn held_against(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
+        self.active_leases(now_ms)
+            .filter(|h| h.lease.session != session)
+            .any(|h| {
+                h.items
+                    .iter()
+                    .any(|b| items.iter().any(|a| leases_conflict(a, b)))
+            })
+    }
+
+    /// The reservations in force at `now_ms`, with the interests they serve.
+    /// The window of one that ran out is over for its session, and the next
+    /// interest gets its own. Pure, and a function of the entry's time, so
+    /// `decide()` sees what the fold of the same entry will record.
+    fn settled(&self, now_ms: i64) -> (Vec<Reservation>, Vec<u64>) {
+        let mut out: Vec<Reservation> = self
+            .reservations
+            .iter()
+            .filter(|r| r.until_ms > now_ms && self.session_present(&r.session, now_ms))
+            .cloned()
+            .collect();
+        let mut served = Vec::new();
+        for (seq, i) in &self.interests {
+            let reserved = |r: &Reservation| {
+                r.session != i.session
+                    && r.items
+                        .iter()
+                        .any(|b| i.items.iter().any(|a| leases_conflict(a, b)))
+            };
+            if self.session_present(&i.session, now_ms)
+                && !self.held_against(&i.session, &i.items, now_ms)
+                && !out.iter().any(reserved)
+            {
+                out.push(Reservation {
+                    session: i.session.clone(),
+                    items: i.items.clone(),
+                    until_ms: now_ms + i.window_ms,
+                });
+                served.push(*seq);
+            }
+        }
+        (out, served)
+    }
+
+    pub fn held_or_reserved(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
+        self.held_against(session, items, now_ms)
+            || self.reserved_against(session, items, now_ms).is_some()
+    }
+
+    /// `session` already waits for something that overlaps `items`.
+    pub fn waiting(&self, session: &str, items: &[LeaseItem]) -> bool {
+        self.interests.values().any(|i| {
+            i.session == session
+                && i.items.iter().any(|b| {
+                    items
+                        .iter()
+                        .any(|a| symbols::overlaps(&a.symbol, &b.symbol))
+                })
+        })
+    }
+
+    pub fn reservations_at(&self, now_ms: i64) -> Vec<Reservation> {
+        self.settled(now_ms).0
+    }
+
+    /// Another session's reservation stands in the way of `items`.
+    pub fn reserved_against(
+        &self,
+        session: &str,
+        items: &[LeaseItem],
+        now_ms: i64,
+    ) -> Option<String> {
+        self.reservations_at(now_ms)
+            .into_iter()
+            .find(|r| {
+                r.session != session
+                    && r.items
+                        .iter()
+                        .any(|b| items.iter().any(|a| leases_conflict(a, b)))
+            })
+            .map(|r| r.session)
+    }
+
+    fn settle_reservations(&mut self, now_ms: i64) {
+        let (reservations, served) = self.settled(now_ms);
+        self.reservations = reservations;
+        for seq in served {
+            self.interests.remove(&seq);
+        }
+        let gone: Vec<u64> = self
+            .interests
+            .iter()
+            .filter(|(_, i)| !self.session_present(&i.session, now_ms))
+            .map(|(seq, _)| *seq)
+            .collect();
+        for seq in gone {
+            self.interests.remove(&seq);
+        }
+    }
+
+    /// What was waited for is in hand.
+    fn acquired(&mut self, session: &str, items: &[LeaseItem]) {
+        let overlaps = |theirs: &[LeaseItem]| {
+            theirs.iter().any(|b| {
+                items
+                    .iter()
+                    .any(|a| symbols::overlaps(&a.symbol, &b.symbol))
+            })
+        };
+        self.reservations
+            .retain(|r| r.session != session || !overlaps(&r.items));
+        self.interests
+            .retain(|_, i| i.session != session || !overlaps(&i.items));
+    }
+
     fn descendants(&self, root: &str) -> Vec<String> {
         self.sessions
             .keys()
@@ -313,6 +461,7 @@ impl State {
         if pins {
             self.prune_leases(e.time_ms);
         }
+        self.settle_reservations(e.time_ms);
         // What the proposal is decided on: its session's leases at this
         // moment. A release by approval changes nothing, the pins are there.
         if pins
@@ -545,6 +694,7 @@ impl State {
             {
                 s.ended = Some(reason.to_string());
             }
+            self.give_back(&id, now_ms);
             if withdraw {
                 self.leases.retain(|_, l| l.session != id);
             } else {
@@ -593,6 +743,23 @@ impl State {
         }
         if let Some(s) = self.sessions.get_mut(old) {
             s.continued_by = Some(new.to_string());
+        }
+    }
+
+    /// What `id` holds by delegation goes back to a parent that can use it.
+    fn give_back(&mut self, id: &str, now_ms: i64) {
+        let delegated: Vec<(String, String)> = self
+            .leases
+            .values()
+            .filter(|l| l.session == id)
+            .filter_map(|l| Some((l.set.clone(), l.delegated_from.clone()?)))
+            .filter(|(_, parent)| self.session_present(parent, now_ms))
+            .collect();
+        for (set, parent) in delegated {
+            if let Some(l) = self.leases.get_mut(&set) {
+                l.session = parent;
+                l.delegated_from = None;
+            }
         }
     }
 
@@ -794,7 +961,14 @@ impl State {
                 agent,
                 scope,
                 expires_ms,
+                leases,
             } => {
+                for set in leases {
+                    if let Some(l) = self.leases.get_mut(set) {
+                        l.session = child.clone();
+                        l.delegated_from = Some(parent.clone());
+                    }
+                }
                 if let Some(p) = self.sessions.get(parent).cloned() {
                     self.sessions.insert(
                         child.clone(),
@@ -859,8 +1033,29 @@ impl State {
                             pins: BTreeMap::new(),
                             acquired_ms,
                             interest: BTreeMap::new(),
+                            delegated_from: None,
                         },
                     );
+                    self.acquired(session, items);
+                }
+            }
+            Op::LeaseInterest { items, intent } => {
+                if let Some(session) = actor.session() {
+                    let window_ms = reasons
+                        .iter()
+                        .find_map(|r| r.strip_prefix(RESERVATION_WINDOW))
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or_default();
+                    self.interests.insert(
+                        seq,
+                        Interest {
+                            session: session.to_string(),
+                            items: items.clone(),
+                            intent: intent.clone(),
+                            window_ms,
+                        },
+                    );
+                    self.register_interest(session, items, time_ms);
                 }
             }
             Op::LeaseRelease { set } => self.release_set(set, time_ms),
@@ -1049,8 +1244,17 @@ impl State {
                 ) {
                     t.closed = true;
                 }
-                if let NegotiationMsg::Yield { set } = message {
-                    self.release_set(set, time_ms);
+                match message {
+                    NegotiationMsg::Yield { set, to: None } => self.release_set(set, time_ms),
+                    NegotiationMsg::Yield { set, to: Some(to) } => {
+                        if let Some(l) = self.leases.get_mut(set) {
+                            l.session = to.clone();
+                            l.acquired_ms = time_ms;
+                            l.interest.clear();
+                            l.delegated_from = None;
+                        }
+                    }
+                    _ => {}
                 }
                 let sender_taint = self.sessions.get(&from).and_then(|s| s.taint.clone());
                 if let (Some(t), Some(r)) = (sender_taint, self.sessions.get_mut(to_session))

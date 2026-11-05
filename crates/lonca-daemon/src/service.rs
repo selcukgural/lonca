@@ -11,7 +11,9 @@ use base64::Engine;
 use lonca_core::canonical::random_id;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp};
-use lonca_core::ops::{Actor, BindChecks, Claim, HumanKey, ObsKind, Observation, Op, Phase};
+use lonca_core::ops::{
+    Actor, BindChecks, Claim, HumanKey, LeaseItem, ObsKind, Observation, Op, Phase,
+};
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
@@ -181,6 +183,8 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("facts.preview", Cred::Agent),
     ("negotiate", Cred::Agent),
     ("cap.attenuate", Cred::Agent),
+    ("lease.interest", Cred::Agent),
+    ("events", Cred::Agent),
     ("session.end", Cred::Agent),
     ("hook.event", Cred::Agent),
     ("hook.bind", Cred::Agent),
@@ -523,6 +527,8 @@ impl Service {
                 })
             }
             "cap.attenuate" => self.attenuate(req, params(p)?),
+            "lease.interest" => self.lease_interest(req, params(p)?),
+            "events" => self.events(req, params(p)?),
             "session.end" => self.agent_end(req),
             "session.heartbeat" => self.heartbeat(req),
             "hook.event" => self.hook_event(req, params(p)?),
@@ -1013,7 +1019,13 @@ impl Service {
                 )
             })
             .collect();
+        let interests: Vec<Value> = s
+            .interests
+            .iter()
+            .map(|(seq, i)| json!({"seq": seq, "session": i.session, "items": i.items, "intent": i.intent}))
+            .collect();
         Ok(json!({
+            "interests": interests, "reservations": s.reservations_at(now),
             "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "frozen": s.frozen, "queue": s.queue,
             "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
             "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now, "daemon_key": s.daemon_key,
@@ -1931,8 +1943,50 @@ impl Service {
         let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
         let mut out = logged(&signed);
         out["set"] = json!(set);
-        out["details"] = json!(details::lease_held(&r.chain.state, &session, &p.items, now));
+        out["details"] = json!(Self::lease_details(r, &session, &p.items, now));
         Ok(out)
+    }
+
+    fn lease_details(
+        r: &RepoHandle,
+        session: &str,
+        items: &[LeaseItem],
+        now: i64,
+    ) -> Vec<details::Detail> {
+        let state = &r.chain.state;
+        let mut out = details::lease_held(state, session, items, now);
+        out.extend(details::lease_reserved(state, session, items, now));
+        out
+    }
+
+    fn lease_interest(&self, req: &Request, p: LeaseInterest) -> Hr {
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        Self::reconcile(r, now)?;
+        let op = Op::LeaseInterest {
+            items: p.items.clone(),
+            intent: p.intent,
+        };
+        let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
+        let mut out = logged(&signed);
+        out["details"] = json!(Self::lease_details(r, &session, &p.items, now));
+        Ok(out)
+    }
+
+    /// Derived from the log for the caller; nothing is written.
+    fn events(&self, req: &Request, p: Events) -> Hr {
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        let mut ops = OpLog::new(&r.store).read_all().or_fail()?;
+        ops.drain(..ops.len().min(p.from as usize));
+        let events = lonca_policy::events::for_session(&r.chain.state, &session, &ops, now);
+        Ok(json!({"events": events, "next": r.chain.state.next_seq}))
     }
 
     fn propose(&self, req: &Request, p: ProposeChange) -> Hr {
@@ -2053,6 +2107,7 @@ impl Service {
             agent: p.agent,
             scope: p.scope,
             expires_ms: p.expires_ms,
+            leases: p.leases,
         };
         let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
         let mut out = logged(&signed);

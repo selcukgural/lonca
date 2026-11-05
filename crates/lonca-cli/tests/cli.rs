@@ -2421,3 +2421,54 @@ fn mcp_status_shows_the_change_the_workspace_proposed_under_its_old_session() {
     assert!(!err, "{st}");
     assert_eq!(st["your_changes"][0]["change"], proposed["change"], "{st}");
 }
+
+/// `lease interest` and `events` on the CLI and over MCP (issue #42).
+#[test]
+fn a_worker_waits_for_a_lease_and_hears_when_it_is_free() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    e.run(r, &session_args("src/**", &["--workspace", "w2"]));
+    let w2 = r.join("w2");
+    let sym = "src/lib.rs#charge";
+    let held = parse(&e.run(&ws, &["lease", "acquire", sym, "--json"]));
+    let set = held["set"].as_str().unwrap();
+
+    let args = ["lease", "interest", "src/lib.rs#refund", "--json"];
+    let free = parse(&refused(&e, &w2, &args, "lease_free"));
+    assert_eq!(free["decision"]["outcome"], "deny");
+
+    let mut mcp = Mcp::start(&e, &w2);
+    let (err, waiting) = mcp.tool(
+        "lease_interest",
+        json!({"symbols": [sym], "intent": "next"}),
+    );
+    assert!(!err, "{waiting}");
+    assert_eq!(waiting["decision"]["outcome"], "allow", "{waiting}");
+    assert_eq!(waiting["details"][0]["code"], "lease_held");
+
+    e.run(&ws, &["lease", "release", set]);
+    e.run(&ws, &["session", "heartbeat"]);
+    let (err, inbox) = mcp.tool("events", json!({}));
+    assert!(!err, "{inbox}");
+    assert_eq!(inbox["events"][0]["kind"], "reserved", "{inbox}");
+    let next = inbox["next"].as_u64().unwrap();
+
+    let cli = parse(&e.run(&w2, &["events", "--json"]));
+    assert_eq!(cli["events"], inbox["events"]);
+    let text_form = e.run(&w2, &["events", "--from", &next.to_string()]);
+    assert!(text_form.contains("reserved"), "{text_form}");
+    assert!(text_form.contains(&format!("next {next}")), "{text_form}");
+
+    let (err, got) = mcp.tool("lease_acquire", json!({"symbols": [sym], "intent": "mine"}));
+    assert!(!err, "{got}");
+    assert_eq!(got["decision"]["outcome"], "allow", "{got}");
+    let (_, inbox) = mcp.tool("events", json!({"from": next}));
+    assert_eq!(inbox["events"], json!([]), "{inbox}");
+
+    // The text form of an interest prints the decision.
+    let args = ["lease", "interest", sym];
+    let out = e.cmd(&ws, &args).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains("allow"), "{}", text(&out.stdout));
+}

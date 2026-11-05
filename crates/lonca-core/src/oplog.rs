@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::canonical::{canonical_bytes, digest_of};
 use crate::error::{Error, Result};
 use crate::keys::{KeyPair, verify_hex};
-use crate::ops::{Actor, Attestation, Decision, Facts, HumanSignature, Op};
+use crate::ops::{Actor, Attestation, Decision, Facts, HumanSignature, NegotiationMsg, Op};
 use crate::store::{CommitSpec, FileEntry, FileMap, FileMode, GitId, Store};
 
 pub const OPLOG_REF: &str = "refs/lonca/oplog";
@@ -31,8 +31,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// adds `reject`; version 7 changes what `change.propose` means for
 /// leases (they are pinned to the change) and prunes dead lease sets;
 /// version 8 gives heartbeats and denied acquires a meaning for leases;
-/// version 9 lets a `session.start` continue an earlier session.
-pub const FORMAT_CURRENT: u32 = 9;
+/// version 9 lets a `session.start` continue an earlier session; version 10
+/// adds `lease.interest`, `to` on a yield and `leases` on `cap.attenuate`.
+pub const FORMAT_CURRENT: u32 = 10;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -55,6 +56,9 @@ pub const FORMAT_LEASE_PINS: u32 = 7;
 pub const FORMAT_LEASE_LIVENESS: u32 = 8;
 /// The first format in which a `session.start` may continue a session.
 pub const FORMAT_SESSION_CONTINUE: u32 = 9;
+/// The first format with `lease.interest`, a yield to a session and lease
+/// sets carried by `cap.attenuate`.
+pub const FORMAT_LEASE_QUEUE: u32 = 10;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -115,6 +119,12 @@ impl OpEntry {
             | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
             Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
             Op::Reject { .. } => FORMAT_REJECT,
+            Op::LeaseInterest { .. }
+            | Op::Negotiate {
+                message: NegotiationMsg::Yield { to: Some(_), .. },
+                ..
+            } => FORMAT_LEASE_QUEUE,
+            Op::CapAttenuate { ref leases, .. } if !leases.is_empty() => FORMAT_LEASE_QUEUE,
             Op::SessionStart {
                 continues: Some(_), ..
             } => FORMAT_SESSION_CONTINUE,
@@ -676,6 +686,60 @@ mod tests {
         assert!(chain(9).is_ok());
         let err = chain(8).unwrap_err();
         assert!(err.to_string().contains("needs log format 9"), "{err}");
+    }
+
+    #[test]
+    fn the_lease_queue_needs_format_10() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let scope = Scope {
+            paths: vec!["**".into()],
+            symbols: None,
+            ops: vec![],
+            max_files: None,
+            max_lines: None,
+            scratch: vec![],
+        };
+        let attenuate = |leases| Op::CapAttenuate {
+            parent: "p".into(),
+            child: "c".into(),
+            agent: "bot".into(),
+            scope: scope.clone(),
+            expires_ms: 9000,
+            leases,
+        };
+        let negotiate = |to| Op::Negotiate {
+            thread: "t".into(),
+            to_session: "s".into(),
+            message: NegotiationMsg::Yield {
+                set: "l".into(),
+                to,
+            },
+        };
+        let at = |op: &Op, format| OpEntry {
+            format,
+            op: op.clone(),
+            ..next(&g, 2000)
+        };
+        for op in [
+            Op::LeaseInterest {
+                items: vec![],
+                intent: String::new(),
+            },
+            negotiate(Some("s".into())),
+            attenuate(vec!["l".into()]),
+        ] {
+            assert_eq!(at(&op, 10).min_format(), FORMAT_LEASE_QUEUE, "{op:?}");
+            let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(&op, format), &key)]);
+            assert!(chain(10).is_ok(), "{op:?}");
+            let err = chain(9).unwrap_err();
+            assert!(err.to_string().contains("needs log format 10"), "{err}");
+        }
+        for op in [negotiate(None), attenuate(vec![])] {
+            assert_eq!(at(&op, 2).min_format(), FORMAT_LEGACY, "{op:?}");
+        }
     }
 
     #[test]

@@ -1079,7 +1079,11 @@ fn runner_outputs_are_json_and_exit_codes_tell_failures_apart() {
     assert_ne!(synced["base_before"], synced["base_after"]);
     assert_eq!(
         synced["conflicts"],
-        serde_json::json!([{"path": "src/lib.rs", "trunk_copy": "src/lib.rs.trunk"}]),
+        serde_json::json!([{
+            "path": "src/lib.rs",
+            "trunk_copy": "src/lib.rs.trunk",
+            "symbols": ["src/lib.rs#charge"],
+        }]),
         "{synced}"
     );
     assert!(hws.join("src/lib.rs.trunk").exists());
@@ -2804,6 +2808,70 @@ fn sync_merges_two_edits_and_refuses_a_file_only_one_side_has() {
     assert!(!h2.join("src/three.rs.trunk").exists(), "trunk has none");
     let kept = std::fs::read_to_string(h2.join("src/three.rs")).unwrap();
     assert!(kept.contains("more"), "{kept}");
+}
+
+/// One conflicting symbol holds back only that symbol: the rest of trunk's
+/// changes to the file come in, so nothing of theirs looks like a local edit.
+#[test]
+fn sync_around_a_conflict_keeps_only_the_conflicting_symbol_local() {
+    let e = Env::new();
+    agent_workspace(&e);
+    let r = &e.root;
+    let hws = r.join("hws");
+    e.run(&hws, &["sync"]);
+    e.run(r, &["workspace", "create", "h2", "--repo", "demo"]);
+    let h2 = r.join("h2");
+    let set = |from: &str, to: &str| TWO_FNS.replace(from, to);
+    std::fs::write(
+        h2.join("src/lib.rs"),
+        set(
+            "charge(a: u64) -> u64 {\n    a",
+            "charge(a: u64) -> u64 {\n    a + 1",
+        ),
+    )
+    .unwrap();
+    let trunk = set(
+        "charge(a: u64) -> u64 {\n    a",
+        "charge(a: u64) -> u64 {\n    a * 2",
+    )
+    .replace(
+        "refund(a: u64) -> u64 {\n    a",
+        "refund(a: u64) -> u64 {\n    a * 3",
+    );
+    std::fs::write(hws.join("src/lib.rs"), &trunk).unwrap();
+    land(&e, &hws, "trunk moves");
+
+    let synced = parse(&e.run(&h2, &["sync", "--json"]));
+    assert_eq!(
+        synced["conflicts"],
+        json!([{
+            "path": "src/lib.rs",
+            "trunk_copy": "src/lib.rs.trunk",
+            "symbols": ["src/lib.rs#charge"],
+        }]),
+        "{synced}"
+    );
+    let kept = std::fs::read_to_string(h2.join("src/lib.rs")).unwrap();
+    assert!(kept.contains("a + 1") && kept.contains("a * 3"), "{kept}");
+    assert!(!kept.contains("a * 2"), "{kept}");
+    assert!(h2.join("src/lib.rs.trunk").exists());
+
+    let text_out = e.run(&h2, &["diff"]);
+    let facts = parse(&text_out);
+    assert_eq!(facts["edits"], json!(["src/lib.rs#charge"]), "{facts}");
+    assert_eq!(facts["added_files"], json!([]), "the copy is no change");
+
+    // Trunk's next change is elsewhere: my edit stays and merges, the copy
+    // of the last conflict goes.
+    std::fs::write(hws.join("src/lib.rs"), trunk.replace("a * 3", "a * 4")).unwrap();
+    land(&e, &hws, "trunk moves again");
+    let shown = e.run(&h2, &["sync"]);
+    assert!(shown.contains("1 merged, 0 conflicts"), "{shown}");
+    assert!(!h2.join("src/lib.rs.trunk").exists(), "gone with the sync");
+    let meta = std::fs::read_to_string(h2.join(".lonca/workspace.json")).unwrap();
+    assert_eq!(parse(&meta)["trunk_copies"], json!([]));
+    let kept = std::fs::read_to_string(h2.join("src/lib.rs")).unwrap();
+    assert!(kept.contains("a + 1") && kept.contains("a * 4"), "{kept}");
 }
 
 /// Undoing a change that a later one built on takes out that change alone.

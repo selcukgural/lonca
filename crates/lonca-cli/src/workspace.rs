@@ -15,6 +15,7 @@ use lonca_core::{FileMode, GitId};
 use lonca_daemon::Client;
 use lonca_daemon::protocol::{FileChange, TreeFile};
 use lonca_symbols::engine::ENGINE_CURRENT;
+use lonca_symbols::merge::{merge_around_conflicts, merge_text_at};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -37,6 +38,10 @@ pub struct Meta {
     /// the authoritative list in the log and sends it at `hook.bind`.
     #[serde(default)]
     pub scratch_roots: Vec<String>,
+    /// `<file>.trunk` copies the last sync wrote. They are for reading:
+    /// never a local change, and gone at the next sync.
+    #[serde(default)]
+    pub trunk_copies: Vec<String>,
 }
 
 pub struct Workspace {
@@ -160,6 +165,7 @@ impl Workspace {
                 manifest,
                 submitted: None,
                 scratch_roots: vec![],
+                trunk_copies: vec![],
             },
         };
         ws.save()?;
@@ -231,7 +237,7 @@ impl Workspace {
                 .strip_prefix(&self.root)?
                 .to_string_lossy()
                 .replace('\\', "/");
-            if self.meta.manifest.contains_key(&rel) {
+            if self.meta.manifest.contains_key(&rel) || self.meta.trunk_copies.contains(&rel) {
                 continue;
             }
             let bytes = fs::read(entry.path())?;
@@ -252,8 +258,10 @@ impl Workspace {
 
     /// Brings trunk into the workspace, keeping local edits. Files edited
     /// locally and on trunk are merged with Lonca's structural merge; on a
-    /// conflict the local file is kept and trunk's version is written next
-    /// to it as `<file>.trunk`.
+    /// conflict everything else of trunk still comes in, the conflicting
+    /// symbols keep the local text and trunk's version is written next to
+    /// the file as `<file>.trunk`. A file with no symbol merge stays local
+    /// as a whole.
     pub fn sync(&mut self, client: &mut Client) -> Result<SyncReport> {
         let status = call(client, "status", json!({}))?;
         let trunk: GitId = serde_json::from_value(status["trunk"].clone())?;
@@ -263,9 +271,13 @@ impl Workspace {
             updated: vec![],
             merged: vec![],
             conflicts: vec![],
+            symbols: vec![],
         };
         if trunk == self.meta.base {
             return Ok(report);
+        }
+        for copy in std::mem::take(&mut self.meta.trunk_copies) {
+            let _ = fs::remove_file(self.root.join(copy));
         }
         let new_files: BTreeMap<String, TreeFile> = fetch(client, &trunk, None)?
             .into_iter()
@@ -360,32 +372,41 @@ impl Workspace {
                         .unwrap_or_default();
                     let mine_text = decode(&m.content_b64);
                     let trunk_text = new.map(|f| decode(&f.content_b64)).unwrap_or_default();
-                    let merged = match (
+                    let texts = match (
                         std::str::from_utf8(&base_text),
                         std::str::from_utf8(&mine_text),
                         std::str::from_utf8(&trunk_text),
                     ) {
                         (Ok(b), Ok(o), Ok(t)) if m.content_b64.is_some() && new.is_some() => {
-                            lonca_symbols::merge::merge_text_at(ENGINE_CURRENT, &path, b, o, t).ok()
+                            Some((b, o, t))
                         }
                         _ => None,
                     };
-                    match merged {
-                        Some(text) => {
-                            fs::write(self.root.join(&path), text)?;
-                            report.merged.push(path.clone());
-                        }
-                        None => {
-                            if let Some(f) = new {
-                                let side = TreeFile {
-                                    path: format!("{path}.trunk"),
-                                    ..f.clone()
-                                };
-                                write_file(&self.root, &side)?;
-                            }
-                            report.conflicts.push(path.clone());
-                        }
+                    let merged =
+                        texts.map(|(b, o, t)| merge_text_at(ENGINE_CURRENT, &path, b, o, t));
+                    if let Some(Ok(text)) = merged {
+                        fs::write(self.root.join(&path), text)?;
+                        report.merged.push(path.clone());
+                        continue;
                     }
+                    if let Some(Err(symbols)) = merged {
+                        report.symbols.extend(symbols);
+                    }
+                    let kept = texts.and_then(|(b, o, t)| {
+                        merge_around_conflicts(ENGINE_CURRENT, &path, b, o, t)
+                    });
+                    if let Some(text) = kept {
+                        fs::write(self.root.join(&path), text)?;
+                    }
+                    if let Some(f) = new {
+                        let side = TreeFile {
+                            path: format!("{path}.trunk"),
+                            ..f.clone()
+                        };
+                        write_file(&self.root, &side)?;
+                        self.meta.trunk_copies.push(side.path);
+                    }
+                    report.conflicts.push(path.clone());
                 }
             }
         }
@@ -406,6 +427,20 @@ pub struct SyncReport {
     pub updated: Vec<String>,
     pub merged: Vec<String>,
     pub conflicts: Vec<String>,
+    /// The symbols in conflict, `path#name`.
+    pub symbols: Vec<String>,
+}
+
+impl SyncReport {
+    /// The symbols of `path` in conflict.
+    pub fn symbols_of(&self, path: &str) -> Vec<&str> {
+        let in_file = |s: &&String| s.split_once('#').is_some_and(|(p, _)| p == path);
+        self.symbols
+            .iter()
+            .filter(in_file)
+            .map(String::as_str)
+            .collect()
+    }
 }
 
 /// How many encoded bytes one `blobs` page may carry. `LONCA_FETCH_BUDGET`

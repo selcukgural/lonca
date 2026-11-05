@@ -15,6 +15,7 @@ use lonca_symbols::sections::{Format, sections};
 use serde_json::{Value, json};
 
 use crate::workspace::Workspace;
+use crate::wsfs;
 use crate::{ctx, setup};
 
 /// Tools that change nothing, and tools that take nothing away. Anything
@@ -388,7 +389,9 @@ impl Server {
                     .as_str()
                     .ok_or_else(|| anyhow!("path required"))?;
                 lonca_core::paths::validate_repo_path(path)?;
-                let text = std::fs::read_to_string(self.ws.root.join(path))?;
+                let local = wsfs::read(&self.ws.root, path)?
+                    .ok_or_else(|| anyhow!("no file {path} in this workspace"))?;
+                let text = String::from_utf8(local.bytes)?;
                 if let Some(list) = section_ids(path, &text) {
                     return Ok(json!({"symbols": list}));
                 }

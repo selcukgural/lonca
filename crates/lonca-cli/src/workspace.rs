@@ -3,8 +3,8 @@
 //! `.lonca/session` (the session token, mode 0600). An agent's workspace is
 //! a git repository too (see `gitdir`), for the tools that expect one.
 //!
-//! Symlinks are written as regular files holding their target, so editing a
-//! workspace can never reach outside it.
+//! Symlinks are written as regular files holding their target, and every
+//! access goes through `wsfs`, so nothing here reaches outside the root.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::ctx::{self, call};
-use crate::gitdir;
+use crate::{gitdir, wsfs};
 
 pub const META_DIR: &str = ".lonca";
 
@@ -111,34 +111,24 @@ impl Workspace {
     }
 
     pub fn token(&self) -> Result<String> {
-        let t = fs::read_to_string(self.root.join(META_DIR).join("session"))
+        let t = wsfs::read(&self.root, &meta_file("session"))?
             .context("this workspace has no agent session")?;
-        Ok(t.trim().to_string())
+        Ok(String::from_utf8_lossy(&t.bytes).trim().to_string())
     }
 
     pub fn save(&self) -> Result<()> {
-        let dir = self.root.join(META_DIR);
-        fs::create_dir_all(&dir)?;
-        let tmp = dir.join("workspace.json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(&self.meta)?)?;
-        fs::rename(tmp, dir.join("workspace.json"))?;
-        Ok(())
+        let meta = serde_json::to_vec_pretty(&self.meta)?;
+        wsfs::write(
+            &self.root,
+            &meta_file("workspace.json"),
+            &meta,
+            wsfs::REGULAR,
+        )
     }
 
     pub fn write_token(&self, token: &str) -> Result<()> {
-        let dir = self.root.join(META_DIR);
-        fs::create_dir_all(&dir)?;
-        let p = dir.join("session");
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        use std::io::Write;
-        opts.open(p)?.write_all(token.as_bytes())?;
-        Ok(())
+        let name = meta_file("session");
+        wsfs::write(&self.root, &name, token.as_bytes(), wsfs::SECRET)
     }
 
     /// Creates a workspace in `dir` (which must be empty or missing); `git`
@@ -182,7 +172,7 @@ impl Workspace {
             },
         };
         ws.save()?;
-        fs::write(dir.join(META_DIR).join(".gitignore"), "*\n")?;
+        wsfs::write(dir, &meta_file(".gitignore"), b"*\n", wsfs::REGULAR)?;
         if git {
             gitdir::init(dir)?;
             ws.write_git_base(&files)?;
@@ -217,37 +207,18 @@ impl Workspace {
         gitdir::set_excluded(&self.root, skipped.into_iter().flatten())
     }
 
-    fn read(&self, path: &str) -> Option<Vec<u8>> {
-        fs::read(self.root.join(path)).ok()
-    }
-
-    fn is_executable(&self, path: &str) -> bool {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::metadata(self.root.join(path))
-                .map(|m| m.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = path;
-            false
-        }
-    }
-
     /// Local changes against the base, as daemon file changes.
     pub fn changes(&self) -> Result<Vec<FileChange>> {
         let mut out = Vec::new();
         for (path, (mode, blob)) in &self.meta.manifest {
-            match self.read(path) {
+            match wsfs::read(&self.root, path)? {
                 None => out.push(FileChange {
                     path: path.clone(),
                     content_b64: None,
                     mode: None,
                 }),
-                Some(bytes) => {
-                    let exec = self.is_executable(path);
+                Some(local) => {
+                    let (bytes, exec) = (local.bytes, local.executable);
                     let new_mode = match mode {
                         FileMode::Regular if exec => Some(FileMode::Executable),
                         FileMode::Executable if !exec => Some(FileMode::Regular),
@@ -285,15 +256,17 @@ impl Workspace {
             if self.meta.manifest.contains_key(&rel) || known.iter().any(|l| l.contains(&rel)) {
                 continue;
             }
-            let bytes = fs::read(entry.path())?;
-            let mode = if self.is_executable(&rel) {
+            let Some(local) = wsfs::read(&self.root, &rel)? else {
+                continue;
+            };
+            let mode = if local.executable {
                 FileMode::Executable
             } else {
                 FileMode::Regular
             };
             out.push(FileChange {
                 path: rel,
-                content_b64: Some(b64().encode(&bytes)),
+                content_b64: Some(b64().encode(&local.bytes)),
                 mode: Some(mode),
             });
         }
@@ -342,7 +315,7 @@ impl Workspace {
             return Ok(report);
         }
         for copy in std::mem::take(&mut self.meta.trunk_copies) {
-            let _ = fs::remove_file(self.root.join(copy));
+            wsfs::remove(&self.root, &copy)?;
         }
         let new_files: BTreeMap<String, TreeFile> = fetch(client, &trunk, None)?
             .into_iter()
@@ -413,7 +386,7 @@ impl Workspace {
                     report.updated.push(path.clone());
                 }
                 (None, None) => {
-                    let _ = fs::remove_file(self.root.join(&path));
+                    wsfs::remove(&self.root, &path)?;
                     report.updated.push(path.clone());
                 }
                 (Some(m), new) => {
@@ -450,7 +423,7 @@ impl Workspace {
                     let merged =
                         texts.map(|(b, o, t)| merge_text_at(ENGINE_CURRENT, &path, b, o, t));
                     if let Some(Ok(text)) = merged {
-                        fs::write(self.root.join(&path), text)?;
+                        wsfs::write(&self.root, &path, text.as_bytes(), unix_mode(m.mode))?;
                         report.merged.push(path.clone());
                         continue;
                     }
@@ -461,7 +434,7 @@ impl Workspace {
                         merge_around_conflicts(ENGINE_CURRENT, &path, b, o, t)
                     });
                     if let Some(text) = kept {
-                        fs::write(self.root.join(&path), text)?;
+                        wsfs::write(&self.root, &path, text.as_bytes(), unix_mode(m.mode))?;
                     }
                     if let Some(f) = new {
                         let side = TreeFile {
@@ -606,6 +579,17 @@ pub fn fetch(
     Ok(files)
 }
 
+fn meta_file(name: &str) -> String {
+    format!("{META_DIR}/{name}")
+}
+
+fn unix_mode(mode: Option<FileMode>) -> u32 {
+    match mode {
+        Some(FileMode::Executable) => wsfs::EXECUTABLE,
+        _ => wsfs::REGULAR,
+    }
+}
+
 fn content(f: &TreeFile) -> Result<Vec<u8>> {
     let bytes = f
         .content_b64
@@ -620,24 +604,7 @@ fn write_file(root: &Path, f: &TreeFile) -> Result<()> {
     if f.path == META_DIR || f.path.starts_with(".lonca/") {
         bail!("refusing to write {} into workspace metadata", f.path);
     }
-    let target = root.join(&f.path);
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    // Replace whatever is there (including a symlink) with a regular file.
-    let _ = fs::remove_file(&target);
-    fs::write(&target, content(f)?)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = if f.mode == FileMode::Executable {
-            0o755
-        } else {
-            0o644
-        };
-        fs::set_permissions(&target, fs::Permissions::from_mode(mode))?;
-    }
-    Ok(())
+    wsfs::write(root, &f.path, &content(f)?, unix_mode(Some(f.mode)))
 }
 
 #[cfg(test)]

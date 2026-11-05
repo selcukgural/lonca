@@ -11,6 +11,7 @@ mod mcp;
 mod setup;
 mod undo;
 mod workspace;
+mod wsfs;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

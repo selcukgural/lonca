@@ -1192,6 +1192,27 @@ how an agent reviews its own work.
 - **Cost:** about 1.5 s per 10,000 small files at `session start` (one loose
   object each), 65 ms for a sync that brings no new blobs. `--no-git` skips it.
 
+## Workspace paths are opened one component at a time
+
+An agent can write its workspace, and the `lonca` that reads or writes it may
+hold more rights: an MCP server runs outside the agent's sandbox. All workspace
+file access goes through `wsfs`.
+
+- **`openat` with `O_NOFOLLOW` per component**, from the root. Checking with
+  `lstat` and then opening leaves a gap an agent with a shell can race. `rustix`
+  gives this with no `unsafe`; it was already in the tree. Unix only, like the
+  daemon's socket.
+- **A symlink at a tracked path is an error, not a deletion.** Calling it deleted
+  would propose a change nobody made. A symlink outside the manifest stays
+  ignored, as before.
+- **`wsfs` checks the path too.** `workspace.json` is the agent's to edit, so
+  `manifest` and `trunk_copies` are not trusted: `..` and absolute paths are
+  refused where they are used.
+- **A write goes to a temporary name and renames**, so a symlink at the name is
+  replaced, not followed, and the mode is set with `fchmod`, past the umask.
+- **`gitdir` keeps its own checks.** `gix` writes objects by path. What a race
+  reaches there is a hash-named object (see "A workspace is a git repository").
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

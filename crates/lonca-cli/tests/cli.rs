@@ -3662,3 +3662,119 @@ fn harness_setup_files_are_no_change_for_git_either() {
     assert!(ws.join(".mcp.json").exists());
     assert_eq!(git_in(&ws, &["status", "--porcelain"]), "");
 }
+
+/// Runs `lonca` and hands back its stderr, having checked that it failed.
+fn fails(e: &Env, cwd: &Path, args: &[&str]) -> String {
+    let out = e.cmd(cwd, args).output().unwrap();
+    assert!(!out.status.success(), "{args:?}: {}", text(&out.stdout));
+    text(&out.stderr)
+}
+
+/// Lonca can hold more rights than the agent, so what the agent left in its
+/// workspace must not steer a read or a write out of it.
+#[test]
+fn a_directory_symlink_can_not_steer_a_sync_out_of_the_workspace() {
+    let e = Env::new();
+    let r = e.root.clone();
+    let ws = agent_workspace(&e);
+    let hws = r.join("hws");
+    e.run(&hws, &["sync"]);
+    let out = r.join("outside");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::rename(ws.join("src"), r.join("src-aside")).unwrap();
+    std::os::unix::fs::symlink(&out, ws.join("src")).unwrap();
+
+    std::fs::write(hws.join("src/new.rs"), "pub fn fresh() {}\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "more"]).contains("allow"));
+    e.settle();
+    let err = fails(&e, &ws, &["sync"]);
+    assert!(err.contains("src is a symlink"), "{err}");
+    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0);
+
+    // Put back, the same sync goes through.
+    std::fs::remove_file(ws.join("src")).unwrap();
+    std::fs::rename(r.join("src-aside"), ws.join("src")).unwrap();
+    assert!(e.run(&ws, &["sync"]).contains("0 conflicts"));
+    assert!(ws.join("src/new.rs").exists());
+}
+
+#[test]
+fn a_symlink_at_a_tracked_path_sends_nothing_from_outside_the_workspace() {
+    let e = Env::new();
+    let r = e.root.clone();
+    let ws = agent_workspace(&e);
+    let secret = r.join("secret");
+    std::fs::write(&secret, "pub fn hidden() {}\n").unwrap();
+    std::fs::remove_file(ws.join("src/lib.rs")).unwrap();
+    std::os::unix::fs::symlink(&secret, ws.join("src/lib.rs")).unwrap();
+    for args in [&["diff"][..], &["propose", "-i", "x", "--accept-facts"]] {
+        let err = fails(&e, &ws, args);
+        assert!(err.contains("src/lib.rs: lib.rs is a symlink"), "{err}");
+        assert!(!err.contains("hidden"), "{err}");
+    }
+
+    // The same for a directory on the way to it, and for a tool's argument.
+    std::fs::remove_file(ws.join("src/lib.rs")).unwrap();
+    std::fs::remove_dir(ws.join("src")).unwrap();
+    let out = r.join("outside");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("lib.rs"), "pub fn hidden() {}\n").unwrap();
+    std::os::unix::fs::symlink(&out, ws.join("src")).unwrap();
+    assert!(fails(&e, &ws, &["diff"]).contains("src is a symlink"));
+    let mut mcp = Mcp::start(&e, &ws);
+    let (is_error, reply) = mcp.tool("symbols", json!({"path": "src/lib.rs"}));
+    assert!(is_error, "{reply}");
+    assert!(!reply.to_string().contains("hidden"), "{reply}");
+}
+
+/// `workspace.json` is the agent's to edit, so its paths are not trusted.
+#[test]
+fn paths_in_workspace_metadata_can_not_leave_the_workspace() {
+    let e = Env::new();
+    let r = e.root.clone();
+    let ws = agent_workspace(&e);
+    let hws = r.join("hws");
+    e.run(&hws, &["sync"]);
+    let victim = r.join("victim");
+    std::fs::write(&victim, "mine\n").unwrap();
+    let edit = |change: &dyn Fn(&mut serde_json::Value)| {
+        let at = ws.join(".lonca/workspace.json");
+        let mut meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&at).unwrap()).unwrap();
+        change(&mut meta);
+        std::fs::write(&at, serde_json::to_vec(&meta).unwrap()).unwrap();
+    };
+
+    // A manifest entry would be read and proposed.
+    edit(&|m| {
+        let lib = m["manifest"]["src/lib.rs"].clone();
+        m["manifest"]["../victim"] = lib;
+    });
+    let err = fails(&e, &ws, &["diff"]);
+    assert!(err.contains("not a path inside the workspace"), "{err}");
+    edit(&|m| {
+        m["manifest"].as_object_mut().unwrap().remove("../victim");
+    });
+
+    // A trunk copy would be deleted at the next sync.
+    edit(&|m| m["trunk_copies"] = json!(["../victim"]));
+    std::fs::write(hws.join("src/new.rs"), "pub fn fresh() {}\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "more"]).contains("allow"));
+    e.settle();
+    let err = fails(&e, &ws, &["sync"]);
+    assert!(err.contains("not a path inside the workspace"), "{err}");
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "mine\n");
+}
+
+#[test]
+fn a_symlink_at_the_workspace_metadata_is_not_followed() {
+    let e = Env::new();
+    let r = e.root.clone();
+    let ws = agent_workspace(&e);
+    let elsewhere = r.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::rename(ws.join(".lonca/session"), r.join("token")).unwrap();
+    std::fs::write(elsewhere.join("note"), "a secret file\n").unwrap();
+    std::os::unix::fs::symlink(elsewhere.join("note"), ws.join(".lonca/session")).unwrap();
+    assert!(fails(&e, &ws, &["sync"]).contains("session is a symlink"));
+}

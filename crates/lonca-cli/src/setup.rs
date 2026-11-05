@@ -4,8 +4,6 @@
 //! start `lonca mcp`.
 
 use std::fs;
-use std::io::Write;
-use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use lonca_core::paths::validate_repo_path;
@@ -15,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::ctx;
 use crate::workspace::{META_DIR, Workspace};
+use crate::wsfs;
 
 pub struct Prepared {
     harness: String,
@@ -75,7 +74,7 @@ impl Prepared {
         // Listed before written: a crash leaves a name, not a local change.
         ws.save()?;
         for (path, text) in &self.filled.files {
-            write_new(&ws.root.join(path), text)?;
+            wsfs::write(&ws.root, path, text.as_bytes(), wsfs::REGULAR)?;
         }
         ws.exclude_from_git()?;
         Ok(paths)
@@ -158,21 +157,6 @@ fn check_target(ws: &Workspace, path: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_new(target: &Path, text: &str) -> Result<()> {
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    // Whatever can not be removed makes `create_new` fail below.
-    let _ = fs::remove_file(target);
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(target)
-        .with_context(|| format!("writing {}", target.display()))?;
-    f.write_all(text.as_bytes())?;
-    Ok(())
-}
-
 /// One argument as a POSIX shell reads it.
 fn shell_quote(s: &str) -> String {
     let plain = |c: char| c.is_ascii_alphanumeric() || "-_./=:,@%+".contains(c);
@@ -187,6 +171,7 @@ mod tests {
     use super::*;
     use crate::workspace::Meta;
     use std::collections::BTreeMap;
+    use std::path::Path;
 
     fn ws(root: &Path) -> Workspace {
         let blob = lonca_core::GitId::of_blob(b"x");

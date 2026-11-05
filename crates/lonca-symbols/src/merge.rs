@@ -13,8 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
-use crate::engine::ENGINE_SECTIONS;
-use crate::extract::{Parsed, Sym, normalize, parse};
+use crate::engine::{ENGINE_EXACT, ENGINE_SECTIONS};
+use crate::extract::{Parsed, Sym, moved, normalize, parse};
 use crate::lang::Lang;
 use crate::sections::{self, Format};
 
@@ -155,7 +155,7 @@ pub fn merge_text_at(
     let file_conflict = || vec![format!("{path}#<file>")];
     let lang = Lang::detect(path);
     if let Some(lang) = lang {
-        match symbol_merge(path, lang, b, o, t) {
+        match symbol_merge(engine, path, lang, b, o, t) {
             Sm::Merged(s) => return Ok(s),
             Sm::Conflict(c) => return Err(c),
             Sm::Fallback => {}
@@ -184,12 +184,19 @@ struct Edit {
 }
 
 struct Merger<'a> {
+    engine: u32,
     path: &'a str,
     b: &'a str,
     o: &'a str,
     t: &'a str,
     edits: Vec<Edit>,
     conflicts: Vec<String>,
+    /// `theirs` moved something, which edits in place can not express.
+    moved: bool,
+}
+
+fn names(syms: &[Sym]) -> Vec<&str> {
+    syms.iter().map(|s| s.name.as_str()).collect()
 }
 
 fn ws_before(src: &str, pos: usize) -> &str {
@@ -236,6 +243,7 @@ impl Merger<'_> {
     fn level(&mut self, bs: &[Sym], os: &[Sym], ts: &[Sym], o_container: Option<&Sym>) {
         let (bm, om, tm) = (by_name(bs), by_name(os), by_name(ts));
         let top = o_container.is_none();
+        self.note_moves(&names(bs), &names(ts));
         for (i, ts_sym) in ts.iter().enumerate() {
             let name = ts_sym.name.as_str();
             let t_text = ts_sym.text(self.t);
@@ -293,7 +301,8 @@ impl Merger<'_> {
                         continue;
                     }
                     let all_containers = b_sym.container && o_sym.container && ts_sym.container;
-                    if all_containers && ts_sym.own == b_sym.own {
+                    let own_same = ts_sym.own_at(self.engine) == b_sym.own_at(self.engine);
+                    if all_containers && own_same {
                         let (bc, oc, tc) = (
                             b_sym.children.clone(),
                             o_sym.children.clone(),
@@ -322,6 +331,12 @@ impl Merger<'_> {
         }
     }
 
+    fn note_moves(&mut self, base: &[&str], theirs: &[&str]) {
+        if self.engine >= ENGINE_EXACT && !moved(base, theirs).is_empty() {
+            self.moved = true;
+        }
+    }
+
     fn imports(&mut self, pb: &Parsed, po: &Parsed, pt: &Parsed) {
         let norm = |src: &str, spans: &[(usize, usize)]| -> Vec<(String, (usize, usize))> {
             spans
@@ -334,6 +349,8 @@ impl Merger<'_> {
             norm(self.o, &po.imports),
             norm(self.t, &pt.imports),
         );
+        let texts: [Vec<&str>; 2] = [&bi, &ti].map(|l| l.iter().map(|(n, _)| n.as_str()).collect());
+        self.note_moves(&texts[0], &texts[1]);
         let bset: BTreeSet<&String> = bi.iter().map(|(n, _)| n).collect();
         let oset: BTreeSet<&String> = oi.iter().map(|(n, _)| n).collect();
         let tset: BTreeSet<&String> = ti.iter().map(|(n, _)| n).collect();
@@ -380,24 +397,31 @@ impl Merger<'_> {
     }
 }
 
-fn symbol_merge(path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
+fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
     let (pb, po, pt) = (parse(lang, b), parse(lang, o), parse(lang, t));
     if pb.has_error || po.has_error || pt.has_error {
         return Sm::Fallback;
     }
-    if pt.residual != pb.residual && po.residual != pt.residual {
-        if po.residual == pb.residual {
+    let (rb, ro, rt) = (
+        pb.residual_at(engine),
+        po.residual_at(engine),
+        pt.residual_at(engine),
+    );
+    if rt != rb && ro != rt {
+        if ro == rb {
             return Sm::Fallback;
         }
         return Sm::Conflict(vec![format!("{path}#<module>")]);
     }
     let mut m = Merger {
+        engine,
         path,
         b,
         o,
         t,
         edits: Vec::new(),
         conflicts: Vec::new(),
+        moved: false,
     };
     m.imports(&pb, &po, &pt);
     m.level(&pb.syms, &po.syms, &pt.syms, None);
@@ -407,7 +431,13 @@ fn symbol_merge(path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
         c.dedup();
         return Sm::Conflict(c);
     }
+    if m.moved {
+        return Sm::Fallback;
+    }
     match m.apply() {
+        // Nothing of `theirs` came through, though the files differ: only
+        // the line merge sees what it changed.
+        Some(text) if engine >= ENGINE_EXACT && text == o => Sm::Fallback,
         Some(text) if !parse(lang, &text).has_error => Sm::Merged(text),
         _ => Sm::Fallback,
     }
@@ -576,6 +606,119 @@ mod tests {
         let o = RS.replace("    1\n", "    10\n");
         let m = merge_text("x.rs", RS, &o, &t).unwrap();
         assert!(m.contains("static X") && m.contains("    10\n"));
+    }
+
+    /// The file parts a symbol merge can not place on its own.
+    const ORDER: &str = "use a;\nuse b;\n\nfn x() -> u8 {\n    1\n}\n\n\n\nfn y() -> u8 {\n    2\n}\n\n\n\nfn z() -> u8 {\n    3\n}\n";
+
+    #[test]
+    fn from_engine_2_a_move_goes_through_the_line_merge() {
+        let f = |n: &str, v: u8| format!("fn {n}() -> u8 {{\n    {v}\n}}\n");
+        let parts = [f("v", 1), f("w", 2), f("x", 3), f("y", 4), f("z", 5)];
+        let base = parts.join("\n\n\n");
+        let moved = [&parts[1], &parts[2], &parts[3], &parts[4], &parts[0]]
+            .map(String::as_str)
+            .join("\n\n\n");
+        let ours = base.replace("    3\n", "    30\n");
+        let m = merge_text_at(2, "x.rs", &base, &ours, &moved).unwrap();
+        assert!(m.find("fn z").unwrap() < m.find("fn v").unwrap(), "{m}");
+        assert!(m.contains("    30\n"), "{m}");
+        let m = merge_text_at(1, "x.rs", &base, &ours, &moved).unwrap();
+        assert!(
+            m.find("fn v").unwrap() < m.find("fn z").unwrap(),
+            "engine 1 stays as it was: {m}"
+        );
+    }
+
+    /// The move is in `theirs` next to an edit that merges in place, so the
+    /// symbol merge has something to apply and only the move can send the
+    /// file to the line merge.
+    #[test]
+    fn from_engine_2_a_move_next_to_an_edit_is_not_lost() {
+        let f = |n: &str, v: u8| format!("fn {n}() -> u8 {{\n    {v}\n}}\n");
+        let parts = [f("v", 1), f("w", 2), f("x", 3), f("y", 4), f("z", 5)];
+        let base = parts.join("\n\n\n");
+        let moved = [&parts[1], &parts[2], &parts[3], &parts[4], &parts[0]]
+            .map(String::as_str)
+            .join("\n\n\n")
+            .replace("    2\n", "    20\n");
+        let ours = base.replace("    4\n", "    40\n");
+        let m = merge_text_at(2, "x.rs", &base, &ours, &moved).unwrap();
+        assert!(m.find("fn z").unwrap() < m.find("fn v").unwrap(), "{m}");
+        assert!(m.contains("    20\n") && m.contains("    40\n"), "{m}");
+    }
+
+    /// Only three containers merge member by member: a side where the
+    /// symbol is a leaf makes it one conflict, named by the symbol.
+    #[test]
+    fn a_symbol_that_is_a_container_on_only_some_sides_conflicts_whole() {
+        let b = "mod m {\n    fn a() {}\n}\n";
+        let t = "mod m {\n    fn a() -> u8 { 1 }\n}\n";
+        assert_eq!(
+            merge_text_at(2, "x.rs", b, "mod m;\n", t),
+            Err(vec!["x.rs#m".into()])
+        );
+    }
+
+    #[test]
+    fn from_engine_2_a_move_inside_a_container_counts_too() {
+        let b = "impl C {\n    fn a() {}\n\n\n\n    fn b() {}\n\n\n\n    fn c() {}\n}\n";
+        let t = "impl C {\n    fn b() {}\n\n\n\n    fn a() {}\n\n\n\n    fn c() {}\n}\n";
+        let o = b.replace("fn c() {}", "fn c() -> u8 { 1 }");
+        let m = merge_text_at(2, "x.rs", b, &o, t).unwrap();
+        assert!(m.find("fn b").unwrap() < m.find("fn a").unwrap(), "{m}");
+        assert!(m.contains("fn c() -> u8"), "{m}");
+    }
+
+    #[test]
+    fn from_engine_2_imports_keep_their_order() {
+        let t = ORDER.replace("use a;\nuse b;\n", "use b;\nuse a;\n");
+        let o = ORDER.replace("    3\n", "    30\n");
+        let m = merge_text_at(2, "x.rs", ORDER, &o, &t).unwrap();
+        assert!(
+            m.starts_with("use b;\nuse a;\n") && m.contains("    30\n"),
+            "{m}"
+        );
+        let m = merge_text_at(1, "x.rs", ORDER, &o, &t).unwrap();
+        assert!(
+            m.starts_with("use a;\nuse b;\n"),
+            "engine 1 stays as it was: {m}"
+        );
+    }
+
+    #[test]
+    fn from_engine_2_a_change_only_of_layout_is_not_dropped() {
+        let t = ORDER.replace("}\n\n\n\nfn y", "}\n\n\n\n\nfn y");
+        let o = ORDER.replace("    3\n", "    30\n");
+        let m = merge_text_at(2, "x.rs", ORDER, &o, &t).unwrap();
+        assert_eq!(m, t.replace("    3\n", "    30\n"));
+        assert_eq!(
+            merge_text_at(1, "x.rs", ORDER, &o, &t).unwrap(),
+            o,
+            "engine 1 drops it"
+        );
+    }
+
+    #[test]
+    fn from_engine_2_a_python_block_change_is_merged_or_a_conflict() {
+        let b = "X = 1\nif X:\n    a = 1\n    b = 2\n\n\n\ndef f():\n    return 1\n";
+        let t = b.replace("    b = 2", "b = 2");
+        let o = b.replace("return 1", "return 2");
+        assert_eq!(
+            merge_text_at(2, "x.py", b, &o, &t).unwrap(),
+            t.replace("return 1", "return 2")
+        );
+        assert_eq!(
+            merge_text_at(1, "x.py", b, &o, &t).unwrap(),
+            o,
+            "engine 1 drops it"
+        );
+        let both = b.replace("    b = 2", "    b = 3");
+        assert_eq!(
+            merge_text_at(2, "x.py", b, &both, &t),
+            Err(vec!["x.py#<module>".into()]),
+            "both sides changed code outside symbols"
+        );
     }
 
     #[test]

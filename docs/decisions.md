@@ -160,6 +160,22 @@ entry format, so they have their own version
   "Sections of files without a grammar"). For everything else its output is
   engine 0's, and `tests/engine/v1/` holds the same cases with the same
   snapshots to prove it.
+- **Engine 2** compares code exactly. Up to engine 1, the code outside
+  symbols, the own text of containers and the imports were compared as
+  text with whitespace collapsed, and a symbol's position was not compared
+  at all. From engine 2:
+  - Code outside symbols and a container's own text are compared as the
+    tree-sitter tree with the text of its tokens
+    (`extract.rs`, `exact_text`). Layout does not count. Indentation that
+    means something is in the tree, and whitespace inside strings and
+    comments is in the token. This needs nothing per language, so a new
+    grammar gets it for free.
+  - Symbols or imports that change order are edits: order can matter, and
+    a merge in place can not express it. The merge leaves such a file to
+    the line merge, where it merges or is `<file>` in `conflicts`.
+  - A symbol merge that brought nothing of `theirs` into a file that
+    differs goes to the line merge too. So a change only of layout between
+    symbols is applied, not dropped, or reported as a conflict.
 
 ## Human keys
 

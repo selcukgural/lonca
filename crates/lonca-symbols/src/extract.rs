@@ -4,10 +4,11 @@
 //! in front of it, so that `#[ignore]` or a doc comment counts as part of the
 //! function it belongs to.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
+use crate::engine::ENGINE_EXACT;
 use crate::lang::Lang;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +21,9 @@ pub struct Sym {
     pub def_start: usize,
     /// Normalized text excluding children (containers) or the full text (leaves).
     pub own: String,
+    /// The same text for containers as [`exact_text`] writes it; empty for
+    /// leaves, whose text is compared as it stands.
+    pub own_exact: String,
     /// Normalized declaration header for callables.
     pub signature: Option<String>,
     pub is_test: bool,
@@ -31,6 +35,15 @@ pub struct Sym {
 impl Sym {
     pub fn text<'a>(&self, src: &'a str) -> &'a str {
         &src[self.start..self.end]
+    }
+
+    /// What `engine` compares as this symbol's own text.
+    pub fn own_at(&self, engine: u32) -> &str {
+        if engine >= ENGINE_EXACT {
+            &self.own_exact
+        } else {
+            &self.own
+        }
     }
 }
 
@@ -48,10 +61,21 @@ pub struct Parsed {
     pub has_error: bool,
     /// Normalized top-level text outside symbols and imports.
     pub residual: String,
+    /// The same code as [`exact_text`] writes it.
+    pub residual_exact: String,
     pub js_tests: Vec<JsTest>,
 }
 
 impl Parsed {
+    /// What `engine` compares as the code outside symbols and imports.
+    pub fn residual_at(&self, engine: u32) -> &str {
+        if engine >= ENGINE_EXACT {
+            &self.residual_exact
+        } else {
+            &self.residual
+        }
+    }
+
     pub fn import_texts(&self, src: &str) -> Vec<String> {
         self.imports
             .iter()
@@ -89,6 +113,7 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
             imports: vec![],
             has_error: true,
             residual: normalize(src),
+            residual_exact: normalize(src),
             js_tests: vec![],
         };
     };
@@ -110,6 +135,8 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
         .collect();
     cut.sort();
     let residual = normalize(&remove_spans(src, 0, src.len(), &cut));
+    let mut residual_exact = String::new();
+    exact_text(root, src, &cut, &mut residual_exact);
     let js_tests = if lang.is_js_family() {
         ex.js_tests(root)
     } else {
@@ -120,6 +147,7 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
         imports,
         has_error: root.has_error(),
         residual,
+        residual_exact,
         js_tests,
     }
 }
@@ -138,6 +166,52 @@ fn remove_spans(src: &str, from: usize, to: usize, spans: &[(usize, usize)]) -> 
         out.push_str(&src[pos..to]);
     }
     out
+}
+
+/// Node kinds whose text is what they mean, whitespace included. The names
+/// hold across tree-sitter grammars, so a new language needs no entry here.
+fn is_verbatim(kind: &str) -> bool {
+    ["string", "comment", "char", "heredoc", "regex"]
+        .iter()
+        .any(|k| kind.contains(k))
+}
+
+/// Writes `n` without the parts inside `cut`: its tree, and the text of its
+/// tokens. Reformatting leaves this as it was; whatever changes the program
+/// does not, because indentation that means something is in the tree and
+/// whitespace in a string is in the token.
+fn exact_text(n: Node, src: &str, cut: &[(usize, usize)], out: &mut String) {
+    let (start, end) = (n.start_byte(), n.end_byte());
+    if cut.iter().any(|&(s, e)| s <= start && end <= e) {
+        return;
+    }
+    if n.child_count() == 0 || is_verbatim(n.kind()) {
+        out.push_str(&src[start..end]);
+        out.push('\u{1f}');
+        return;
+    }
+    if n.is_named() {
+        out.push_str(n.kind());
+        out.push('(');
+    }
+    for c in n.children(&mut n.walk()) {
+        exact_text(c, src, cut, out);
+    }
+    if n.is_named() {
+        out.push(')');
+    }
+}
+
+/// The names both lists hold that do not keep their place among them.
+pub(crate) fn moved(old: &[&str], new: &[&str]) -> Vec<String> {
+    let in_both = |list: &[&str], other: &[&str]| -> Vec<String> {
+        let other: BTreeSet<&str> = other.iter().copied().collect();
+        let kept = list.iter().filter(|x| other.contains(**x));
+        kept.map(|x| x.to_string()).collect()
+    };
+    let (a, b) = (in_both(old, new), in_both(new, old));
+    let shifted = a.into_iter().zip(b).filter(|(x, y)| x != y);
+    shifted.map(|(_, y)| y).collect()
 }
 
 struct Def<'t> {
@@ -441,9 +515,11 @@ impl<'s> Extractor<'s> {
                 self.level(m, &member_prefix, &mut children_syms, None, seen);
             }
             let end = child.end_byte();
+            let cut: Vec<(usize, usize)> = children_syms.iter().map(|s| (s.start, s.end)).collect();
+            let mut own_exact = String::new();
             let own = if def.members.is_some() {
-                let cut: Vec<(usize, usize)> =
-                    children_syms.iter().map(|s| (s.start, s.end)).collect();
+                own_exact.push_str(&self.src[start..child.start_byte()]);
+                exact_text(child, self.src, &cut, &mut own_exact);
                 normalize(&remove_spans(self.src, start, end, &cut))
             } else {
                 normalize(&self.src[start..end])
@@ -459,6 +535,7 @@ impl<'s> Extractor<'s> {
                 end,
                 def_start: def_node.start_byte(),
                 own,
+                own_exact,
                 signature,
                 is_test,
                 skipped,
@@ -765,6 +842,103 @@ mod tests {
         let t = p.tests(src);
         assert!(t["TestNew"].1);
         assert_eq!(p.imports.len(), 1);
+    }
+
+    #[test]
+    fn a_name_moved_is_one_that_loses_its_place_among_the_common_ones() {
+        let m = |a: &[&str], b: &[&str]| moved(a, b);
+        assert_eq!(m(&["a", "b", "c"], &["c", "b", "a"]), ["c", "a"]);
+        assert_eq!(m(&["a", "b"], &["b", "a"]), ["b", "a"]);
+        assert!(m(&["a", "b"], &["a", "b"]).is_empty());
+        // Added and deleted names shift nothing.
+        assert!(m(&["a", "b", "c"], &["x", "a", "c", "y"]).is_empty());
+        assert!(m(&[], &["a"]).is_empty());
+    }
+
+    fn exact(lang: Lang, src: &str) -> String {
+        parse(lang, src).residual_exact
+    }
+
+    #[test]
+    fn exact_text_ignores_layout_and_keeps_what_the_program_means() {
+        let py = "X = 1\nif X:\n    a = 1\n    b = 2\n";
+        assert_eq!(
+            exact(Lang::Python, py),
+            exact(Lang::Python, &py.replace("X = 1", "X  =  1"))
+        );
+        assert_eq!(
+            exact(Lang::Python, py),
+            exact(Lang::Python, &py.replace("a = 1\n", "a = 1\n\n"))
+        );
+        // Indentation that means something, and both ends of a block.
+        assert_ne!(
+            exact(Lang::Python, py),
+            exact(Lang::Python, &py.replace("    b = 2", "b = 2"))
+        );
+        assert_ne!(
+            exact(Lang::Python, py),
+            exact(Lang::Python, &py.replace("X = 1", "X = 2"))
+        );
+        // Whitespace in a token, also around an escape inside the string.
+        let s = "X = \"a  \\n b\"\n";
+        assert_ne!(
+            exact(Lang::Python, s),
+            exact(Lang::Python, &s.replace("a  ", "a "))
+        );
+        let r = "const fn f() {}\nstatic S: &str = \"\";\nm!(\"a  b\");\n";
+        assert_ne!(
+            exact(Lang::Rust, r),
+            exact(Lang::Rust, &r.replace("a  b", "a b"))
+        );
+        let c = "# one  two\nX = 1\n";
+        assert_ne!(
+            exact(Lang::Python, c),
+            exact(Lang::Python, &c.replace("one  two", "one two"))
+        );
+    }
+
+    #[test]
+    fn exact_text_leaves_symbols_and_imports_out() {
+        let src = "import os\nX = 1\ndef f():\n    return 1\nY = 2\n";
+        let base = exact(Lang::Python, src);
+        assert_eq!(
+            base,
+            exact(Lang::Python, &src.replace("return 1", "return 2"))
+        );
+        assert_eq!(
+            base,
+            exact(Lang::Python, &src.replace("import os", "import sys"))
+        );
+        assert!(base.contains('X') && base.contains('Y'), "{base}");
+        assert!(!base.contains("return") && !base.contains("os"), "{base}");
+    }
+
+    #[test]
+    fn each_engine_reads_its_own_text() {
+        let p = parse(
+            Lang::Python,
+            "class C:\n    x  =  1\n    def m(self):\n        pass\nY  =  2\n",
+        );
+        assert_eq!(p.residual_at(1), "Y = 2");
+        assert_eq!(p.residual_at(2), p.residual_exact);
+        assert_ne!(p.residual_exact, p.residual);
+        let c = &p.syms[0];
+        assert_eq!(c.own_at(1), "class C: x = 1");
+        assert_eq!(c.own_at(2), c.own_exact);
+        assert!(!c.own_exact.contains("pass"), "{}", c.own_exact);
+        assert!(c.own_exact.contains("x"), "{}", c.own_exact);
+        assert_eq!(
+            c.children[0].own_at(2),
+            "",
+            "a leaf has no own text to compare"
+        );
+    }
+
+    #[test]
+    fn a_comment_attached_to_a_container_is_part_of_its_own_text() {
+        let src = "// one\nimpl C {\n    fn a() {}\n}\n";
+        let own = |s: &str| parse(Lang::Rust, s).syms[0].own_exact.clone();
+        assert_ne!(own(src), own(&src.replace("one", "two")));
     }
 
     #[test]

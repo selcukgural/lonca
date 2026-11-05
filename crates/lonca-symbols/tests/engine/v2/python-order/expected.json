@@ -1,0 +1,285 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#User.greet"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#<imports>",
+          "src/sample.py#helper",
+          "src/sample.py#other"
+        ],
+        "import_only_files": [],
+        "lines_added": 5,
+        "lines_removed": 5,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "import sys\nimport os\n\n\ndef other():\n    return 2\n\n\ndef helper():\n    return 1\n\n\nclass User:\n    def greet(self):\n        return \"hello\"\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          9
+        ],
+        [
+          10,
+          20
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "helper",
+          "own": "",
+          "signature": "def helper():",
+          "skipped": false,
+          "span": [
+            23,
+            23,
+            49
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "other",
+          "own": "",
+          "signature": "def other():",
+          "skipped": false,
+          "span": [
+            52,
+            52,
+            77
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "User.greet",
+              "own": "",
+              "signature": "def greet(self):",
+              "skipped": false,
+              "span": [
+                96,
+                96,
+                132
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "User",
+          "own": "class_definition(class\u001fUser\u001f:\u001f)",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            80,
+            80,
+            132
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          9
+        ],
+        [
+          10,
+          20
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "helper",
+          "own": "",
+          "signature": "def helper():",
+          "skipped": false,
+          "span": [
+            23,
+            23,
+            49
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "other",
+          "own": "",
+          "signature": "def other():",
+          "skipped": false,
+          "span": [
+            52,
+            52,
+            77
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "User.greet",
+              "own": "",
+              "signature": "def greet(self):",
+              "skipped": false,
+              "span": [
+                96,
+                96,
+                135
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "User",
+          "own": "class_definition(class\u001fUser\u001f:\u001f)",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            80,
+            80,
+            135
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          10
+        ],
+        [
+          11,
+          20
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "other",
+          "own": "",
+          "signature": "def other():",
+          "skipped": false,
+          "span": [
+            23,
+            23,
+            48
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "helper",
+          "own": "",
+          "signature": "def helper():",
+          "skipped": false,
+          "span": [
+            51,
+            51,
+            77
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "User.greet",
+              "own": "",
+              "signature": "def greet(self):",
+              "skipped": false,
+              "span": [
+                96,
+                96,
+                132
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "User",
+          "own": "class_definition(class\u001fUser\u001f:\u001f)",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            80,
+            80,
+            132
+          ]
+        }
+      ]
+    }
+  }
+}

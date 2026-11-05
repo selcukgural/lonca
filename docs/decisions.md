@@ -1174,12 +1174,13 @@ how an agent reviews its own work.
   so `repo_name` refuses a workspace.
 - **This departs from the issue:** it asked for a warning and a plain directory
   on a machine with no `git`. Nothing here needs `git`, so that case is gone.
-- **Lonca only replaces files it owns**, by rename, and first checks that the
-  directories it writes in are real ones. The check and the write are not
-  atomic against an agent racing them. What that race can reach is a
-  hash-named object file, not chosen content or a chosen name. A sync whose
-  `.git` fails the check goes through with `git_warning`: `.git` is a convenience
-  and `changes()` does not depend on it.
+- **Every write goes through `wsfs`**, so a symlink anywhere in `.git` stops it
+  and a race can not steer it. `gix` writes objects by path, so a sync writes
+  them to a private temporary directory and copies them in. The first base skips
+  that copy: the directory is new and no agent has its token yet, and at 10,000
+  files the copy took 4 s instead of 1.5 s. A sync that can not
+  write `.git` goes through with `git_warning`: `.git` is a convenience and
+  `changes()` does not depend on it.
 - **One commit, no parent, not trunk's commit.** Trunk's history is not in the
   workspace, and a symlink is a regular file there, so its tree may differ from
   trunk's. Local commits leave the branch at a sync; their content stays in the
@@ -1190,7 +1191,8 @@ how an agent reviews its own work.
   file on disk is the blob, the same comparison `changes()` makes.
 - **Only sessions.** A person who wants git uses a checkout (humans guide).
 - **Cost:** about 1.5 s per 10,000 small files at `session start` (one loose
-  object each), 65 ms for a sync that brings no new blobs. `--no-git` skips it.
+  object each), about 100 ms for a sync that brings no new blobs. `--no-git`
+  skips it.
 
 ## What a critical path costs (#103)
 
@@ -1208,6 +1210,35 @@ a critical path costs a session nobody fully observes: `deny` or `escalate`.
 - **No log format.** Nothing an entry means changes: a policy with neither key
   decides as before, and a release that does not know the keys refuses the
   policy (`deny_unknown_fields`) rather than deciding differently.
+
+## Workspace paths are opened one component at a time
+
+An agent can write its workspace, and the `lonca` that reads or writes it may
+hold more rights: an MCP server runs outside the agent's sandbox. All workspace
+file access goes through `wsfs`.
+
+- **`openat` with `O_NOFOLLOW` per component**, from the root. Checking with
+  `lstat` and then opening leaves a gap an agent with a shell can race. `rustix`
+  gives this with no `unsafe`; it was already in the tree. Unix only, like the
+  daemon's socket.
+- **A symlink at a tracked path is an error, not a deletion.** Calling it deleted
+  would propose a change nobody made. A symlink outside the manifest stays
+  ignored, as before.
+- **`wsfs` checks the path too.** `workspace.json` is the agent's to edit, so
+  `manifest` and `trunk_copies` are not trusted: `..` and absolute paths are
+  refused where they are used.
+- **A write goes to a temporary name and renames**, so a symlink at the name is
+  replaced, not followed, and the mode is set with `fchmod`, past the umask.
+- **A read refuses what is not one plain file**: anything with another hard link
+  (it may be a file from outside), and more than `MAX_LINE`, which no request
+  could carry anyway and which a sparse file could otherwise fake.
+- **`.gitignore` and `.ignore` are read the same way**, by a short walker in
+  `workspace.rs`: the `ignore` crate's walker opens them by path, so one could be
+  a symlink or a FIFO. Its `gitignore` matcher is still used. A symlinked ignore
+  file counts for nothing.
+- **Names that are not UTF-8 are refused**, not sent under a lossy name.
+- **`.lonca` is matched with ASCII case folded** everywhere (`is_workspace_metadata`):
+  on macOS `.LONCA/session` is `.lonca/session`.
 
 ## Open questions (carried from the design)
 

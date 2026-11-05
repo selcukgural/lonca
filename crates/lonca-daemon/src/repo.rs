@@ -194,7 +194,7 @@ impl RepoHandle {
         let mut seen = std::collections::BTreeSet::new();
         for c in changes {
             lonca_core::paths::validate_repo_path(&c.path)?;
-            if c.path == ".lonca" || c.path.starts_with(".lonca/") {
+            if lonca_core::paths::is_workspace_metadata(&c.path) {
                 return Err(Error::Invalid(
                     ".lonca/ is workspace metadata, not repository content".into(),
                 ));

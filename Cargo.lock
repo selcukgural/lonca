@@ -2253,6 +2253,7 @@ dependencies = [
  "lonca-policy",
  "lonca-symbols",
  "lonca-verify",
+ "rustix",
  "serde",
  "serde_json",
  "similar",

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### A workspace holds regular files
+
+A symlink at a tracked path, or on the way to one, now stops `lonca diff`,
+`propose` and `sync` with an error naming it. Replace it with a file, or restore
+the directory, and run it again. Paths in `.lonca/workspace.json` must stay
+inside the workspace.
+
 ### An agent's workspace is a git repository (#111)
 
 `session start` now gives the workspace a `.git` with one commit of its base, so

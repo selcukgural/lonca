@@ -19,11 +19,12 @@ lonca-daemon = { version = "0.1.0", path = "../lonca-daemon" }
 lonca-policy = { version = "0.1.0", path = "../lonca-policy" }
 lonca-symbols = { version = "0.1.0", path = "../lonca-symbols" }
 lonca-verify = { version = "0.1.0", path = "../lonca-verify" }
+rustix = { version = "1.1.5", features = ["fs"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 similar = "3.2.0"
+tempfile = "3.27.0"
 ureq = { version = "3.4.2", features = ["json"] }
 
 [dev-dependencies]
 lonca-audit = { path = "../lonca-audit" }
-tempfile = "3.27.0"

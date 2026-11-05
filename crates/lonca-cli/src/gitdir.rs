@@ -5,21 +5,21 @@
 //! The agent can write here, and `lonca sync` may run outside its sandbox
 //! (an MCP server does). So Lonca never runs `git` on this directory and
 //! never reads a file in it: `core.fsmonitor`, a hook or a filter would run
-//! with Lonca's rights. It only replaces the files it owns, which replaces
-//! a symlink instead of following it, and writes nothing if a directory it
-//! needs is not the real directory it made.
+//! with Lonca's rights. Every write goes through `wsfs`, so a symlink
+//! anywhere on the way stops it.
 //!
 //! No proposal comes from here: `changes()` compares files with the
 //! manifest, and a commit or a staged file changes neither.
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use lonca_core::store::{CommitSpec, FileEntry, FileMap, LooseObjects, index_of};
 use lonca_core::{FileMode, GitId};
+
+use crate::wsfs;
 
 const BRANCH: &str = "refs/heads/main";
 
@@ -46,56 +46,11 @@ const CONFIG: &str = "\
 /// `lonca diff`, whatever the repository says about line ends or filters.
 const ATTRIBUTES: &str = "* -text -ident -filter -working-tree-encoding\n";
 
-fn git_dir(root: &Path) -> PathBuf {
-    root.join(".git")
-}
-
-/// Writes `bytes` to `path` by replacing it. `create_new` refuses a symlink
-/// left at the temporary name, and the rename takes the place of whatever
-/// `path` was without following it.
-fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
-    let name = path.file_name().context("no file name")?;
-    let tmp = path.with_file_name(format!("{}.lonca-tmp", name.to_string_lossy()));
-    let _ = fs::remove_file(&tmp);
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    f.write_all(bytes)?;
-    fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
-}
-
-/// The directories Lonca writes in, or an error if any is not the real
-/// directory it made. Object writes land in `objects/<xx>/`, so those count.
-fn own_dirs(root: &Path) -> Result<PathBuf> {
-    let git = git_dir(root);
-    let real = |dir: &Path| -> Result<()> {
-        let meta =
-            fs::symlink_metadata(dir).with_context(|| format!("looking at {}", dir.display()))?;
-        if !meta.is_dir() {
-            bail!("{} is not a directory", dir.display());
-        }
-        Ok(())
-    };
-    real(&git)?;
-    for dir in ["objects", "refs", "refs/heads", "info"] {
-        real(&git.join(dir))?;
-    }
-    for entry in fs::read_dir(git.join("objects"))? {
-        real(&entry?.path())?;
-    }
-    Ok(git)
-}
-
 /// Makes `root` a repository with nothing in it yet.
 pub fn init(root: &Path) -> Result<()> {
-    let git = git_dir(root);
-    for dir in ["objects", "refs/heads", "info"] {
-        fs::create_dir_all(git.join(dir))?;
-    }
-    replace(&git.join("config"), CONFIG.as_bytes())?;
-    replace(&git.join("info/attributes"), ATTRIBUTES.as_bytes())
+    wsfs::write(root, ".git/config", CONFIG.as_bytes(), wsfs::REGULAR)?;
+    let attributes = ATTRIBUTES.as_bytes();
+    wsfs::write(root, ".git/info/attributes", attributes, wsfs::REGULAR)
 }
 
 /// What the base looks like on disk: a symlink is a regular file there, and
@@ -112,18 +67,29 @@ fn checked_out(manifest: &BTreeMap<String, (FileMode, GitId)>) -> FileMap {
     manifest.iter().map(entry).collect()
 }
 
-/// Points the repository at `base`: `main`, `HEAD` and the index all move,
-/// so anything staged or committed locally is a local edit again. `blobs`
-/// are the contents the repository may not have yet.
-pub fn set_base<'a>(
-    root: &Path,
+/// Copies the loose objects under `objects` into the workspace's `.git`.
+fn install(root: &Path, objects: &Path) -> Result<()> {
+    for dir in fs::read_dir(objects)? {
+        let dir = dir?;
+        for file in fs::read_dir(dir.path())? {
+            let file = file?;
+            let (prefix, rest) = (dir.file_name(), file.file_name());
+            let (prefix, rest) = (prefix.to_string_lossy(), rest.to_string_lossy());
+            let rel = format!(".git/objects/{prefix}/{rest}");
+            wsfs::write(root, &rel, &fs::read(file.path())?, wsfs::REGULAR)?;
+        }
+    }
+    Ok(())
+}
+
+/// Writes `blobs` and the commit of `manifest`; returns what `point_at` needs.
+fn write_objects<'a>(
+    objects: &LooseObjects,
     base: &GitId,
     manifest: &BTreeMap<String, (FileMode, GitId)>,
     blobs: impl Iterator<Item = &'a [u8]>,
     time_ms: i64,
-) -> Result<()> {
-    let git = own_dirs(root)?;
-    let objects = LooseObjects::at(&git.join("objects"));
+) -> Result<(FileMap, GitId)> {
     for bytes in blobs {
         objects.write_blob(bytes)?;
     }
@@ -137,9 +103,51 @@ pub fn set_base<'a>(
         message: format!("lonca base {base}\n"),
         headers: vec![],
     })?;
-    replace(&git.join("index"), &index_of(&files)?)?;
-    replace(&git.join(BRANCH), format!("{commit}\n").as_bytes())?;
-    replace(&git.join("HEAD"), format!("ref: {BRANCH}\n").as_bytes())
+    Ok((files, commit))
+}
+
+/// Moves `main`, `HEAD` and the index to `commit`.
+fn point_at(root: &Path, files: &FileMap, commit: &GitId) -> Result<()> {
+    wsfs::write(root, ".git/index", &index_of(files)?, wsfs::REGULAR)?;
+    let branch = format!(".git/{BRANCH}");
+    let id = format!("{commit}\n");
+    wsfs::write(root, &branch, id.as_bytes(), wsfs::REGULAR)?;
+    let head = format!("ref: {BRANCH}\n");
+    wsfs::write(root, ".git/HEAD", head.as_bytes(), wsfs::REGULAR)
+}
+
+/// The first base of a workspace just made. `gix` writes objects by path,
+/// which is safe only here: no agent has been in the directory yet, and
+/// copying every object in would cost a large repository seconds.
+pub fn first_base<'a>(
+    root: &Path,
+    base: &GitId,
+    manifest: &BTreeMap<String, (FileMode, GitId)>,
+    blobs: impl Iterator<Item = &'a [u8]>,
+    time_ms: i64,
+) -> Result<()> {
+    let dir = root.join(".git/objects");
+    fs::create_dir_all(&dir)?;
+    let (files, commit) = write_objects(&LooseObjects::at(&dir), base, manifest, blobs, time_ms)?;
+    point_at(root, &files, &commit)
+}
+
+/// Points the repository at `base`, so anything staged or committed locally
+/// is a local edit again. `blobs` are the contents the repository may not
+/// have yet. An agent may be working here, so objects are written away from
+/// the workspace and copied in.
+pub fn set_base<'a>(
+    root: &Path,
+    base: &GitId,
+    manifest: &BTreeMap<String, (FileMode, GitId)>,
+    blobs: impl Iterator<Item = &'a [u8]>,
+    time_ms: i64,
+) -> Result<()> {
+    let scratch = tempfile::tempdir()?;
+    let objects = LooseObjects::at(scratch.path());
+    let (files, commit) = write_objects(&objects, base, manifest, blobs, time_ms)?;
+    install(root, scratch.path())?;
+    point_at(root, &files, &commit)
 }
 
 /// One `.git/info/exclude` line for exactly `path`, or none for a path a
@@ -161,13 +169,12 @@ fn exclude_line(path: &str) -> Option<String> {
 /// Keeps `.lonca/` and `paths` out of `git status`. They are what
 /// `changes()` skips: a local change for neither tool.
 pub fn set_excluded<'a>(root: &Path, paths: impl Iterator<Item = &'a String>) -> Result<()> {
-    let git = own_dirs(root)?;
     let mut text = String::from("/.lonca/\n");
     for line in paths.filter_map(|p| exclude_line(p)) {
         text.push_str(&line);
         text.push('\n');
     }
-    replace(&git.join("info/exclude"), text.as_bytes())
+    wsfs::write(root, ".git/info/exclude", text.as_bytes(), wsfs::REGULAR)
 }
 
 #[cfg(test)]
@@ -218,7 +225,7 @@ mod tests {
         }
         init(root).unwrap();
         let blobs = files.iter().map(|(_, _, t)| t.as_bytes());
-        set_base(root, &base_id(), &manifest, blobs, 1_000_000).unwrap();
+        first_base(root, &base_id(), &manifest, blobs, 1_000_000).unwrap();
         set_excluded(root, [].iter()).unwrap();
         (dir, manifest)
     }
@@ -337,37 +344,47 @@ mod tests {
         set_excluded(root, [].iter()).unwrap();
         assert_eq!(fs::read_to_string(&victim).unwrap(), "mine");
         assert_eq!(git(root, &["status", "--porcelain"]), "");
-        // So is a symlink waiting at the temporary name.
-        std::os::unix::fs::symlink(&victim, git_path.join("index.lonca-tmp")).unwrap();
-        set_base(root, &base_id(), &manifest, [].into_iter(), 3_000_000).unwrap();
-        assert_eq!(fs::read_to_string(&victim).unwrap(), "mine");
 
-        // A directory swapped for a symlink stops the write.
-        for name in ["objects/ab", "objects", "refs/heads", "refs", "info"] {
+        // A directory swapped for a symlink stops the write, and nothing
+        // lands on the other side.
+        for name in ["objects", "refs/heads", "refs", "info"] {
             let at = git_path.join(name);
             let aside = out.path().join(name.replace('/', "-"));
-            if at.exists() {
-                fs::rename(&at, &aside).unwrap();
-            } else {
-                fs::create_dir(&aside).unwrap();
-            }
+            fs::rename(&at, &aside).unwrap();
             std::os::unix::fs::symlink(&aside, &at).unwrap();
-            let e = set_base(root, &base_id(), &manifest, [].into_iter(), 3_000_000);
-            let e = format!("{:#}", e.unwrap_err());
-            assert!(e.contains("is not a directory"), "{name}: {e}");
-            assert!(set_excluded(root, [].iter()).is_err(), "{name}");
+            let before = fs::read_dir(&aside).unwrap().count();
+            let written = if name == "info" {
+                set_excluded(root, [].iter())
+            } else {
+                set_base(root, &base_id(), &manifest, [].into_iter(), 3_000_000)
+            };
+            let e = format!("{:#}", written.unwrap_err());
+            assert!(e.contains("is a symlink"), "{name}: {e}");
+            assert_eq!(fs::read_dir(&aside).unwrap().count(), before, "{name}");
             fs::remove_file(&at).unwrap();
-            if !name.starts_with("objects/") {
-                fs::rename(&aside, &at).unwrap();
-            }
+            fs::rename(&aside, &at).unwrap();
         }
 
-        // `.git` itself, as a symlink, a file or nothing.
+        // One object directory is enough to stop it, when it is the one
+        // an object goes to.
+        let id = GitId::of_blob(b"fresh\n").to_string();
+        let shard = git_path.join("objects").join(&id[..2]);
+        let aside = out.path().join("shard");
+        fs::create_dir(&aside).unwrap();
+        let _ = fs::remove_dir_all(&shard);
+        std::os::unix::fs::symlink(&aside, &shard).unwrap();
+        let blobs = [b"fresh\n".as_slice()];
+        let e = set_base(root, &base_id(), &manifest, blobs.into_iter(), 3_000_000);
+        assert!(format!("{:#}", e.unwrap_err()).contains("is a symlink"));
+        assert_eq!(fs::read_dir(&aside).unwrap().count(), 0);
+        fs::remove_file(&shard).unwrap();
+
+        // `.git` itself, as a symlink or a file.
         let aside = out.path().join("git");
         fs::rename(&git_path, &aside).unwrap();
-        assert!(set_excluded(root, [].iter()).is_err());
         std::os::unix::fs::symlink(&aside, &git_path).unwrap();
-        assert!(set_excluded(root, [].iter()).is_err());
+        let e = format!("{:#}", set_excluded(root, [].iter()).unwrap_err());
+        assert!(e.contains(".git is a symlink"), "{e}");
         fs::remove_file(&git_path).unwrap();
         fs::write(&git_path, "gitdir: /elsewhere\n").unwrap();
         assert!(set_excluded(root, [].iter()).is_err());

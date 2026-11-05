@@ -39,6 +39,13 @@ pub fn validate_repo_path(p: &str) -> Result<()> {
     Ok(())
 }
 
+/// Is `p` under a workspace's `.lonca/`? Case is folded: on macOS
+/// `.LONCA/session` is that same file.
+pub fn is_workspace_metadata(p: &str) -> bool {
+    let first = p.split('/').next().unwrap_or_default();
+    first.eq_ignore_ascii_case(".lonca")
+}
+
 pub fn validate_path_pattern(p: &str) -> Result<()> {
     if p == "**" {
         return Ok(());
@@ -115,6 +122,16 @@ pub fn symbol_pattern_within(inner: &str, outer: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_metadata_is_the_first_component_in_any_case() {
+        for p in [".lonca", ".lonca/session", ".LONCA/session", ".Lonca/a/b"] {
+            assert!(is_workspace_metadata(p), "{p}");
+        }
+        for p in ["src/.lonca/x", ".lonca2/x", "lonca/x", ""] {
+            assert!(!is_workspace_metadata(p), "{p}");
+        }
+    }
 
     #[test]
     fn path_validation() {

@@ -313,7 +313,7 @@ fn write(
                     format!("lonca: writes outside the workspace are not allowed ({shown})");
                 refuse(reason, shown);
             }
-            Some(rel) if rel == ".lonca" || rel.starts_with(".lonca/") => {
+            Some(rel) if lonca_core::paths::is_workspace_metadata(&rel) => {
                 refuse("lonca: .lonca/ is workspace metadata".to_string(), rel);
             }
             Some(_) if pre => {}

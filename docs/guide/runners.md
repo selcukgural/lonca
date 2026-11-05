@@ -63,6 +63,9 @@ and the files `lonca harness setup` wrote are excluded.
   branch is left behind, but no file changes. A sync that can not do this (the
   agent replaced part of `.git`) still syncs and says so: `git_warning` with
   `--json`, a warning otherwise.
+- A workspace holds regular files. A symlink at a tracked path, or on the way
+  to one, stops `diff`, `propose` and `sync` with an error naming it; other
+  symlinks are ignored.
 - A commit is local. `lonca propose` sends what differs from the base, whether
   it was committed or not, and nothing is proposed from `.git`.
 - `git clean -x` removes `.lonca/` as well: that ends the workspace.

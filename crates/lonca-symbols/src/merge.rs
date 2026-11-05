@@ -13,8 +13,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
+use crate::engine::ENGINE_SECTIONS;
 use crate::extract::{Parsed, Sym, normalize, parse};
 use crate::lang::Lang;
+use crate::sections::{self, Format};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeResult {
@@ -24,6 +26,7 @@ pub struct MergeResult {
 }
 
 pub fn merge3(
+    engine: u32,
     base: &FileMap,
     ours: &FileMap,
     theirs: &FileMap,
@@ -83,7 +86,7 @@ pub fn merge3(
                         pick(Some(o), &mut files);
                         continue;
                     };
-                    match merge_text(path, bt, ot, tt) {
+                    match merge_text_at(engine, path, bt, ot, tt) {
                         Ok(text) => write(text.as_bytes())?,
                         Err(c) => {
                             conflicts.extend(c);
@@ -106,13 +109,49 @@ pub fn merge3(
     Ok(MergeResult { files, conflicts })
 }
 
-/// Merges one file's text. `Err` carries the conflicting symbols.
+/// Merges one file's text with engine 0. `Err` carries the conflicting
+/// symbols.
 pub fn merge_text(
     path: &str,
     b: &str,
     o: &str,
     t: &str,
 ) -> std::result::Result<String, Vec<String>> {
+    merge_text_at(0, path, b, o, t)
+}
+
+/// A merge by sections, when `engine` has them and every side does. `None`
+/// leaves the file to the line merge. A result that is no longer the format
+/// it was is a conflict: the sections merged, the file did not.
+fn section_merge(
+    engine: u32,
+    path: &str,
+    b: &str,
+    o: &str,
+    t: &str,
+) -> Option<std::result::Result<String, Vec<String>>> {
+    if engine < ENGINE_SECTIONS {
+        return None;
+    }
+    let format = Format::detect(path)?;
+    Some(match sections::merge(format, b, o, t)? {
+        Ok(text) if sections::sections(format, &text).is_some() => Ok(text),
+        Ok(_) => Err(vec![format!("{path}#<file>")]),
+        Err(names) => Err(names.iter().map(|n| format!("{path}#{n}")).collect()),
+    })
+}
+
+/// Merges one file's text with the given engine.
+pub fn merge_text_at(
+    engine: u32,
+    path: &str,
+    b: &str,
+    o: &str,
+    t: &str,
+) -> std::result::Result<String, Vec<String>> {
+    if let Some(r) = section_merge(engine, path, b, o, t) {
+        return r;
+    }
     let file_conflict = || vec![format!("{path}#<file>")];
     let lang = Lang::detect(path);
     if let Some(lang) = lang {
@@ -377,6 +416,50 @@ fn symbol_merge(path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_1_merges_by_sections_and_engine_0_by_lines() {
+        let b = "# A\nx\n# B\ny\n";
+        let o = "# A\nX\n# B\ny\n";
+        let t = "# A\nY\n# B\ny\n";
+        assert_eq!(
+            merge_text_at(1, "n.md", b, o, t),
+            Err(vec!["n.md#A".into()])
+        );
+        assert_eq!(
+            merge_text_at(0, "n.md", b, o, t),
+            Err(vec!["n.md#<file>".into()])
+        );
+        let t = "# A\nx\n# B\nY\n";
+        assert_eq!(
+            merge_text_at(1, "n.md", b, o, t).unwrap(),
+            "# A\nX\n# B\nY\n"
+        );
+    }
+
+    #[test]
+    fn a_file_without_sections_keeps_the_line_merge() {
+        let b = "a\nb\nc\nd\ne\n";
+        let m = merge_text_at(1, "n.md", b, "A\nb\nc\nd\ne\n", "a\nb\nc\nd\nE\n");
+        assert_eq!(m.unwrap(), "A\nb\nc\nd\nE\n");
+        assert_eq!(
+            merge_text_at(1, "n.md", b, "X\nb\nc\nd\ne\n", "Y\nb\nc\nd\ne\n"),
+            Err(vec!["n.md#<file>".into()])
+        );
+    }
+
+    /// Sections can each be right and the file wrong: a dotted key and a
+    /// table of the same name.
+    #[test]
+    fn a_merged_file_that_no_longer_parses_is_a_conflict() {
+        let b = "a = 1\nb = 2\n";
+        let o = "a = 1\nb = 2\n[x]\nz = 2\n";
+        let t = "a = 1\nb = 2\nx.y = 1\n";
+        assert_eq!(
+            merge_text_at(1, "c.toml", b, o, t),
+            Err(vec!["c.toml#<file>".into()])
+        );
+    }
 
     const RS: &str =
         "use std::io;\n\nfn a() {\n    1\n}\nfn b() {\n    2\n}\n\nfn c() {\n    3\n}\n";

@@ -10,6 +10,7 @@ use lonca_core::ops::Op;
 use lonca_core::{ChangeId, GitId};
 use lonca_daemon::Client;
 use lonca_daemon::protocol::{FileChange, TreeFile};
+use lonca_symbols::engine::ENGINE_CURRENT;
 use serde_json::json;
 
 use crate::ctx::call;
@@ -70,7 +71,8 @@ fn reverse_range(
                 let s = |x: &Vec<u8>| String::from_utf8(x.clone()).ok();
                 match (s(av), s(nv), s(bv)) {
                     (Some(av), Some(nv), Some(bv)) => {
-                        match lonca_symbols::merge::merge_text(p, &av, &nv, &bv) {
+                        match lonca_symbols::merge::merge_text_at(ENGINE_CURRENT, p, &av, &nv, &bv)
+                        {
                             Ok(m) => Some(m.into_bytes()),
                             Err(_) => {
                                 conflicts.push(p.clone());

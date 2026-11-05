@@ -5,8 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::ops::Facts;
 use lonca_core::{FileMap, GitId, Result};
 
+use crate::engine::ENGINE_SECTIONS;
 use crate::extract::{Parsed, Sym, parse};
 use crate::lang::Lang;
+use crate::sections::{APPEND, Format, Section, appended, sections};
 
 const FILE: &str = "<file>";
 const MODULE: &str = "<module>";
@@ -44,6 +46,7 @@ fn count_lines(s: &str) -> u32 {
 }
 
 pub fn analyze(
+    engine: u32,
     base: &FileMap,
     new: &FileMap,
     read: &dyn Fn(&GitId) -> Result<Vec<u8>>,
@@ -100,7 +103,13 @@ pub fn analyze(
                 f.lines_added += a;
                 f.lines_removed += r;
                 let Some(lang) = lang else {
-                    f.edits.push(sym_id(path, FILE));
+                    let by_section = (engine >= ENGINE_SECTIONS)
+                        .then(|| Format::detect(path))
+                        .flatten()
+                        .is_some_and(|format| compare_sections(path, format, old, newt, &mut f));
+                    if !by_section {
+                        f.edits.push(sym_id(path, FILE));
+                    }
                     continue;
                 };
                 let pb = parse(lang, old);
@@ -134,6 +143,32 @@ pub fn analyze(
         facts: f,
         syntax_errors,
     })
+}
+
+/// The sections that differ, or `false` for a file to treat whole: one
+/// that has no sections, or whose sections do not show what changed.
+fn compare_sections(path: &str, format: Format, old: &str, new: &str, f: &mut Facts) -> bool {
+    let (Some(bs), Some(ns)) = (sections(format, old), sections(format, new)) else {
+        return false;
+    };
+    let text = |list: &[Section], name: &str| {
+        let found = list.iter().find(|s| s.name == name);
+        found.map(|s| s.text.clone())
+    };
+    let before = f.edits.len() + f.adds.len() + f.deletes.len();
+    for n in &ns {
+        match text(&bs, &n.name) {
+            None => f.adds.push(sym_id(path, &n.name)),
+            Some(b) if b == n.text => {}
+            Some(b) if format == Format::Markdown && appended(&b, &n.text).is_some() => {
+                f.adds.push(sym_id(path, &format!("{}.{APPEND}", n.name)));
+            }
+            Some(_) => f.edits.push(sym_id(path, &n.name)),
+        }
+    }
+    let gone = bs.iter().filter(|b| text(&ns, &b.name).is_none());
+    f.deletes.extend(gone.map(|b| sym_id(path, &b.name)));
+    f.edits.len() + f.adds.len() + f.deletes.len() > before
 }
 
 fn compare_file(path: &str, pb: &Parsed, old: &str, pn: &Parsed, new: &str, f: &mut Facts) {
@@ -208,6 +243,76 @@ fn diff_level(path: &str, bs: &[Sym], old: &str, ns: &[Sym], new: &str, f: &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn section_facts(engine: u32, path: &str, old: &str, new: &str) -> Facts {
+        let map = |text: &str| {
+            let mut m = FileMap::new();
+            m.insert(
+                path.to_string(),
+                lonca_core::FileEntry {
+                    mode: lonca_core::FileMode::Regular,
+                    blob: GitId::of_blob(text.as_bytes()),
+                },
+            );
+            m
+        };
+        let (old, new) = (old.to_string(), new.to_string());
+        let (o, n) = (old.clone(), new.clone());
+        let read = move |id: &GitId| {
+            let text = if *id == GitId::of_blob(o.as_bytes()) {
+                &o
+            } else {
+                &n
+            };
+            Ok(text.clone().into_bytes())
+        };
+        analyze(engine, &map(&old), &map(&new), &read)
+            .unwrap()
+            .facts
+    }
+
+    #[test]
+    fn engine_1_reads_sections_and_engine_0_the_whole_file() {
+        let old = "# A\nx\n# B\ny\n";
+        let new = "# A\nX\n# B\ny\n# C\nz\n";
+        let f = section_facts(1, "n.md", old, new);
+        assert_eq!(f.edits, ["n.md#A"]);
+        assert_eq!(f.adds, ["n.md#C"]);
+        let f = section_facts(1, "n.md", new, old);
+        assert_eq!(f.deletes, ["n.md#C"]);
+        let f = section_facts(0, "n.md", old, new);
+        assert_eq!(f.edits, ["n.md#<file>"]);
+        assert_eq!(f.adds, Vec::<String>::new());
+    }
+
+    #[test]
+    fn only_markdown_grows_by_appending() {
+        let f = section_facts(1, "n.md", "# A\nx\n# B\ny\n", "# A\nx\nmore\n# B\ny\n");
+        assert_eq!(f.adds, ["n.md#A.<append>"]);
+        assert_eq!(f.edits, Vec::<String>::new());
+        let f = section_facts(1, "c.toml", "a = 1\nb = 2\n", "a = 12\nb = 2\n");
+        assert_eq!(f.edits, ["c.toml#a"]);
+        assert_eq!(f.adds, Vec::<String>::new());
+    }
+
+    /// Fail closed: anything that can not be read by sections is one edit.
+    #[test]
+    fn a_file_without_sections_is_edited_whole() {
+        let edit = |path, old, new| section_facts(1, path, old, new).edits;
+        assert_eq!(edit("n.md", "plain\n", "other\n"), ["n.md#<file>"]);
+        assert_eq!(
+            edit("c.toml", "a = 1\nb = 2\n", "a = \n"),
+            ["c.toml#<file>"]
+        );
+        assert_eq!(
+            edit("c.toml", "a = \n", "a = 1\nb = 2\n"),
+            ["c.toml#<file>"]
+        );
+        assert_eq!(edit("n.txt", "a\n", "b\n"), ["n.txt#<file>"]);
+        // Only what no section shows: the space between JSON members.
+        let (old, new) = ("{\"a\": 1, \"b\": 2}\n", "{\"a\": 1,\n \"b\": 2}\n");
+        assert_eq!(edit("c.json", old, new), ["c.json#<file>"]);
+    }
     use lonca_core::{FileEntry, FileMode};
     use std::collections::HashMap;
 
@@ -240,7 +345,7 @@ mod tests {
         let mut mem = Mem(HashMap::new());
         let b = tree(&mut mem, base);
         let n = tree(&mut mem, new);
-        analyze(&b, &n, &|id| Ok(mem.0[&id.0].clone())).unwrap()
+        analyze(0, &b, &n, &|id| Ok(mem.0[&id.0].clone())).unwrap()
     }
 
     const BASE: &str = "use std::io;\n\npub struct Client;\n\nimpl Client {\n    pub fn charge(&self, a: u64) -> u64 {\n        a\n    }\n\n    pub fn refund(&self) {}\n}\n\n#[test]\nfn charges() {}\n";

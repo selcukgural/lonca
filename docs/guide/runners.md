@@ -147,6 +147,9 @@ MCP server, and keeps the human approval as the control.
 - `lonca lease needed --json` in a workspace (the `lease_needed` MCP
   tool): the leases the local diff needs, who holds them, and `acquire`,
   the free ones as items for `lease_acquire`.
+- The `symbols` MCP tool lists a file's symbols, and the sections of
+  Markdown, TOML, JSON and YAML files, so two workers can edit one
+  `README.md` under different headings. `lease_needed` names them.
 - `details` in a `lease.acquire` or `change.propose` answer: who holds
   what, their intent, the expiry or the change it is pinned to. Read
   these instead of parsing `decision.reasons`.

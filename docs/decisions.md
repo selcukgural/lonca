@@ -156,6 +156,10 @@ entry format, so they have their own version
 - **Compatibility during 0.x** is the same as for the format: every engine
   version that ever wrote an entry stays recomputable by every later
   release.
+- **Engine 1** adds sections for Markdown, TOML, JSON and YAML (see
+  "Sections of files without a grammar"). For everything else its output is
+  engine 0's, and `tests/engine/v1/` holds the same cases with the same
+  snapshots to prove it.
 
 ## Human keys
 
@@ -863,6 +867,44 @@ a symbol and race everyone to hand it to a sub-agent (#42).
   caller's. A notification of a signature change is left to #43, which needs it.
 - **No gate on the format.** A log without interests has no reservations, so
   older entries replay untouched.
+
+## Sections of files without a grammar
+
+Any change to a file with no grammar was an edit of `path#<file>`, an
+exclusive lease on the whole file, and the merge was by lines: only one agent
+at a time could touch `README.md`, `CHANGELOG.md` or `Cargo.toml`, exactly the
+files many parallel tasks touch together (#46).
+
+- **Sections** (`crates/lonca-symbols/src/sections.rs`), by engine 1:
+  Markdown by heading (`README.md#Install.Linux`); TOML by table and key
+  (`Cargo.toml#dependencies.serde`, `bin[0].name`); JSON by top-level member,
+  and one level into `dependencies`, `devDependencies`,
+  `optionalDependencies`, `peerDependencies` and `scripts`; YAML by key and
+  one level down. They use the `.` hierarchy of symbols, so a lease on a
+  section covers what is in it, and adding one takes an `insert` lease on its
+  container. A `.` or `#` in a heading or key becomes `-`.
+- **Fail closed.** A file that does not parse, repeats a name, has one
+  section, or is not plainly what it should be has no sections: whole-file
+  edit and line merge, as before. A change no section shows (the space
+  between JSON members) is a whole-file edit too. A merge whose result no
+  longer parses is a `<file>` conflict.
+- **The merge** takes each section from the side that changed it. Both sides
+  changing one is a conflict on that section. It keeps ours' order, and what
+  only theirs added follows what it followed there. JSON has no sections to
+  concatenate, so members are joined with the file's own separator, which is
+  what keeps the commas right.
+- **Appending, by rule and not by list.** The issue proposed
+  `leases.append_files`. A policy value can not reach the merge: `integrate`
+  and `facts_of` take only the engine, and the auditor must recompute them from
+  the log. Instead, in Markdown, a section that only grew at its end is an
+  addition (`path#Section.<append>`, an `insert` lease on the section), and two
+  such additions merge, ours first. Any other change to the section is an
+  edit, and conflicts as one. TOML, JSON and YAML have keys, so there an
+  addition is a new key.
+- **Critical paths are unaffected:** `Cargo.toml` still needs its human
+  approval, however small the section.
+- **Clients** read the same sections: `sync` and the undo merge use the
+  current engine, and the `symbols` MCP tool lists sections as symbols.
 
 ## Reject, and a pending proposal whose session ends
 

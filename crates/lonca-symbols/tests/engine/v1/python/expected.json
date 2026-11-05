@@ -1,0 +1,457 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#charge"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.py#added"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.py#gone"
+        ],
+        "edits": [
+          "src/sample.py#Ledger.add",
+          "src/sample.py#sig",
+          "src/sample.py#test_charges"
+        ],
+        "import_only_files": [
+          "src/sample.py"
+        ],
+        "lines_added": 9,
+        "lines_removed": 5,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [
+          "src/sample.py#sig"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 1,
+          "skipped": 1
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "import os\nimport sys\nimport pytest\n\n\ndef charge(amount):\n    return amount * 2\n\n\ndef sig(a, b):\n    return a + b\n\n\ndef added():\n    return sys.argv[0]\n\n\nclass Ledger:\n    def __init__(self):\n        self.entries = {}\n\n    def add(self, k, v):\n        self.entries.setdefault(k, v)\n\n    def total(self):\n        return sum(self.entries.values())\n\n\n@pytest.mark.skip\ndef test_charges():\n    assert charge(2) == 2\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          9
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "def charge(amount): return amount",
+          "signature": "def charge(amount):",
+          "skipped": false,
+          "span": [
+            12,
+            12,
+            49
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "gone",
+          "own": "def gone(): pass",
+          "signature": "def gone():",
+          "skipped": false,
+          "span": [
+            52,
+            52,
+            72
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "def sig(a): return a + 1",
+          "signature": "def sig(a):",
+          "skipped": false,
+          "span": [
+            75,
+            75,
+            103
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.__init__",
+              "own": "def __init__(self): self.entries = {}",
+              "signature": "def __init__(self):",
+              "skipped": false,
+              "span": [
+                124,
+                124,
+                169
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "def add(self, k, v): self.entries[k] = v",
+              "signature": "def add(self, k, v):",
+              "skipped": false,
+              "span": [
+                175,
+                175,
+                223
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "def total(self): return sum(self.entries.values())",
+              "signature": "def total(self):",
+              "skipped": false,
+              "span": [
+                229,
+                229,
+                287
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class Ledger:",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            106,
+            106,
+            287
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "test_charges",
+          "own": "def test_charges(): assert charge(2) == 2",
+          "signature": "def test_charges():",
+          "skipped": false,
+          "span": [
+            290,
+            290,
+            335
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          9
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "def charge(amount): return amount * 2",
+          "signature": "def charge(amount):",
+          "skipped": false,
+          "span": [
+            12,
+            12,
+            53
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "gone",
+          "own": "def gone(): pass",
+          "signature": "def gone():",
+          "skipped": false,
+          "span": [
+            56,
+            56,
+            76
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "def sig(a): return a + 1",
+          "signature": "def sig(a):",
+          "skipped": false,
+          "span": [
+            79,
+            79,
+            107
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.__init__",
+              "own": "def __init__(self): self.entries = {}",
+              "signature": "def __init__(self):",
+              "skipped": false,
+              "span": [
+                128,
+                128,
+                173
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "def add(self, k, v): self.entries[k] = v",
+              "signature": "def add(self, k, v):",
+              "skipped": false,
+              "span": [
+                179,
+                179,
+                227
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "def total(self): return sum(self.entries.values())",
+              "signature": "def total(self):",
+              "skipped": false,
+              "span": [
+                233,
+                233,
+                291
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class Ledger:",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            110,
+            110,
+            291
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "test_charges",
+          "own": "def test_charges(): assert charge(2) == 2",
+          "signature": "def test_charges():",
+          "skipped": false,
+          "span": [
+            294,
+            294,
+            339
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          9
+        ],
+        [
+          10,
+          20
+        ],
+        [
+          22,
+          35
+        ]
+      ],
+      "js_tests": [],
+      "residual": "",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "def charge(amount): return amount",
+          "signature": "def charge(amount):",
+          "skipped": false,
+          "span": [
+            38,
+            38,
+            75
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "def sig(a, b): return a + b",
+          "signature": "def sig(a, b):",
+          "skipped": false,
+          "span": [
+            78,
+            78,
+            109
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "added",
+          "own": "def added(): return sys.argv[0]",
+          "signature": "def added():",
+          "skipped": false,
+          "span": [
+            112,
+            112,
+            147
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.__init__",
+              "own": "def __init__(self): self.entries = {}",
+              "signature": "def __init__(self):",
+              "skipped": false,
+              "span": [
+                168,
+                168,
+                213
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "def add(self, k, v): self.entries.setdefault(k, v)",
+              "signature": "def add(self, k, v):",
+              "skipped": false,
+              "span": [
+                219,
+                219,
+                277
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "def total(self): return sum(self.entries.values())",
+              "signature": "def total(self):",
+              "skipped": false,
+              "span": [
+                283,
+                283,
+                341
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class Ledger:",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            150,
+            150,
+            341
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "test_charges",
+          "own": "@pytest.mark.skip def test_charges(): assert charge(2) == 2",
+          "signature": "def test_charges():",
+          "skipped": true,
+          "span": [
+            344,
+            362,
+            407
+          ]
+        }
+      ]
+    }
+  }
+}

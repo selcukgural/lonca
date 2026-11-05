@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use lonca_core::{FileEntry, FileMap, FileMode, Store};
 use lonca_symbols::engine::{ENGINES_KNOWN, check};
+use lonca_symbols::sections::{Format, sections};
 use lonca_symbols::{Lang, Sym, analyze, merge3, parse};
 use serde_json::{Value, json};
 
@@ -60,6 +61,12 @@ fn parsed_json(lang: Lang, src: &str) -> Value {
     })
 }
 
+fn sections_json(format: Format, src: &str) -> Value {
+    let s = sections(format, src).unwrap_or_default();
+    let s = s.iter().map(|x| json!({"name": x.name, "text": x.text}));
+    Value::Array(s.collect())
+}
+
 fn side(dir: &Path, stem: &str) -> (String, String) {
     let file = std::fs::read_dir(dir)
         .unwrap()
@@ -76,7 +83,13 @@ fn run_case(engine: u32, dir: &Path) -> Value {
     let (_, ours) = side(dir, "ours");
     let (_, theirs) = side(dir, "theirs");
     let path = format!("src/sample.{ext}");
-    let lang = Lang::detect(&path).unwrap_or_else(|| panic!("no language for {path}"));
+    let lang = Lang::detect(&path);
+    let format = Format::detect(&path);
+    assert!(lang.is_some() || format.is_some(), "nothing reads {path}");
+    let symbols = |text: &str| match lang {
+        Some(lang) => parsed_json(lang, text),
+        None => sections_json(format.unwrap(), text),
+    };
 
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init_bare(&tmp.path().join("r.git")).unwrap();
@@ -95,10 +108,10 @@ fn run_case(engine: u32, dir: &Path) -> Value {
     let read = |id: &lonca_core::GitId| store.read_blob(id);
     let write = |bytes: &[u8]| store.write_blob(bytes);
     let facts = |n: &FileMap| {
-        let a = analyze(&b, n, &read).unwrap();
+        let a = analyze(engine, &b, n, &read).unwrap();
         json!({"facts": a.facts, "syntax_errors": a.syntax_errors})
     };
-    let merged = merge3(&b, &o, &t, &read, &write).unwrap();
+    let merged = merge3(engine, &b, &o, &t, &read, &write).unwrap();
     let merged_text = merged
         .files
         .get(&path)
@@ -106,9 +119,9 @@ fn run_case(engine: u32, dir: &Path) -> Value {
     json!({
         "path": path,
         "symbols": {
-            "base": parsed_json(lang, &base),
-            "ours": parsed_json(lang, &ours),
-            "theirs": parsed_json(lang, &theirs),
+            "base": symbols(&base),
+            "ours": symbols(&ours),
+            "theirs": symbols(&theirs),
         },
         "facts": {"ours": facts(&o), "theirs": facts(&t)},
         "merge": {"conflicts": merged.conflicts, "text": merged_text},
@@ -160,7 +173,9 @@ fn every_engine_version_reproduces_its_frozen_output() {
 fn every_language_has_a_case_for_the_current_engine() {
     let current = *ENGINES_KNOWN.last().unwrap();
     let exts: Vec<String> = cases(current).iter().map(|d| side(d, "base").0).collect();
-    for ext in ["rs", "py", "ts", "tsx", "js", "cs", "go"] {
+    for ext in [
+        "rs", "py", "ts", "tsx", "js", "cs", "go", "md", "toml", "json", "yaml",
+    ] {
         assert!(exts.iter().any(|e| e == ext), "no .{ext} case: {exts:?}");
     }
 }

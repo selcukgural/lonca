@@ -3494,6 +3494,15 @@ fn a_freed_lease_goes_to_the_oldest_interest_for_a_window() {
 
     assert!(h.lease("b", "l3", &[(F, LeaseKind::Edit)]).is_allow());
     assert!(h.chain.state.reservations.is_empty());
+    // What b waited for is in hand; c goes on waiting behind it.
+    let waiting: Vec<&str> = h
+        .chain
+        .state
+        .interests
+        .values()
+        .map(|i| i.session.as_str())
+        .collect();
+    assert_eq!(waiting, ["c"]);
     h.assert_replay();
 }
 
@@ -3946,6 +3955,44 @@ fn reservations_of_different_symbols_do_not_stand_in_each_others_way() {
         .collect();
     assert_eq!(holders, ["b", "d"]);
     assert!(h.lease("d", "l3", &[(g, LeaseKind::Edit)]).is_allow());
+    assert_eq!(h.chain.state.reservations.len(), 1, "b's stands");
+    assert_eq!(h.chain.state.reservations[0].session, "b");
     assert!(h.lease("b", "l4", &[(F, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+fn start_with_symbols(h: &mut H, session: &str, symbols: &[&str]) {
+    let mut op = h.start_op(session, &["src/**"], None);
+    if let Op::SessionStart { scope, .. } = &mut op {
+        scope.symbols = Some(symbols.iter().map(|s| s.to_string()).collect());
+    }
+    assert!(h.human("ayse", op).is_allow());
+}
+
+/// What a lease request asks for, the same for an acquire and an interest.
+#[test]
+fn a_lease_names_a_valid_symbol_inside_the_sessions_symbols() {
+    let mut h = H::new();
+    h.start("a", &["**"]);
+    for bad in ["src/a.rs#", "../a.rs#f", "src/a.rs"] {
+        let d = h.lease("a", "l", &[(bad, LeaseKind::Edit)]);
+        assert!(denied_with(&d, "invalid_symbol"), "{bad}: {d:?}");
+    }
+
+    start_with_symbols(&mut h, "some", &["Client.*"]);
+    let inside = "src/a.rs#Client.charge";
+    assert!(
+        h.lease("some", "l1", &[(inside, LeaseKind::Edit)])
+            .is_allow()
+    );
+    let d = h.lease("some", "l2", &[("src/a.rs#other", LeaseKind::Edit)]);
+    assert!(denied_with(&d, "scope_symbol:src/a.rs#other"), "{d:?}");
+    // A pseudo-symbol is more than any name: only `*` reaches it.
+    let d = h.lease("some", "l3", &[("src/a.rs#<file>", LeaseKind::Insert)]);
+    assert!(denied_with(&d, "scope_symbol:"), "{d:?}");
+
+    start_with_symbols(&mut h, "all", &["*"]);
+    let d = h.lease("all", "l4", &[("src/b.rs#<file>", LeaseKind::Insert)]);
+    assert!(d.is_allow(), "{d:?}");
     h.assert_replay();
 }

@@ -3,7 +3,7 @@
 
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
-use lonca_core::oplog::{SignedOp, verify_chain};
+use lonca_core::oplog::{FORMAT_CURRENT, SignedOp, verify_chain};
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
 use std::sync::Arc;
@@ -168,7 +168,23 @@ impl H {
     }
 
     fn start_as(&mut self, human: &str, session: &str, paths: &[&str]) {
-        let op = Op::SessionStart {
+        let op = self.start_op(session, paths, None);
+        let d = self.human(human, op);
+        assert!(d.is_allow(), "{d:?}");
+    }
+
+    /// `session` takes over the workspace of `old`.
+    fn continue_as(&mut self, session: &str, old: &str, paths: &[&str], widen: bool) -> Decision {
+        let continues = Some(Continuation {
+            session: old.into(),
+            widen,
+        });
+        let op = self.start_op(session, paths, continues);
+        self.human("ayse", op)
+    }
+
+    fn start_op(&self, session: &str, paths: &[&str], continues: Option<Continuation>) -> Op {
+        Op::SessionStart {
             session: session.into(),
             agent: format!("bot-{session}"),
             model: Some("test-model".into()),
@@ -190,9 +206,8 @@ impl H {
                 scratch: vec![],
             },
             expires_ms: self.now + 120 * MIN,
-        };
-        let d = self.human(human, op);
-        assert!(d.is_allow(), "{d:?}");
+            continues,
+        }
     }
 
     /// Start a session and bind it as observed by locked hooks + sandbox.
@@ -1663,6 +1678,7 @@ fn key_operations_work_in_a_frozen_repository() {
             scratch: vec![],
         },
         expires_ms: h.now + 60 * MIN,
+        continues: None,
     };
     assert!(denied_with(&h.human("ayse", start), "frozen:incident"));
     assert!(
@@ -3039,7 +3055,7 @@ fn entries_of_an_older_format_know_no_liveness() {
     assert!(heartbeat(&mut h, "a").is_allow());
     let mut old = h.log.clone();
     for o in &mut old {
-        assert_eq!(o.entry.format, 8);
+        assert_eq!(o.entry.format, FORMAT_CURRENT);
         o.entry.format = 7;
         if matches!(o.entry.op, Op::Observe { .. }) {
             o.entry.decision.reasons.clear();
@@ -3104,6 +3120,254 @@ fn liveness_limits_must_be_positive() {
         )
         .is_ok()
     );
+}
+
+// ------------------------------------------------------- continued sessions
+
+fn taint(session: &str) -> Op {
+    Op::Taint {
+        session: session.into(),
+        reason: "read the web".into(),
+    }
+}
+
+/// What is known of the workspace's files goes with them: a new session
+/// on the same files clears nothing (issue #98).
+#[test]
+fn a_continuation_inherits_taint_level_and_writes_and_starts_alive() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.wrote("a", "src/a.rs");
+    let shell = Op::Observe {
+        session: "a".into(),
+        events: vec![Observation {
+            phase: Phase::Pre,
+            kind: ObsKind::Shell {
+                program: "ls".into(),
+                digest: "d".into(),
+            },
+            external: false,
+        }],
+    };
+    assert!(h.daemon(shell, vec![]).is_allow());
+    assert!(h.daemon(taint("a"), vec![]).is_allow());
+    h.now += 121 * MIN;
+    assert!(!h.chain.state.session_active("a", h.now));
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+
+    let s = &h.chain.state;
+    let (old, new) = (&s.sessions["a"], &s.sessions["b"]);
+    assert_eq!(new.taint.as_deref(), Some("read the web"));
+    assert_eq!(new.level, old.level);
+    assert_ne!(new.level, ObservationLevel::Unobserved);
+    assert_eq!(new.writes, old.writes);
+    assert!(new.writes.contains("src/a.rs"));
+    assert_eq!(new.shell_seen, old.shell_seen);
+    assert!(new.shell_seen);
+    assert_eq!(new.continued_from.as_deref(), Some("a"));
+    assert_eq!(new.continued_by, None);
+    assert_eq!(new.parent, None, "not a child: it outlives the old session");
+    assert_eq!(old.continued_by.as_deref(), Some("b"));
+    assert_eq!(old.ended.as_deref(), Some("continued by b"));
+    assert!(s.session_active("b", h.now));
+    assert!(s.continues("b", "a"));
+    assert!(!s.continues("a", "b"));
+    h.assert_replay();
+}
+
+/// A session that was never tainted or bound stays so: nothing is
+/// invented for the continuation.
+#[test]
+fn a_clean_unobserved_session_continues_clean_and_unobserved() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+    let new = &h.chain.state.sessions["b"];
+    assert_eq!(new.taint, None);
+    assert_eq!(new.level, ObservationLevel::Unobserved);
+    assert!(new.writes.is_empty());
+    assert!(!new.shell_seen);
+    // A plain start has none of it.
+    h.start("c", &["src/**"]);
+    let c = &h.chain.state.sessions["c"];
+    assert_eq!((&c.continued_from, &c.continued_by), (&None, &None));
+    h.assert_replay();
+}
+
+#[test]
+fn a_live_session_ends_with_its_continuation_and_its_leases_end_with_it() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start("other", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+
+    let s = &h.chain.state;
+    assert!(!s.session_active("a", h.now));
+    assert!(s.session_active("b", h.now));
+    assert!(s.leases.is_empty(), "a lease is not carried");
+    let d = h.lease("a", "l2", &[(f, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "session_inactive"), "{d:?}");
+    assert!(h.lease("b", "l3", &[(f, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+#[test]
+fn continuing_is_refused_for_what_is_not_a_single_root_session_in_scope() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let d = h.continue_as("b", "nope", &["src/**"], false);
+    assert!(denied_with(&d, "unknown_session"), "{d:?}");
+
+    // Wider than the old session: only when the human asks for it.
+    let d = h.continue_as("b", "a", &["src/**", "docs/**"], false);
+    assert!(denied_with(&d, "scope_widening:path:docs/**"), "{d:?}");
+    assert!(h.chain.state.session_active("a", h.now), "nothing happened");
+    assert!(!h.chain.state.sessions.contains_key("b"));
+
+    // Narrower needs nothing.
+    assert!(h.continue_as("b", "a", &["src/a/**"], false).is_allow());
+    // A wide one is logged as such.
+    assert!(h.continue_as("c", "b", &["src/**"], true).is_allow());
+    assert_eq!(h.chain.state.sessions["c"].scope.paths, ["src/**"]);
+
+    // One successor: a workspace never has two live sessions.
+    let d = h.continue_as("d", "b", &["src/a/**"], false);
+    assert!(denied_with(&d, "session_continued"), "{d:?}");
+    assert!(h.chain.state.session_active("c", h.now));
+
+    // A child's scope and lifetime are its parent's.
+    h.start("p", &["src/**"]);
+    let attenuate = Op::CapAttenuate {
+        parent: "p".into(),
+        child: "kid".into(),
+        agent: "bot".into(),
+        scope: h.chain.state.sessions["p"].scope.clone(),
+        expires_ms: h.now + 10 * MIN,
+    };
+    assert!(h.agent("p", attenuate).is_allow());
+    let d = h.continue_as("e", "kid", &["src/**"], false);
+    assert!(denied_with(&d, "continue_child_session"), "{d:?}");
+    h.assert_replay();
+}
+
+/// The change in flight stays what it was; its pins pass to the session
+/// that goes on, which can propose on top of it and take it back.
+#[test]
+fn a_pending_change_keeps_its_pin_and_the_continuation_holds_it() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start("other", &["src/**"]);
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    let both = [(f, LeaseKind::Edit), (g, LeaseKind::Edit)];
+    assert!(h.lease("a", "l1", &both).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+
+    assert!(matches!(
+        h.chain.state.changes[&c].status,
+        ChangeStatus::Pending { .. }
+    ));
+    let l = &h.chain.state.leases["l1"];
+    assert_eq!(l.session, "b");
+    assert_eq!(l.pins[&c].len(), 1);
+    assert_eq!(
+        l.items.len(),
+        1,
+        "what was not pinned ended with the session"
+    );
+    assert_eq!(held(&h, "b"), [f]);
+    let d = h.lease("other", "l2", &[(f, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{f}:b:")), "{d:?}");
+    assert!(h.lease("other", "l3", &[(g, LeaseKind::Edit)]).is_allow());
+
+    // On top of it: the same symbol, no new lease.
+    let c2 = ChangeId::random();
+    assert_eq!(h.propose("b", c2, edit(f)).outcome, Outcome::Escalate);
+    assert!(h.chain.state.leases["l1"].pins.contains_key(&c2));
+
+    // The continuation may take back what its workspace proposed, and an
+    // outsider may not.
+    let withdraw = Op::ChangeWithdraw { change: c };
+    let d = h.agent("other", withdraw.clone());
+    assert!(denied_with(&d, "not_own_change"), "{d:?}");
+    assert!(h.agent("b", withdraw).is_allow());
+    assert_eq!(h.chain.state.changes[&c].status, ChangeStatus::Withdrawn);
+    assert!(h.chain.state.leases["l1"].pins.contains_key(&c2));
+    assert!(h.human("ayse", approve(pending_seq(&h, c2))).is_allow());
+    assert!(integrate(&mut h, c2, Some(gid('e')), &[]).is_allow());
+    assert!(!h.chain.state.leases.contains_key("l1"));
+    h.assert_replay();
+}
+
+/// A session goes on only in the direction of its continuation.
+#[test]
+fn the_earlier_session_can_not_take_back_the_continuations_change() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+    assert!(h.lease("b", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("b", c, edit(f)).outcome, Outcome::Escalate);
+    h.start("x", &["src/**"]);
+    let d = h.agent("x", Op::ChangeWithdraw { change: c });
+    assert!(denied_with(&d, "not_own_change"), "{d:?}");
+    h.assert_replay();
+}
+
+/// A revocation is about the work, whichever session of it is named, and
+/// it leaves no pin behind.
+#[test]
+fn revoking_either_session_withdraws_the_work_and_frees_the_pin() {
+    for revoked in ["a", "b"] {
+        let mut h = H::new();
+        h.start("a", &["src/**"]);
+        h.start("other", &["src/**"]);
+        let f = "src/a.rs#f";
+        assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+        let c = ChangeId::random();
+        assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+        assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+        let revoke = Op::CapRevoke {
+            session: revoked.into(),
+            reason: "no".into(),
+        };
+        assert!(h.human("ayse", revoke).is_allow());
+
+        let s = &h.chain.state;
+        assert_eq!(s.changes[&c].status, ChangeStatus::Withdrawn, "{revoked}");
+        assert!(s.pending.is_empty(), "{revoked}");
+        let pins: Vec<_> = s.leases.values().flat_map(|l| l.pins.keys()).collect();
+        assert!(pins.is_empty(), "{revoked}: {pins:?}");
+        let d = h.lease("other", "l2", &[(f, LeaseKind::Edit)]);
+        assert!(d.is_allow(), "{revoked}: {d:?}");
+        h.assert_replay();
+    }
+}
+
+/// Revoking the continuation takes back the chain, however long it is.
+#[test]
+fn a_revocation_reaches_every_earlier_session_of_the_workspace() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+    assert!(h.continue_as("d", "b", &["src/**"], false).is_allow());
+    assert_eq!(held(&h, "d"), [f], "pins pass along the chain");
+    let revoke = Op::CapRevoke {
+        session: "d".into(),
+        reason: "no".into(),
+    };
+    assert!(h.human("ayse", revoke).is_allow());
+    assert_eq!(h.chain.state.changes[&c].status, ChangeStatus::Withdrawn);
+    assert!(!h.chain.state.session_active("d", h.now));
+    h.assert_replay();
 }
 
 // ------------------------------------------------------- agent config paths

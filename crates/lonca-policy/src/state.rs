@@ -43,6 +43,11 @@ pub struct Session {
     pub shell_seen: bool,
     /// `None` until the first heartbeat: such a session lives by its TTL.
     pub heartbeat: Option<Heartbeat>,
+    /// The session whose workspace this one took over. Not a `parent`: a
+    /// parent's end ends its children, and this session outlives that one.
+    pub continued_from: Option<String>,
+    /// The session that took this one's workspace over.
+    pub continued_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -227,6 +232,25 @@ impl State {
             cur = s.parent.as_deref();
         }
         true
+    }
+
+    /// `session` and the sessions it continues, newest first.
+    fn lineage(&self, session: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = Some(session.to_string());
+        while let Some(id) = cur {
+            cur = self
+                .sessions
+                .get(&id)
+                .and_then(|s| s.continued_from.clone());
+            out.push(id);
+        }
+        out
+    }
+
+    /// `session` is `earlier`, or took over its workspace.
+    pub fn continues(&self, session: &str, earlier: &str) -> bool {
+        self.lineage(session).iter().any(|s| s == earlier)
     }
 
     /// `child` is `ancestor` or was (transitively) created from it.
@@ -548,10 +572,27 @@ impl State {
                         c.status = ChangeStatus::Withdrawn;
                     }
                     self.queue.retain(|q| *q != ch);
+                    // A continuation holds its pins now: its sets are not
+                    // among the ones dropped above.
+                    self.unpin(ch, false);
                 }
                 self.pending
                     .retain(|_, p| p.actor.session() != Some(id.as_str()));
             }
+        }
+    }
+
+    /// `old` ends and `new` goes on with its work. Leases end with the
+    /// session as they always do, so a set is left only for its pinned
+    /// items, and those pass to `new`: the change stays what they are
+    /// pinned to, and `new` can propose on top of it.
+    fn hand_over(&mut self, old: &str, new: &str, now_ms: i64) {
+        self.end_sessions(old, &format!("continued by {new}"), false, now_ms);
+        for l in self.leases.values_mut().filter(|l| l.session == old) {
+            l.session = new.to_string();
+        }
+        if let Some(s) = self.sessions.get_mut(old) {
+            s.continued_by = Some(new.to_string());
         }
     }
 
@@ -702,11 +743,15 @@ impl State {
                 task,
                 scope,
                 expires_ms,
+                continues,
             } => {
                 let root_human = match actor {
                     Actor::Human { name } => name.clone(),
                     _ => String::new(),
                 };
+                // What is known of the workspace's files goes with them.
+                let old = continues.as_ref();
+                let old = old.and_then(|c| self.sessions.get(&c.session)).cloned();
                 self.sessions.insert(
                     session.clone(),
                     Session {
@@ -719,14 +764,21 @@ impl State {
                         scope: scope.clone(),
                         created_ms: time_ms,
                         expires_ms: *expires_ms,
-                        level: ObservationLevel::Unobserved,
-                        taint: None,
+                        level: old
+                            .as_ref()
+                            .map_or(ObservationLevel::Unobserved, |o| o.level),
+                        taint: old.as_ref().and_then(|o| o.taint.clone()),
                         ended: None,
-                        writes: BTreeSet::new(),
-                        shell_seen: false,
+                        writes: old.as_ref().map(|o| o.writes.clone()).unwrap_or_default(),
+                        shell_seen: old.as_ref().is_some_and(|o| o.shell_seen),
                         heartbeat: None,
+                        continued_from: old.as_ref().map(|o| o.id.clone()),
+                        continued_by: None,
                     },
                 );
+                if let Some(old) = old {
+                    self.hand_over(&old.id, session, time_ms);
+                }
             }
             Op::SessionBind { session, level, .. } => {
                 if let Some(s) = self.sessions.get_mut(session) {
@@ -762,12 +814,18 @@ impl State {
                             writes: BTreeSet::new(),
                             shell_seen: false,
                             heartbeat: None,
+                            continued_from: None,
+                            continued_by: None,
                         },
                     );
                 }
             }
             Op::CapRevoke { session, reason } => {
-                self.end_sessions(session, &format!("revoked: {reason}"), true, time_ms)
+                // A revocation is about the work, and the earlier sessions
+                // of a continued workspace did part of it.
+                for id in self.lineage(session) {
+                    self.end_sessions(&id, &format!("revoked: {reason}"), true, time_ms);
+                }
             }
             Op::LeaseAcquire {
                 set,

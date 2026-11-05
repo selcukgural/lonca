@@ -73,6 +73,28 @@ impl Workspace {
             .context("not inside a Lonca workspace (no .lonca/workspace.json above this directory)")
     }
 
+    /// The workspace at `dir` itself, for a new session of `repo` to go on
+    /// with. Returns it with the session it was left by.
+    pub fn to_continue(dir: &Path, repo: &str) -> Result<(Workspace, String)> {
+        let ws = Workspace::find(dir)
+            .filter(|ws| ws.root == dir)
+            .with_context(|| format!("{} is not a Lonca workspace", dir.display()))?;
+        if ws.meta.repo != repo {
+            bail!(
+                "{} is a workspace of repository {}, not {repo}",
+                dir.display(),
+                ws.meta.repo
+            );
+        }
+        let Some(session) = ws.meta.session.clone() else {
+            bail!(
+                "{} is a human workspace: no session to continue",
+                dir.display()
+            );
+        };
+        Ok((ws, session))
+    }
+
     pub fn token(&self) -> Result<String> {
         let t = fs::read_to_string(self.root.join(META_DIR).join("session"))
             .context("this workspace has no agent session")?;

@@ -2138,3 +2138,286 @@ fn a_workspace_is_created_with_json() {
     assert_eq!(w["base"], status["trunk"]);
     assert!(r.join("w1/.lonca").is_dir());
 }
+
+fn session_args<'a>(paths: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
+    let mut args = vec![
+        "session", "start", "--repo", "demo", "--agent", "claude", "--paths", paths,
+    ];
+    args.extend_from_slice(extra);
+    args
+}
+
+/// A worker outlives its session: a human continues the workspace and the
+/// edit goes on from where it stood (issue #98).
+#[test]
+fn an_expired_sessions_edit_lands_under_its_continuation() {
+    let e = Env::new();
+    agent_workspace(&e);
+    let r = &e.root;
+    e.run(
+        r,
+        &session_args("src/**", &["--workspace", "w1", "--ttl", "1s"]),
+    );
+    let w1 = r.join("w1");
+    let edited = "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n";
+    std::fs::write(w1.join("src/lib.rs"), edited).unwrap();
+    let meta = |w: &Path| parse(&std::fs::read_to_string(w.join(".lonca/workspace.json")).unwrap());
+    let before = meta(&w1);
+    let first = before["session"].as_str().unwrap().to_string();
+    let old_token = std::fs::read_to_string(w1.join(".lonca/session")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // The session is over, and it hears so.
+    let args = ["lease", "acquire", "src/lib.rs#charge"];
+    refused(&e, &w1, &args, "session_inactive");
+    let out = e
+        .cmd(&w1, &["session", "heartbeat", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("session_inactive"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(text(&out.stdout), "");
+
+    let args = session_args("src/**", &["--continue", "w1", "--json"]);
+    let c = parse(&e.run(r, &args));
+    let second = c["session"].as_str().unwrap().to_string();
+    assert_ne!(second, first);
+    assert_eq!(c["continues"], first.as_str());
+    assert_eq!(c["workspace"].as_str(), w1.to_str());
+    assert_eq!(c["decision"]["outcome"], "allow", "{c}");
+
+    // Files, base and manifest stayed; session and token did not.
+    assert_eq!(
+        std::fs::read_to_string(w1.join("src/lib.rs")).unwrap(),
+        edited
+    );
+    let after = meta(&w1);
+    assert_eq!(after["session"], second.as_str());
+    assert_eq!(after["base"], before["base"]);
+    assert_eq!(after["manifest"], before["manifest"]);
+    let token = std::fs::read_to_string(w1.join(".lonca/session")).unwrap();
+    assert_ne!(token, old_token);
+    assert!(!c.to_string().contains(token.trim()));
+
+    let held = e.run(&w1, &["lease", "acquire", "src/lib.rs#charge", "--json"]);
+    assert_eq!(parse(&held)["decision"]["outcome"], "allow", "{held}");
+    let args = ["propose", "-i", "double", "--accept-facts", "--json"];
+    let proposed = parse(&e.run(&w1, &args));
+    assert_eq!(proposed["status"], "pending", "{proposed}");
+    let seq = proposed["seq"].as_u64().unwrap().to_string();
+    e.run(r, &["approve", &seq, "--repo", "demo"]);
+    e.settle();
+    let s = status_json(&e);
+    let mut changes = s["changes"].as_array().unwrap().iter();
+    let change = changes.find(|c| c["change"] == proposed["change"]).unwrap();
+    assert_eq!(change["status"]["status"], "integrated", "{change}");
+
+    // Text form says what it continued.
+    let args = session_args("src/**", &["--continue", "w1"]);
+    let out = e.run(r, &args);
+    assert!(out.contains(&format!("continues {second}")), "{out}");
+}
+
+#[test]
+fn continuing_a_live_session_leaves_one_session_and_a_pending_change_stands() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    let args = ["propose", "-i", "double", "--accept-facts", "--json"];
+    let proposed = parse(&e.run(&ws, &args));
+    assert_eq!(proposed["status"], "pending", "{proposed}");
+    let old_token = std::fs::read_to_string(ws.join(".lonca/session")).unwrap();
+
+    let args = session_args("src/**", &["--continue", "ws", "--json"]);
+    let c = parse(&e.run(r, &args));
+    let s = status_json(&e);
+    let all = s["sessions"].as_array().unwrap().iter();
+    let active: Vec<_> = all.filter(|x| x["active"] == true).collect();
+    assert_eq!(active.len(), 1, "{s}");
+    assert_eq!(active[0]["id"], c["session"]);
+    assert_eq!(s["pending"][0]["change"], proposed["change"]);
+    assert_eq!(s["leases"][0]["session"], c["session"], "{s}");
+    assert_eq!(
+        s["leases"][0]["pinned"][0]["change"], proposed["change"],
+        "{s}"
+    );
+
+    // The old token is refused; the workspace works on the new one.
+    let heart = e.cmd(&ws, &["session", "heartbeat"]).output().unwrap();
+    assert!(heart.status.success(), "{}", text(&heart.stderr));
+    let keep = std::fs::read_to_string(ws.join(".lonca/session")).unwrap();
+    std::fs::write(ws.join(".lonca/session"), &old_token).unwrap();
+    let out = e.cmd(&ws, &["session", "heartbeat"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    std::fs::write(ws.join(".lonca/session"), keep).unwrap();
+
+    // On top of the pending change: an edit of another symbol.
+    let synced = parse(&e.run(&ws, &["sync", "--json"]));
+    assert_eq!(synced["conflicts"], json!([]));
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a * 3\n}\n",
+    )
+    .unwrap();
+    e.run(&ws, &["lease", "acquire", "src/lib.rs#refund"]);
+    let args = ["propose", "-i", "more", "--accept-facts", "--json"];
+    let next = parse(&e.run(&ws, &args));
+    assert_eq!(next["status"], "pending", "{next}");
+}
+
+#[test]
+fn continuing_is_refused_without_a_workspace_of_the_repository_or_a_plain_scope() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    let fails = |args: Vec<&str>, code: i32, says: &str| {
+        let out = e.cmd(r, &args).output().unwrap();
+        let stderr = text(&out.stderr);
+        assert_eq!(out.status.code(), Some(code), "{args:?}: {stderr}");
+        assert!(stderr.contains(says), "{stderr}");
+    };
+
+    // A wider scope is refused, and leaves the old session running.
+    let args = session_args("src/**,docs/**", &["--continue", "ws"]);
+    fails(args, 1, "scope_widening:path:docs/**");
+    assert!(
+        e.cmd(&ws, &["session", "heartbeat"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    // Asked for plainly, it goes through.
+    let args = session_args("src/**,docs/**", &["--continue", "ws", "--widen", "--json"]);
+    let c = parse(&e.run(r, &args));
+    assert_eq!(c["paths"], json!(["src/**", "docs/**"]));
+
+    // No workspace, a subdirectory of one, a human's, another repository's.
+    std::fs::create_dir_all(r.join("plain")).unwrap();
+    fails(
+        session_args("src/**", &["--continue", "plain"]),
+        3,
+        "is not a Lonca workspace",
+    );
+    fails(
+        session_args("src/**", &["--continue", "ws/src"]),
+        3,
+        "is not a Lonca workspace",
+    );
+    fails(
+        session_args("src/**", &["--continue", "hws"]),
+        3,
+        "is a human workspace",
+    );
+    e.run(r, &["init", "other"]);
+    let mut args = session_args("src/**", &["--continue", "ws"]);
+    args[3] = "other";
+    fails(args, 3, "is a workspace of repository demo, not other");
+
+    // Usage: one of the two, and --widen only with --continue.
+    let usage = |args: &[&str]| e.cmd(r, args).output().unwrap().status.code();
+    assert_eq!(usage(&session_args("src/**", &[])), Some(3));
+    let args = session_args("src/**", &["--continue", "ws", "--workspace", "x"]);
+    assert_eq!(usage(&args), Some(3));
+    assert_eq!(
+        usage(&session_args("src/**", &["--workspace", "x", "--widen"])),
+        Some(3)
+    );
+}
+
+/// A tainted session's workspace stays tainted through the CLI.
+#[test]
+fn a_continuation_is_tainted_when_the_session_it_continues_was() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    // Scope is what the workspace was given; a file no hook saw is what
+    // taints an observed session, so the taint comes from a hook event.
+    let event = json!({
+        "hook_event_name": "PreToolUse", "tool_name": "WebFetch",
+        "tool_input": {"url": "https://example.com/"}, "cwd": ws,
+    });
+    let out = e.hook(&ws, &event.to_string());
+    assert_ne!(out.status.code(), None);
+    let tainted = |e: &Env, id: &serde_json::Value| {
+        let s = status_json(e);
+        let mut all = s["sessions"].as_array().unwrap().iter();
+        all.find(|x| x["id"] == *id).unwrap()["taint"].clone()
+    };
+    let meta = parse(&std::fs::read_to_string(ws.join(".lonca/workspace.json")).unwrap());
+    let old = tainted(&e, &meta["session"]);
+    assert!(
+        old.is_string(),
+        "the hook did not taint: {}",
+        status_json(&e)
+    );
+
+    let args = session_args("src/**", &["--continue", "ws", "--json"]);
+    let c = parse(&e.run(r, &args));
+    assert_eq!(tainted(&e, &c["session"]), old);
+}
+
+/// A session that is over stops `lonca mcp`'s heartbeat, and its next
+/// tool result says so in the shape of every failure.
+#[test]
+fn the_mcp_server_stops_beating_and_tells_the_worker_the_session_ended() {
+    let e = Env::new();
+    agent_workspace(&e);
+    let r = &e.root;
+    e.run(
+        r,
+        &session_args("src/**", &["--workspace", "w1", "--ttl", "1s"]),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let mut mcp = Mcp::start(&e, &r.join("w1"));
+    let mut said = None;
+    for _ in 0..100 {
+        let (err, body) = mcp.tool("preview", json!({}));
+        if err && body["code"] == "session_inactive" {
+            said = Some(body);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let body = said.expect("the worker was never told");
+    assert!(
+        body["message"].as_str().unwrap().contains("--continue"),
+        "{body}"
+    );
+    assert_eq!(body["details"], json!([]));
+    // Any tool: the session is over for all of them.
+    let (err, again) = mcp.tool("status", json!({}));
+    assert!(err, "{again}");
+    assert_eq!(again["code"], "session_inactive");
+}
+
+/// A change of an earlier session is still the workspace's for the worker.
+#[test]
+fn mcp_status_shows_the_change_the_workspace_proposed_under_its_old_session() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    let args = ["propose", "-i", "double", "--accept-facts", "--json"];
+    let proposed = parse(&e.run(&ws, &args));
+    e.run(r, &session_args("src/**", &["--continue", "ws"]));
+    let mut mcp = Mcp::start(&e, &ws);
+    let (err, st) = mcp.tool("status", json!({}));
+    assert!(!err, "{st}");
+    assert_eq!(st["your_changes"][0]["change"], proposed["change"], "{st}");
+}

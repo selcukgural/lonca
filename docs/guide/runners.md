@@ -46,6 +46,40 @@ page is the harness side.
    ends the session and its token. A session a runner forgets expires
    at its TTL; `lonca session revoke <id>` ends one from outside.
 
+## A worker that outlives its session
+
+A session has a TTL (`sessions.max_ttl_minutes`, 8 hours by default) and
+can not be extended; a worker that sleeps overnight goes on under a new
+one. When the session is over, `lonca session heartbeat` exits 1 and
+`lonca mcp` stops beating and answers every tool with `{"code":
+"session_inactive", ...}`. Continuing is a human's act, signed like a
+start:
+
+```sh
+lonca session start --repo demo --agent claude --paths 'src/**' \
+      --continue /work/claude-1 --json
+```
+
+- The workspace stays as it is: files, base, manifest, and the change it
+  proposed. `sync`, `diff` and `propose` go on where they stood. The
+  session token in `.lonca/session` is replaced; restart `lonca mcp` so
+  it reads the new one.
+- A session that is still alive ends in the same step, so one workspace
+  never has two live sessions. A session can be continued once.
+- **Taint carries over**, with the observation level and what was seen
+  written, because the workspace may hold what the tainted session
+  wrote. A fresh directory is the only clean start.
+- **Leases do not**, and the worker leases again; `lease_needed` says
+  what. Items pinned to a change in flight stay pinned to it and pass to
+  the new session, so the worker can sync and propose on top of it, and
+  `change.withdraw` it.
+- `--paths` wider than the old session's is refused unless the human
+  adds `--widen`, which the prompt and the log both show. Pass
+  `--scratch` again if the worker needs its scratch roots; they are part
+  of the scope.
+- Revoking any session of the chain withdraws what all of them have in
+  flight.
+
 ## Claude Code settings
 
 Hooks, in the settings file the runner gives the worker (`settings.json`

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
+use gix::objs::Write as _;
 use gix::objs::tree::{self, EntryKind};
 use gix::refs::transaction::PreviousValue;
 use serde::{Deserialize, Serialize};
@@ -184,14 +185,10 @@ impl Store {
     }
 
     pub fn write_tree(&self, files: &FileMap) -> Result<GitId> {
-        let mut root: BTreeMap<String, Node> = BTreeMap::new();
-        for (path, entry) in files {
-            validate_repo_path(path)?;
-            let comps: Vec<&str> = path.split('/').collect();
-            insert(&mut root, &comps, entry, path)?;
-        }
+        let root = nodes(files)?;
         let repo = self.local();
-        Ok(write_dir(&repo, &root)?.into())
+        let write = |tree: gix::objs::Tree| Ok(repo.write_object(tree).map_err(git)?.detach());
+        Ok(write_dir(&write, &root)?.into())
     }
 
     pub fn read_tree(&self, tree: &GitId) -> Result<FileMap> {
@@ -216,33 +213,7 @@ impl Store {
 
     pub fn write_commit(&self, spec: &CommitSpec) -> Result<GitId> {
         let repo = self.local();
-        let sig = gix::actor::Signature {
-            name: spec.author_name.as_str().into(),
-            email: spec.author_email.as_str().into(),
-            time: gix::date::Time {
-                seconds: spec.time_ms.div_euclid(1000),
-                offset: 0,
-            },
-        };
-        let parents = spec
-            .parents
-            .iter()
-            .map(|p| p.oid())
-            .collect::<Result<Vec<_>>>()?;
-        let commit = gix::objs::Commit {
-            tree: spec.tree.oid()?,
-            parents: parents.into_iter().collect(),
-            author: sig.clone(),
-            committer: sig,
-            encoding: None,
-            message: spec.message.as_str().into(),
-            extra_headers: spec
-                .headers
-                .iter()
-                .map(|(k, v)| (k.as_str().into(), v.as_str().into()))
-                .collect(),
-        };
-        let id = repo.write_object(commit).map_err(git)?;
+        let id = repo.write_object(commit_of(spec)?).map_err(git)?;
         Ok(id.detach().into())
     }
 
@@ -323,6 +294,118 @@ impl Store {
     }
 }
 
+/// An objects directory with no repository around it. Nothing is read from
+/// disk: opening a repository would follow its config and `commondir`, which
+/// is no good for a directory somebody else can write to.
+pub struct LooseObjects {
+    store: gix::odb::loose::Store,
+}
+
+impl LooseObjects {
+    pub fn at(dir: &Path) -> Self {
+        Self {
+            store: gix::odb::loose::Store::at(dir, gix::hash::Kind::Sha1),
+        }
+    }
+
+    pub fn write_blob(&self, bytes: &[u8]) -> Result<GitId> {
+        let id = self
+            .store
+            .write_buf(gix::objs::Kind::Blob, bytes)
+            .map_err(git)?;
+        Ok(id.into())
+    }
+
+    pub fn write_tree(&self, files: &FileMap) -> Result<GitId> {
+        let write = |tree: gix::objs::Tree| self.store.write(&tree).map_err(git);
+        Ok(write_dir(&write, &nodes(files)?)?.into())
+    }
+
+    pub fn write_commit(&self, spec: &CommitSpec) -> Result<GitId> {
+        let id = self.store.write(&commit_of(spec)?).map_err(git)?;
+        Ok(id.into())
+    }
+}
+
+/// A Git index holding `files`, as the bytes of `.git/index`. Every stat is
+/// zero, so Git compares each file by content the first time it looks: a
+/// stat taken here could call a locally edited file clean. Files with
+/// another mode than regular or executable are refused: an index of this
+/// kind describes a checkout, where neither can be.
+pub fn index_of(files: &FileMap) -> Result<Vec<u8>> {
+    use gix::index::entry::{Flags, Mode, Stat};
+    let mut state = gix::index::State::new(gix::hash::Kind::Sha1);
+    for (path, entry) in files {
+        let mode = match entry.mode {
+            FileMode::Regular => Mode::FILE,
+            FileMode::Executable => Mode::FILE_EXECUTABLE,
+            other => {
+                return Err(Error::Invalid(format!(
+                    "{path}: no index entry for {other:?}"
+                )));
+            }
+        };
+        let id = entry.blob.oid()?;
+        state.dangerously_push_entry(
+            Stat::default(),
+            id,
+            Flags::empty(),
+            mode,
+            path.as_str().into(),
+        );
+    }
+    state.sort_entries();
+    let mut out = Vec::new();
+    let options = gix::index::write::Options {
+        extensions: gix::index::write::Extensions::None,
+        skip_hash: false,
+    };
+    gix::index::File::from_state(state, "index")
+        .write_to(&mut out, options)
+        .map_err(git)?;
+    Ok(out)
+}
+
+fn commit_of(spec: &CommitSpec) -> Result<gix::objs::Commit> {
+    let sig = gix::actor::Signature {
+        name: spec.author_name.as_str().into(),
+        email: spec.author_email.as_str().into(),
+        time: gix::date::Time {
+            seconds: spec.time_ms.div_euclid(1000),
+            offset: 0,
+        },
+    };
+    let parents = spec
+        .parents
+        .iter()
+        .map(|p| p.oid())
+        .collect::<Result<Vec<_>>>()?;
+    Ok(gix::objs::Commit {
+        tree: spec.tree.oid()?,
+        parents: parents.into_iter().collect(),
+        author: sig.clone(),
+        committer: sig,
+        encoding: None,
+        message: spec.message.as_str().into(),
+        extra_headers: spec
+            .headers
+            .iter()
+            .map(|(k, v)| (k.as_str().into(), v.as_str().into()))
+            .collect(),
+    })
+}
+
+/// `files` as a tree of directories.
+fn nodes(files: &FileMap) -> Result<BTreeMap<String, Node>> {
+    let mut root = BTreeMap::new();
+    for (path, entry) in files {
+        validate_repo_path(path)?;
+        let comps: Vec<&str> = path.split('/').collect();
+        insert(&mut root, &comps, entry, path)?;
+    }
+    Ok(root)
+}
+
 fn insert(
     dir: &mut BTreeMap<String, Node>,
     comps: &[&str],
@@ -346,7 +429,10 @@ fn insert(
     }
 }
 
-fn write_dir(repo: &gix::Repository, dir: &BTreeMap<String, Node>) -> Result<ObjectId> {
+fn write_dir(
+    write: &impl Fn(gix::objs::Tree) -> Result<ObjectId>,
+    dir: &BTreeMap<String, Node>,
+) -> Result<ObjectId> {
     let mut entries = Vec::with_capacity(dir.len());
     for (name, node) in dir {
         let (mode, oid) = match node {
@@ -359,7 +445,7 @@ fn write_dir(repo: &gix::Repository, dir: &BTreeMap<String, Node>) -> Result<Obj
                 };
                 (kind, f.blob.oid()?)
             }
-            Node::Dir(d) => (EntryKind::Tree, write_dir(repo, d)?),
+            Node::Dir(d) => (EntryKind::Tree, write_dir(write, d)?),
         };
         entries.push(tree::Entry {
             mode: mode.into(),
@@ -368,10 +454,7 @@ fn write_dir(repo: &gix::Repository, dir: &BTreeMap<String, Node>) -> Result<Obj
         });
     }
     entries.sort();
-    let id = repo
-        .write_object(gix::objs::Tree { entries })
-        .map_err(git)?;
-    Ok(id.detach())
+    write(gix::objs::Tree { entries })
 }
 
 fn walk(repo: &gix::Repository, id: ObjectId, prefix: &str, out: &mut FileMap) -> Result<()> {
@@ -582,6 +665,108 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&fsck.stderr)
         );
+    }
+}
+
+#[cfg(test)]
+mod loose_tests {
+    use super::*;
+
+    /// `git` reading a bare repository around the objects.
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "git {args:?}: {err}");
+        String::from_utf8_lossy(&out.stdout).trim_end().to_string()
+    }
+
+    fn file(mode: FileMode, blob: &GitId) -> FileEntry {
+        let blob = blob.clone();
+        FileEntry { mode, blob }
+    }
+
+    #[test]
+    fn objects_written_with_no_repository_are_what_git_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("repo.git");
+        Store::init_bare(&bare).unwrap();
+        let objects = LooseObjects::at(&bare.join("objects"));
+
+        let blob = objects.write_blob(b"hello\n").unwrap();
+        assert_eq!(blob, GitId::of_blob(b"hello\n"));
+        let files = FileMap::from([
+            ("a.txt".to_string(), file(FileMode::Regular, &blob)),
+            ("d/run.sh".to_string(), file(FileMode::Executable, &blob)),
+        ]);
+        let tree = objects.write_tree(&files).unwrap();
+        assert_eq!(
+            tree,
+            Store::open(&bare).unwrap().write_tree(&files).unwrap()
+        );
+        let spec = CommitSpec {
+            tree: tree.clone(),
+            parents: vec![],
+            author_name: "a".into(),
+            author_email: "a@b".into(),
+            time_ms: 5_000,
+            message: "m\n".into(),
+            headers: vec![],
+        };
+        let commit = objects.write_commit(&spec).unwrap();
+        assert_eq!(
+            commit,
+            Store::open(&bare).unwrap().write_commit(&spec).unwrap()
+        );
+        let shown = git(&bare, &["show", "--format=%T %an %at", "-s", &commit.0]);
+        assert_eq!(shown, format!("{} a 5", tree.0));
+        assert_eq!(
+            git(&bare, &["show", &format!("{}:d/run.sh", commit.0)]),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn a_tree_of_paths_that_can_not_be_a_tree_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = LooseObjects::at(dir.path());
+        let blob = GitId::of_blob(b"x");
+        let one = |p: &str| FileMap::from([(p.to_string(), file(FileMode::Regular, &blob))]);
+        assert!(objects.write_tree(&one(".git/config")).is_err());
+        let mut clash = one("a");
+        clash.extend(one("a/b"));
+        assert!(objects.write_tree(&clash).is_err());
+    }
+
+    #[test]
+    fn an_index_lists_the_files_in_gits_order_with_their_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("repo.git");
+        Store::init_bare(&bare).unwrap();
+        let blob = GitId::of_blob(b"x");
+        let files = FileMap::from([
+            ("a/b".to_string(), file(FileMode::Regular, &blob)),
+            ("a.b".to_string(), file(FileMode::Regular, &blob)),
+            ("run".to_string(), file(FileMode::Executable, &blob)),
+        ]);
+        std::fs::write(bare.join("index"), index_of(&files).unwrap()).unwrap();
+        let listed = git(&bare, &["ls-files", "--stage"]);
+        let want = [
+            format!("100644 {} 0\ta.b", blob.0),
+            format!("100644 {} 0\ta/b", blob.0),
+            format!("100755 {} 0\trun", blob.0),
+        ];
+        assert_eq!(listed, want.join("\n"));
+
+        for mode in [FileMode::Symlink, FileMode::Submodule] {
+            let files = FileMap::from([("x".to_string(), file(mode, &blob))]);
+            let e = index_of(&files).unwrap_err().to_string();
+            assert!(e.contains("x: no index entry"), "{e}");
+        }
     }
 }
 

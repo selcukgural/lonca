@@ -1158,6 +1158,40 @@ Passing tests do not show that they would catch a flipped `>=` or a
 - **Not nextest.** Not installed by default and not needed for speed:
   the workspace test run is dominated by two ~1.3 s binaries.
 
+## A workspace is a git repository (#111)
+
+An agent's workspace has a `.git` with one commit of its base, because agents
+and tools expect one: `codex exec` refuses a plain directory, and `git diff` is
+how an agent reviews its own work.
+
+- **Lonca never runs `git` on it and never reads a file in it.** The agent can
+  write `.git/config`, and `lonca sync` can run outside the agent's sandbox: an
+  MCP server does. A `git` process there would run `core.fsmonitor`, a
+  `reference-transaction` hook, a promisor remote's transport and so on, with
+  Lonca's rights. `-c` overrides would be a list of what we thought of, so
+  `.git` is written in-process: loose objects through `LooseObjects`, which
+  opens no repository, and an index from `index_of`. `checkout.rs` runs `git`,
+  so `repo_name` refuses a workspace.
+- **This departs from the issue:** it asked for a warning and a plain directory
+  on a machine with no `git`. Nothing here needs `git`, so that case is gone.
+- **Lonca only replaces files it owns**, by rename, and first checks that the
+  directories it writes in are real ones. The check and the write are not
+  atomic against an agent racing them. What that race can reach is a
+  hash-named object file, not chosen content or a chosen name. A sync whose
+  `.git` fails the check goes through with `git_warning`: `.git` is a convenience
+  and `changes()` does not depend on it.
+- **One commit, no parent, not trunk's commit.** Trunk's history is not in the
+  workspace, and a symlink is a regular file there, so its tree may differ from
+  trunk's. Local commits leave the branch at a sync; their content stays in the
+  files.
+- **The index has zero stats**, so the first `git status` hashes every file. A
+  stat taken at write time could call a locally edited file clean.
+- **`.git/info/attributes` turns off line-end, ident and filter handling**: the
+  file on disk is the blob, the same comparison `changes()` makes.
+- **Only sessions.** A person who wants git uses a checkout (humans guide).
+- **Cost:** about 1.5 s per 10,000 small files at `session start` (one loose
+  object each), 65 ms for a sync that brings no new blobs. `--no-git` skips it.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

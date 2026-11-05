@@ -3475,3 +3475,190 @@ fn session_end_says_when_work_was_left_behind() {
     let out = e.run(&ws, &["session", "end"]);
     assert!(out.contains("left unproposed: 1 file(s)"), "{out}");
 }
+
+/// `git` in a workspace as a tool there runs it, with none of the
+/// developer's config.
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let o = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "git {args:?}: {}", text(&o.stderr));
+    text(&o.stdout).trim_end().to_string()
+}
+
+const CHARGE: &str = "pub fn charge(a: u64) -> u64 {\n    a\n}\n";
+const REFUND: &str = "pub fn refund(a: u64) -> u64 {\n    a\n}\n";
+
+#[test]
+fn an_agents_workspace_is_a_repository_that_means_what_lonca_diff_means() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    assert_eq!(git_in(&ws, &["status", "--porcelain"]), "");
+    assert_eq!(git_in(&ws, &["diff"]), "");
+    assert!(ws.join(".lonca/session").exists());
+    assert_eq!(
+        git_in(&ws, &["check-ignore", ".lonca/session"]),
+        ".lonca/session"
+    );
+
+    // An edit: both tools see it.
+    let edited = CHARGE.replace("    a\n", "    a + 1\n");
+    std::fs::write(ws.join("src/lib.rs"), format!("{edited}\n{REFUND}")).unwrap();
+    assert_eq!(git_in(&ws, &["diff", "--name-only"]), "src/lib.rs");
+    assert!(git_in(&ws, &["diff"]).contains("+    a + 1"));
+    let facts = e.run(&ws, &["diff"]);
+    assert!(facts.contains("src/lib.rs#charge"), "{facts}");
+
+    // A local commit: git has nothing left to show, Lonca sees the same
+    // edit, and that edit is what a proposal sends.
+    git_in(&ws, &["commit", "-qam", "checkpoint"]);
+    assert_eq!(git_in(&ws, &["diff"]), "");
+    assert_eq!(e.run(&ws, &["diff"]), facts);
+    e.run(&ws, &["lease", "acquire", "src/lib.rs#charge"]);
+    let out = e.run(&ws, &["propose", "-i", "bump", "--accept-facts"]);
+    assert!(out.contains("escalate"), "{out}");
+    let seq: String = out
+        .trim_start_matches('#')
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let r = &e.root;
+    assert!(
+        e.run(r, &["approve", &seq, "--repo", "demo"])
+            .contains("released")
+    );
+    e.settle();
+    let hws = r.join("hws");
+    e.run(&hws, &["sync"]);
+    let trunk = std::fs::read_to_string(hws.join("src/lib.rs")).unwrap();
+    assert_eq!(trunk, format!("{edited}\n{REFUND}"));
+    assert!(!hws.join(".git").exists() && !hws.join("config").exists());
+}
+
+#[test]
+fn a_sync_moves_the_repository_and_keeps_only_local_edits_in_git_diff() {
+    let e = Env::new();
+    let r = e.root.clone();
+    let ws = agent_workspace(&e);
+    // The agent edits one symbol.
+    let mine = CHARGE.replace("    a\n", "    a + 1\n");
+    std::fs::write(ws.join("src/lib.rs"), format!("{mine}\n{REFUND}")).unwrap();
+    let before = git_in(&ws, &["rev-parse", "HEAD"]);
+
+    // Trunk moves: a new file, and the other symbol of the same file.
+    let hws = r.join("hws");
+    e.run(&hws, &["sync"]);
+    let theirs = REFUND.replace("    a\n", "    a - 1\n");
+    std::fs::write(hws.join("src/lib.rs"), format!("{CHARGE}\n{theirs}")).unwrap();
+    std::fs::write(hws.join("src/new.rs"), "pub fn fresh() {}\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "more"]).contains("allow"));
+    e.settle();
+
+    let report = parse(&e.run(&ws, &["sync", "--json"]));
+    assert_eq!(report["merged"], json!(["src/lib.rs"]), "{report}");
+    assert_eq!(report["git_warning"], json!(null), "{report}");
+    assert_ne!(git_in(&ws, &["rev-parse", "HEAD"]), before);
+    assert_eq!(git_in(&ws, &["status", "--porcelain"]), " M src/lib.rs");
+    let diff = git_in(&ws, &["diff"]);
+    assert!(diff.contains("+    a + 1"), "{diff}");
+    assert!(
+        !diff.contains("a - 1\n+"),
+        "trunk's edit is not local: {diff}"
+    );
+    assert!(git_in(&ws, &["show", "HEAD:src/lib.rs"]).contains("a - 1"));
+    assert!(git_in(&ws, &["ls-files"]).contains("src/new.rs"));
+    git_in(&ws, &["fsck", "--strict"]);
+
+    // A conflict: the file stays local, the trunk copy is no git change.
+    let clash = CHARGE.replace("    a\n", "    a + 2\n");
+    e.run(&hws, &["sync"]);
+    std::fs::write(hws.join("src/lib.rs"), format!("{clash}\n{theirs}")).unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "clash"]).contains("allow"));
+    e.settle();
+    let report = parse(&e.run(&ws, &["sync", "--json"]));
+    assert_eq!(report["conflicts"][0]["path"], "src/lib.rs", "{report}");
+    assert!(ws.join("src/lib.rs.trunk").exists());
+    assert_eq!(git_in(&ws, &["status", "--porcelain"]), " M src/lib.rs");
+    let diff = git_in(&ws, &["diff"]);
+    assert!(
+        diff.contains("-    a + 2") && diff.contains("+    a + 1"),
+        "{diff}"
+    );
+}
+
+#[test]
+fn a_tampered_repository_does_not_stop_a_sync_and_says_so() {
+    let e = Env::new();
+    let r = e.root.clone();
+    let ws = agent_workspace(&e);
+    let hws = r.join("hws");
+    std::fs::write(hws.join("src/new.rs"), "pub fn fresh() {}\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "more"]).contains("allow"));
+    e.settle();
+
+    std::fs::rename(ws.join(".git/refs"), r.join("elsewhere")).unwrap();
+    std::os::unix::fs::symlink(r.join("elsewhere"), ws.join(".git/refs")).unwrap();
+    let out = e.cmd(&ws, &["sync"]).output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stderr).contains("warning: .git still shows the old base"));
+    assert!(ws.join("src/new.rs").exists());
+    assert!(e.run(&ws, &["diff"]).contains("no local changes"));
+}
+
+#[test]
+fn a_plain_workspace_stays_plain_and_a_workspace_of_lonca_is_no_checkout() {
+    let e = Env::new();
+    let r = e.root.clone();
+    let ws = agent_workspace(&e);
+    // `lonca fetch` and `propose --commit` run git, so never in here.
+    for args in [
+        &["fetch", "--repo", "demo"][..],
+        &["propose", "--commit", "HEAD", "--repo", "demo"],
+    ] {
+        let out = e.cmd(&ws, args).output().unwrap();
+        assert!(!out.status.success(), "{args:?}");
+        assert!(
+            text(&out.stderr).contains("this is a Lonca workspace"),
+            "{args:?}"
+        );
+    }
+    assert!(
+        !std::fs::read_to_string(ws.join(".git/config"))
+            .unwrap()
+            .contains("[lonca]")
+    );
+
+    let mut args = session_args("src/**", &["--workspace", "plain", "--no-git"]);
+    args.push("--json");
+    assert_eq!(parse(&e.run(&r, &args))["decision"]["outcome"], "allow");
+    assert!(r.join("plain/src/lib.rs").exists());
+    assert!(!r.join("plain/.git").exists());
+    let hws = r.join("hws");
+    assert!(!hws.join(".git").exists(), "a person's workspace is plain");
+    std::fs::write(hws.join("src/new.rs"), "pub fn fresh() {}\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "more"]).contains("allow"));
+    e.settle();
+    let report = parse(&e.run(&r.join("plain"), &["sync", "--json"]));
+    assert_eq!(report["updated"], json!(["src/new.rs"]), "{report}");
+    assert_eq!(report["git_warning"], json!(null), "{report}");
+    assert!(!r.join("plain/.git").exists());
+
+    // Refused with --continue: that workspace already is what it is.
+    let mut args = session_args("src/**", &["--continue", "plain", "--no-git"]);
+    args.push("--json");
+    let out = e.cmd(&r, &args).output().unwrap();
+    assert!(!out.status.success());
+}
+
+#[test]
+fn harness_setup_files_are_no_change_for_git_either() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    e.run(&ws, &["harness", "setup", "claude-code"]);
+    assert!(ws.join(".mcp.json").exists());
+    assert_eq!(git_in(&ws, &["status", "--porcelain"]), "");
+}

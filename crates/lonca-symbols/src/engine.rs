@@ -29,9 +29,7 @@ pub const ENGINE_SECTIONS: u32 = 1;
 /// treats a change of order as a change.
 pub const ENGINE_EXACT: u32 = 2;
 
-/// The first engine in which a type's own text is the unit `Type.<def>`,
-/// apart from its members.
-pub const ENGINE_DEFS: u32 = 3;
+pub use lonca_core::ops::ENGINE_DEFS;
 
 /// Every engine version this build can recompute.
 pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3];

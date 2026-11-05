@@ -192,7 +192,7 @@ entry format, so they have their own version
     Containers have one, and so do declarations whose members stand beside
     them, like a Rust `struct` or a Go `type` (`TYPE_KINDS` in `extract.rs`).
     `Type` itself keeps its meaning, the whole type, and covers `Type.<def>`.
-  - **No new log format and no change to `decide()` for a lease.** By name
+  - **No new log format, and leases are decided as before.** By name
     `Type.<def>` is already a member of `Type`, so `covers` and
     `leases_conflict` give the right answer as they stand: it overlaps
     neither `Type.method` nor `insert Type`. Only the facts changed, and they
@@ -214,11 +214,25 @@ entry format, so they have their own version
   - **An `impl` taken out** has no lease that reaches its members, so facts
     report its members as deletes and `Type` as an edit, instead of a delete
     of `impl:Type`.
-  - **Scopes.** A proposal's `Type.<def>` is checked as `Type`, so a scope
-    reaches what it reached: `Type` does, and `Type.*`, the members, still
-    does not. A lease request is checked as it always was, because the old
-    answer for a literal `Type.<def>` must replay: a session scoped to `Type`
-    leases `Type`.
+  - **An addition must come through.** Where a new member goes in a
+    container with no member to stand beside is found in the text, and a
+    string or a comment can fool it while the file still parses. So from
+    engine 3 a symbol merge whose result lacks a symbol either side added
+    goes to the line merge, and in a sync the file stays local.
+  - **Layout of the container comes from `t`** when the walk runs the other
+    way round: blank lines or line endings that `o` changed around its
+    members are not kept, as for any text the comparison calls layout.
+  - **A moved `impl` is its type**, for the same reason as one taken out.
+    Moves go to the line merge, which can still conflict on nearby lines.
+  - **Scopes.** Facts of engine 3 and later check `Type.<def>` as `Type`, and
+    the literal name also matches. `Type` reaches it, which from this engine
+    includes the `impl` headers that used to be `impl:Type`. `Type.*`, the
+    members, did not reach the type's own text and still does not. This takes
+    `symbols_engine` as an input of `decide()`, because before engine 3
+    `T.<def>` in facts can only be a document section called `<def>`, and
+    old entries must replay as decided. A lease request has no engine and is
+    checked as it always was: a session scoped to exactly `Type` leases
+    `Type`, the whole type.
 
 ## Harness profiles
 

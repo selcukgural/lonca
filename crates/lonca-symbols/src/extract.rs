@@ -8,13 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
+use lonca_core::ops::DEF;
+
 use crate::engine::{ENGINE_DEFS, ENGINE_EXACT};
 use crate::lang::Lang;
-
-/// The member of a type that stands for its own text: `Type.<def>` is the
-/// header, fields, decorators and class-level statements, and for Rust every
-/// `impl` header of the type, without its methods.
-pub const DEF: &str = "<def>";
 
 /// Declarations with a definition of their own even with no members in the
 /// file's tree: a Rust `struct` or a Go `type`, whose methods stand beside
@@ -400,7 +397,7 @@ impl<'s> Extractor<'s> {
                     };
                     let mut d = container(Some(format!("impl:{full}")), "body")?;
                     d.member_prefix = Some(full);
-                    d.impl_for = Some(ty);
+                    d.impl_for = Some(ty).filter(|ty| !ty.is_empty());
                     Some(d)
                 }
                 _ => None,
@@ -806,6 +803,15 @@ mod tests {
         assert_eq!(dr.changed_unit(dr, 3), "R.<def>");
         assert_eq!(cr.changed_unit(dr, 3), "R");
         assert_eq!(dr.changed_unit(cr, 3), "R");
+    }
+
+    /// A type with no plain name has no definition to share.
+    #[test]
+    fn an_impl_of_a_projected_type_is_its_own_definition() {
+        let p = parse(Lang::Rust, "impl R for <T as X>::Y {}\n");
+        let i = &p.syms[0];
+        assert_eq!(i.def_of.as_ref(), Some(&i.name));
+        assert_eq!(i.impl_of(3), None);
     }
 
     #[test]

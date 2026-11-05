@@ -259,6 +259,15 @@ pub struct Claim {
     pub revert_of: Option<ChangeId>,
 }
 
+/// The member of a type that stands for its own text: `Type.<def>` is the
+/// header, fields, decorators and class-level statements, and for Rust every
+/// `impl` header of the type, without its methods.
+pub const DEF: &str = "<def>";
+
+/// The first symbol engine whose facts name `Type.<def>`. Before it the same
+/// text could only be the heading of a document section.
+pub const ENGINE_DEFS: u32 = 3;
+
 /// What a change actually does, computed by Lonca from the Git objects.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Facts {

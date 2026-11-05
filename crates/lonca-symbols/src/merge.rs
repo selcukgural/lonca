@@ -196,7 +196,44 @@ pub fn merge_around_conflicts(
     if m.moved {
         return None;
     }
-    m.apply().filter(|text| !parse(lang, text).has_error)
+    let conflicts = std::mem::take(&mut m.conflicts);
+    let sides = [&pb, &po, &pt];
+    m.apply()
+        .filter(|text| holds_up(engine, path, lang, text, sides, &conflicts))
+}
+
+fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
+    for s in syms {
+        out.insert(&s.name);
+        all_names(&s.children, out);
+    }
+}
+
+/// `text` parses, and from [`ENGINE_DEFS`] on it has every symbol a side
+/// added, unless that symbol is in `conflicts`. A text insert can land in a
+/// string or a comment and still parse, and the addition would be gone.
+fn holds_up(
+    engine: u32,
+    path: &str,
+    lang: Lang,
+    text: &str,
+    [pb, po, pt]: [&Parsed; 3],
+    conflicts: &[String],
+) -> bool {
+    let merged = parse(lang, text);
+    if merged.has_error {
+        return false;
+    }
+    if engine < ENGINE_DEFS {
+        return true;
+    }
+    let (mut base, mut sides, mut there) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    all_names(&pb.syms, &mut base);
+    all_names(&po.syms, &mut sides);
+    all_names(&pt.syms, &mut sides);
+    all_names(&merged.syms, &mut there);
+    let mut added = sides.difference(&base);
+    added.all(|n| there.contains(n) || conflicts.contains(&format!("{path}#{n}")))
 }
 
 enum Sm {
@@ -507,7 +544,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         // Nothing of `theirs` came through, though the files differ: only
         // the line merge sees what it changed.
         Some(text) if engine >= ENGINE_EXACT && text == o => Sm::Fallback,
-        Some(text) if !parse(lang, &text).has_error => Sm::Merged(text),
+        Some(text) if holds_up(engine, path, lang, &text, [&pb, &po, &pt], &[]) => Sm::Merged(text),
         _ => Sm::Fallback,
     }
 }
@@ -609,6 +646,48 @@ mod tests {
         let t = t.replace("class A:", "class A(B):");
         let c = merge_text_at(3, "a.py", CLASS, &o, &t);
         assert_eq!(c, Err(vec!["a.py#<file>".to_string()]));
+    }
+
+    /// The place for a new member is found in the text, and text can fool
+    /// it: what does not come through as a symbol goes to the line merge.
+    #[test]
+    fn an_addition_that_lands_in_a_string_or_a_comment_is_not_merged() {
+        let b = "class A:\n    \"\"\"Use {x}.\"\"\"\n";
+        let o = format!("{b}\n    def m(self):\n        return 1\n");
+        let t = b.replace("class A:", "class A(B):");
+        let want = o.replace("class A:", "class A(B):");
+        assert_eq!(merge_text_at(3, "a.py", b, &o, &t).unwrap(), want);
+        assert_eq!(merge_text_at(3, "a.py", b, &t, &o).unwrap(), want);
+
+        let (b, o, t) = (
+            "impl S {\n}\n",
+            "impl S { // note\n}\n",
+            "impl S { fn m() {} }\n",
+        );
+        let want = Err(vec!["a.rs#<file>".to_string()]);
+        assert_eq!(merge_text_at(3, "a.rs", b, o, t), want);
+        assert_eq!(merge_text_at(3, "a.rs", b, t, o), want);
+        // Engine 2 keeps what it wrote.
+        assert_eq!(
+            merge_text_at(2, "a.rs", b, o, t).unwrap(),
+            "impl S { // note fn m() {}\n}\n"
+        );
+        // In a sync, such a file stays local as a whole.
+        assert_eq!(merge_around_conflicts(3, "a.rs", b, o, t), None);
+        assert!(merge_around_conflicts(2, "a.rs", b, o, t).is_some());
+    }
+
+    /// An addition in conflict has no place in the middle a sync keeps.
+    #[test]
+    fn a_sync_keeps_going_past_an_addition_in_conflict() {
+        let b = "fn a() {}\n";
+        let o = "fn a() {}\n\nfn n() { o(); }\n";
+        let t = "fn a() { x(); }\n\nfn n() { t(); }\n";
+        let kept = merge_around_conflicts(3, "a.rs", b, o, t).unwrap();
+        assert_eq!(kept, "fn a() { x(); }\n\nfn n() { o(); }\n");
+        let (o, t) = (b, "fn a() { x(); }\n\nfn n() { t(); }\n");
+        let kept = merge_around_conflicts(3, "a.rs", b, o, t).unwrap();
+        assert_eq!(kept, t);
     }
 
     /// An `impl` header is the type's definition, and merges like a class's.

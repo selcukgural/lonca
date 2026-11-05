@@ -270,7 +270,8 @@ fn diff_level(
     if engine >= ENGINE_EXACT {
         let [a, b]: [Vec<&str>; 2] = [bs, ns].map(|l| l.iter().map(|s| s.name.as_str()).collect());
         for name in moved(&a, &b) {
-            f.edits.push(sym_id(path, &name));
+            let ty = nm.get(name.as_str()).and_then(|s| s.impl_of(engine));
+            f.edits.push(sym_id(path, ty.unwrap_or(&name)));
         }
     }
 }
@@ -328,6 +329,17 @@ mod tests {
         let f = section_facts(3, "a.rs", "fn f(a: u8) {}\n", "fn f(a: u16) {}\n");
         assert_eq!(f.edits, ["a.rs#f"]);
         assert_eq!(f.signature_changes, ["a.rs#f"]);
+    }
+
+    /// A move goes to the line merge, which sees the members of the block.
+    #[test]
+    fn an_impl_that_moves_is_its_type() {
+        let old = "impl S {\n    fn a() {}\n}\n\nfn f() {}\n";
+        let new = "fn f() {}\n\nimpl S {\n    fn a() {}\n}\n";
+        let f = section_facts(3, "a.rs", old, new);
+        assert_eq!(f.edits, ["a.rs#S", "a.rs#f"]);
+        let f = section_facts(2, "a.rs", old, new);
+        assert_eq!(f.edits, ["a.rs#f", "a.rs#impl:S"]);
     }
 
     #[test]

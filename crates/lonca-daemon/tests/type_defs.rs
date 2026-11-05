@@ -130,6 +130,51 @@ const CSHARP: Case = Case {
 
 const CASES: [Case; 5] = [RUST, GO, PYTHON, TYPESCRIPT, CSHARP];
 
+/// A class with no members to anchor an addition, and text that looks like
+/// where the body ends.
+const NO_MEMBERS: Case = Case {
+    path: "src/plain.py",
+    base: "class S:\n    \"\"\"Use {x}.\"\"\"\n",
+    changes: &[
+        change("def", "class S:\n", "class S(Base):\n"),
+        change(
+            "add",
+            "{x}.\"\"\"\n",
+            "{x}.\"\"\"\n\n    def one(self):\n        return 1\n",
+        ),
+    ],
+};
+
+/// Classes in a class: each level has its own definition.
+const NESTED: Case = Case {
+    path: "src/nested.py",
+    base: "class S:\n    class I:\n        def one(self):\n            return 1\n\n        def two(self):\n            return 2\n\n    def three(self):\n        return 3\n",
+    changes: &[
+        change("outer", "class S:\n", "class S(Base):\n"),
+        change("inner", "    class I:\n", "    class I(Base):\n"),
+        change("one", "            return 1\n", "            return 10\n"),
+        change("two", "            return 2\n", "            return 20\n"),
+        change("three", "        return 3\n", "        return 30\n"),
+    ],
+};
+
+/// A file with an inherent and a trait `impl`: one definition for both.
+const TRAIT_IMPL: Case = Case {
+    path: "src/traits.rs",
+    base: "pub struct S;\n\nimpl S {\n    pub fn one() -> u8 {\n        1\n    }\n}\n\nimpl From<u8> for S {\n    fn from(_: u8) -> Self {\n        S\n    }\n}\n",
+    changes: &[
+        change("struct", "pub struct S;\n", "pub struct S(u8);\n"),
+        change("header", "impl S {", "#[cfg(unix)]\nimpl S {"),
+        change(
+            "trait-header",
+            "impl From<u8> for S {",
+            "#[cfg(unix)]\nimpl From<u8> for S {",
+        ),
+        change("one", "        1\n", "        10\n"),
+        change("from", "        S\n", "        S.clone()\n"),
+    ],
+};
+
 impl Case {
     fn text(&self, c: &Change) -> String {
         assert_eq!(self.base.matches(c.from).count(), 1, "{}", c.name);
@@ -181,7 +226,7 @@ fn union(a: &[String], b: &[String]) -> Vec<String> {
 #[test]
 fn leases_and_the_merge_agree() {
     let mut free = Vec::new();
-    for case in &CASES {
+    for case in CASES.iter().chain(&[NO_MEMBERS, NESTED, TRAIT_IMPL]) {
         for a in case.changes {
             for b in case.changes {
                 if a.name == b.name {
@@ -211,6 +256,14 @@ fn leases_and_the_merge_agree() {
             let pair = format!("{} {a} {b}", case.path);
             assert!(free.contains(&pair), "{pair}: {free:?}");
         }
+    }
+    for pair in [
+        "src/plain.py def add",
+        "src/nested.py outer inner",
+        "src/nested.py inner one",
+        "src/traits.rs header from",
+    ] {
+        assert!(free.iter().any(|p| p == pair), "{pair}: {free:?}");
     }
 }
 
@@ -246,28 +299,35 @@ fn claim_of(f: &Facts) -> Claim {
     }
 }
 
-/// Three agents through the daemon, whichever reaches the queue first: the
+/// Three agents through the daemon, in every order the queue can have: the
 /// definition, a method, a new method. All three hold their leases at once
 /// and all three integrate, and the auditor recomputes it all.
 #[test]
 fn three_agents_on_one_type_all_integrate() {
     for case in &CASES {
-        for first in 0..3 {
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
             let mut e = Env::new();
             e.init(None);
             let r = e.human_change(vec![file(case.path, case.base)], "seed");
             assert_eq!(r["decision"]["outcome"], "allow", "{r}");
             assert_eq!(e.svc.process_all(), 1);
             let base = e.trunk();
-            let order = (0..3).map(|i| &case.changes[(first + i) % 3]);
             let agents: Vec<_> = order
-                .map(|c| {
+                .map(|i| {
+                    let c = &case.changes[i];
                     let t = e.session(c.name, &["src/**"]);
                     e.bind(&t);
                     e.wrote(&t, case.path);
                     (t, c)
                 })
-                .collect();
+                .to_vec();
             for (token, c) in &agents {
                 let items = case.leases(&case.facts(&case.text(c)));
                 let args = json!({"items": items, "intent": c.name, "ttl_ms": 600_000});

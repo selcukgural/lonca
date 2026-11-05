@@ -6,12 +6,11 @@
 //! block) are children of `path#<file>`. `path#Type.<def>` is the type's own
 //! text, a member of `Type` like its methods: a lease on it leaves them free.
 
-use lonca_core::ops::{Facts, LeaseItem, LeaseKind};
+use lonca_core::ops::{DEF, Facts, LeaseItem, LeaseKind};
 
 pub const FILE: &str = "<file>";
 pub const MODULE: &str = "<module>";
 pub const IMPORTS: &str = "<imports>";
-pub const DEF: &str = "<def>";
 
 pub fn split(symbol: &str) -> Option<(&str, &str)> {
     symbol.split_once('#')

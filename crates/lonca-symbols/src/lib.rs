@@ -11,7 +11,7 @@ pub mod lang;
 pub mod merge;
 pub mod sections;
 
-pub use extract::{Parsed, Sym, parse};
+pub use extract::{DEF, Parsed, Sym, parse};
 pub use facts::{Analysis, analyze};
 pub use lang::Lang;
 pub use merge::{MergeResult, merge3};

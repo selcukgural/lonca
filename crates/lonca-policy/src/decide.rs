@@ -1157,6 +1157,9 @@ fn propose(
             if let Some(pats) = &s.scope.symbols {
                 for sym in &touched {
                     let name = symbols::split(sym).map(|(_, n)| n).unwrap_or(sym);
+                    // Who may change a type's own text keeps that right
+                    // now that facts call it `Type.<def>`.
+                    let name = symbols::def_of(name).unwrap_or(name);
                     let ok = if name.starts_with('<') {
                         pats.iter().any(|p| p == "*")
                     } else {

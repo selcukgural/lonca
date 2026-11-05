@@ -4234,3 +4234,77 @@ fn a_lease_request_may_be_as_long_as_the_limits_and_no_longer() {
     assert!(request(&mut h, "one", 1, 0).is_allow());
     h.assert_replay();
 }
+
+/// A type's definition is a member of the type: it stands beside its
+/// methods and beside what is added to the type, and inside the whole type.
+#[test]
+fn a_definition_is_held_apart_from_the_members_of_its_type() {
+    let mut h = H::new();
+    for s in ["def", "method", "add", "other"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let (def, method, ty) = ("src/a.rs#T.<def>", "src/a.rs#T.m", "src/a.rs#T");
+    assert!(h.lease("def", "l1", &[(def, LeaseKind::Edit)]).is_allow());
+    assert!(
+        h.lease("method", "l2", &[(method, LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert!(h.lease("add", "l3", &[(ty, LeaseKind::Insert)]).is_allow());
+    // A second holder of the definition, and the whole type, are refused.
+    let d = h.lease("other", "l4", &[(def, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{def}:def:")), "{d:?}");
+    let d = h.lease("other", "l5", &[(ty, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_held"), "{d:?}");
+
+    // A change of the definition needs it, not a member's lease.
+    h.wrote("method", "src/a.rs");
+    let d = h.propose("method", ChangeId::random(), edit(def));
+    assert!(denied_with(&d, &format!("lease_missing:{def}")), "{d:?}");
+    h.wrote("def", "src/a.rs");
+    let d = h.propose("def", ChangeId::random(), edit(def));
+    assert!(d.is_allow(), "{d:?}");
+
+    // The whole type covers its definition.
+    let whole = "src/b.rs#U";
+    assert!(
+        h.lease("other", "l6", &[(whole, LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.wrote("other", "src/b.rs");
+    let d = h.propose("other", ChangeId::random(), edit("src/b.rs#U.<def>"));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// A scope that names a type still reaches its own text in the facts, and
+/// one that names a method does not.
+#[test]
+fn a_definition_in_the_facts_is_inside_the_scope_of_its_type() {
+    let mut h = H::new();
+    start_with_symbols(&mut h, "type", &["T"]);
+    start_with_symbols(&mut h, "method", &["T.m"]);
+    assert!(
+        h.lease("type", "l1", &[("src/a.rs#T", LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert!(
+        h.lease("method", "l2", &[("src/b.rs#T.m", LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.wrote("type", "src/a.rs");
+    h.wrote("method", "src/b.rs");
+    let d = h.propose("type", ChangeId::random(), edit("src/a.rs#T.<def>"));
+    assert!(!format!("{d:?}").contains("scope_symbol"), "{d:?}");
+    let def = "src/b.rs#T.<def>";
+    let d = h.propose("method", ChangeId::random(), edit(def));
+    assert!(denied_with(&d, &format!("scope_symbol:{def}")), "{d:?}");
+    // `T.*` was the members and not the type's own text, and stays so.
+    start_with_symbols(&mut h, "members", &["T.*"]);
+    let m = ("src/c.rs#T.m", LeaseKind::Edit);
+    assert!(h.lease("members", "l3", &[m]).is_allow());
+    h.wrote("members", "src/c.rs");
+    let def = "src/c.rs#T.<def>";
+    let d = h.propose("members", ChangeId::random(), edit(def));
+    assert!(denied_with(&d, &format!("scope_symbol:{def}")), "{d:?}");
+    h.assert_replay();
+}

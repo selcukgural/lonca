@@ -76,7 +76,7 @@ fn tool_list() -> Value {
     };
     json!([
         {"name": "status", "description": "Repository state: trunk, queue, all active leases (who holds what and why), your session and your changes.", "inputSchema": s(json!({}), &[])},
-        {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method).", "inputSchema": s(json!({"path": path}), &["path"])},
+        {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method). `def` of a type is its own text (fields, header): lease it to leave the methods to others.", "inputSchema": s(json!({"path": path}), &["path"])},
         {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it, their intent, and when it expires (or the change it is pinned to).", "inputSchema": s(json!({"items": items("Symbols with a kind each, for a set of mixed kinds"), "symbols": symbols, "kind": kind, "intent": intent, "ttl_minutes": ttl}), &["intent"])},
         {"name": "lease_needed", "description": "The leases your local changes need, computed by Lonca: for each symbol the kind needed and whether you hold it, it is free, or who holds it. `acquire` lists the free ones as items for lease_acquire.", "inputSchema": s(json!({}), &[])},
         {"name": "lease_interest", "description": "Say you are waiting for symbols another session holds. It holds nothing and never waits: go on with other work. When they are freed you get a short reservation (see `events`) and only you can acquire them; the oldest interest goes first. Refused (`lease_free`) for what nobody holds: acquire that.", "inputSchema": s(json!({"items": items("The symbols you are waiting for, with a kind each"), "symbols": symbols, "kind": kind, "intent": intent}), &["intent"])},
@@ -402,7 +402,7 @@ impl Server {
                 let mut out = Vec::new();
                 fn walk(path: &str, s: &[lonca_symbols::Sym], out: &mut Vec<Value>) {
                     for x in s {
-                        out.push(json!({"id": format!("{path}#{}", x.name), "container": x.container, "test": x.is_test}));
+                        out.push(json!({"id": format!("{path}#{}", x.name), "container": x.container, "test": x.is_test, "def": x.def_of.as_ref().map(|t| format!("{path}#{t}.{}", lonca_symbols::DEF))}));
                         walk(path, &x.children, out);
                     }
                 }

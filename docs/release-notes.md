@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### A type's fields and header can be leased apart from its methods (#41)
+
+`path#Type.<def>` is a type's own text: a struct's fields, a class header, its
+decorators and class-level statements, and for Rust every `impl` header. One
+agent can hold it while others edit methods and add new ones, in Rust, Go,
+Python, TypeScript and C#, and all of them integrate, in whatever order they
+reach the queue. Facts now report `Type.<def>` where they said `Type`, and an
+`impl` that is taken out as an edit of `Type` plus deletes of its members
+(symbol engine 3), so copy claims from `preview` as before. A lease on `Type`
+still covers all of it, and old logs audit as they did. `symbols` shows the id
+as `def`. A lease on `impl:Type` no longer covers what facts report for that
+block: lease `Type.<def>`.
+
 ### A workspace holds regular files
 
 A symlink at a tracked path, or on the way to one, now stops `lonca diff`,

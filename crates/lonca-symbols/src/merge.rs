@@ -13,8 +13,24 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
-use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_SECTIONS};
-use crate::extract::{Parsed, Sym, moved, normalize, parse};
+use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_PLACES, ENGINE_SECTIONS};
+use crate::extract::{Parsed, Placed, Sym, moved, normalize, parse, shifted};
+
+/// Code outside symbols as an engine compares it, and its place among them.
+type Code<'a> = (&'a str, Placed<'a>);
+
+fn own_code(engine: u32, s: &Sym) -> Code<'_> {
+    (s.own_at(engine), s.placed())
+}
+
+fn outer_code(engine: u32, p: &Parsed) -> Code<'_> {
+    (p.residual_at(engine), p.placed())
+}
+
+/// The code differs, in what it says or in where it stands.
+fn differs(engine: u32, a: Code, b: Code) -> bool {
+    a.0 != b.0 || engine >= ENGINE_PLACES && shifted(a.1, b.1)
+}
 use crate::lang::Lang;
 use crate::sections::{self, Format};
 
@@ -162,10 +178,19 @@ pub fn merge_text_at(
         }
     }
     let merged = diffy::merge(b, o, t).map_err(|_| file_conflict())?;
-    if let Some(lang) = lang
-        && parse(lang, &merged).has_error
-    {
-        return Err(file_conflict());
+    if let Some(lang) = lang {
+        let [pb, po, pt] = [b, o, t].map(|text| parse(lang, text));
+        // A side that does not parse has no symbols to hold the merge to,
+        // and engines before this check only asked that the result parses.
+        let unread = pb.has_error || po.has_error || pt.has_error;
+        let engine = if unread || engine < ENGINE_PLACES {
+            0
+        } else {
+            engine
+        };
+        if !holds_up(engine, path, lang, &merged, [&pb, &po, &pt], &[]) {
+            return Err(file_conflict());
+        }
     }
     Ok(merged)
 }
@@ -187,7 +212,7 @@ pub fn merge_around_conflicts(
     if pb.has_error || po.has_error || pt.has_error {
         return None;
     }
-    if pt.residual_at(engine) != pb.residual_at(engine) {
+    if differs(engine, outer_code(engine, &pb), outer_code(engine, &pt)) {
         return None;
     }
     let mut m = Merger::new(engine, path, b, o, t);
@@ -209,9 +234,34 @@ fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
     }
 }
 
-/// `text` parses, and from [`ENGINE_DEFS`] on it has every symbol a side
-/// added, unless that symbol is in `conflicts`. A text insert can land in a
-/// string or a comment and still parse, and the addition would be gone.
+/// Each side's code stands in `m` where that side put it among its symbols.
+/// A side is the measure only if `m` has its code and the other side left
+/// the places alone.
+fn places_kept(engine: u32, [b, o, t]: [Code; 3], m: Code) -> bool {
+    let kept = |side: Code, other: Code| {
+        side.0 != m.0 || differs(engine, b, other) || !shifted(side.1, m.1)
+    };
+    kept(o, t) && kept(t, o)
+}
+
+fn members_kept(engine: u32, [bs, os, ts]: [&[Sym]; 3], merged: &[Sym]) -> bool {
+    let (bm, om, tm) = (by_name(bs), by_name(os), by_name(ts));
+    merged.iter().filter(|m| m.container).all(|m| {
+        let name = m.name.as_str();
+        let (Some(b), Some(o), Some(t)) = (bm.get(name), om.get(name), tm.get(name)) else {
+            return true;
+        };
+        let code = [b, o, t].map(|s| own_code(engine, s));
+        places_kept(engine, code, own_code(engine, m))
+            && members_kept(engine, [&b.children, &o.children, &t.children], &m.children)
+    })
+}
+
+/// `text` parses. From [`ENGINE_DEFS`] on it has every symbol a side added,
+/// unless that symbol is in `conflicts`: a text insert can land in a string
+/// or a comment and still parse, and the addition would be gone. From
+/// [`ENGINE_PLACES`] on, also for the line merge, what a side deleted stays
+/// deleted and code stands where the sides put it.
 fn holds_up(
     engine: u32,
     path: &str,
@@ -232,8 +282,27 @@ fn holds_up(
     all_names(&po.syms, &mut sides);
     all_names(&pt.syms, &mut sides);
     all_names(&merged.syms, &mut there);
-    let mut added = sides.difference(&base);
-    added.all(|n| there.contains(n) || conflicts.contains(&format!("{path}#{n}")))
+    let in_conflict = |n: &str| conflicts.contains(&format!("{path}#{n}"));
+    if !sides
+        .difference(&base)
+        .all(|n| there.contains(n) || in_conflict(n))
+    {
+        return false;
+    }
+    if engine < ENGINE_PLACES {
+        return true;
+    }
+    let (mut in_o, mut in_t) = (BTreeSet::new(), BTreeSet::new());
+    all_names(&po.syms, &mut in_o);
+    all_names(&pt.syms, &mut in_t);
+    let gone = base
+        .iter()
+        .filter(|n| !in_o.contains(*n) || !in_t.contains(*n));
+    let code = [pb, po, pt].map(|p| outer_code(engine, p));
+    gone.into_iter()
+        .all(|n| !there.contains(n) || in_conflict(n))
+        && places_kept(engine, code, outer_code(engine, &merged))
+        && members_kept(engine, [&pb.syms, &po.syms, &pt.syms], &merged.syms)
 }
 
 enum Sm {
@@ -342,7 +411,12 @@ impl<'a> Merger<'a> {
                     .to_string();
                     let prev = ts[..i].iter().rev().find_map(|s| om.get(s.name.as_str()));
                     let next = ts[i + 1..].iter().find_map(|s| om.get(s.name.as_str()));
-                    if let Some(p) = prev {
+                    let after_code = self.engine >= ENGINE_PLACES && i > 0 && {
+                        let gap = &self.t[ts[i - 1].end..ts_sym.start];
+                        !gap.trim_matches([' ', '\t', '\n', '\r', ';', ','])
+                            .is_empty()
+                    };
+                    if let (Some(p), false) = (prev, after_code) {
                         self.insert(p.end, format!("{sep_before}{t_text}"));
                     } else if let Some(n) = next {
                         let sep_after = match ws_after(self.t, ts_sym.end) {
@@ -385,15 +459,22 @@ impl<'a> Merger<'a> {
                         continue;
                     }
                     let defs = self.engine >= ENGINE_DEFS;
-                    let own = |s: &Sym| s.own_at(self.engine).to_string();
-                    let (own_b, own_o, own_t) = (own(b_sym), own(o_sym), own(ts_sym));
-                    if own_t != own_b && !(defs && own_t == own_o) {
-                        if defs && own_o == own_b && self.around_theirs(b_sym, o_sym, ts_sym) {
-                            continue;
-                        }
-                        self.conflict(&unit);
-                        if !defs {
-                            continue;
+                    let [code_b, code_o, code_t] =
+                        [*b_sym, *o_sym, ts_sym].map(|s| own_code(self.engine, s));
+                    let changed = differs(self.engine, code_b, code_t);
+                    if changed && !(defs && !differs(self.engine, code_o, code_t)) {
+                        let o_kept = defs && !differs(self.engine, code_b, code_o);
+                        if o_kept && code_t.0 == code_b.0 {
+                            // Only places: that is the line merge's to do.
+                            self.moved = true;
+                        } else {
+                            if o_kept && self.around_theirs(b_sym, o_sym, ts_sym) {
+                                continue;
+                            }
+                            self.conflict(&unit);
+                            if !defs {
+                                continue;
+                            }
                         }
                     }
                     self.level(
@@ -517,13 +598,9 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
     if pb.has_error || po.has_error || pt.has_error {
         return Sm::Fallback;
     }
-    let (rb, ro, rt) = (
-        pb.residual_at(engine),
-        po.residual_at(engine),
-        pt.residual_at(engine),
-    );
-    if rt != rb && ro != rt {
-        if ro == rb {
+    let [cb, co, ct] = [&pb, &po, &pt].map(|p| outer_code(engine, p));
+    if differs(engine, cb, ct) && differs(engine, co, ct) {
+        if !differs(engine, cb, co) {
             return Sm::Fallback;
         }
         return Sm::Conflict(vec![format!("{path}#<module>")]);
@@ -688,6 +765,185 @@ mod tests {
         let (o, t) = (b, "fn a() { x(); }\n\nfn n() { t(); }\n");
         let kept = merge_around_conflicts(3, "a.rs", b, o, t).unwrap();
         assert_eq!(kept, t);
+    }
+
+    const MODULE: &str = "a = 1\n\ndef f():\n    return 1\n\nprint(a)\n\ndef g():\n    return 2\n\ndef h():\n    return 3\n\ndef i():\n    return 4\n\ndef j():\n    return 5\n";
+
+    fn moved_print() -> String {
+        let t = MODULE.replace(
+            "def f():\n    return 1\n\nprint(a)\n",
+            "print(a)\n\ndef f():\n    return 1\n",
+        );
+        assert_ne!(t, MODULE);
+        t
+    }
+
+    /// A statement moved past a symbol, with an edit beside it: the move
+    /// comes through or the merge says so. It is never dropped.
+    #[test]
+    fn code_that_changed_places_is_not_dropped() {
+        let t = moved_print().replace("return 2", "return 20");
+        let o = MODULE.replace("return 5", "return 50");
+        let want = t.replace("return 5", "return 50");
+        assert_eq!(merge_text_at(4, "a.py", MODULE, &o, &t).unwrap(), want);
+        // Engine 3 keeps what it wrote.
+        let lost = MODULE
+            .replace("return 2", "return 20")
+            .replace("return 5", "return 50");
+        assert_eq!(merge_text_at(3, "a.py", MODULE, &o, &t).unwrap(), lost);
+
+        let (a, b) = (
+            "    x = g()\n\n    def m(self):\n        return y\n\n",
+            "    def m(self):\n        return y\n\n    x = g()\n\n",
+        );
+        let base = format!("class A:\n{a}    def n(self):\n        return 1\n");
+        let t = base.replace(a, b).replace("return 1", "return 5");
+        let o = base.replace("return y", "return z");
+        let want = t.replace("return y", "return z");
+        assert_eq!(merge_text_at(4, "a.py", &base, &o, &t).unwrap(), want);
+        let lost = o.replace("return 1", "return 5");
+        assert_eq!(merge_text_at(3, "a.py", &base, &o, &t).unwrap(), lost);
+    }
+
+    /// `o` moved the code and `t` took the container: it must not be lost
+    /// with the layout of `o`.
+    #[test]
+    fn code_that_changed_places_beside_a_header_is_not_dropped() {
+        let (a, b) = (
+            "    x = g()\n\n    def m(self):\n        return y\n\n",
+            "    def m(self):\n        return y\n\n    x = g()\n\n",
+        );
+        let tail = "    def n(self):\n        return 1\n\n    def p(self):\n        return 2\n\n    def q(self):\n        return 3\n";
+        let base = format!("class A:\n    w = 1\n\n    v = 2\n\n{a}{tail}");
+        let o = base.replace(a, b).replace("return 3", "return 30");
+        let t = base.replace("class A:", "class A(B):");
+        let want = Err(vec!["a.py#A.<def>".to_string()]);
+        assert_eq!(merge_text_at(4, "a.py", &base, &o, &t), want);
+        assert_eq!(merge_text_at(4, "a.py", &base, &t, &o), want);
+    }
+
+    /// A move is a change of that code: with any other change of it on the
+    /// other side, the lines would bring back a deletion or write it twice.
+    #[test]
+    fn code_changed_on_one_side_and_moved_on_the_other_conflicts() {
+        let module = Err(vec!["a.py#<module>".to_string()]);
+        let t = moved_print().replace("return 2", "return 20");
+        let deleted = MODULE.replace("print(a)\n\n", "");
+        assert_eq!(merge_text_at(4, "a.py", MODULE, &deleted, &t), module);
+        assert_eq!(merge_text_at(4, "a.py", MODULE, &t, &deleted), module);
+        let last = MODULE.replace("print(a)\n\n", "") + "\nprint(a)\n";
+        let m = merge_text_at(4, "a.py", MODULE, &moved_print(), &last);
+        assert_eq!(m, module);
+        // The same move on both sides is no conflict.
+        let m = merge_text_at(4, "a.py", MODULE, &moved_print(), &t);
+        assert_eq!(m.unwrap(), t);
+    }
+
+    #[test]
+    fn a_line_merge_keeps_a_symbol_deleted() {
+        // `t` moved `b`, `o` deleted it: both take its old lines away.
+        let fb = "def b():\n    return 2\n\n";
+        let fc = "def c():\n    x = 1\n    y = 2\n    z = 3\n    return x\n\n";
+        let (fa, fd) = ("def a():\n    return 1\n\n", "def d():\n    return 4\n");
+        let b = format!("{fa}{fb}{fc}{fd}");
+        let t = format!("{fa}{fc}{fb}{fd}");
+        let o = format!("{fa}{fc}{fd}");
+        let want = Err(vec!["a.py#<file>".to_string()]);
+        assert_eq!(merge_text_at(4, "a.py", &b, &o, &t), want);
+        assert_eq!(merge_text_at(3, "a.py", &b, &o, &t).unwrap(), t);
+    }
+
+    /// A repeated import, a renamed symbol: the anchors are gone or the
+    /// same, and the code must still stand where the side put it.
+    #[test]
+    fn code_keeps_its_place_with_no_anchor_to_say_so() {
+        let b = "import os\nx = 1\nimport os\n\ndef f():\n    return 1\n\ndef g():\n    return 2\n\ndef h():\n    return 3\n";
+        let t = "import os\nimport os\nx = 1\n\ndef f():\n    return 10\n\ndef g():\n    return 2\n\ndef h():\n    return 3\n";
+        let o = b.replace("return 3", "return 30");
+        let want = t.replace("return 3", "return 30");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, t).unwrap(), want);
+
+        let b = "def a():\n    return 1\n\ndef f():\n    return 2\n\nsetup()\n\ndef k():\n    return 3\n\ndef l():\n    return 4\n";
+        let t = "def a():\n    return 1\n\nsetup()\n\ndef g():\n    return 2\n\ndef k():\n    return 3\n\ndef l():\n    return 4\n";
+        let o = b.replace("return 4", "return 40");
+        let want = t.replace("return 4", "return 40");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, t).unwrap(), want);
+    }
+
+    /// A new symbol goes on the side of the code it stood beside.
+    #[test]
+    fn an_addition_stays_behind_the_code_it_needs() {
+        let b = "def a():\n    return 1\n\napp = Flask()\n\ndef k():\n    return 3\n";
+        let route = "@app.route('/')\ndef r():\n    return 2\n";
+        let t = b.replace("app = Flask()\n", &format!("app = Flask()\n\n{route}"));
+        let o = b.replace("return 1", "return 10");
+        let want = t.replace("return 1", "return 10");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, &t).unwrap(), want);
+        let m = merge_text_at(3, "a.py", b, &o, &t).unwrap();
+        assert!(
+            m.find("@app").unwrap() < m.find("app = Flask").unwrap(),
+            "{m}"
+        );
+
+        // With code on both sides and no symbol after it, the end of the file.
+        let t = b.replace(
+            "def k():\n    return 3\n",
+            "def k():\n    return 3\n\nmain()\n\ndef z():\n    return 9\n",
+        );
+        let want = t.replace("return 1", "return 10");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, &t).unwrap(), want);
+    }
+
+    /// Two different headers are a conflict on the definition, not a move:
+    /// a sync still brings in the members.
+    #[test]
+    fn a_sync_brings_in_the_members_around_two_headers() {
+        let o = class("class A:", "class A(B):");
+        let t = class("class A:", "class A(C):").replace("return 2", "return 20");
+        let kept = merge_around_conflicts(4, "a.py", CLASS, &o, &t).unwrap();
+        assert_eq!(kept, o.replace("return 2", "return 20"));
+    }
+
+    /// The same own text on both sides is compared with `o`, so an edit on
+    /// each side stays a merge by symbols: their lines touch.
+    #[test]
+    fn code_in_place_on_both_sides_stays_a_symbol_merge() {
+        let b = "class A:\n    def a(self): return 1\n    def b(self): return 2\n";
+        let o = b
+            .replace("class A:", "class A(B):")
+            .replace("return 1", "return 10");
+        let t = b
+            .replace("class A:", "class A(B):")
+            .replace("return 2", "return 20");
+        let want = o.replace("return 2", "return 20");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, &t).unwrap(), want);
+
+        let b = "x = 1\ndef a(): return 1\ndef b(): return 2\n";
+        let o = b.replace("x = 1", "x = 2").replace("return 1", "return 10");
+        let t = b.replace("x = 1", "x = 2").replace("return 2", "return 20");
+        let want = o.replace("return 2", "return 20");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, &t).unwrap(), want);
+    }
+
+    /// Symbols added or taken out around code move nothing.
+    #[test]
+    fn a_symbol_added_beside_code_stays_a_symbol_merge() {
+        let b = "x = 1\ndef a(): return 1\ny = 2\ndef b(): return 2\n";
+        let o = b.replace("def b(): return 2", "def n(): return 0\ndef b(): return 2");
+        let t = b.replace("return 1", "return 10");
+        let want = o.replace("return 1", "return 10");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, &t).unwrap(), want);
+        let other_way = merge_text_at(4, "a.py", b, &t, &o).unwrap();
+        assert!(other_way.contains("def n(): return 0\n"), "{other_way}");
+        assert!(other_way.contains("return 10"), "{other_way}");
+    }
+
+    #[test]
+    fn a_sync_leaves_a_file_alone_when_code_changed_places() {
+        let t = moved_print().replace("return 2", "return 20");
+        let o = MODULE.replace("return 2", "return 21");
+        assert_eq!(merge_around_conflicts(4, "a.py", MODULE, &o, &t), None);
+        assert!(merge_around_conflicts(3, "a.py", MODULE, &o, &t).is_some());
     }
 
     /// An `impl` header is the type's definition, and merges like a class's.

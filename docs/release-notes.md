@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Code that changes places among symbols is a change (symbol engine 4)
+
+A statement moved past a function or a method now shows in the facts, as an
+edit of `<module>` or of `Type.<def>`, and takes that lease. The merge treats it
+like a moved symbol: it goes to the line merge, which brings it in or reports a
+conflict. Copy claims from `preview` as before.
+
 ### A type's fields and header can be leased apart from its methods (#41)
 
 `path#Type.<def>` is a type's own text: a struct's fields, a class header, its

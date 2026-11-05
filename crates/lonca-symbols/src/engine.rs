@@ -18,8 +18,9 @@ use lonca_core::{Error, Result};
 /// The engine this build writes. Version 0 is the engine of every entry
 /// written before versions were recorded; version 1 adds the sections of
 /// Markdown, TOML, JSON and YAML files; version 2 compares code exactly;
-/// version 3 tells a type's definition from its members.
-pub const ENGINE_CURRENT: u32 = 3;
+/// version 3 tells a type's definition from its members; version 4 compares
+/// where code stands among symbols.
+pub const ENGINE_CURRENT: u32 = 4;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -31,8 +32,12 @@ pub const ENGINE_EXACT: u32 = 2;
 
 pub use lonca_core::ops::ENGINE_DEFS;
 
+/// The first engine that treats code that changed places among the symbols
+/// around it as a change.
+pub const ENGINE_PLACES: u32 = 4;
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

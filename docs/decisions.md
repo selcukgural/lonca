@@ -234,6 +234,39 @@ entry format, so they have their own version
     checked as it always was: a session scoped to exactly `Type` leases
     `Type`, the whole type.
 
+- **Engine 4** compares where code stands among symbols. `exact_text` leaves
+  symbols out, so code that changed places with a symbol read the same on
+  both sides, though order can matter between statements as much as between
+  symbols.
+  - `exact_text` notes where each symbol and import stood (`Spot`), and
+    `shifted` compares each piece of code with the names in front of it,
+    counting only names both sides have. So adding or removing a symbol moves
+    nothing, and two symbols side by side that swap are engine 2's rule, not
+    this one's. This needs nothing per language.
+  - Imports are named by their order, not their text, so a changed import
+    or a repeated one is still a place.
+  - Facts report such a change as an edit of `<module>`, or of `Type.<def>`
+    inside a container, so it needs the lease of that code.
+  - **A move is a change of that code.** Moved on one side with the code
+    untouched on the other, it goes to the line merge, where it merges or is
+    `<file>` in `conflicts`. Moved on one side and changed or moved otherwise
+    on the other, it is a conflict on `<module>` or `Type.<def>`: the line
+    merge sees a move as a deletion and an insertion, so it would bring back
+    what `o` deleted or write the statement twice. A sync leaves such a file
+    local.
+  - **A symbol merge and a line merge are held to one check** (`holds_up` in
+    `merge.rs`): the result has what the sides added and not what they
+    deleted, and each side's code stands where that side put it among its
+    symbols. Failing it, a symbol merge goes to the line merge, and a line
+    merge is `<file>` in `conflicts`. So a text insert in the wrong place can
+    not pass for a merge because the file still parses.
+  - A new symbol goes beside the code it stood next to: behind `app = Flask()`
+    if that is where its side put it, not after the symbol before that.
+  - **What this does not see.** A symbol renamed while code moves past it is
+    no anchor in the facts, so the move is not reported, though the merge
+    keeps it; and adding a duplicate renumbers `name~2`, which reads as a
+    move. Both wait for stable ids (#44), and the second only costs a lease.
+
 ## Harness profiles
 
 Which harnesses Lonca can read is data, not code (issue #109). A profile

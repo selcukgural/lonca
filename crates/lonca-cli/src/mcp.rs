@@ -14,36 +14,137 @@ use lonca_daemon::Client;
 use lonca_symbols::sections::{Format, sections};
 use serde_json::{Value, json};
 
-use crate::ctx;
 use crate::workspace::Workspace;
+use crate::{ctx, setup};
+
+/// Tools that change nothing, and tools that take nothing away. Anything
+/// else counts as destructive, so a new tool asks until it is listed here.
+const READ_ONLY: &[&str] = &[
+    "status",
+    "symbols",
+    "lease_needed",
+    "events",
+    "preview",
+    "change_status",
+];
+const ADDITIVE: &[&str] = &["lease_acquire", "lease_interest", "lease_renew", "propose"];
+
+/// `tool` with the hints a harness uses to approve it on its own.
+fn annotated(mut tool: Value) -> Value {
+    let name = tool["name"].as_str().unwrap_or("");
+    let read_only = READ_ONLY.contains(&name);
+    tool["annotations"] = json!({
+        "readOnlyHint": read_only,
+        "destructiveHint": !read_only && !ADDITIVE.contains(&name),
+        "openWorldHint": false,
+    });
+    tool
+}
 
 fn tools() -> Value {
+    let list = tool_list().as_array().cloned().unwrap_or_default();
+    Value::Array(list.into_iter().map(annotated).collect())
+}
+
+fn tool_list() -> Value {
     let s = |props: Value, required: &[&str]| json!({"type": "object", "properties": props, "required": required});
-    let list = json!({"type": "array", "items": {"type": "string"}});
-    let kind = json!({"type": "string", "enum": ["edit", "insert", "rename"]});
-    let items = json!({"type": "array", "items": {
-        "type": "object",
-        "properties": {"symbol": {"type": "string"}, "kind": kind},
-        "required": ["symbol", "kind"],
-    }});
+    let text = |what: &str| json!({"type": "string", "description": what});
+    let number = |what: &str| json!({"type": "integer", "description": what});
+    let list =
+        |what: &str| json!({"type": "array", "items": {"type": "string"}, "description": what});
+    let kind = json!({"type": "string", "enum": ["edit", "insert", "rename"], "description": "edit changes a body; insert adds members to a type or file; rename renames or deletes"});
+    let items = |what: &str| {
+        json!({"type": "array", "description": what, "items": {
+            "type": "object",
+            "properties": {
+                "symbol": text("A symbol id, as `symbols` lists it: path#Type.method"),
+                "kind": kind,
+            },
+            "required": ["symbol", "kind"],
+        }})
+    };
+    let intent = text("In a sentence, what you are doing and why; others read it");
+    let set = text("A lease set id (lse_...), from lease_acquire or status");
+    let symbols = list("Symbol ids (path#Type.method), all with the same `kind`");
+    let ttl = number("Minutes to hold the lease; 10 if not given");
+    let path = text("File path relative to the workspace root");
+    let claim = |field: &str, what: &str| {
+        list(&format!(
+            "{what}. Copy `facts.{field}` from what preview reports"
+        ))
+    };
     json!([
         {"name": "status", "description": "Repository state: trunk, queue, all active leases (who holds what and why), your session and your changes.", "inputSchema": s(json!({}), &[])},
-        {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method).", "inputSchema": s(json!({"path": {"type": "string", "description": "file path relative to the workspace root"}}), &["path"])},
-        {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it, their intent, and when it expires (or the change it is pinned to).", "inputSchema": s(json!({"items": items, "symbols": list, "kind": kind, "intent": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["intent"])},
+        {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method).", "inputSchema": s(json!({"path": path}), &["path"])},
+        {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it, their intent, and when it expires (or the change it is pinned to).", "inputSchema": s(json!({"items": items("Symbols with a kind each, for a set of mixed kinds"), "symbols": symbols, "kind": kind, "intent": intent, "ttl_minutes": ttl}), &["intent"])},
         {"name": "lease_needed", "description": "The leases your local changes need, computed by Lonca: for each symbol the kind needed and whether you hold it, it is free, or who holds it. `acquire` lists the free ones as items for lease_acquire.", "inputSchema": s(json!({}), &[])},
-        {"name": "lease_interest", "description": "Say you are waiting for symbols another session holds. It holds nothing and never waits: go on with other work. When they are freed you get a short reservation (see `events`) and only you can acquire them; the oldest interest goes first. Refused (`lease_free`) for what nobody holds: acquire that.", "inputSchema": s(json!({"items": items, "symbols": list, "kind": kind, "intent": {"type": "string"}}), &["intent"])},
-        {"name": "events", "description": "What happened that you should know of: a lease reserved for you, a lease handed to you, your change integrated, conflicted, approved or rejected, a message from another session. Pass `from` as `next` of the last answer.", "inputSchema": s(json!({"from": {"type": "integer"}}), &[])},
-        {"name": "lease_release", "description": "Release a lease set you hold, or only the items you name: the rest stays yours, under a new set id with the time it had left. Items pinned to a change in flight stay until the change leaves the queue; integration releases them without this call.", "inputSchema": s(json!({"set": {"type": "string"}, "items": items}), &["set"])},
-        {"name": "lease_renew", "description": "Extend a lease set you hold, for ttl_minutes from now. While this server runs it renews your sets for you, so call this only to ask for a longer TTL. Past the hold limit a renewal is denied (lease_hold_limit) while another session wants the symbols.", "inputSchema": s(json!({"set": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["set"])},
+        {"name": "lease_interest", "description": "Say you are waiting for symbols another session holds. It holds nothing and never waits: go on with other work. When they are freed you get a short reservation (see `events`) and only you can acquire them; the oldest interest goes first. Refused (`lease_free`) for what nobody holds: acquire that.", "inputSchema": s(json!({"items": items("The symbols you are waiting for, with a kind each"), "symbols": symbols, "kind": kind, "intent": intent}), &["intent"])},
+        {"name": "events", "description": "What happened that you should know of: a lease reserved for you, a lease handed to you, your change integrated, conflicted, approved or rejected, a message from another session. Pass `from` as `next` of the last answer.", "inputSchema": s(json!({"from": number("`next` of the last answer; 0 for all")}), &[])},
+        {"name": "lease_release", "description": "Release a lease set you hold, or only the items you name: the rest stays yours, under a new set id with the time it had left. Items pinned to a change in flight stay until the change leaves the queue; integration releases them without this call.", "inputSchema": s(json!({"set": set, "items": items("Only these items; the whole set if not given")}), &["set"])},
+        {"name": "lease_renew", "description": "Extend a lease set you hold, for ttl_minutes from now. While this server runs it renews your sets for you, so call this only to ask for a longer TTL. Past the hold limit a renewal is denied (lease_hold_limit) while another session wants the symbols.", "inputSchema": s(json!({"set": set, "ttl_minutes": ttl}), &["set"])},
         {"name": "preview", "description": "Facts of your local changes as Lonca computes them: symbols edited/added/deleted, signature changes, test changes, files. Use this to write an accurate claim.", "inputSchema": s(json!({}), &[])},
-        {"name": "propose", "description": "Submit your local changes. The claim must list exactly the symbols you changed (compare with preview); a mismatch is refused. Integration happens in the merge queue after build/test verification.", "inputSchema": s(json!({
-            "intent": {"type": "string"}, "edits": list, "adds": list, "deletes": list, "deleted_files": list, "signature_changes": list,
-            "tests": {"type": "object", "properties": {"added": {"type": "integer"}, "modified": {"type": "integer"}, "deleted": {"type": "integer"}, "skipped": {"type": "integer"}}}
+        {"name": "propose", "description": "Submit your local changes. Give an `intent` and copy `edits`, `adds`, `deletes`, `deleted_files`, `signature_changes` and `tests` from what preview reports; a claim that differs is denied (claim_mismatch:<field>). Integration happens in the merge queue after build/test verification.", "inputSchema": s(json!({
+            "intent": intent,
+            "edits": claim("edits", "Existing symbols whose body you changed"),
+            "adds": claim("adds", "Symbols you added"),
+            "deletes": claim("deletes", "Symbols you deleted"),
+            "deleted_files": claim("deleted_files", "Files you deleted"),
+            "signature_changes": claim("signature_changes", "Symbols whose signature you changed"),
+            "tests": {"type": "object", "description": "Tests changed by count. Copy `facts.tests` from what preview reports", "properties": {
+                "added": number("Tests added"), "modified": number("Tests modified"), "deleted": number("Tests deleted"), "skipped": number("Tests skipped"),
+            }}
         }), &["intent"])},
-        {"name": "change_status", "description": "Status of a proposed change (queued, pending review, integrated, conflicted, rejected with reasons: a human's `rejected: ...` reason says what to fix before you sync and propose again), with the evidence of its last integration attempt (build and test logs).", "inputSchema": s(json!({"change": {"type": "string"}}), &["change"])},
+        {"name": "change_status", "description": "Status of a proposed change (queued, pending review, integrated, conflicted, rejected with reasons: a human's `rejected: ...` reason says what to fix before you sync and propose again), with the evidence of its last integration attempt (build and test logs).", "inputSchema": s(json!({"change": text("A change id, from propose or status")}), &["change"])},
         {"name": "sync", "description": "Bring trunk into the workspace, keeping and merging your local edits.", "inputSchema": s(json!({}), &[])},
-        {"name": "negotiate", "description": "Message another session about leases: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Bounded number of rounds.", "inputSchema": s(json!({"thread": {"type": "string"}, "to_session": {"type": "string"}, "message": {"type": "object", "description": "e.g. {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"} or {\"type\":\"yield\",\"set\":\"lse_...\",\"to\":\"<to_session>\"}; with `to` the set moves to that session at once, without it the set is freed"}}), &["thread", "to_session", "message"])},
+        {"name": "negotiate", "description": "Message another session about leases: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Bounded number of rounds.", "inputSchema": s(json!({"thread": text("A name for this conversation, the same in every message of it"), "to_session": text("The session you are writing to, from status or a lease denial"), "message": {"type": "object", "description": "e.g. {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"} or {\"type\":\"yield\",\"set\":\"lse_...\",\"to\":\"<to_session>\"}; with `to` the set moves to that session at once, without it the set is freed"}}), &["thread", "to_session", "message"])},
     ])
+}
+
+/// A call naming an argument its tool does not take. Ignoring one leaves a
+/// model repeating a call that can not work: a claim sent as `symbols` is an
+/// empty claim, denied for a reason it can not see. So it gets the tool's
+/// schema again, with what each argument is for.
+#[derive(Debug)]
+struct WrongArgument {
+    message: String,
+    expected: Value,
+}
+
+impl std::fmt::Display for WrongArgument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for WrongArgument {}
+
+fn wrong_argument(list: &Value, tool: &str, args: &Value) -> Option<WrongArgument> {
+    let found = list.as_array()?.iter().find(|t| t["name"] == tool)?;
+    let known = found["inputSchema"]["properties"].as_object()?;
+    let wrong = args.as_object()?.keys().find(|k| !known.contains_key(*k))?;
+    Some(WrongArgument {
+        message: format!("{tool} has no argument `{wrong}`; `expected` says what it takes"),
+        expected: found["inputSchema"].clone(),
+    })
+}
+
+/// For each `claim_mismatch:<field>` of a denial, what was claimed and what
+/// Lonca computed, so that the next call can be the right one.
+fn claim_mismatch(args: &Value, answer: &Value) -> Value {
+    let reasons = answer["decision"]["reasons"].as_array();
+    let fields = reasons
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(|reason| reason.strip_prefix("claim_mismatch:"));
+    let gaps = fields.map(|field| {
+        json!({
+            "field": field,
+            "claimed": args.get(field).cloned().unwrap_or(json!([])),
+            "facts": answer["facts"][field],
+        })
+    });
+    Value::Array(gaps.collect())
 }
 
 const DEFAULT_TTL_MINUTES: i64 = 10;
@@ -217,6 +318,9 @@ pub fn lease_needed(c: &mut Client, ws: &Workspace) -> Result<Value> {
 
 /// A failed tool call, for the model and for a runner reading it.
 fn error_body(e: &anyhow::Error) -> Value {
+    if let Some(w) = e.downcast_ref::<WrongArgument>() {
+        return json!({"code": "invalid", "message": w.message, "details": [], "expected": w.expected});
+    }
     match e.downcast_ref::<ctx::MethodError>() {
         Some(m) => json!({"code": m.code, "message": m.message, "details": []}),
         None => json!({"code": "invalid", "message": format!("{e:#}"), "details": []}),
@@ -240,7 +344,23 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 }
 
 impl Server {
+    /// A tool that only reads runs past an argument it does not take and
+    /// says so; one that changes something does not run on a call that may
+    /// not mean what it says.
     fn tool(&mut self, name: &str, args: &Value) -> Result<Value> {
+        let Some(wrong) = wrong_argument(&tools(), name, args) else {
+            return self.call_tool(name, args);
+        };
+        if !READ_ONLY.contains(&name) {
+            return Err(wrong.into());
+        }
+        let mut answer = self.call_tool(name, args)?;
+        answer["warnings"] = json!([wrong.message]);
+        answer["expected"] = wrong.expected;
+        Ok(answer)
+    }
+
+    fn call_tool(&mut self, name: &str, args: &Value) -> Result<Value> {
         let c = &mut self.client;
         match name {
             "status" => {
@@ -354,11 +474,12 @@ impl Server {
                     },
                     revert_of: None,
                 };
-                let r = ctx::call(
+                let mut r = ctx::call(
                     c,
                     "change.propose",
                     json!({"base": self.ws.meta.base, "files": changes, "claim": claim}),
                 )?;
+                r["claim_mismatch"] = claim_mismatch(args, &r);
                 if r["decision"]["outcome"] != "deny" {
                     self.ws.meta.submitted = Some((
                         serde_json::from_value(r["change"].clone())?,
@@ -392,6 +513,7 @@ pub fn run() -> Result<()> {
     let ended = Arc::new(AtomicBool::new(false));
     let beating = ended.clone();
     std::thread::spawn(move || keep_alive(heart, beating));
+    let rules = setup::neutral_rules(Some(&ws));
     let mut server = Server { ws, client };
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -412,7 +534,7 @@ pub fn run() -> Result<()> {
                 "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "lonca", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Lonca governs this workspace: lease symbols before editing, propose with an exact claim, sync after integration."
+                "instructions": rules,
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({"tools": tools()})),
@@ -453,9 +575,9 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LeaseItem, LeaseKind, RETRY_BEAT_MS, anyhow, beat_interval_ms, ctx, due_for_renewal,
-        error_body, next_beat, remainder, renewal_ttl_ms, requested_items, section_ids,
-        session_over, tools, ttl_ms,
+        ADDITIVE, LeaseItem, LeaseKind, READ_ONLY, RETRY_BEAT_MS, annotated, anyhow,
+        beat_interval_ms, claim_mismatch, ctx, due_for_renewal, error_body, next_beat, remainder,
+        renewal_ttl_ms, requested_items, section_ids, session_over, tools, ttl_ms, wrong_argument,
     };
     use serde_json::json;
 
@@ -463,6 +585,106 @@ mod tests {
         LeaseItem {
             symbol: symbol.into(),
             kind,
+        }
+    }
+
+    #[test]
+    fn a_wrong_argument_comes_back_with_the_tool_s_schema() {
+        let list = tools();
+        let check = |tool: &str, args| wrong_argument(&list, tool, &args);
+        let w = check("propose", json!({"intent": "x", "symbols": ["a#b"]})).unwrap();
+        assert!(
+            w.message.starts_with("propose has no argument `symbols`"),
+            "{w}"
+        );
+        assert_eq!(w.to_string(), w.message);
+        assert_eq!(w.expected["required"], json!(["intent"]));
+        let body = error_body(&w.into());
+        assert_eq!(body["code"], "invalid");
+        assert!(
+            body["message"].as_str().unwrap().contains("`symbols`"),
+            "{body}"
+        );
+        let edits = &body["expected"]["properties"]["edits"]["description"];
+        assert!(edits.as_str().unwrap().contains("facts.edits"), "{body}");
+
+        assert!(check("propose", json!({"intent": "x", "edits": []})).is_none());
+        assert!(check("status", json!({})).is_none());
+        assert!(check("status", json!({"x": 1})).is_some());
+        assert!(
+            check("no_such_tool", json!({"x": 1})).is_none(),
+            "named as unknown later"
+        );
+        assert!(check("status", json!(null)).is_none());
+    }
+
+    /// Not every harness shows a model the tool schemas up front; every
+    /// harness gives it the rules. So they name what `propose` takes.
+    #[test]
+    fn the_rules_say_what_each_argument_of_propose_is() {
+        let list = tools();
+        let propose = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "propose");
+        let properties = propose.unwrap()["inputSchema"]["properties"].as_object();
+        let rules = crate::setup::neutral_rules(None);
+        for name in properties.unwrap().keys() {
+            assert!(rules.contains(&format!("`{name}` (")), "{name}");
+        }
+    }
+
+    /// Without a description a name is all a model has, and it guesses.
+    #[test]
+    fn every_argument_of_every_tool_says_what_it_is_for() {
+        for tool in tools().as_array().unwrap() {
+            let properties = tool["inputSchema"]["properties"].as_object().unwrap();
+            for (name, schema) in properties {
+                let about = schema["description"].as_str().unwrap_or("");
+                assert!(!about.is_empty(), "{}: {name}", tool["name"]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_denied_claim_says_what_was_claimed_and_what_lonca_computed() {
+        let answer = json!({
+            "decision": {"outcome": "deny", "reasons": ["claim_mismatch:edits", "lease_missing:a#b"]},
+            "facts": {"edits": ["a#b"], "adds": []},
+        });
+        let gaps = claim_mismatch(&json!({"edits": ["a#c"]}), &answer);
+        assert_eq!(
+            gaps,
+            json!([{"field": "edits", "claimed": ["a#c"], "facts": ["a#b"]}])
+        );
+        let gaps = claim_mismatch(&json!({}), &answer);
+        assert_eq!(gaps[0]["claimed"], json!([]));
+        assert_eq!(claim_mismatch(&json!({}), &json!({})), json!([]));
+    }
+
+    #[test]
+    fn a_harness_can_tell_what_a_tool_does_and_a_new_tool_counts_as_destructive() {
+        let hints = |name: &str| {
+            let a = &annotated(json!({"name": name}))["annotations"];
+            (a["readOnlyHint"].clone(), a["destructiveHint"].clone())
+        };
+        assert_eq!(hints("status"), (json!(true), json!(false)));
+        assert_eq!(hints("propose"), (json!(false), json!(false)));
+        assert_eq!(hints("sync"), (json!(false), json!(true)));
+        assert_eq!(hints("a_new_tool"), (json!(false), json!(true)));
+        let list = tools();
+        let names: Vec<&str> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| {
+                assert_eq!(t["annotations"]["openWorldHint"], json!(false));
+                t["name"].as_str().unwrap()
+            })
+            .collect();
+        for listed in READ_ONLY.iter().chain(ADDITIVE) {
+            assert!(names.contains(listed), "{listed} is not a tool");
         }
     }
 

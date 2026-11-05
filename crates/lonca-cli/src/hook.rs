@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use lonca_daemon::Client;
-use lonca_policy::harness::render;
+use lonca_policy::harness::{render, rules};
 use serde_json::{Value, json};
 
 use crate::ctx;
@@ -124,24 +124,11 @@ fn bind(client: &mut Client, harness: &str, start: &Value, ws: &Workspace) -> Re
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    let where_to_write = if scratch.is_empty() {
-        "- Edit files only inside this workspace.".to_string()
-    } else {
-        format!(
-            "- Edit files only inside this workspace. Notes, logs and throwaway files go to your scratch directory ({}); nothing there is part of the repository or of a proposal.",
-            scratch.join(", ")
-        )
-    };
-    let context = format!(
-        "This workspace is governed by Lonca (repository {repo}, session {session}, observation level {level}).\n\
-                 - Before editing a function, method or type, lease it: mcp__lonca__lease_acquire with symbols like \"src/file.rs#Type.method\" (mcp__lonca__symbols lists them).\n\
-                 {where_to_write}\n\
-                 - mcp__lonca__lease_needed says which leases your local changes need and who holds them.\n\
-                 - Check your changes with mcp__lonca__preview, then submit with mcp__lonca__propose, declaring exactly the symbols you changed.\n\
-                 - After your change integrates, run mcp__lonca__sync before continuing. Integration releases the leases the change needed: lease a symbol again before editing it again.\n\
-                 - If a symbol is leased by another agent, ask it with mcp__lonca__negotiate or wait.\n\
-                 - Reading untrusted paths or files outside this workspace taints the session; whether web fetches, network commands and other MCP servers do is the repository's policy ([taint] in lonca.toml). Tainted changes need human review.",
-        repo = ws.meta.repo
+    let about = format!(
+        " (repository {}, session {session}, observation level {level})",
+        ws.meta.repo
     );
+    let prefix = start["tool_prefix"].as_str().unwrap_or("");
+    let context = rules(&about, prefix, &scratch);
     Ok(render(&start["context"], "context", &context))
 }

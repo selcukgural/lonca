@@ -190,6 +190,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("hook.event", Cred::Agent),
     ("hook.input", Cred::Agent),
     ("hook.bind", Cred::Agent),
+    ("harness.setup", Cred::Agent),
     ("queue.run", Cred::AnyHuman),
 ];
 
@@ -536,6 +537,7 @@ impl Service {
             "hook.event" => self.hook_event(req, params(p)?),
             "hook.input" => self.hook_input(req, params(p)?),
             "hook.bind" => self.hook_bind(req, params(p)?),
+            "harness.setup" => self.harness_setup(req, params(p)?),
             "queue.run" => Ok(json!({"integrated": self.process_all()})),
             m => fail("unknown_method", format!("unknown method {m}")),
         }
@@ -2231,6 +2233,7 @@ impl Service {
                     "phase": "session_start",
                     "session": field(&profile.fields.session).unwrap_or(""),
                     "context": profile.context,
+                    "tool_prefix": profile.tool_prefix(),
                 }));
             }
             Some(Event::BeforeTool) => "PreToolUse",
@@ -2258,6 +2261,16 @@ impl Service {
             out["output"] = render(&profile.deny, "reason", &reason);
         }
         Ok(out)
+    }
+
+    /// The setup part of a harness's profile, from the signed policy. A
+    /// harness with no profile is an answer, not an error: it still gets
+    /// the rules and the MCP server.
+    fn harness_setup(&self, req: &Request, h: HarnessSetup) -> Hr {
+        let mut guard = self.lock();
+        let (repo, _) = Self::agent(&guard, req, self.now())?;
+        let policy = Self::repo(&mut guard, &repo)?.policy().or_fail()?;
+        Ok(json!({"setup": policy.config.harness(&h.harness).map(|p| &p.setup)}))
     }
 
     fn hook_bind(&self, req: &Request, b: HookBind) -> Hr {

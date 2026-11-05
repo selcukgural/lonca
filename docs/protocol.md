@@ -635,8 +635,9 @@ entries.
 daemon reads `input` with the harness's profile from the policy
 (`docs/guide/runners.md`, "Any other harness"). A harness without a
 profile, or an event it does not have, is `invalid`. A session start gives
-`{"phase": "session_start", "session": string, "context": template}`: call
-`hook.bind`, then fill `{context}`. A tool call gives what `hook.event`
+`{"phase": "session_start", "session": string, "context": template,
+"tool_prefix": string}`: call `hook.bind`, then fill `{context}`, naming the
+tools with `tool_prefix`. A tool call gives what `hook.event`
 gives, plus `"output"` on a denial: the answer in the harness's shape.
 
 ### `hook.bind`
@@ -645,6 +646,13 @@ gives, plus `"output"` on a denial: the answer in the harness's shape.
 "sudo_without_password": boolean, "workspace": absolute path | null}`.
 Logged, plus `"level"` (observation level), `"notes"` ([string]) and
 `"scratch"` ([absolute path], the session's scratch roots from the log).
+
+### `harness.setup`
+
+*agent.* `{"harness": string}`. Gives `{"setup": object | null}`: the
+`setup` part of the harness's profile from the policy, holes unfilled, or
+`null` for a harness with no profile, which still gets the rules and the MCP
+server. Not logged.
 
 ### `queue.run`
 
@@ -802,6 +810,22 @@ Secure Enclave key, and reads the file again. Every `lonca` human
 command does the same by itself. The file is readable by anything
 running as the developer: it opens reads and prepares only; every write
 still needs a signature.
+
+- `harness setup <name> [--print] --json`, in a workspace: `{"harness",
+  "known": boolean, "written": [path], "files": {path: text}, "flags":
+  [string], "env": {name: value}, "note": string, "rules": string, "mcp":
+  {"command", "args", "cwd", "env"}}`. `--print` writes nothing. A file the
+  repository has, a local file or a symlink at a target is refused, and
+  nothing is written; the files of `setup` are never a local change.
+- `session start --harness <name> --json`: the same report as `"setup"`. If
+  the setup fails, the session has started: the error names it.
+- `rules`: the rules as text, with neutral tool names.
+
+MCP tools: an argument a tool does not take is refused with `invalid` by a
+tool that changes something, with the tool's input schema as `"expected"`. A
+tool that only reads runs and adds `"warnings": [string]` and `"expected"`. A `propose` denied
+for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
+"facts"}]`.
 
 ## Protocol numbers
 

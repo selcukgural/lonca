@@ -293,6 +293,12 @@ pub struct HookEvent {
     pub harness: Option<String>,
 }
 
+/// `harness.setup`: which harness's setup to read from the policy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HarnessSetup {
+    pub harness: String,
+}
+
 /// What a hook received from its harness, untouched: the daemon reads it with
 /// the harness's profile from the policy.
 #[derive(Clone, Debug, Serialize, Deserialize)]

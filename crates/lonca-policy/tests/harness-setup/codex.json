@@ -1,0 +1,29 @@
+{
+  "files": {},
+  "flags": [
+    "-c",
+    "mcp_servers.lonca.command=lonca",
+    "-c",
+    "mcp_servers.lonca.args=[\"mcp\"]",
+    "-c",
+    "mcp_servers.lonca.cwd=/w",
+    "-c",
+    "mcp_servers.lonca.env.LONCA_SOCKET=/s/lonca.sock",
+    "-c",
+    "mcp_servers.lonca.env.LONCA_WORKSPACE=/w",
+    "-c",
+    "mcp_servers.lonca.default_tools_approval_mode=approve",
+    "-c",
+    "developer_instructions=RULES",
+    "-c",
+    "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
+    "-c",
+    "hooks.PreToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
+    "-c",
+    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]"
+  ],
+  "env": {
+    "LONCA_SOCKET": "/s/lonca.sock"
+  },
+  "note": "Codex runs hooks only after a person reviews them with /hooks, or with --dangerously-bypass-hook-trust, which also runs any other hook you have unreviewed. Without them the rules and the MCP server still work. Add --skip-git-repo-check: the workspace is not a git repository."
+}

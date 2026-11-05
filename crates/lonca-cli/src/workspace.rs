@@ -42,6 +42,10 @@ pub struct Meta {
     /// never a local change, and gone at the next sync.
     #[serde(default)]
     pub trunk_copies: Vec<String>,
+    /// Files `lonca harness setup` wrote: never a local change, and only
+    /// ever paths the repository does not have.
+    #[serde(default)]
+    pub generated: Vec<String>,
 }
 
 pub struct Workspace {
@@ -166,6 +170,7 @@ impl Workspace {
                 submitted: None,
                 scratch_roots: vec![],
                 trunk_copies: vec![],
+                generated: vec![],
             },
         };
         ws.save()?;
@@ -237,7 +242,8 @@ impl Workspace {
                 .strip_prefix(&self.root)?
                 .to_string_lossy()
                 .replace('\\', "/");
-            if self.meta.manifest.contains_key(&rel) || self.meta.trunk_copies.contains(&rel) {
+            let known = [&self.meta.trunk_copies, &self.meta.generated];
+            if self.meta.manifest.contains_key(&rel) || known.iter().any(|l| l.contains(&rel)) {
                 continue;
             }
             let bytes = fs::read(entry.path())?;
@@ -415,6 +421,9 @@ impl Workspace {
             .into_iter()
             .map(|(p, f)| (p, (f.mode, f.blob)))
             .collect();
+        // Trunk's file took the place of one that was generated.
+        let manifest = &self.meta.manifest;
+        self.meta.generated.retain(|p| !manifest.contains_key(p));
         self.save()?;
         Ok(report)
     }

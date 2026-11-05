@@ -40,6 +40,10 @@ pub struct Profile {
     pub mcp_separator: String,
     #[serde(default)]
     pub tools: BTreeMap<String, ToolRule>,
+    /// What a workspace needs for this harness to get the rules, the MCP
+    /// server and the hooks.
+    #[serde(default)]
+    pub setup: Setup,
 }
 
 fn default_mcp_prefix() -> String {
@@ -128,6 +132,150 @@ impl Profile {
         .into_iter()
         .find_map(|(n, event)| (n == name).then_some(event))
     }
+
+    /// What this harness puts before the name of a tool of `lonca mcp`.
+    pub fn tool_prefix(&self) -> String {
+        format!("{}lonca{}", self.mcp_prefix, self.mcp_separator)
+    }
+}
+
+/// What `lonca harness setup` does for a harness. Every string may hold
+/// `{rules}`, `{socket}` and `{workspace}`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Setup {
+    /// Files to write into the workspace, for a harness that reads them there.
+    #[serde(default)]
+    pub files: Vec<SetupFile>,
+    /// The arguments that do the same with nothing written, for a runner, and
+    /// for a harness that ignores files in a directory it does not trust.
+    #[serde(default)]
+    pub flags: Vec<Flag>,
+    /// Environment the harness must start with.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// What a person has to know or do that Lonca can not.
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupFile {
+    pub path: String,
+    pub format: Format,
+    pub content: Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Format {
+    Json,
+    Toml,
+    /// `content` is the text of the file.
+    Text,
+}
+
+/// One command line argument.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum Flag {
+    Text(String),
+    /// The text of one of the setup's files, for a harness that takes a
+    /// file's content as an argument.
+    File {
+        file: String,
+    },
+}
+
+/// A setup with its holes filled in.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Filled {
+    /// Relative path and text.
+    pub files: BTreeMap<String, String>,
+    pub flags: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub note: String,
+}
+
+impl Setup {
+    /// Fills the holes. Text goes through each format's own writer, so
+    /// nothing in a path or in the rules can change a file's structure.
+    pub fn fill(&self, rules: &str, socket: &str, workspace: &str) -> Result<Filled, String> {
+        let holes = [
+            ("workspace", workspace),
+            ("socket", socket),
+            ("rules", rules),
+        ];
+        let value = |v: &Value| holes.iter().fold(v.clone(), |v, (k, t)| render(&v, k, t));
+        let string = |s: &str| match value(&Value::String(s.to_string())) {
+            Value::String(s) => s,
+            _ => unreachable!("render keeps a string a string"),
+        };
+        let mut files = BTreeMap::new();
+        for f in &self.files {
+            files.insert(f.path.clone(), f.format.write(&value(&f.content))?);
+        }
+        let flags = self.flags.iter().map(|flag| match flag {
+            Flag::Text(s) => Ok(string(s)),
+            Flag::File { file } => files
+                .get(file)
+                .cloned()
+                .ok_or_else(|| format!("a flag names {file}, which the setup does not write")),
+        });
+        Ok(Filled {
+            flags: flags.collect::<Result<_, String>>()?,
+            files,
+            env: self
+                .env
+                .iter()
+                .map(|(k, v)| (k.clone(), string(v)))
+                .collect(),
+            note: string(&self.note),
+        })
+    }
+}
+
+impl Format {
+    fn write(self, content: &Value) -> Result<String, String> {
+        let text = match self {
+            Format::Json => serde_json::to_string_pretty(content).map_err(|e| e.to_string())?,
+            Format::Toml => toml::to_string(content).map_err(|e| e.to_string())?,
+            Format::Text => content
+                .as_str()
+                .ok_or("the content of a text file is a string")?
+                .to_string(),
+        };
+        Ok(format!("{}\n", text.trim_end()))
+    }
+}
+
+const RULES: &str = "\
+- Before editing a function, method or type, lease it: {tool}lease_acquire with symbols like \"src/file.rs#Type.method\" ({tool}symbols lists them).
+{where}
+- {tool}lease_needed says which leases your local changes need and who holds them.
+- Check your changes with {tool}preview, then submit with {tool}propose. Its arguments are `intent` (what you did and why, in a sentence) and, each copied from `facts` in what preview reports: `edits` (existing symbols whose body you changed), `adds` (symbols you added), `deletes` (symbols you deleted), `deleted_files` (files you deleted), `signature_changes` (symbols whose signature you changed), `tests` (test counts: added, modified, deleted, skipped). There is no other argument: symbols go in those lists by what happened to them. A claim that differs from the facts is denied (claim_mismatch:<field>).
+- After your change integrates, run {tool}sync before continuing. Integration releases the leases the change needed: lease a symbol again before editing it again.
+- If a symbol is leased by another agent, ask it with {tool}negotiate or wait.
+- Editing a file is not delivering it: nothing reaches the repository until you propose it.
+- Reading untrusted paths or files outside this workspace taints the session; whether web fetches, network commands and other MCP servers do is the repository's policy ([taint] in lonca.toml). Tainted changes need human review.";
+
+/// Lonca's rules for an agent, from the one text every harness gets.
+/// `about` follows "governed by Lonca", `tool_prefix` goes before each tool's
+/// name (empty for the neutral names), `scratch` are the session's roots.
+pub fn rules(about: &str, tool_prefix: &str, scratch: &[&str]) -> String {
+    let where_to_write = if scratch.is_empty() {
+        "- Edit files only inside this workspace.".to_string()
+    } else {
+        format!(
+            "- Edit files only inside this workspace. Notes, logs and throwaway files go to your scratch directory ({}); nothing there is part of the repository or of a proposal.",
+            scratch.join(", ")
+        )
+    };
+    let body = RULES
+        .replace("{tool}", tool_prefix)
+        .replace("{where}", &where_to_write);
+    format!("This workspace is governed by Lonca{about}.\n{body}")
 }
 
 /// `template` with `{key}` replaced in every string.
@@ -178,6 +326,97 @@ mod tests {
         let t = json!({"a": {"b": ["x {reason} y", 1]}, "c": "{other}", "d": true});
         let want = json!({"a": {"b": ["x no y", 1]}, "c": "{other}", "d": true});
         assert_eq!(render(&t, "reason", "no"), want);
+    }
+
+    #[test]
+    fn the_rules_are_one_text_with_each_harness_s_tool_names() {
+        let neutral = rules("", "", &[]);
+        assert!(neutral.starts_with("This workspace is governed by Lonca.\n"));
+        assert!(neutral.contains("lease it: lease_acquire with"));
+        assert!(!neutral.contains("mcp_") && !neutral.contains('{'.to_string().as_str()));
+        assert!(neutral.contains("- Edit files only inside this workspace.\n"));
+
+        let claude = rules(
+            " (repository r)",
+            &built_in()["claude-code"].tool_prefix(),
+            &[],
+        );
+        assert!(claude.starts_with("This workspace is governed by Lonca (repository r).\n"));
+        assert_eq!(
+            claude
+                .replace(" (repository r)", "")
+                .replace("mcp__lonca__", ""),
+            neutral
+        );
+        assert!(claude.contains("mcp__lonca__propose"));
+        assert!(rules("", &built_in()["gemini"].tool_prefix(), &[]).contains("mcp_lonca_propose"));
+
+        let scratch = rules("", "", &["/a", "/b"]);
+        assert!(scratch.contains("your scratch directory (/a, /b);"));
+    }
+
+    fn setup(toml: &str) -> Setup {
+        toml::from_str(toml).unwrap()
+    }
+
+    #[test]
+    fn a_file_is_written_by_its_format_so_a_hole_can_not_change_its_structure() {
+        let tricky = "a\"b\nc = 1";
+        let s = setup(
+            r#"
+            [[files]]
+            path = "a.json"
+            format = "json"
+            content = { x = "{workspace}" }
+            [[files]]
+            path = "a.toml"
+            format = "toml"
+            content = { x = "{workspace}" }
+            [[files]]
+            path = "a.txt"
+            format = "text"
+            content = "{rules}"
+        "#,
+        );
+        let f = s.fill("the rules", "/s", tricky).unwrap();
+        let json: Value = serde_json::from_str(&f.files["a.json"]).unwrap();
+        assert_eq!(json["x"], tricky);
+        let toml: Value = toml::from_str(&f.files["a.toml"]).unwrap();
+        assert_eq!(toml, json!({"x": tricky}));
+        assert_eq!(f.files["a.txt"], "the rules\n");
+    }
+
+    #[test]
+    fn a_text_file_with_no_text_is_refused() {
+        let s = setup("[[files]]\npath = \"a\"\nformat = \"text\"\ncontent = 1\n");
+        let e = s.fill("", "", "").unwrap_err();
+        assert!(e.contains("is a string"), "{e}");
+    }
+
+    #[test]
+    fn flags_env_and_note_are_filled_and_a_flag_can_hold_a_file() {
+        let s = setup(
+            r#"
+            flags = ["--dir={workspace}", "--mcp", { file = "m.json" }, "--r", "{rules}"]
+            env = { SOCK = "{socket}" }
+            note = "in {workspace}"
+            [[files]]
+            path = "m.json"
+            format = "json"
+            content = { s = "{socket}" }
+        "#,
+        );
+        let f = s.fill("R", "/s", "/w").unwrap();
+        let file = "{\n  \"s\": \"/s\"\n}\n";
+        assert_eq!(f.flags, ["--dir=/w", "--mcp", file, "--r", "R"]);
+        assert_eq!(f.env["SOCK"], "/s");
+        assert_eq!(f.note, "in /w");
+        assert_eq!(f.files["m.json"], file);
+
+        let bad = setup("flags = [{ file = \"nope\" }]\n");
+        assert!(bad.fill("", "", "").unwrap_err().contains("nope"));
+        assert!(toml::from_str::<Setup>("flags = [{ typo = \"x\" }]\n").is_err());
+        assert!(toml::from_str::<Setup>("typo = 1\n").is_err());
     }
 
     #[test]

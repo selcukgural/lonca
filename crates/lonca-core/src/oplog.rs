@@ -267,10 +267,20 @@ impl<'a> OpLog<'a> {
 
     /// All entries, oldest first.
     pub fn read_all(&self) -> Result<Vec<SignedOp>> {
+        self.read_from(0)
+    }
+
+    /// The entries from sequence `seq` on, oldest first. The log is walked
+    /// from its head, so this costs what it returns, however long the log.
+    pub fn read_from(&self, seq: u64) -> Result<Vec<SignedOp>> {
         let mut out = Vec::new();
         let mut cur = self.head()?;
         while let Some(c) = cur {
-            out.push(self.read_at(&c)?);
+            let op = self.read_at(&c)?;
+            if op.entry.seq < seq {
+                break;
+            }
+            out.push(op);
             let info = self.store.read_commit(&c)?;
             if info.parents.len() > 1 {
                 return Err(Error::Integrity(format!(

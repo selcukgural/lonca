@@ -2216,6 +2216,9 @@ fn print_lease_needs(report: &Value) {
     for l in lease_need_lines(report) {
         println!("{l}");
     }
+    if let Some(advice) = report["advice"].as_str() {
+        println!("{advice}");
+    }
 }
 
 /// What `lonca status` adds to a lease set with pins.

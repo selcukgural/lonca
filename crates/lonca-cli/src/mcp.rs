@@ -80,7 +80,7 @@ fn tool_list() -> Value {
         {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it, their intent, and when it expires (or the change it is pinned to).", "inputSchema": s(json!({"items": items("Symbols with a kind each, for a set of mixed kinds"), "symbols": symbols, "kind": kind, "intent": intent, "ttl_minutes": ttl}), &["intent"])},
         {"name": "lease_needed", "description": "The leases your local changes need, computed by Lonca: for each symbol the kind needed and whether you hold it, it is free, or who holds it. `acquire` lists the free ones as items for lease_acquire.", "inputSchema": s(json!({}), &[])},
         {"name": "lease_interest", "description": "Say you are waiting for symbols another session holds. It holds nothing and never waits: go on with other work. When they are freed you get a short reservation (see `events`) and only you can acquire them; the oldest interest goes first. Refused (`lease_free`) for what nobody holds: acquire that.", "inputSchema": s(json!({"items": items("The symbols you are waiting for, with a kind each"), "symbols": symbols, "kind": kind, "intent": intent}), &["intent"])},
-        {"name": "events", "description": "What happened that you should know of: a lease reserved for you, a lease handed to you, your change integrated, conflicted, approved or rejected, a message from another session. Pass `from` as `next` of the last answer.", "inputSchema": s(json!({"from": number("`next` of the last answer; 0 for all")}), &[])},
+        {"name": "events", "description": "What happened that you should know of: a lease reserved for you, a lease handed to you, your change integrated, conflicted, approved or rejected, a message from another session with what it says. Messages and leases also arrive with the answers of your tools. Pass `from` as `next` of the last answer.", "inputSchema": s(json!({"from": number("`next` of the last answer; 0 for all")}), &[])},
         {"name": "lease_release", "description": "Release a lease set you hold, or only the items you name: the rest stays yours, under a new set id with the time it had left. Items pinned to a change in flight stay until the change leaves the queue; integration releases them without this call.", "inputSchema": s(json!({"set": set, "items": items("Only these items; the whole set if not given")}), &["set"])},
         {"name": "lease_renew", "description": "Extend a lease set you hold, for ttl_minutes from now. While this server runs it renews your sets for you, so call this only to ask for a longer TTL. Past the hold limit a renewal is denied (lease_hold_limit) while another session wants the symbols.", "inputSchema": s(json!({"set": set, "ttl_minutes": ttl}), &["set"])},
         {"name": "preview", "description": "Facts of your local changes as Lonca computes them: symbols edited/added/deleted, signature changes, test changes, files. Use this to write an accurate claim.", "inputSchema": s(json!({}), &[])},
@@ -97,7 +97,7 @@ fn tool_list() -> Value {
         }), &["intent"])},
         {"name": "change_status", "description": "Status of a proposed change (queued, pending review, integrated, conflicted, rejected with reasons: a human's `rejected: ...` reason says what to fix before you sync and propose again), with the evidence of its last integration attempt (build and test logs).", "inputSchema": s(json!({"change": text("A change id, from propose or status")}), &["change"])},
         {"name": "sync", "description": "Bring trunk into the workspace, keeping and merging your local edits.", "inputSchema": s(json!({}), &[])},
-        {"name": "negotiate", "description": "Message another session about leases: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Bounded number of rounds.", "inputSchema": s(json!({"thread": text("A name for this conversation, the same in every message of it"), "to_session": text("The session you are writing to, from status or a lease denial"), "message": {"type": "object", "description": "e.g. {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"} or {\"type\":\"yield\",\"set\":\"lse_...\",\"to\":\"<to_session>\"}; with `to` the set moves to that session at once, without it the set is freed"}}), &["thread", "to_session", "message"])},
+        {"name": "negotiate", "description": "Settle a lease with the agent that holds it: claim, propose_split, yield (give up one of your lease sets), counter, accept, decline. Lonca tells the other agent. Bounded number of rounds.", "inputSchema": s(json!({"thread": text("A name for this conversation, the same in every message of it"), "to_session": text("The session you are writing to, from status or a lease denial"), "message": {"type": "object", "description": "One of {\"type\":\"claim\",\"symbols\":[...],\"reason\":\"...\"}, {\"type\":\"propose_split\",\"mine\":[...],\"yours\":[...]}, {\"type\":\"yield\",\"set\":\"lse_...\",\"to\":\"<to_session>\"}, {\"type\":\"counter\",\"note\":\"...\"}, {\"type\":\"accept\"}, {\"type\":\"decline\",\"note\":\"...\"}. With `to` a yielded set moves to that session at once, without it the set is freed. accept and decline end the thread"}}), &["thread", "to_session", "message"])},
     ])
 }
 
@@ -307,14 +307,17 @@ fn release_items(c: &mut Client, set: &str, released: Vec<LeaseItem>) -> Result<
 pub fn lease_needed(c: &mut Client, ws: &Workspace) -> Result<Value> {
     let changes = ws.changes()?;
     if changes.is_empty() {
-        return Ok(json!({"changes": 0, "leases": [], "acquire": []}));
+        return Ok(json!({"changes": 0, "leases": [], "acquire": [], "advice": null}));
     }
     let r = ctx::call(
         c,
         "facts.preview",
         json!({"base": ws.meta.base, "files": changes}),
     )?;
-    Ok(json!({"changes": changes.len(), "leases": r["leases"], "acquire": r["acquire"]}))
+    Ok(json!({
+        "changes": changes.len(), "leases": r["leases"], "acquire": r["acquire"],
+        "advice": r["advice"],
+    }))
 }
 
 /// A failed tool call, for the model and for a runner reading it.
@@ -345,6 +348,13 @@ fn strings(v: &Value, key: &str) -> Vec<String> {
 }
 
 impl Server {
+    /// What other sessions want of this one, for the end of a tool's answer.
+    /// A failure here must not cost the answer: the news waits for the next.
+    fn news(&mut self) -> Option<String> {
+        let inbox = ctx::call(&mut self.client, "inbox", json!({})).ok()?;
+        inbox["text"].as_str().map(String::from)
+    }
+
     /// A tool that only reads runs past an argument it does not take and
     /// says so; one that changes something does not run on a call that may
     /// not mean what it says.
@@ -507,6 +517,14 @@ impl Server {
     }
 }
 
+/// A tool's answer. News from other sessions comes as text of its own, so the
+/// answer stays one JSON document for whoever parses it.
+fn answer(body: String, news: Option<String>, is_error: bool) -> Value {
+    let mut content = vec![json!({"type": "text", "text": body})];
+    content.extend(news.map(|text| json!({"type": "text", "text": text})));
+    json!({"content": content, "isError": is_error})
+}
+
 pub fn run() -> Result<()> {
     let ws = Workspace::current()?;
     let mut client = ctx::connect()?;
@@ -553,13 +571,12 @@ pub fn run() -> Result<()> {
                 } else {
                     server.tool(name, &args)
                 };
+                let news = server.news();
                 Ok(match result {
-                    Ok(v) => {
-                        json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v)?}], "isError": false})
-                    }
+                    Ok(v) => answer(serde_json::to_string_pretty(&v)?, news, false),
                     Err(e) => {
                         let body = serde_json::to_string_pretty(&error_body(&e))?;
-                        json!({"content": [{"type": "text", "text": body}], "isError": true})
+                        answer(body, news, true)
                     }
                 })
             }
@@ -785,6 +802,17 @@ mod tests {
         assert_eq!(next_beat(Ok(1234)), Some(1234));
         assert_eq!(next_beat(Err(said("session_inactive"))), None);
         assert_eq!(next_beat(Err(said("io"))), Some(RETRY_BEAT_MS));
+    }
+
+    #[test]
+    fn news_comes_after_the_answer_as_text_of_its_own() {
+        let quiet = super::answer("{}".into(), None, false);
+        assert_eq!(quiet["content"].as_array().unwrap().len(), 1);
+        assert_eq!(quiet["isError"], false);
+        let told = super::answer("{}".into(), Some("news".into()), true);
+        assert_eq!(told["content"][0]["text"], "{}");
+        assert_eq!(told["content"][1]["text"], "news");
+        assert_eq!(told["isError"], true);
     }
 
     #[test]

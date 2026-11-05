@@ -362,7 +362,8 @@ Kirlilik hem **oturumda** hem **içerikte** taşınır.
 
 - Mesajlar agent'lar arasında doğrudan değil, daemon üzerinden gider ve log'a yazılır.
 - **Yapısal mesaj türleri:** `claim`, `propose_split`, `yield`, `counter`, `accept`.
-- **Sınırlar:** tur sayısı (ör. 4) ve süre. Aşılırsa Basamak 3'e geçilir.
+- **Sınırlar:** tur sayısı (ör. 4) ve süre. Aşılırsa Basamak 3'e geçilir. (Basamak 3 henüz yok: §11'e bakın.)
+- **Mesaj karşı tarafa ulaşır.** Daemon her Lonca aracının yanıtına, hook destekleyen harness'lerde her araç çağrısından sonra da yeni mesajı ekler. Mesaj, başka bir agent'ın sözü olarak işaretlenir; kullanıcının veya deponun talimatı sayılmaz.
 - **Çıktı** her zaman ya bir lease devri ya da bir değişiklik önerisidir. İkisi de Gatekeeper'dan geçer.
 
 ### 5.13 Bağımsız Denetçi (Auditor)
@@ -583,7 +584,7 @@ Faz 0'da kapananlar (gerekçeleri `docs/decisions.md`'de): temel **gitoxide + ke
 | §5.9 Verification | Tamam / kısmi | Sözdizimi, build, test, beyan–diff, test silme/atlama eskalasyonu. Değişen testlerde eski test paketini yeni koda karşı koşmak yapılmadı. |
 | §5.10 Köken / taint | Tamam | Hook gözlemleri, `unobserved` = kirli, gözlem–etki tutarlılığı, müzakerede yayılma, ağ proxy'si (lsof ile atıf). Kirliliği içerik düzeyinde taşıma (okunan kirli içerik) kısmen: değişikliklerin köken etiketi var, okuyanı kirletme yalnızca "güvenilmeyen yollar" üzerinden. |
 | §5.11 MCP + CLI | Tamam | `lonca mcp` (11 araç), `lonca hook`, kapsamlı CLI. |
-| §5.12 Müzakere | Tamam | Yapısal mesajlar, tur sınırı, `yield` ile kiralama devri. |
+| §5.12 Müzakere | Kısmi | Yapısal mesajlar, tur sınırı, `yield` ile kiralama devri, mesajın alıcıya ulaşması (`inbox`, araç sonrası hook). Süre sınırı yok. §6 Basamak 3 (politika) yapılmadı: `negotiation_exhausted` yalnızca bir red; agent serbest işe döner ve kalanı son yanıtında insana bildirir. |
 | §5.13 Auditor | Tamam | Karar, Facts ve merge yeniden hesaplama; yayımlanmış log karşılaştırması; dondurma bayrağı. Karar kodunu paylaşıyor (açık soru duruyor). |
 | §5.14 AI Danışman | Tamam | `lonca advise`; günlük bütçe; diff kırpılmıyor, büyükse reddediliyor. Yalnızca sahte API'ye karşı test edildi. |
 | §3.1–3.3 Sertleştirilmiş mod | Tamam, sahada denenmedi | Kurulum betikleri (macOS/Linux), peer uid kontrolü, sudo kontrolü, managed settings denetimi. Betikler `--render` ile ve Lonca'nın kendi denetleyicisiyle test edildi; gerçek `sudo` kurulumu çalıştırılmadı. |

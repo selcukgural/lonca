@@ -153,6 +153,12 @@ impl Mcp {
         resp["result"].clone()
     }
 
+    /// Calls a tool; the text after its answer, if any.
+    fn news(&mut self, name: &str, args: serde_json::Value) -> Option<String> {
+        let r = self.request("tools/call", json!({"name": name, "arguments": args}));
+        r["content"][1]["text"].as_str().map(String::from)
+    }
+
     /// Calls a tool; the first value says whether it is an MCP error.
     fn tool(&mut self, name: &str, args: serde_json::Value) -> (bool, serde_json::Value) {
         let r = self.request("tools/call", json!({"name": name, "arguments": args}));
@@ -1889,7 +1895,10 @@ fn mcp_leases_mixed_kinds_says_what_is_needed_and_releases_part_of_a_set() {
     let mut mcp = Mcp::start(&e, &ws);
 
     let (_, none) = mcp.tool("lease_needed", json!({}));
-    assert_eq!(none, json!({"changes": 0, "leases": [], "acquire": []}));
+    assert_eq!(
+        none,
+        json!({"changes": 0, "leases": [], "acquire": [], "advice": null})
+    );
 
     std::fs::write(
         ws.join("src/lib.rs"),
@@ -3907,4 +3916,43 @@ fn symbols_give_the_definition_of_a_type() {
     assert!(listed.contains("S  (definition: S.<def>)"), "{listed}");
     assert!(listed.contains("impl:S  (definition: S.<def>)"), "{listed}");
     assert!(listed.lines().any(|l| l == "f"), "{listed}");
+}
+
+#[test]
+fn mcp_tells_an_agent_what_another_one_asked_with_the_answer_of_any_tool() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    e.run(&e.root, &session_args("src/**", &["--workspace", "w2"]));
+    let w2 = e.root.join("w2");
+    let sym = "src/lib.rs#refund";
+
+    let mut mcp = Mcp::start(&e, &ws);
+    let (_, held) = mcp.tool("lease_acquire", json!({"symbols": [sym], "intent": "mine"}));
+    assert_eq!(held["decision"]["outcome"], "allow", "{held}");
+    assert_eq!(mcp.news("status", json!({})), None);
+
+    let mut other = Mcp::start(&e, &w2);
+    let (_, denied) = other.tool("lease_acquire", json!({"symbols": [sym], "intent": "too"}));
+    assert_eq!(denied["decision"]["outcome"], "deny", "{denied}");
+    let mine = denied["details"][0]["holder_session"].as_str().unwrap();
+    assert!(
+        denied["advice"].as_str().unwrap().contains(mine),
+        "{denied}"
+    );
+    let args = ["lease", "acquire", sym, "--intent", "too"];
+    let out = e.cmd(&w2, &args).output().unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("Settle it between you"), "{said}");
+
+    let (err, sent) = other.tool(
+        "negotiate",
+        json!({"thread": "t1", "to_session": mine,
+               "message": {"type": "claim", "symbols": ["src/lib.rs#charge"], "reason": "needs it"}}),
+    );
+    assert!(!err, "{sent}");
+
+    let news = mcp.news("status", json!({})).expect("the news");
+    assert!(news.contains("in thread t1"), "{news}");
+    assert!(news.contains("needs it"), "{news}");
+    assert_eq!(mcp.news("status", json!({})), None);
 }

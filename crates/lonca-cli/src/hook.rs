@@ -117,7 +117,8 @@ fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
             None
         }));
     }
-    Ok((r["decision"] == "deny").then(|| r["output"].clone()))
+    // A refusal, or what the harness should add to the agent's context.
+    Ok(Some(r["output"].clone()).filter(|o| !o.is_null()))
 }
 
 /// Tells the daemon what the workspace holds; the answer, if there is one,

@@ -60,9 +60,13 @@ impl Env {
     }
 
     fn hook(&self, cwd: &Path, input: &str) -> Output {
+        self.hook_as(cwd, input, &["hook"])
+    }
+
+    fn hook_as(&self, cwd: &Path, input: &str, args: &[&str]) -> Output {
         use std::io::Write;
         let mut child = self
-            .cmd(cwd, &["hook"])
+            .cmd(cwd, args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -2872,6 +2876,143 @@ fn sync_around_a_conflict_keeps_only_the_conflicting_symbol_local() {
     assert_eq!(parse(&meta)["trunk_copies"], json!([]));
     let kept = std::fs::read_to_string(h2.join("src/lib.rs")).unwrap();
     assert!(kept.contains("a + 1") && kept.contains("a * 4"), "{kept}");
+}
+
+/// Each harness gets a refusal in the shape it honours, and a hook set up
+/// for the wrong harness says so instead of watching nothing.
+#[test]
+fn hooks_speak_each_harness() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let event = |name: &str, tool: &str, path: &str| {
+        json!({
+            "hook_event_name": name, "tool_name": tool, "cwd": ws,
+            "tool_input": {"file_path": path, "command": format!("*** Update File: {path}")},
+        })
+        .to_string()
+    };
+    let gemini = ["hook", "--harness", "gemini"];
+    let codex = ["hook", "--harness", "codex"];
+
+    let o = e.hook_as(
+        &ws,
+        &event("BeforeTool", "write_file", "/etc/hosts"),
+        &gemini,
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let out = parse(&text(&o.stdout));
+    assert_eq!(out["decision"], "deny", "{out}");
+    assert!(
+        out["reason"].as_str().unwrap().contains("/etc/hosts"),
+        "{out}"
+    );
+    let o = e.hook_as(
+        &ws,
+        &event("BeforeTool", "write_file", "src/lib.rs"),
+        &gemini,
+    );
+    assert!(o.stdout.is_empty(), "{}", text(&o.stdout));
+
+    let o = e.hook_as(
+        &ws,
+        &event("PreToolUse", "apply_patch", "/etc/hosts"),
+        &codex,
+    );
+    let out = parse(&text(&o.stdout));
+    let deny = &out["hookSpecificOutput"];
+    assert_eq!(deny["permissionDecision"], "deny", "{out}");
+    assert_eq!(deny["hookEventName"], "PreToolUse");
+
+    for (input, args) in [
+        (event("BeforeTool", "Write", "src/lib.rs"), &["hook"][..]),
+        (event("BeforeTool", "Bash", "x"), &codex[..]),
+        (event("PreToolUse", "write_file", "x"), &gemini[..]),
+        (event("AfterTool", "Write", "x"), &["hook"][..]),
+        (event("PostToolUse", "write_file", "x"), &gemini[..]),
+    ] {
+        let o = e.hook_as(&ws, &input, args);
+        assert_eq!(o.status.code(), Some(2), "{input}");
+        assert!(
+            text(&o.stderr).contains("hook event"),
+            "{}",
+            text(&o.stderr)
+        );
+    }
+    let o = e.hook_as(
+        &ws,
+        &event("PreToolUse", "Bash", "x"),
+        &["hook", "--harness", "cursor"],
+    );
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o.stderr).contains("unknown harness cursor"));
+
+    let bind =
+        json!({"hook_event_name": "SessionStart", "session_id": "h1", "cwd": ws}).to_string();
+    let o = e.hook_as(&ws, &bind, &gemini);
+    let out = parse(&text(&o.stdout));
+    assert_eq!(out["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    let log = parse(&e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]));
+    assert!(log.to_string().contains("\"harness\":\"gemini\""), "{log}");
+}
+
+/// A harness Lonca has never heard of: one signed policy update, no new
+/// Lonca, and its events, tools and answers work.
+#[test]
+fn a_harness_described_in_the_policy_needs_no_new_lonca() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    let table = r#"
+[harnesses.acme]
+events = { session_start = "begin", before_tool = "about_to", after_tool = "did" }
+fields = { event = "what", tool = "with", input = "args", cwd = "dir", session = "run" }
+deny = { allowed = false, why = "{reason}" }
+context = { say = "{context}" }
+
+[harnesses.acme.tools]
+save = { kind = "write", fields = ["target"] }
+"#;
+    let bundle = |dir: &Path| {
+        let cfg = dir.join("lonca.toml");
+        let pol = dir.join("policy.cedar");
+        let c = format!("{}{table}", lonca_policy::config::DEFAULT_CONFIG);
+        std::fs::write(&cfg, c).unwrap();
+        std::fs::write(&pol, lonca_policy::config::DEFAULT_POLICY).unwrap();
+        (cfg, pol)
+    };
+    let acme = ["hook", "--harness", "acme"];
+    let event = |what: &str, target: &str| {
+        json!({"what": what, "with": "save", "args": {"target": target}, "dir": ws, "run": "r1"})
+            .to_string()
+    };
+    let o = e.hook_as(&ws, &event("about_to", "/etc/hosts"), &acme);
+    assert_eq!(o.status.code(), Some(2), "no profile yet");
+
+    let (cfg, pol) = bundle(r);
+    let (cfg, pol) = (cfg.to_str().unwrap(), pol.to_str().unwrap());
+    e.run(
+        r,
+        &[
+            "policy", "set", "--repo", "demo", "--config", cfg, "--policy", pol,
+        ],
+    );
+
+    let o = e.hook_as(&ws, &event("about_to", "/etc/hosts"), &acme);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let out = parse(&text(&o.stdout));
+    assert_eq!(out["allowed"], false, "{out}");
+    assert!(out["why"].as_str().unwrap().contains("/etc/hosts"), "{out}");
+    let o = e.hook_as(&ws, &event("did", "src/lib.rs"), &acme);
+    assert!(o.status.success() && o.stdout.is_empty());
+    let o = e.hook_as(&ws, &event("begin", ""), &acme);
+    let out = parse(&text(&o.stdout));
+    assert!(out["say"].as_str().unwrap().contains("Lonca"), "{out}");
+    let log = parse(&e.run(r, &["log", "--repo", "demo", "--json", "--from", "1"]));
+    let log = log.to_string();
+    assert!(
+        log.contains("\"harness\":\"acme\"") && log.contains("\"r1\""),
+        "{log}"
+    );
 }
 
 /// Undoing a change that a later one built on takes out that change alone.

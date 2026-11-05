@@ -19,6 +19,7 @@ use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::decide::{level_for, valid_token};
 use lonca_policy::details;
+use lonca_policy::harness::{Event, render};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate};
@@ -187,6 +188,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("events", Cred::Agent),
     ("session.end", Cred::Agent),
     ("hook.event", Cred::Agent),
+    ("hook.input", Cred::Agent),
     ("hook.bind", Cred::Agent),
     ("queue.run", Cred::AnyHuman),
 ];
@@ -532,6 +534,7 @@ impl Service {
             "session.end" => self.agent_end(req),
             "session.heartbeat" => self.heartbeat(req),
             "hook.event" => self.hook_event(req, params(p)?),
+            "hook.input" => self.hook_input(req, params(p)?),
             "hook.bind" => self.hook_bind(req, params(p)?),
             "queue.run" => Ok(json!({"integrated": self.process_all()})),
             m => fail("unknown_method", format!("unknown method {m}")),
@@ -2207,6 +2210,56 @@ impl Service {
         Ok(json!(verdict))
     }
 
+    /// Reads a hook's raw input with the harness's profile. A session start
+    /// is answered with what the hook needs for `hook.bind`; a tool call goes
+    /// the way of `hook.event`, and a refusal comes in the harness's shape.
+    fn hook_input(&self, req: &Request, h: HookInput) -> Hr {
+        let profile = {
+            let mut guard = self.lock();
+            let (repo, _) = Self::agent(&guard, req, self.now())?;
+            let policy = Self::repo(&mut guard, &repo)?.policy().or_fail()?;
+            policy.config.harness(&h.harness).cloned()
+        };
+        let Some(profile) = profile else {
+            return fail("invalid", format!("unknown harness {}", h.harness));
+        };
+        let field = |name: &str| h.input.get(name).and_then(Value::as_str);
+        let name = field(&profile.fields.event).unwrap_or("");
+        let phase = match profile.event_of(name) {
+            Some(Event::SessionStart) => {
+                return Ok(json!({
+                    "phase": "session_start",
+                    "session": field(&profile.fields.session).unwrap_or(""),
+                    "context": profile.context,
+                }));
+            }
+            Some(Event::BeforeTool) => "PreToolUse",
+            Some(Event::AfterTool) => "PostToolUse",
+            None => {
+                let message = format!("{name:?} is not a {} hook event", h.harness);
+                return fail("invalid", message);
+            }
+        };
+        let ev = HookEvent {
+            hook_event_name: phase.to_string(),
+            tool_name: field(&profile.fields.tool).map(str::to_string),
+            tool_input: h
+                .input
+                .get(&profile.fields.input)
+                .cloned()
+                .unwrap_or(Value::Null),
+            cwd: field(&profile.fields.cwd).map(str::to_string),
+            workspace: h.workspace.clone(),
+            harness: Some(h.harness.clone()),
+        };
+        let mut out = self.hook_event(req, ev)?;
+        if out["decision"] == "deny" {
+            let reason = out["reason"].as_str().unwrap_or("").to_string();
+            out["output"] = render(&profile.deny, "reason", &reason);
+        }
+        Ok(out)
+    }
+
     fn hook_bind(&self, req: &Request, b: HookBind) -> Hr {
         let mut guard = self.lock();
         let now = self.now();
@@ -2220,7 +2273,7 @@ impl Service {
             )
         } else {
             hooks::Inspection {
-                notes: vec![format!("unknown harness {}", b.harness)],
+                notes: vec![format!("no locked profile for harness {}", b.harness)],
                 ..Default::default()
             }
         };

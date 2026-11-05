@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Hooks for any harness (#109)
+
+`lonca hook --harness <name>` reads a harness's events and tools from a
+profile. Claude Code, Codex and Gemini CLI come built in; `[harnesses.<name>]`
+in `lonca.toml` adds another or replaces one, with no new Lonca
+(`docs/guide/runners.md`, "Any other harness"). A hook event the harness does
+not have now exits 2. Tools Lonca does not know taint the session by default:
+if a runner uses one that reads nothing from outside, list it in
+`[taint] safe_tools` or set `unknown_tools = false` with a signed policy
+update. `.gemini/**` joins the default `paths.critical`; existing repositories
+keep their policy until they update it.
+
 ### Symbol engine 2: code is compared exactly
 
 Changes that engine 1 did not see outside symbols, inside a class's own text

@@ -329,8 +329,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Claude Code hook handler (reads the hook event on stdin).
-    Hook,
+    /// Harness hook handler (reads the hook event on stdin).
+    Hook {
+        /// The harness profile to read the event with: claude-code, codex,
+        /// gemini, or one the repository's policy describes.
+        #[arg(long, default_value = "claude-code")]
+        harness: String,
+    },
     /// MCP server for agents (stdio).
     Mcp,
     /// AI advisory for a change: summary and risk flags (no authority).
@@ -624,7 +629,7 @@ fn main() -> ExitCode {
         }
     };
     match cli.cmd {
-        Cmd::Hook => hook::run(),
+        Cmd::Hook { harness } => hook::run(&harness),
         cmd => match run(cmd) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -1947,7 +1952,7 @@ fn run(cmd: Cmd) -> Result<()> {
             println!("{}", call(&mut c, "queue.run", json!({}))?);
             Ok(())
         }
-        Cmd::Hook => unreachable!("handled in main"),
+        Cmd::Hook { .. } => unreachable!("handled in main"),
         Cmd::Mcp => mcp::run(),
         Cmd::Advise {
             change,

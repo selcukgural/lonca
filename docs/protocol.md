@@ -621,9 +621,23 @@ logged; stop beating.
 
 *agent.* A harness hook event: `{"hook_event_name": string,
 "tool_name": string | null, "tool_input": object, "cwd": string | null,
-"workspace": absolute path}`. Result `{"decision": "allow" | "deny" |
+"workspace": absolute path, "harness": "claude-code" | "codex" |
+"gemini" | null}`. The event name is always `PreToolUse` or `PostToolUse`;
+the tool name is the harness's own. No harness means Claude Code; one
+Lonca does not know is denied. Result `{"decision": "allow" | "deny" |
 "ask", "reason": string}`. Observations are logged as `observe`
 entries.
+
+### `hook.input`
+
+*agent.* What a hook program got from its harness, untouched:
+`{"harness": string, "input": object, "workspace": absolute path}`. The
+daemon reads `input` with the harness's profile from the policy
+(`docs/guide/runners.md`, "Any other harness"). A harness without a
+profile, or an event it does not have, is `invalid`. A session start gives
+`{"phase": "session_start", "session": string, "context": template}`: call
+`hook.bind`, then fill `{context}`. A tool call gives what `hook.event`
+gives, plus `"output"` on a denial: the answer in the harness's shape.
 
 ### `hook.bind`
 

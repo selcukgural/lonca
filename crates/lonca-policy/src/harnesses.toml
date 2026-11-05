@@ -1,0 +1,75 @@
+# What Lonca knows about each agent harness, as data. A repository adds or
+# replaces one under `[harnesses.<name>]` in lonca.toml, with a signed policy
+# update: a new harness needs no new Lonca. See docs/guide/runners.md.
+
+[claude-code]
+events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse" }
+deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
+context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+
+[claude-code.tools]
+Read = { kind = "read", fields = ["file_path"] }
+NotebookRead = { kind = "read", fields = ["notebook_path"] }
+Glob = { kind = "read", fields = ["path"] }
+Grep = { kind = "read", fields = ["path"] }
+LS = { kind = "read", fields = ["path"] }
+Write = { kind = "write", fields = ["file_path"] }
+Edit = { kind = "write", fields = ["file_path"] }
+MultiEdit = { kind = "write", fields = ["file_path"] }
+NotebookEdit = { kind = "write", fields = ["notebook_path"] }
+Bash = { kind = "shell", fields = ["command"] }
+PowerShell = { kind = "shell", fields = ["command"] }
+WebFetch = { kind = "fetch", fields = ["url"] }
+WebSearch = { kind = "search" }
+Agent = { kind = "inert" }
+AskUserQuestion = { kind = "inert" }
+EnterPlanMode = { kind = "inert" }
+ExitPlanMode = { kind = "inert" }
+Skill = { kind = "inert" }
+Task = { kind = "inert" }
+TaskCreate = { kind = "inert" }
+TaskGet = { kind = "inert" }
+TaskList = { kind = "inert" }
+TaskOutput = { kind = "inert" }
+TaskStop = { kind = "inert" }
+TaskUpdate = { kind = "inert" }
+TodoWrite = { kind = "inert" }
+ToolSearch = { kind = "inert" }
+
+[codex]
+events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse" }
+deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
+context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+
+[codex.tools]
+Bash = { kind = "shell", fields = ["command"] }
+apply_patch = { kind = "write", fields = ["command"], headers = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "] }
+Write = { kind = "write", fields = ["command"], headers = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "] }
+Edit = { kind = "write", fields = ["command"], headers = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "] }
+view_image = { kind = "read", fields = ["path"] }
+spawn_agent = { kind = "inert" }
+update_plan = { kind = "inert" }
+
+[gemini]
+events = { session_start = "SessionStart", before_tool = "BeforeTool", after_tool = "AfterTool" }
+deny = { decision = "deny", reason = "{reason}" }
+context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+mcp_prefix = "mcp_"
+mcp_separator = "_"
+
+[gemini.tools]
+read_file = { kind = "read", fields = ["file_path"] }
+read_many_files = { kind = "read", fields = ["include"] }
+list_directory = { kind = "read", fields = ["dir_path"] }
+glob = { kind = "read", fields = ["dir_path"] }
+grep_search = { kind = "read", fields = ["dir_path"] }
+write_file = { kind = "write", fields = ["file_path"] }
+replace = { kind = "write", fields = ["file_path"] }
+run_shell_command = { kind = "shell", fields = ["command"] }
+web_fetch = { kind = "fetch", fields = ["url", "prompt"] }
+google_web_search = { kind = "search" }
+activate_skill = { kind = "inert" }
+ask_user = { kind = "inert" }
+enter_plan_mode = { kind = "inert" }
+exit_plan_mode = { kind = "inert" }
+write_todos = { kind = "inert" }

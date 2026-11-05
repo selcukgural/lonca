@@ -70,7 +70,7 @@ stop_deny = { decision = "block", reason = "{reason}" }
 # Codex skips a project's .codex/ until a person trusts the directory, so a
 # file in a new workspace does nothing: everything goes in as flags.
 [codex.setup]
-note = "Codex runs hooks only after a person reviews them with /hooks, or with --dangerously-bypass-hook-trust, which also runs any other hook you have unreviewed. Without them the rules and the MCP server still work. Add --skip-git-repo-check: the workspace is not a git repository."
+note = "Codex runs hooks only after a person reviews them with /hooks, or with --dangerously-bypass-hook-trust, which also runs any other hook you have unreviewed. Without them the rules and the MCP server still work."
 flags = [
   "-c", "mcp_servers.lonca.command=lonca",
   "-c", "mcp_servers.lonca.args=[\"mcp\"]",

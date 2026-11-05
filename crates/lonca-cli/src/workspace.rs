@@ -1,6 +1,7 @@
-//! Workspaces: a plain directory with the files of a base commit, plus
+//! Workspaces: a directory with the files of a base commit, plus
 //! `.lonca/workspace.json` (repo, base, manifest) and, for agents,
-//! `.lonca/session` (the session token, mode 0600).
+//! `.lonca/session` (the session token, mode 0600). An agent's workspace is
+//! a git repository too (see `gitdir`), for the tools that expect one.
 //!
 //! Symlinks are written as regular files holding their target, so editing a
 //! workspace can never reach outside it.
@@ -19,7 +20,8 @@ use lonca_symbols::merge::{merge_around_conflicts, merge_text_at};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::ctx::call;
+use crate::ctx::{self, call};
+use crate::gitdir;
 
 pub const META_DIR: &str = ".lonca";
 
@@ -46,6 +48,9 @@ pub struct Meta {
     /// ever paths the repository does not have.
     #[serde(default)]
     pub generated: Vec<String>,
+    /// The workspace has a `.git` Lonca keeps at the base.
+    #[serde(default)]
+    pub git: bool,
 }
 
 pub struct Workspace {
@@ -136,13 +141,15 @@ impl Workspace {
         Ok(())
     }
 
-    /// Creates a workspace in `dir` (which must be empty or missing).
+    /// Creates a workspace in `dir` (which must be empty or missing); `git`
+    /// makes it a repository as well.
     pub fn create(
         client: &mut Client,
         dir: &Path,
         repo: &str,
         session: Option<String>,
         human: Option<String>,
+        git: bool,
     ) -> Result<Workspace> {
         if dir.exists() && fs::read_dir(dir)?.next().is_some() {
             bail!("{} is not empty", dir.display());
@@ -171,11 +178,43 @@ impl Workspace {
                 scratch_roots: vec![],
                 trunk_copies: vec![],
                 generated: vec![],
+                git,
             },
         };
         ws.save()?;
         fs::write(dir.join(META_DIR).join(".gitignore"), "*\n")?;
+        if git {
+            gitdir::init(dir)?;
+            ws.write_git_base(&files)?;
+        }
         Ok(ws)
+    }
+
+    /// Moves `.git` to the base. `files` are those whose content it may
+    /// not hold yet.
+    fn write_git_base<'a>(&self, files: impl IntoIterator<Item = &'a TreeFile>) -> Result<()> {
+        let blobs = files
+            .into_iter()
+            .filter(|f| f.mode != FileMode::Submodule)
+            .map(content)
+            .collect::<Result<Vec<_>>>()?;
+        gitdir::set_base(
+            &self.root,
+            &self.meta.base,
+            &self.meta.manifest,
+            blobs.iter().map(Vec::as_slice),
+            ctx::now_ms(),
+        )?;
+        self.exclude_from_git()
+    }
+
+    /// Tells `.git` what `changes()` skips.
+    pub fn exclude_from_git(&self) -> Result<()> {
+        if !self.meta.git {
+            return Ok(());
+        }
+        let skipped = [&self.meta.generated, &self.meta.trunk_copies];
+        gitdir::set_excluded(&self.root, skipped.into_iter().flatten())
     }
 
     fn read(&self, path: &str) -> Option<Vec<u8>> {
@@ -297,6 +336,7 @@ impl Workspace {
             merged: vec![],
             conflicts: vec![],
             symbols: vec![],
+            git_warning: None,
         };
         if trunk == self.meta.base {
             return Ok(report);
@@ -435,15 +475,29 @@ impl Workspace {
                 }
             }
         }
-        self.meta.base = trunk;
-        self.meta.manifest = new_files
-            .into_iter()
-            .map(|(p, f)| (p, (f.mode, f.blob)))
+        let manifest = new_files
+            .values()
+            .map(|f| (f.path.clone(), (f.mode, f.blob.clone())))
             .collect();
+        let held: BTreeSet<&GitId> = self.meta.manifest.values().map(|(_, b)| b).collect();
+        let fresh: Vec<&TreeFile> = new_files
+            .values()
+            .filter(|f| !held.contains(&f.blob))
+            .collect();
+        // The sync is done once this is saved: a `.git` that has been
+        // tampered with costs `git diff` its meaning, and nothing else.
+        self.meta.base = trunk;
+        self.meta.manifest = manifest;
         // Trunk's file took the place of one that was generated.
         let manifest = &self.meta.manifest;
         self.meta.generated.retain(|p| !manifest.contains_key(p));
         self.save()?;
+        report.git_warning = self
+            .meta
+            .git
+            .then(|| self.write_git_base(fresh))
+            .and_then(|r| r.err())
+            .map(|e| format!("{e:#}"));
         Ok(report)
     }
 }
@@ -457,6 +511,9 @@ pub struct SyncReport {
     pub conflicts: Vec<String>,
     /// The symbols in conflict, `path#name`.
     pub symbols: Vec<String>,
+    /// `.git` could not follow the new base; the sync itself went through.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_warning: Option<String>,
 }
 
 impl SyncReport {
@@ -549,6 +606,15 @@ pub fn fetch(
     Ok(files)
 }
 
+fn content(f: &TreeFile) -> Result<Vec<u8>> {
+    let bytes = f
+        .content_b64
+        .as_ref()
+        .map(|c| b64().decode(c))
+        .transpose()?;
+    Ok(bytes.unwrap_or_default())
+}
+
 fn write_file(root: &Path, f: &TreeFile) -> Result<()> {
     lonca_core::paths::validate_repo_path(&f.path)?;
     if f.path == META_DIR || f.path.starts_with(".lonca/") {
@@ -560,13 +626,7 @@ fn write_file(root: &Path, f: &TreeFile) -> Result<()> {
     }
     // Replace whatever is there (including a symlink) with a regular file.
     let _ = fs::remove_file(&target);
-    let bytes = f
-        .content_b64
-        .as_ref()
-        .map(|c| b64().decode(c))
-        .transpose()?
-        .unwrap_or_default();
-    fs::write(&target, bytes)?;
+    fs::write(&target, content(f)?)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

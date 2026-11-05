@@ -77,6 +77,7 @@ impl Prepared {
         for (path, text) in &self.filled.files {
             write_new(&ws.root.join(path), text)?;
         }
+        ws.exclude_from_git()?;
         Ok(paths)
     }
 
@@ -204,6 +205,7 @@ mod tests {
                 scratch_roots: vec![],
                 trunk_copies: vec![],
                 generated: vec![],
+                git: false,
             },
         }
     }

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### An agent's workspace is a git repository (#111)
+
+`session start` now gives the workspace a `.git` with one commit of its base, so
+`git status` and `git diff` work and `codex exec` no longer needs
+`--skip-git-repo-check`. `lonca sync` moves it with the base. A commit there
+stays there: only `propose` delivers, and the rules say so. Lonca writes `.git`
+itself and never runs `git` on it, since the agent can change its config.
+`--no-git` keeps a plain directory; a person's workspace stays plain. `lonca
+fetch` and `propose --commit` now refuse to run inside a workspace.
+
 ### A critical path can wait for a person instead of being refused (#103)
 
 An unobserved or tainted session was denied any change to `[paths] critical`,

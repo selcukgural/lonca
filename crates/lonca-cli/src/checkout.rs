@@ -97,9 +97,9 @@ pub fn fetch(c: &mut Client, dir: &Path, repo: &str) -> Result<Value> {
     if got != trunk {
         bail!("fetched {got} but the daemon's trunk is {trunk}");
     }
+    // How far the previous trunk ref was behind (0 when it was trunk).
     let behind = match &previous {
-        Some(p) if *p != trunk => call(c, "trunk.distance", json!({"base": p}))?["behind"].clone(),
-        Some(_) => json!(0),
+        Some(p) => call(c, "trunk.distance", json!({"base": p}))?["behind"].clone(),
         None => Value::Null,
     };
     Ok(json!({

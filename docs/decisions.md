@@ -1192,6 +1192,23 @@ how an agent reviews its own work.
 - **Cost:** about 1.5 s per 10,000 small files at `session start` (one loose
   object each), 65 ms for a sync that brings no new blobs. `--no-git` skips it.
 
+## What a critical path costs (#103)
+
+`[observation] unobserved_critical` and `[taint] critical` say what a change to
+a critical path costs a session nobody fully observes: `deny` or `escalate`.
+
+- **The default stays `deny`.** Opening one is a signed policy update, so the
+  choice is in the log.
+- **Two words, not one**, since a taint is a stronger claim than a missing
+  observation. A session in both states needs both open. The denial reasons
+  are unchanged for today's policies, because replay compares them: a session
+  in both states denied by default says `tainted_critical_path` alone.
+- **`unobserved_is_tainted = false` is not the same thing**, and stays as it
+  was: it drops the review with the denial.
+- **No log format.** Nothing an entry means changes: a policy with neither key
+  decides as before, and a release that does not know the keys refuses the
+  policy (`deny_unknown_fields`) rather than deciding differently.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

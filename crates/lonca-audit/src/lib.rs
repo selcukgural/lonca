@@ -176,6 +176,7 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
                 policy: &policy,
                 facts: e.facts.as_ref(),
                 evidence: &e.evidence,
+                symbols_engine: e.symbols_engine,
             },
         );
         if let Some(key) = e.switches_daemon_key() {

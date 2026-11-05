@@ -30,6 +30,8 @@ struct H {
     humans: Vec<(String, KeyPair)>,
     now: i64,
     log: Vec<SignedOp>,
+    /// The symbol engine proposals record.
+    engine: u32,
 }
 
 impl H {
@@ -44,6 +46,7 @@ impl H {
             humans: vec![("ayse".into(), KeyPair::generate())],
             now: T0,
             log: vec![],
+            engine: 0,
         };
         let op = Op::RepoInit {
             repo: REPO.into(),
@@ -85,7 +88,7 @@ impl H {
             sub.op,
             Op::ChangePropose { .. } | Op::ChangeIntegrate { .. }
         ) {
-            sub.symbols_engine = Some(0);
+            sub.symbols_engine = Some(self.engine);
         }
         let op = self.chain.prepare(sub, self.now, &self.policy);
         self.chain.commit(&op);
@@ -360,6 +363,7 @@ impl H {
                     policy: &self.policy,
                     facts: e.facts.as_ref(),
                     evidence: &e.evidence,
+                    symbols_engine: e.symbols_engine,
                 },
             );
             assert_eq!(
@@ -3149,6 +3153,7 @@ fn entries_of_an_older_format_know_no_liveness() {
         policy: &bundle,
         facts: None,
         evidence: &[],
+        symbols_engine: None,
     };
     let actor = Actor::Agent {
         name: "bot-a".into(),
@@ -4232,5 +4237,96 @@ fn a_lease_request_may_be_as_long_as_the_limits_and_no_longer() {
     assert!(denied_with(&d, "intent_too_long"), "{d:?}");
     assert!(request(&mut h, "long", 1, 500).is_allow());
     assert!(request(&mut h, "one", 1, 0).is_allow());
+    h.assert_replay();
+}
+
+/// A type's definition is a member of the type: it stands beside its
+/// methods and beside what is added to the type, and inside the whole type.
+#[test]
+fn a_definition_is_held_apart_from_the_members_of_its_type() {
+    let mut h = H::new();
+    for s in ["def", "method", "add", "other"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let (def, method, ty) = ("src/a.rs#T.<def>", "src/a.rs#T.m", "src/a.rs#T");
+    assert!(h.lease("def", "l1", &[(def, LeaseKind::Edit)]).is_allow());
+    assert!(
+        h.lease("method", "l2", &[(method, LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert!(h.lease("add", "l3", &[(ty, LeaseKind::Insert)]).is_allow());
+    // A second holder of the definition, and the whole type, are refused.
+    let d = h.lease("other", "l4", &[(def, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{def}:def:")), "{d:?}");
+    let d = h.lease("other", "l5", &[(ty, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_held"), "{d:?}");
+
+    // A change of the definition needs it, not a member's lease.
+    h.wrote("method", "src/a.rs");
+    let d = h.propose("method", ChangeId::random(), edit(def));
+    assert!(denied_with(&d, &format!("lease_missing:{def}")), "{d:?}");
+    h.wrote("def", "src/a.rs");
+    let d = h.propose("def", ChangeId::random(), edit(def));
+    assert!(d.is_allow(), "{d:?}");
+
+    // The whole type covers its definition.
+    let whole = "src/b.rs#U";
+    assert!(
+        h.lease("other", "l6", &[(whole, LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.wrote("other", "src/b.rs");
+    let d = h.propose("other", ChangeId::random(), edit("src/b.rs#U.<def>"));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// A scope that names a type still reaches its own text in the facts, one
+/// that names a method or the members does not, and the name itself is
+/// enough. Before engine 3 the same text is a document section and old
+/// entries must replay as they were decided.
+#[test]
+fn a_definition_in_the_facts_is_inside_the_scope_of_its_type() {
+    let mut h = H::new();
+    h.engine = 3;
+    let scopes = [("type", "T"), ("method", "T.m"), ("members", "T.*")];
+    for (i, (session, scope)) in scopes.into_iter().enumerate() {
+        start_with_symbols(&mut h, session, &[scope]);
+        let held = if i == 0 { "src/a.rs#T" } else { "src/a.rs#T.m" };
+        let held = held.replace("a.rs", &format!("{i}.rs"));
+        let set = format!("l{i}");
+        let d = h.lease(session, &set, &[(&held, LeaseKind::Edit)]);
+        assert!(d.is_allow(), "{d:?}");
+    }
+    let propose = |h: &mut H, session: &str, name: &str| {
+        let path = format!("src/{name}.rs");
+        h.wrote(session, &path);
+        let def = format!("{path}#T.<def>");
+        (h.propose(session, ChangeId::random(), edit(&def)), def)
+    };
+    let (d, _) = propose(&mut h, "type", "0");
+    assert!(!format!("{d:?}").contains("scope_symbol"), "{d:?}");
+    for (session, file) in [("method", "1"), ("members", "2")] {
+        let (d, def) = propose(&mut h, session, file);
+        assert!(denied_with(&d, &format!("scope_symbol:{def}")), "{d:?}");
+    }
+
+    start_with_symbols(&mut h, "literal", &["T.<def>"]);
+    let held = ("src/3.rs#T.<def>", LeaseKind::Edit);
+    assert!(h.lease("literal", "l3", &[held]).is_allow());
+    let (d, _) = propose(&mut h, "literal", "3");
+    assert!(!format!("{d:?}").contains("scope_symbol"), "{d:?}");
+
+    h.engine = 2;
+    start_with_symbols(&mut h, "old-type", &["T"]);
+    start_with_symbols(&mut h, "old-members", &["T.*"]);
+    let held = ("src/4.rs#T", LeaseKind::Edit);
+    assert!(h.lease("old-type", "l4", &[held]).is_allow());
+    let (d, def) = propose(&mut h, "old-type", "4");
+    assert!(denied_with(&d, &format!("scope_symbol:{def}")), "{d:?}");
+    let held = ("src/5.rs#T.<def>", LeaseKind::Edit);
+    assert!(h.lease("old-members", "l5", &[held]).is_allow());
+    let (d, _) = propose(&mut h, "old-members", "5");
+    assert!(!format!("{d:?}").contains("scope_symbol"), "{d:?}");
     h.assert_replay();
 }

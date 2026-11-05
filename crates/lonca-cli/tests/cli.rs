@@ -3882,3 +3882,29 @@ fn modes_in_a_workspace_do_not_depend_on_the_umask() {
     assert_eq!(mode("run.sh"), 0o755);
     assert_eq!(mode(".lonca/session"), 0o600);
 }
+
+/// `symbols` gives the id of a type's own text, for the tool and the command.
+#[test]
+fn symbols_give_the_definition_of_a_type() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let src = "pub struct S;\n\nimpl S {\n    pub fn m() {}\n}\n\npub fn f() {}\n";
+    std::fs::write(ws.join("src/types.rs"), src).unwrap();
+    let mut mcp = Mcp::start(&e, &ws);
+    let (is_error, reply) = mcp.tool("symbols", json!({"path": "src/types.rs"}));
+    assert!(!is_error, "{reply}");
+    let def = |id: &str| {
+        let id = format!("src/types.rs#{id}");
+        let list = reply["symbols"].as_array().unwrap().iter();
+        let mut found = list.filter(|s| s["id"] == id.as_str());
+        found.next().unwrap()["def"].clone()
+    };
+    assert_eq!(def("S"), "src/types.rs#S.<def>");
+    assert_eq!(def("impl:S"), "src/types.rs#S.<def>");
+    assert_eq!(def("S.m"), serde_json::Value::Null);
+    assert_eq!(def("f"), serde_json::Value::Null);
+    let listed = e.run(&ws, &["symbols", "src/types.rs"]);
+    assert!(listed.contains("S  (definition: S.<def>)"), "{listed}");
+    assert!(listed.contains("impl:S  (definition: S.<def>)"), "{listed}");
+    assert!(listed.lines().any(|l| l == "f"), "{listed}");
+}

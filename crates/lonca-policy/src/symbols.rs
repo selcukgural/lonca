@@ -3,9 +3,10 @@
 //! A symbol id is `path#Qualified.name`. Every symbol in a file has the
 //! pseudo-symbol `path#<file>` as its outermost container. `path#<module>`
 //! (top-level code outside any symbol) and `path#<imports>` (the import
-//! block) are children of `path#<file>`.
+//! block) are children of `path#<file>`. `path#Type.<def>` is the type's own
+//! text, a member of `Type` like its methods: a lease on it leaves them free.
 
-use lonca_core::ops::{Facts, LeaseItem, LeaseKind};
+use lonca_core::ops::{DEF, Facts, LeaseItem, LeaseKind};
 
 pub const FILE: &str = "<file>";
 pub const MODULE: &str = "<module>";
@@ -35,6 +36,11 @@ pub fn ancestors(symbol: &str) -> Vec<String> {
     }
     out.push(file_symbol(path));
     out
+}
+
+/// The type whose definition `name` is, for a `Type.<def>`.
+pub fn def_of(name: &str) -> Option<&str> {
+    name.strip_suffix(DEF)?.strip_suffix('.')
 }
 
 /// The container a new symbol is inserted into.
@@ -109,6 +115,21 @@ mod tests {
             "src/a.rs#Client.charge",
             "src/a.rs#Client.refund"
         ));
+    }
+
+    /// The definition is one more member: the type covers it, and it covers
+    /// nothing but itself.
+    #[test]
+    fn a_definition_is_a_member_of_its_type() {
+        let def = "src/a.rs#Client.<def>";
+        assert!(covers("src/a.rs#Client", def));
+        assert!(covers("src/a.rs#<file>", def));
+        assert!(!overlaps(def, "src/a.rs#Client.charge"));
+        assert!(!covers(def, "src/a.rs#Client"));
+        assert_eq!(def_of("m.Client.<def>"), Some("m.Client"));
+        for name in ["Client", "<def>", "Client<def>", "Client.<def>.x"] {
+            assert_eq!(def_of(name), None, "{name}");
+        }
     }
 
     #[test]

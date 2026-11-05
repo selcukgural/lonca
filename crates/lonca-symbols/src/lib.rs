@@ -14,4 +14,5 @@ pub mod sections;
 pub use extract::{Parsed, Sym, parse};
 pub use facts::{Analysis, analyze};
 pub use lang::Lang;
+pub use lonca_core::ops::DEF;
 pub use merge::{MergeResult, merge3};

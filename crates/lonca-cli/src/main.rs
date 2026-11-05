@@ -2083,7 +2083,11 @@ fn run(cmd: Cmd) -> Result<()> {
                 for x in s {
                     let mut tags = Vec::new();
                     if x.is_test {
-                        tags.push(if x.skipped { "test, skipped" } else { "test" });
+                        let test = if x.skipped { "test, skipped" } else { "test" };
+                        tags.push(test.to_string());
+                    }
+                    if let Some(ty) = &x.def_of {
+                        tags.push(format!("definition: {ty}.{}", lonca_symbols::DEF));
                     }
                     let tags = if tags.is_empty() {
                         String::new()

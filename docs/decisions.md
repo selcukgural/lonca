@@ -36,7 +36,9 @@ from the design.
   changes to trunk's text; module-level edits fall back to a line merge;
   every merged file of a supported language must parse.
 - **Rust `impl` blocks** are containers named `impl:Type` whose members are
-  named `Type.method`, so a lease on `Type` covers every method.
+  named `Type.method`, so a lease on `Type` covers every method. The block's
+  own text belongs to `Type.<def>` from engine 3 (see "Symbol engine
+  versions").
 - **Leases never wait.** Acquisition is all-or-nothing and returns the
   holder and intent on conflict; there is no hold-and-wait, so no deadlock.
 - **Unobserved means tainted.** Sessions start unobserved; only a harness
@@ -178,6 +180,59 @@ entry format, so they have their own version
   - A symbol merge that brought nothing of `theirs` into a file that
     differs goes to the line merge too. So a change only of layout between
     symbols is applied, not dropped, or reported as a conflict.
+- **Engine 3** tells a type's definition from its members (issue #41). Up
+  to engine 2, changing a struct's fields or a class header took a lease on
+  `Type`, which covers every method and refuses every `insert` on the type,
+  so one agent on a field stopped all the others. Besides, a lease on
+  `impl:Type` overlapped nothing named `Type.method`, and the merge then
+  refused what the leases had allowed, but only when the header was the
+  later of the two changes.
+  - `Type.<def>` is the type's own text: the header, fields, decorators,
+    class-level statements and, for Rust, every `impl` header of the type.
+    Containers have one, and so do declarations whose members stand beside
+    them, like a Rust `struct` or a Go `type` (`TYPE_KINDS` in `extract.rs`).
+    `Type` itself keeps its meaning, the whole type, and covers `Type.<def>`.
+  - **No new log format, and leases are decided as before.** By name
+    `Type.<def>` is already a member of `Type`, so `covers` and
+    `leases_conflict` give the right answer as they stand: it overlaps
+    neither `Type.method` nor `insert Type`. Only the facts changed, and they
+    are recorded with their engine. `impl:Type` stays out of the hierarchy,
+    because changing `ancestors` would change old decisions in a replay.
+  - **One name for one change.** `Sym::changed_unit` is what facts report
+    and what the merge conflicts on, so they can not drift apart.
+    `crates/lonca-daemon/tests/type_defs.rs` holds them together for every
+    two changes in five languages: what the merge refuses, the leases have
+    refused first, and what can be held at once merges into both changes.
+    The reverse does not hold on purpose: a struct and an `impl` header are
+    one unit for a lease, and the merge could take them apart.
+  - **The merge does not depend on the order of the queue.** A container
+    changed on both sides takes `t`'s own text when `o`'s is unchanged, by
+    running the same walk the other way round and replacing the container.
+    Own text changed the same way on both sides is no conflict. Own text
+    changed two ways is a conflict on `Type.<def>`, and the members still
+    merge, so a sync brings in everything else.
+  - **An `impl` taken out** has no lease that reaches its members, so facts
+    report its members as deletes and `Type` as an edit, instead of a delete
+    of `impl:Type`.
+  - **An addition must come through.** Where a new member goes in a
+    container with no member to stand beside is found in the text, and a
+    string or a comment can fool it while the file still parses. So from
+    engine 3 a symbol merge whose result lacks a symbol either side added
+    goes to the line merge, and in a sync the file stays local.
+  - **Layout of the container comes from `t`** when the walk runs the other
+    way round: blank lines or line endings that `o` changed around its
+    members are not kept, as for any text the comparison calls layout.
+  - **A moved `impl` is its type**, for the same reason as one taken out.
+    Moves go to the line merge, which can still conflict on nearby lines.
+  - **Scopes.** Facts of engine 3 and later check `Type.<def>` as `Type`, and
+    the literal name also matches. `Type` reaches it, which from this engine
+    includes the `impl` headers that used to be `impl:Type`. `Type.*`, the
+    members, did not reach the type's own text and still does not. This takes
+    `symbols_engine` as an input of `decide()`, because before engine 3
+    `T.<def>` in facts can only be a document section called `<def>`, and
+    old entries must replay as decided. A lease request has no engine and is
+    checked as it always was: a session scoped to exactly `Type` leases
+    `Type`, the whole type.
 
 ## Harness profiles
 

@@ -234,32 +234,44 @@ fn diff_level(
                 if b.text(old) == n.text(new) {
                     continue;
                 }
+                let unit = sym_id(path, &b.changed_unit(n, engine));
                 if b.container && n.container {
                     if b.own_at(engine) != n.own_at(engine) {
-                        f.edits.push(sym_id(path, &n.name));
+                        f.edits.push(unit.clone());
                     }
                     let (bc, nc) = (&b.children[..], &n.children[..]);
                     diff_level(engine, path, (bc, old), (nc, new), f);
                 } else {
-                    f.edits.push(sym_id(path, &n.name));
+                    f.edits.push(unit.clone());
                 }
                 if let (Some(bs), Some(ns)) = (&b.signature, &n.signature)
                     && bs != ns
                 {
-                    f.signature_changes.push(sym_id(path, &n.name));
+                    f.signature_changes.push(unit);
                 }
             }
         }
     }
     for b in bs {
-        if !nm.contains_key(b.name.as_str()) {
-            f.deletes.push(sym_id(path, &b.name));
+        if nm.contains_key(b.name.as_str()) {
+            continue;
+        }
+        match b.impl_of(engine) {
+            // No lease on an `impl` reaches the members named after its
+            // type, so the type is what stands for the block.
+            Some(ty) => {
+                f.edits.push(sym_id(path, ty));
+                let members = b.children.iter().map(|c| sym_id(path, &c.name));
+                f.deletes.extend(members);
+            }
+            None => f.deletes.push(sym_id(path, &b.name)),
         }
     }
     if engine >= ENGINE_EXACT {
         let [a, b]: [Vec<&str>; 2] = [bs, ns].map(|l| l.iter().map(|s| s.name.as_str()).collect());
         for name in moved(&a, &b) {
-            f.edits.push(sym_id(path, &name));
+            let ty = nm.get(name.as_str()).and_then(|s| s.impl_of(engine));
+            f.edits.push(sym_id(path, ty.unwrap_or(&name)));
         }
     }
 }
@@ -293,6 +305,62 @@ mod tests {
         analyze(engine, &map(&old), &map(&new), &read)
             .unwrap()
             .facts
+    }
+
+    /// A type's own text is `Type.<def>` from engine 3, in every list that
+    /// names it, and older engines keep the name they recorded.
+    #[test]
+    fn engine_3_reports_the_definition_of_a_type() {
+        let (old, new) = (
+            "struct S<T> {\n    a: T,\n}\n",
+            "struct S<U> {\n    a: U,\n}\n",
+        );
+        let f = section_facts(3, "a.rs", old, new);
+        assert_eq!(f.edits, ["a.rs#S.<def>"]);
+        assert_eq!(f.signature_changes, ["a.rs#S.<def>"]);
+        let f = section_facts(2, "a.rs", old, new);
+        assert_eq!(f.edits, ["a.rs#S"]);
+        assert_eq!(f.signature_changes, ["a.rs#S"]);
+
+        let (old, new) = ("class A:\n    x = 1\n", "class A:\n    x = 2\n");
+        assert_eq!(section_facts(3, "a.py", old, new).edits, ["a.py#A.<def>"]);
+        assert_eq!(section_facts(2, "a.py", old, new).edits, ["a.py#A"]);
+
+        let f = section_facts(3, "a.rs", "fn f(a: u8) {}\n", "fn f(a: u16) {}\n");
+        assert_eq!(f.edits, ["a.rs#f"]);
+        assert_eq!(f.signature_changes, ["a.rs#f"]);
+    }
+
+    /// A move goes to the line merge, which sees the members of the block.
+    #[test]
+    fn an_impl_that_moves_is_its_type() {
+        let old = "impl S {\n    fn a() {}\n}\n\nfn f() {}\n";
+        let new = "fn f() {}\n\nimpl S {\n    fn a() {}\n}\n";
+        let f = section_facts(3, "a.rs", old, new);
+        assert_eq!(f.edits, ["a.rs#S", "a.rs#f"]);
+        let f = section_facts(2, "a.rs", old, new);
+        assert_eq!(f.edits, ["a.rs#f", "a.rs#impl:S"]);
+    }
+
+    #[test]
+    fn an_impl_taken_out_is_its_type_and_its_members() {
+        let old = "struct S;\n\nimpl S {\n    fn a() {}\n}\n\nimpl R for S {\n    fn b() {}\n}\n";
+        let new = "struct S;\n\nimpl R for S {\n    fn b() {}\n}\n";
+        let f = section_facts(3, "a.rs", old, new);
+        assert_eq!(f.edits, ["a.rs#S"]);
+        assert_eq!(f.deletes, ["a.rs#S.a"]);
+        let f = section_facts(2, "a.rs", old, new);
+        assert_eq!(f.edits, Vec::<String>::new());
+        assert_eq!(f.deletes, ["a.rs#impl:S"]);
+
+        let new = "struct S;\n\nimpl S {\n    fn a() {}\n}\n";
+        let f = section_facts(3, "a.rs", old, new);
+        assert_eq!(f.edits, ["a.rs#S"]);
+        assert_eq!(f.deletes, ["a.rs#S.R.b"]);
+        // A class taken out is a delete of the class, as it always was.
+        let f = section_facts(3, "a.py", "class A:\n    x = 1\n\nb = 2\n", "b = 2\n");
+        assert_eq!(f.deletes, ["a.py#A"]);
+        assert_eq!(f.edits, Vec::<String>::new());
     }
 
     #[test]

@@ -105,6 +105,10 @@ unknown method: `unknown_method`, whatever the token.
   directories outside the workspace the agent may write to: writes
   there are allowed and not observed, reads there do not taint, nothing
   there can be proposed. A child scope may keep or drop them, not add.
+- **`path#Type.<def>`**: a type's own text (fields, header, for Rust the
+  `impl` headers), apart from its methods. `path#Type` is the whole type and
+  covers it. Facts report it from symbol engine 3 on; the MCP tool `symbols`
+  gives it as `def`.
 - **lease item**: `{"symbol": "path#Qualified.name", "kind": "edit" |
   "insert" | "rename"}`; for `insert` the symbol is the container
   (`path#Type` or `path#<file>`). Markdown, TOML, JSON and YAML files

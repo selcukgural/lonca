@@ -8,8 +8,26 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
 
-use crate::engine::ENGINE_EXACT;
+use lonca_core::ops::DEF;
+
+use crate::engine::{ENGINE_DEFS, ENGINE_EXACT};
 use crate::lang::Lang;
+
+/// Declarations with a definition of their own even with no members in the
+/// file's tree: a Rust `struct` or a Go `type`, whose methods stand beside
+/// them. The names hold across tree-sitter grammars, so a new language needs
+/// an entry only for a kind of its own.
+const TYPE_KINDS: &[&str] = &[
+    "struct_item",
+    "enum_item",
+    "union_item",
+    "type_item",
+    "type_declaration",
+    "interface_declaration",
+    "type_alias_declaration",
+    "enum_declaration",
+    "record_declaration",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sym {
@@ -26,6 +44,9 @@ pub struct Sym {
     pub own_exact: String,
     /// Normalized declaration header for callables.
     pub signature: Option<String>,
+    /// The type whose definition this symbol's own text belongs to: itself,
+    /// the type of a Rust `impl`, or nothing for what has no members.
+    pub def_of: Option<String>,
     pub is_test: bool,
     pub skipped: bool,
     pub container: bool,
@@ -44,6 +65,30 @@ impl Sym {
         } else {
             &self.own
         }
+    }
+
+    /// What a change of this symbol into `new` is a change of: the one name
+    /// that facts report and the merge conflicts on, so that a lease covers
+    /// the unit the merge works with. A symbol that changed its shape is
+    /// changed whole.
+    pub fn changed_unit(&self, new: &Sym, engine: u32) -> String {
+        match &new.def_of {
+            Some(ty)
+                if engine >= ENGINE_DEFS
+                    && self.def_of == new.def_of
+                    && self.container == new.container =>
+            {
+                format!("{ty}.{DEF}")
+            }
+            _ => new.name.clone(),
+        }
+    }
+
+    /// The type of a Rust `impl`: its members are named after the type and
+    /// are not its children by name.
+    pub fn impl_of(&self, engine: u32) -> Option<&str> {
+        let ty = self.def_of.as_deref().filter(|ty| *ty != self.name);
+        ty.filter(|_| engine >= ENGINE_DEFS)
     }
 }
 
@@ -219,6 +264,8 @@ struct Def<'t> {
     /// Prefix for members when it differs from `name` (Rust `impl` blocks:
     /// the block is `impl:Client`, its methods are `Client.method`).
     member_prefix: Option<String>,
+    /// The type a Rust `impl` is for.
+    impl_for: Option<String>,
     /// The node holding nested members, if this is a container.
     members: Option<Node<'t>>,
     /// The function/method body, used to cut the signature.
@@ -307,6 +354,7 @@ impl<'s> Extractor<'s> {
             name.map(|name| Def {
                 name,
                 member_prefix: None,
+                impl_for: None,
                 members: None,
                 body: n.child_by_field_name("body"),
                 header_start: n.start_byte(),
@@ -316,6 +364,7 @@ impl<'s> Extractor<'s> {
             name.map(|name| Def {
                 name,
                 member_prefix: None,
+                impl_for: None,
                 members: n.child_by_field_name(field),
                 body: None,
                 header_start: n.start_byte(),
@@ -344,10 +393,11 @@ impl<'s> Extractor<'s> {
                     let ty = Self::base_type_name(&name("type")?);
                     let full = match name("trait") {
                         Some(tr) => format!("{ty}.{}", Self::base_type_name(&tr)),
-                        None => ty,
+                        None => ty.clone(),
                     };
                     let mut d = container(Some(format!("impl:{full}")), "body")?;
                     d.member_prefix = Some(full);
+                    d.impl_for = Some(ty).filter(|ty| !ty.is_empty());
                     Some(d)
                 }
                 _ => None,
@@ -505,15 +555,23 @@ impl<'s> Extractor<'s> {
             } else {
                 format!("{base}~{count}")
             };
+            let under_prefix = |name: &String| match prefix {
+                "" => name.clone(),
+                _ => format!("{prefix}.{name}"),
+            };
             let mut children_syms = Vec::new();
             if let Some(m) = def.members {
                 let member_prefix = match &def.member_prefix {
-                    Some(p) if prefix.is_empty() => p.clone(),
-                    Some(p) => format!("{prefix}.{p}"),
+                    Some(p) => under_prefix(p),
                     None => qualified.clone(),
                 };
                 self.level(m, &member_prefix, &mut children_syms, None, seen);
             }
+            let is_type = def.members.is_some() || TYPE_KINDS.contains(&def_node.kind());
+            let def_of = match &def.impl_for {
+                Some(ty) => Some(under_prefix(ty)),
+                None => is_type.then(|| qualified.clone()),
+            };
             let end = child.end_byte();
             let cut: Vec<(usize, usize)> = children_syms.iter().map(|s| (s.start, s.end)).collect();
             let mut own_exact = String::new();
@@ -537,6 +595,7 @@ impl<'s> Extractor<'s> {
                 own,
                 own_exact,
                 signature,
+                def_of,
                 is_test,
                 skipped,
                 container: def.members.is_some(),
@@ -675,6 +734,94 @@ fn find_descendant<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn find<'a>(s: &'a [Sym], name: &str) -> &'a Sym {
+        fn walk<'a>(s: &'a [Sym], name: &str) -> Option<&'a Sym> {
+            let inner = |x: &'a Sym| walk(&x.children, name);
+            s.iter()
+                .find(|x| x.name == name)
+                .or(s.iter().find_map(inner))
+        }
+        walk(s, name).unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    /// Who has a definition: containers and types, and an `impl` has its
+    /// type's, also inside a module and for a trait.
+    #[test]
+    fn definitions_belong_to_types() {
+        let src = "struct S;\nenum E { A }\ntype T = u8;\nfn f() {}\nconst C: u8 = 1;\n\
+                   trait R {}\nimpl S {}\nimpl From<u8> for S {}\n\
+                   mod m {\n    struct S;\n    impl S {}\n    impl R for S {}\n}\n";
+        let p = parse(Lang::Rust, src);
+        for (name, want) in [
+            ("S", Some("S")),
+            ("E", Some("E")),
+            ("T", Some("T")),
+            ("R", Some("R")),
+            ("f", None),
+            ("C", None),
+            ("impl:S", Some("S")),
+            ("impl:S.From", Some("S")),
+            ("m", Some("m")),
+            ("m.S", Some("m.S")),
+            ("m.impl:S", Some("m.S")),
+            ("m.impl:S.R", Some("m.S")),
+        ] {
+            assert_eq!(find(&p.syms, name).def_of.as_deref(), want, "{name}");
+        }
+        let g = parse(
+            Lang::Go,
+            "package p\ntype T struct{}\nfunc (t T) M() {}\nfunc F() {}\n",
+        );
+        assert_eq!(find(&g.syms, "T").def_of.as_deref(), Some("T"));
+        assert_eq!(find(&g.syms, "T.M").def_of, None);
+        assert_eq!(find(&g.syms, "F").def_of, None);
+    }
+
+    /// One name for one change, and a symbol that changed shape is whole.
+    #[test]
+    fn a_change_is_of_the_definition_only_for_the_same_shape() {
+        let p = parse(Lang::Rust, "struct S;\nfn f() {}\nmod m {}\nimpl S {}\n");
+        let [s, f, m, i] = ["S", "f", "m", "impl:S"].map(|n| find(&p.syms, n));
+        assert_eq!(s.changed_unit(s, 3), "S.<def>");
+        assert_eq!(s.changed_unit(s, 2), "S");
+        assert_eq!(f.changed_unit(f, 3), "f");
+        assert_eq!(m.changed_unit(m, 3), "m.<def>");
+        assert_eq!(i.changed_unit(i, 3), "S.<def>");
+        assert_eq!(i.changed_unit(i, 2), "impl:S");
+        // Same name, other shape: a `mod m;` and a `mod m {}`.
+        let q = parse(Lang::Rust, "mod m;\nfn S() {}\n");
+        let (m2, s2) = (find(&q.syms, "m"), find(&q.syms, "S"));
+        assert_eq!(m.changed_unit(m2, 3), "m");
+        assert_eq!(m2.changed_unit(m, 3), "m");
+        assert_eq!(s.changed_unit(s2, 3), "S");
+        assert_eq!(s2.changed_unit(s, 3), "S");
+        // A `record` with no body is a type and no container.
+        let c = parse(Lang::CSharp, "class R { }\n");
+        let d = parse(Lang::CSharp, "record R(int A);\n");
+        let (cr, dr) = (find(&c.syms, "R"), find(&d.syms, "R"));
+        assert_eq!(dr.changed_unit(dr, 3), "R.<def>");
+        assert_eq!(cr.changed_unit(dr, 3), "R");
+        assert_eq!(dr.changed_unit(cr, 3), "R");
+    }
+
+    /// A type with no plain name has no definition to share.
+    #[test]
+    fn an_impl_of_a_projected_type_is_its_own_definition() {
+        let p = parse(Lang::Rust, "impl R for <T as X>::Y {}\n");
+        let i = &p.syms[0];
+        assert_eq!(i.def_of.as_ref(), Some(&i.name));
+        assert_eq!(i.impl_of(3), None);
+    }
+
+    #[test]
+    fn only_an_impl_stands_for_another_type() {
+        let p = parse(Lang::Rust, "struct S;\nimpl S {}\nfn f() {}\n");
+        assert_eq!(find(&p.syms, "impl:S").impl_of(3), Some("S"));
+        assert_eq!(find(&p.syms, "impl:S").impl_of(2), None);
+        assert_eq!(find(&p.syms, "S").impl_of(3), None);
+        assert_eq!(find(&p.syms, "f").impl_of(3), None);
+    }
 
     fn names(p: &Parsed) -> Vec<String> {
         fn walk(s: &[Sym], out: &mut Vec<String>) {

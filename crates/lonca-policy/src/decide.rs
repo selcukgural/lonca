@@ -17,9 +17,9 @@ use std::collections::BTreeSet;
 use lonca_core::oplog::FORMAT_LEASE_LIVENESS;
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
-    Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, Facts,
-    HumanKey, HumanSignature, LeaseItem, LeaseKind, MAX_UNPROPOSED_PATHS, NegotiationMsg, ObsKind,
-    Observation, ObservationLevel, Op, Outcome, Scope,
+    Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, ENGINE_DEFS,
+    Facts, HumanKey, HumanSignature, LeaseItem, LeaseKind, MAX_UNPROPOSED_PATHS, NegotiationMsg,
+    ObsKind, Observation, ObservationLevel, Op, Outcome, Scope,
 };
 use lonca_core::paths::{
     path_matches, path_pattern_within, symbol_matches, symbol_pattern_within,
@@ -40,6 +40,8 @@ pub struct Ctx<'a> {
     pub policy: &'a PolicyBundle,
     pub facts: Option<&'a Facts>,
     pub evidence: &'a [Attestation],
+    /// The symbol engine that computed `facts`: what their names mean.
+    pub symbols_engine: Option<u32>,
 }
 
 #[derive(Default)]
@@ -1157,10 +1159,16 @@ fn propose(
             if let Some(pats) = &s.scope.symbols {
                 for sym in &touched {
                     let name = symbols::split(sym).map(|(_, n)| n).unwrap_or(sym);
+                    // Who may change a type's own text keeps that right
+                    // now that facts call it `Type.<def>`. `Type.*`, the
+                    // members, did not reach it and does not.
+                    let defs = ctx.symbols_engine.is_some_and(|v| v >= ENGINE_DEFS);
+                    let of = symbols::def_of(name).filter(|_| defs);
                     let ok = if name.starts_with('<') {
                         pats.iter().any(|p| p == "*")
                     } else {
-                        pats.iter().any(|p| symbol_matches(p, name))
+                        let scoped = |p: &String| symbol_matches(p, of.unwrap_or(name));
+                        pats.iter().any(|p| p == name || scoped(p))
                     };
                     if !ok {
                         v.deny(format!("scope_symbol:{sym}"));

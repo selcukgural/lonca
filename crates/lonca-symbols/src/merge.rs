@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
-use crate::engine::{ENGINE_EXACT, ENGINE_SECTIONS};
+use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_SECTIONS};
 use crate::extract::{Parsed, Sym, moved, normalize, parse};
 use crate::lang::Lang;
 use crate::sections::{self, Format};
@@ -196,7 +196,44 @@ pub fn merge_around_conflicts(
     if m.moved {
         return None;
     }
-    m.apply().filter(|text| !parse(lang, text).has_error)
+    let conflicts = std::mem::take(&mut m.conflicts);
+    let sides = [&pb, &po, &pt];
+    m.apply()
+        .filter(|text| holds_up(engine, path, lang, text, sides, &conflicts))
+}
+
+fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
+    for s in syms {
+        out.insert(&s.name);
+        all_names(&s.children, out);
+    }
+}
+
+/// `text` parses, and from [`ENGINE_DEFS`] on it has every symbol a side
+/// added, unless that symbol is in `conflicts`. A text insert can land in a
+/// string or a comment and still parse, and the addition would be gone.
+fn holds_up(
+    engine: u32,
+    path: &str,
+    lang: Lang,
+    text: &str,
+    [pb, po, pt]: [&Parsed; 3],
+    conflicts: &[String],
+) -> bool {
+    let merged = parse(lang, text);
+    if merged.has_error {
+        return false;
+    }
+    if engine < ENGINE_DEFS {
+        return true;
+    }
+    let (mut base, mut sides, mut there) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    all_names(&pb.syms, &mut base);
+    all_names(&po.syms, &mut sides);
+    all_names(&pt.syms, &mut sides);
+    all_names(&merged.syms, &mut there);
+    let mut added = sides.difference(&base);
+    added.all(|n| there.contains(n) || conflicts.contains(&format!("{path}#{n}")))
 }
 
 enum Sm {
@@ -342,19 +379,29 @@ impl<'a> Merger<'a> {
                         self.replace(o_sym.start, o_sym.end, t_text.to_string());
                         continue;
                     }
-                    let all_containers = b_sym.container && o_sym.container && ts_sym.container;
-                    let own_same = ts_sym.own_at(self.engine) == b_sym.own_at(self.engine);
-                    if all_containers && own_same {
-                        let (bc, oc, tc) = (
-                            b_sym.children.clone(),
-                            o_sym.children.clone(),
-                            ts_sym.children.clone(),
-                        );
-                        let o_owned = (*o_sym).clone();
-                        self.level(&bc, &oc, &tc, Some(&o_owned));
-                    } else {
-                        self.conflict(name);
+                    let unit = b_sym.changed_unit(ts_sym, self.engine);
+                    if !(b_sym.container && o_sym.container && ts_sym.container) {
+                        self.conflict(&unit);
+                        continue;
                     }
+                    let defs = self.engine >= ENGINE_DEFS;
+                    let own = |s: &Sym| s.own_at(self.engine).to_string();
+                    let (own_b, own_o, own_t) = (own(b_sym), own(o_sym), own(ts_sym));
+                    if own_t != own_b && !(defs && own_t == own_o) {
+                        if defs && own_o == own_b && self.around_theirs(b_sym, o_sym, ts_sym) {
+                            continue;
+                        }
+                        self.conflict(&unit);
+                        if !defs {
+                            continue;
+                        }
+                    }
+                    self.level(
+                        &b_sym.children,
+                        &o_sym.children,
+                        &ts_sym.children,
+                        Some(o_sym),
+                    );
                 }
             }
         }
@@ -371,6 +418,26 @@ impl<'a> Merger<'a> {
                 }
             }
         }
+    }
+
+    /// `t` changed the container's own text and `o` only its members. The
+    /// result is `t`'s container with the members of both, so the same walk
+    /// runs the other way round and replaces the container in `o`. `false`
+    /// when the members conflict: nothing is done, and that walk is the
+    /// caller's to make, in `o`, so that conflicts keep the text of `o`.
+    fn around_theirs(&mut self, b: &Sym, o: &Sym, t: &Sym) -> bool {
+        let mut m = Merger::new(self.engine, self.path, self.b, self.t, self.o);
+        m.level(&b.children, &t.children, &o.children, Some(t));
+        if !m.conflicts.is_empty() {
+            return false;
+        }
+        self.note_moves(&names(&b.children), &names(&t.children));
+        self.moved |= m.moved;
+        match m.apply_within(t.start, t.end) {
+            Some(text) => self.replace(o.start, o.end, text),
+            None => self.moved = true,
+        }
+        true
     }
 
     fn note_moves(&mut self, base: &[&str], theirs: &[&str]) {
@@ -415,7 +482,13 @@ impl<'a> Merger<'a> {
         }
     }
 
-    fn apply(mut self) -> Option<String> {
+    fn apply(self) -> Option<String> {
+        let end = self.o.len();
+        self.apply_within(0, end)
+    }
+
+    /// `o` from `from` to `to` with the edits applied, all of them inside.
+    fn apply_within(mut self, from: usize, to: usize) -> Option<String> {
         self.edits.sort_by(|a, b| {
             a.start
                 .cmp(&b.start)
@@ -427,14 +500,14 @@ impl<'a> Merger<'a> {
                 return None;
             }
         }
-        let mut out = String::with_capacity(self.o.len());
-        let mut pos = 0;
+        let mut out = String::with_capacity(to - from);
+        let mut pos = from;
         for e in &self.edits {
             out.push_str(&self.o[pos..e.start]);
             out.push_str(&e.text);
             pos = e.end;
         }
-        out.push_str(&self.o[pos..]);
+        out.push_str(&self.o[pos..to]);
         Some(out)
     }
 }
@@ -471,7 +544,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         // Nothing of `theirs` came through, though the files differ: only
         // the line merge sees what it changed.
         Some(text) if engine >= ENGINE_EXACT && text == o => Sm::Fallback,
-        Some(text) if !parse(lang, &text).has_error => Sm::Merged(text),
+        Some(text) if holds_up(engine, path, lang, &text, [&pb, &po, &pt], &[]) => Sm::Merged(text),
         _ => Sm::Fallback,
     }
 }
@@ -479,6 +552,166 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CLASS: &str = "class A:\n    x = 1\n\n    def a(self):\n        return 1\n\n    def b(self):\n        return 2\n\n    def c(self):\n        return 3\n";
+
+    fn class(from: &str, to: &str) -> String {
+        assert_eq!(CLASS.matches(from).count(), 1, "{from}");
+        CLASS.replace(from, to)
+    }
+
+    /// Which side changes the header and which a method does not matter
+    /// any more: the queue decides that, not the agents.
+    #[test]
+    fn a_header_and_a_method_merge_in_either_order() {
+        let header = class("class A:", "class A(B):");
+        let method = class("return 1", "return 10");
+        let both = header.replace("return 1", "return 10");
+        let merge = |engine, o, t| merge_text_at(engine, "a.py", CLASS, o, t);
+        assert_eq!(merge(3, &header, &method).unwrap(), both);
+        assert_eq!(merge(3, &method, &header).unwrap(), both);
+        // Engines up to 2 stay as they were: frozen, and only one way round.
+        assert_eq!(merge(2, &header, &method).unwrap(), both);
+        assert_eq!(merge(2, &method, &header), Err(vec!["a.py#A".to_string()]));
+    }
+
+    #[test]
+    fn the_same_header_on_both_sides_is_no_conflict() {
+        let header = class("class A:", "class A(B):");
+        let o = header.replace("return 1", "return 10");
+        let t = header.replace("return 2", "return 20");
+        let want = o.replace("return 2", "return 20");
+        assert_eq!(merge_text_at(3, "a.py", CLASS, &o, &t).unwrap(), want);
+        let c = merge_text_at(2, "a.py", CLASS, &o, &t);
+        assert_eq!(c, Err(vec!["a.py#A".to_string()]));
+    }
+
+    /// The name is the one facts report, and a lease covers.
+    #[test]
+    fn two_headers_conflict_on_the_definition() {
+        let o = class("class A:", "class A(B):").replace("return 1", "return 10");
+        let t = class("class A:", "class A(C):").replace("return 2", "return 20");
+        let c = merge_text_at(3, "a.py", CLASS, &o, &t);
+        assert_eq!(c, Err(vec!["a.py#A.<def>".to_string()]));
+    }
+
+    /// A conflict among the members, with a header changed on one side:
+    /// the definition is in `conflicts` too, since it did not come through.
+    #[test]
+    fn a_conflict_around_a_header_names_both() {
+        let o = class("return 1", "return 10");
+        let t = class("class A:", "class A(B):")
+            .replace("return 1", "return 11")
+            .replace("return 2", "return 20");
+        let c = merge_text_at(3, "a.py", CLASS, &o, &t);
+        let want = ["a.py#A.<def>", "a.py#A.a"].map(String::from);
+        assert_eq!(c, Err(want.to_vec()));
+        // In a sync, what can come in does, and the rest stays local.
+        let kept = merge_around_conflicts(3, "a.py", CLASS, &o, &t).unwrap();
+        assert_eq!(kept, o.replace("return 2", "return 20"));
+        let t = class("class A:", "class A(B):").replace("return 2", "return 20");
+        let o = class("class A:", "class A(C):");
+        let kept = merge_around_conflicts(3, "a.py", CLASS, &o, &t).unwrap();
+        assert_eq!(kept, o.replace("return 2", "return 20"));
+    }
+
+    /// Moved members can not be merged in place, on either side.
+    #[test]
+    fn a_move_beside_a_header_goes_to_the_line_merge() {
+        let (a, b) = (
+            "    def a(self):\n        return 1\n\n",
+            "    def b(self):\n        return 2\n\n",
+        );
+        let swapped = class(&format!("{a}{b}"), &format!("{b}{a}"));
+        let header = class("class A:", "class A(B):");
+        let want = swapped.replace("class A:", "class A(B):");
+        assert_eq!(
+            merge_text_at(3, "a.py", CLASS, &swapped, &header).unwrap(),
+            want
+        );
+        assert_eq!(
+            merge_text_at(3, "a.py", CLASS, &header, &swapped).unwrap(),
+            want
+        );
+
+        let t = swapped.replace("class A:", "class A(B):");
+        let edited = class("return 3", "return 30");
+        let want = t.replace("return 3", "return 30");
+        assert_eq!(merge_text_at(3, "a.py", CLASS, &edited, &t).unwrap(), want);
+
+        // Moved on both sides, and not the same way: the lines say conflict.
+        let o = class(&format!("{a}{b}"), &format!("{b}{a}"));
+        let (b2, c) = (b.trim_end(), "    def c(self):\n        return 3");
+        let t = class(&format!("{b2}\n\n{c}"), &format!("{c}\n\n{b2}"));
+        let t = t.replace("class A:", "class A(B):");
+        let c = merge_text_at(3, "a.py", CLASS, &o, &t);
+        assert_eq!(c, Err(vec!["a.py#<file>".to_string()]));
+    }
+
+    /// The place for a new member is found in the text, and text can fool
+    /// it: what does not come through as a symbol goes to the line merge.
+    #[test]
+    fn an_addition_that_lands_in_a_string_or_a_comment_is_not_merged() {
+        let b = "class A:\n    \"\"\"Use {x}.\"\"\"\n";
+        let o = format!("{b}\n    def m(self):\n        return 1\n");
+        let t = b.replace("class A:", "class A(B):");
+        let want = o.replace("class A:", "class A(B):");
+        assert_eq!(merge_text_at(3, "a.py", b, &o, &t).unwrap(), want);
+        assert_eq!(merge_text_at(3, "a.py", b, &t, &o).unwrap(), want);
+
+        let (b, o, t) = (
+            "impl S {\n}\n",
+            "impl S { // note\n}\n",
+            "impl S { fn m() {} }\n",
+        );
+        let want = Err(vec!["a.rs#<file>".to_string()]);
+        assert_eq!(merge_text_at(3, "a.rs", b, o, t), want);
+        assert_eq!(merge_text_at(3, "a.rs", b, t, o), want);
+        // Engine 2 keeps what it wrote.
+        assert_eq!(
+            merge_text_at(2, "a.rs", b, o, t).unwrap(),
+            "impl S { // note fn m() {}\n}\n"
+        );
+        // In a sync, such a file stays local as a whole.
+        assert_eq!(merge_around_conflicts(3, "a.rs", b, o, t), None);
+        assert!(merge_around_conflicts(2, "a.rs", b, o, t).is_some());
+    }
+
+    /// An addition in conflict has no place in the middle a sync keeps.
+    #[test]
+    fn a_sync_keeps_going_past_an_addition_in_conflict() {
+        let b = "fn a() {}\n";
+        let o = "fn a() {}\n\nfn n() { o(); }\n";
+        let t = "fn a() { x(); }\n\nfn n() { t(); }\n";
+        let kept = merge_around_conflicts(3, "a.rs", b, o, t).unwrap();
+        assert_eq!(kept, "fn a() { x(); }\n\nfn n() { o(); }\n");
+        let (o, t) = (b, "fn a() { x(); }\n\nfn n() { t(); }\n");
+        let kept = merge_around_conflicts(3, "a.rs", b, o, t).unwrap();
+        assert_eq!(kept, t);
+    }
+
+    /// An `impl` header is the type's definition, and merges like a class's.
+    #[test]
+    fn an_impl_header_merges_with_its_methods() {
+        let b = "struct S;\n\nimpl S {\n    fn a() {}\n\n    fn b() {}\n}\n";
+        let t = b.replace("impl S {", "#[cfg(unix)]\nimpl S {");
+        let o = b.replace("fn a() {}", "fn a() { x(); }");
+        let want = t.replace("fn a() {}", "fn a() { x(); }");
+        assert_eq!(merge_text_at(3, "a.rs", b, &o, &t).unwrap(), want);
+        assert_eq!(merge_text_at(3, "a.rs", b, &t, &o).unwrap(), want);
+        let o = o.replace("impl S {", "#[cfg(windows)]\nimpl S {");
+        assert_eq!(
+            merge_text_at(3, "a.rs", b, &o, &t),
+            Err(vec!["a.rs#S.<def>".to_string()])
+        );
+        // A struct is a leaf: both sides changing it conflict on the unit.
+        let b = "struct S {\n    a: u8,\n}\n";
+        let o = "struct S {\n    a: u16,\n}\n";
+        let t = "struct S {\n    a: u32,\n}\n";
+        let want = |n: &str| Err(vec![format!("a.rs#{n}")]);
+        assert_eq!(merge_text_at(3, "a.rs", b, o, t), want("S.<def>"));
+        assert_eq!(merge_text_at(2, "a.rs", b, o, t), want("S"));
+    }
 
     #[test]
     fn engine_1_merges_by_sections_and_engine_0_by_lines() {

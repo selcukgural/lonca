@@ -88,6 +88,7 @@ impl Chain {
                 policy,
                 facts: sub.facts.as_ref(),
                 evidence: &sub.evidence,
+                symbols_engine: sub.symbols_engine,
             },
         );
         let entry = OpEntry {
@@ -140,6 +141,7 @@ pub fn replay_checked(
                     policy: &policy,
                     facts: e.facts.as_ref(),
                     evidence: &e.evidence,
+                    symbols_engine: e.symbols_engine,
                 },
             );
             if d != e.decision {

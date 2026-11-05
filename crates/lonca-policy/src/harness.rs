@@ -271,6 +271,7 @@ impl Format {
 
 const RULES: &str = "\
 - Before editing a function, method or type, lease it: {tool}lease_acquire with symbols like \"src/file.rs#Type.method\" ({tool}symbols lists them).
+- To change a type's fields or header, lease \"src/file.rs#Type.<def>\", the `def` of the type in {tool}symbols: its methods stay free for others. A lease on \"src/file.rs#Type\" is the whole type and holds them all up.
 {where}
 - {tool}lease_needed says which leases your local changes need and who holds them.
 - Check your changes with {tool}preview, then submit with {tool}propose. Its arguments are `intent` (what you did and why, in a sentence) and, each copied from `facts` in what preview reports: `edits` (existing symbols whose body you changed), `adds` (symbols you added), `deletes` (symbols you deleted), `deleted_files` (files you deleted), `signature_changes` (symbols whose signature you changed), `tests` (test counts: added, modified, deleted, skipped). There is no other argument: symbols go in those lists by what happened to them. A claim that differs from the facts is denied (claim_mismatch:<field>).

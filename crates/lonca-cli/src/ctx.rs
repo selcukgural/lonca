@@ -128,6 +128,12 @@ pub fn denied(r: &Value) -> Result<()> {
     Ok(())
 }
 
+/// The structured reasons of an answer (#48); an answer without any has
+/// none, so `details` is always an array in a command's JSON.
+pub fn details(r: &Value) -> Value {
+    r.get("details").cloned().unwrap_or_else(|| json!([]))
+}
+
 pub fn connect() -> Result<Client> {
     let s = socket();
     Client::connect(&s).map_err(|e| {

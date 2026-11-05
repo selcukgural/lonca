@@ -17,7 +17,7 @@ use lonca_daemon::Client;
 use serde_json::json;
 
 use crate::ctx::{self, call};
-use crate::{human_client, human_client_any, print_decision, submit};
+use crate::{human_client, human_client_any, print_decision, submit_outcome};
 
 /// The human to act as, checked before it is used in file names.
 pub fn name(h: Option<String>) -> Result<String> {
@@ -135,7 +135,7 @@ pub fn rotate(name: &str, repos: &[String], secure_enclave: bool) -> Result<()> 
             human: name.into(),
             key: next.key.clone(),
         };
-        allowed(repo, &submit(&mut c, name, repo, op)?, &mut failed);
+        allowed(repo, &submit_outcome(&mut c, name, repo, op)?, &mut failed);
     }
     if !failed.is_empty() {
         bail!(
@@ -168,7 +168,7 @@ pub fn recovery_key(name: &str, repos: &[String], out: &Path) -> Result<()> {
             human: name.into(),
             key: key.clone(),
         };
-        allowed(repo, &submit(&mut c, name, repo, op)?, &mut failed);
+        allowed(repo, &submit_outcome(&mut c, name, repo, op)?, &mut failed);
     }
     if !failed.is_empty() {
         bail!("recovery key not set in {}", failed.join(", "));
@@ -267,7 +267,7 @@ pub fn daemon_rotate(name: &str, repos: &[String]) -> Result<()> {
         }
         print!("{repo}: ");
         let op = Op::DaemonRotate { key: key.clone() };
-        allowed(repo, &submit(&mut c, name, repo, op)?, &mut failed);
+        allowed(repo, &submit_outcome(&mut c, name, repo, op)?, &mut failed);
     }
     if !failed.is_empty() {
         bail!("not rotated in {}", failed.join(", "));
@@ -310,7 +310,7 @@ pub fn daemon_recover(name: &str, repos: &[String]) -> Result<()> {
         let mut c = human_client(repo, name)?;
         print!("{repo}: ");
         let op = Op::DaemonRecover { key: key.clone() };
-        match submit(&mut c, name, repo, op) {
+        match submit_outcome(&mut c, name, repo, op) {
             Ok(r) => allowed(repo, &r, &mut failed),
             Err(e) => {
                 println!("{e}");

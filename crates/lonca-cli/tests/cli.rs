@@ -1276,6 +1276,39 @@ fn large_trees_are_fetched_in_pages_and_import_warns() {
         text(&out.stderr)
     );
 
+    // With --json the warning is data: nothing outside the JSON on stdout,
+    // nothing as text on stderr.
+    let args = [
+        "init",
+        "imported",
+        "--import",
+        work.to_str().unwrap(),
+        "--json",
+    ];
+    let out = e.cmd(r, &args).output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout).lines().count(),
+        1,
+        "{}",
+        text(&out.stdout)
+    );
+    let init = parse(&text(&out.stdout));
+    assert_eq!(init["repo"], "imported");
+    let warnings = init["warnings"].as_array().unwrap();
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .starts_with("huge.bin is 2097153 bytes"),
+        "{init}"
+    );
+    assert!(
+        !text(&out.stderr).contains("warning"),
+        "{}",
+        text(&out.stderr)
+    );
+
     // Pages of at most 2000 encoded bytes: the workspace still comes whole.
     let budget = |c: &mut Command| {
         c.env("LONCA_FETCH_BUDGET", "2000");
@@ -1927,4 +1960,181 @@ fn mcp_leases_mixed_kinds_says_what_is_needed_and_releases_part_of_a_set() {
     let (err, denied) = mcp.tool("lease_release", json!({"set": "nope"}));
     assert!(!err);
     assert_eq!(denied["decision"]["reasons"][0], "unknown_lease_set");
+}
+
+/// Runs `lonca` and expects a refusal: exit 1, the reason on stderr,
+/// and on stdout what the command printed (its JSON, if it was asked for).
+fn refused(e: &Env, cwd: &Path, args: &[&str], reason: &str) -> String {
+    let out = e.cmd(cwd, args).output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{args:?}: {}",
+        text(&out.stderr)
+    );
+    let stderr = text(&out.stderr);
+    assert!(
+        stderr.contains("denied: ") && stderr.contains(reason),
+        "{stderr}"
+    );
+    text(&out.stdout)
+}
+
+fn parse(s: &str) -> serde_json::Value {
+    serde_json::from_str(s.trim()).unwrap_or_else(|err| panic!("{err}: {s}"))
+}
+
+/// The contract of #77 on the commands it left out (issue #97).
+#[test]
+fn lease_commands_exit_one_on_denial_and_speak_json() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    let second = [
+        "session",
+        "start",
+        "--repo",
+        "demo",
+        "--agent",
+        "codex",
+        "--paths",
+        "src/**",
+        "--workspace",
+        "ws2",
+    ];
+    e.run(r, &second);
+    let ws2 = r.join("ws2");
+
+    let held = parse(&e.run(
+        &ws,
+        &[
+            "lease",
+            "acquire",
+            "src/lib.rs#charge",
+            "-i",
+            "doubling",
+            "--json",
+        ],
+    ));
+    assert_eq!(held["decision"]["outcome"], "allow", "{held}");
+    assert_eq!(held["details"], json!([]));
+    assert!(held["seq"].as_u64().unwrap() > 0, "{held}");
+    let set = held["set"].as_str().unwrap().to_string();
+    assert!(set.starts_with("lse_"), "{held}");
+
+    // Denied: JSON on stdout says who stands in the way, stderr the reason.
+    let args = ["lease", "acquire", "src/lib.rs#charge", "--json"];
+    let denied = parse(&refused(&e, &ws2, &args, "lease_held:src/lib.rs#charge"));
+    assert_eq!(denied["decision"]["outcome"], "deny");
+    let d = &denied["details"][0];
+    assert_eq!(d["code"], "lease_held", "{denied}");
+    assert_eq!(d["holder_agent"], "claude");
+    assert_eq!(d["intent"], "doubling");
+    assert_eq!(d["set"], set.as_str());
+    assert_eq!(d["pinned_to"], serde_json::Value::Null);
+    // Without --json the denial exits the same way and names no set.
+    let args = ["lease", "acquire", "src/lib.rs#charge"];
+    let out = refused(&e, &ws2, &args, "lease_held");
+    assert!(!out.contains("lease set"), "{out}");
+
+    // Somebody else's set can be neither renewed nor released.
+    refused(&e, &ws2, &["lease", "renew", &set], "not_own_lease");
+    let args = ["lease", "release", &set, "--json"];
+    let denied = parse(&refused(&e, &ws2, &args, "not_own_lease"));
+    assert_eq!(denied["set"], set.as_str());
+    assert_eq!(denied["decision"]["outcome"], "deny");
+    assert_eq!(denied["details"], json!([]));
+
+    // Allowed: exit 0, the set they were given, and the text form too.
+    let renewed = parse(&e.run(&ws, &["lease", "renew", &set, "--json"]));
+    assert_eq!(renewed["set"], set.as_str());
+    assert_eq!(renewed["decision"]["outcome"], "allow", "{renewed}");
+    assert!(e.run(&ws, &["lease", "renew", &set]).contains("allow"));
+
+    // A proposal without its lease names the symbol and the kind.
+    let edited = "pub fn charge(a: u64) -> u64 {\n    a\n}\n\npub fn refund(a: u64) -> u64 {\n    a * 2\n}\n";
+    std::fs::write(ws2.join("src/lib.rs"), edited).unwrap();
+    let args = ["propose", "-i", "x", "--accept-facts", "--json"];
+    let denied = parse(&refused(&e, &ws2, &args, "lease_missing"));
+    assert_eq!(denied["status"], "denied");
+    let d = &denied["details"][0];
+    assert_eq!(d["code"], "lease_missing", "{denied}");
+    assert_eq!(d["symbol"], "src/lib.rs#refund");
+    assert_eq!(d["needed_kind"], "edit");
+
+    // The held symbol, pinned to a change in flight: the detail says so.
+    let doubled = "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n";
+    std::fs::write(ws.join("src/lib.rs"), doubled).unwrap();
+    let args = ["propose", "-i", "double", "--accept-facts", "--json"];
+    let proposed = parse(&e.run(&ws, &args));
+    assert_eq!(proposed["status"], "pending", "{proposed}");
+    assert_eq!(proposed["details"], json!([]));
+    let args = ["lease", "acquire", "src/lib.rs#charge", "--json"];
+    let denied = parse(&refused(&e, &ws2, &args, "lease_held"));
+    assert_eq!(denied["details"][0]["pinned_to"], proposed["change"]);
+
+    // A set nobody pinned goes with an answer in JSON too.
+    let got = parse(&e.run(&ws2, &["lease", "acquire", "src/lib.rs#refund", "--json"]));
+    let free = got["set"].as_str().unwrap();
+    let released = parse(&e.run(&ws2, &["lease", "release", free, "--json"]));
+    assert_eq!(released["set"], free);
+    assert_eq!(released["decision"]["outcome"], "allow", "{released}");
+    assert_eq!(released["seq"], got["seq"].as_u64().unwrap() + 1);
+    assert_eq!(status_json(&e)["leases"].as_array().unwrap().len(), 1);
+}
+
+/// Every command that signs reports a denial in its exit code, not only
+/// the ones a runner drives (issue #97).
+#[test]
+fn a_human_operation_that_is_denied_exits_one() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    let args = [
+        "session", "revoke", "ses_nope", "--repo", "demo", "--reason", "x",
+    ];
+    refused(&e, r, &args, "unknown_session");
+
+    // Undoing a lease that is gone: the compensating release is refused.
+    let got = parse(&e.run(&ws, &["lease", "acquire", "src/lib.rs#charge", "--json"]));
+    let seq = got["seq"].as_u64().unwrap().to_string();
+    e.run(&ws, &["lease", "release", got["set"].as_str().unwrap()]);
+    let args = ["undo", &seq, "--repo", "demo"];
+    refused(&e, r, &args, "unknown_lease_set");
+
+    // Revert goes on past a refused step and ends with the refusal.
+    let args = [
+        "revert",
+        "--actor",
+        "agent:claude",
+        "--apply",
+        "--repo",
+        "demo",
+    ];
+    let out = refused(&e, r, &args, "unknown_lease_set");
+    assert!(out.contains(&format!("#{seq} (release lease set")), "{out}");
+    assert!(out.contains("not undone"), "{out}");
+}
+
+/// `workspace create --json` and `init --json` for a runner setting up a
+/// project (issue #97).
+#[test]
+fn a_workspace_is_created_with_json() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    let init = parse(&e.run(r, &["init", "demo", "--json"]));
+    assert_eq!(init["repo"], "demo");
+    assert_eq!(init["decision"]["outcome"], "allow", "{init}");
+    assert_eq!(init["seq"], 0, "{init}");
+    assert_eq!(init["warnings"], json!([]));
+    let status = status_json(&e);
+    assert_eq!(init["trunk"], status["trunk"]);
+
+    let args = ["workspace", "create", "w1", "--repo", "demo", "--json"];
+    let w = parse(&e.run(r, &args));
+    assert_eq!(w["workspace"].as_str(), r.join("w1").to_str());
+    assert_eq!(w["repo"], "demo");
+    assert_eq!(w["base"], status["trunk"]);
+    assert!(r.join("w1/.lonca").is_dir());
 }

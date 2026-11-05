@@ -633,8 +633,9 @@ Everything else is a policy or key-management reason; show it.
 ## CLI for runners
 
 Where the daemon has no call of its own, a runner drives `lonca`:
-creating a workspace is the CLI's work (`session start`, `workspace
-create`), and so are `sync`, `propose` from a workspace, `human login`.
+creating a repository or a workspace is the CLI's work (`init`,
+`session start`, `workspace create`), and so are `sync`, `propose` from a
+workspace, `lease` from a shell, `human login`.
 These commands take `--json` and print one JSON object (or array) on
 stdout; nothing else goes to stdout then. Human-readable output has the
 same facts, nothing more. **No token is ever printed**, in either form.
@@ -644,7 +645,7 @@ Exit codes:
 | code | meaning |
 |---|---|
 | 0 | done; a proposal that waits for a human (`escalate`) is done too |
-| 1 | the daemon refused: an error code, or a logged decision with `outcome: deny`; stderr has `code: message` (`denied: claim_mismatch:edits`) |
+| 1 | the daemon refused: an error code, or a logged decision with `outcome: deny`; stderr has `code: message` (`denied: claim_mismatch:edits`). A denial exits 1 on every command, with or without `--json` |
 | 2 | the daemon is unreachable, or answered something that is not the protocol |
 | 3 | usage, and everything that never reached the daemon (no workspace, no local changes, no key) |
 
@@ -665,7 +666,18 @@ Exit codes:
   A conflict leaves the local file as it was and writes trunk's version
   to `trunk_copy` (`<path>.trunk`).
 - `propose --json`: `{"change", "commit", "seq", "decision", "status":
-  "queued" | "pending" | "denied"}`. `denied` also exits 1.
+  "queued" | "pending" | "denied", "details": [detail]}`. `denied` also
+  exits 1. `details` is empty for a human's proposal, which needs no
+  lease.
+- `lease acquire --json`, `lease release <set> --json` and `lease renew
+  <set> --json` (in the agent's workspace): `{"seq", "decision", "set",
+  "details": [detail]}`. A denied `acquire`'s `set` names nothing; read
+  `details` for who holds what.
+- `init --json`: `{"repo", "trunk", "seq", "decision", "warnings":
+  [string]}`. The warnings are those of `repo.prepare_init`; with
+  `--json` they are not repeated on stderr.
+- `workspace create --json`: `{"workspace": absolute path, "repo",
+  "base"}`.
 - `pending --json`: the `pending` array of `status`.
 - `approve <seq> --json` and `reject <seq> --reason … --json`:
   `{"seq", "target_seq", "change": change id | null, "decision"}`;
@@ -697,7 +709,9 @@ still needs a signature.
   `scope.scratch`, `hook.bind.scratch`, `session start --scratch`
   (#78); `tree[].size`, `blobs`, `repo.prepare_init.warnings` (#79);
   `change.diff`, `change.get.evidence` (#80); the `reject` operation
-  (#81); `trunk.bundle`, `trunk.distance` (#83).
+  (#81); `trunk.bundle`, `trunk.distance` (#83); `--json` on `lease`,
+  `init` and `workspace create`, `details` in `propose --json`, and a
+  denial exits 1 on every command (#97).
   `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,

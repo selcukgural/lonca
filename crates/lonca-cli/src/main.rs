@@ -82,6 +82,8 @@ enum Cmd {
         branch: Option<String>,
         #[arg(long = "as")]
         human: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Agent sessions.
     #[command(subcommand)]
@@ -514,6 +516,8 @@ enum WorkspaceCmd {
         repo: String,
         #[arg(long = "as")]
         human: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -528,14 +532,20 @@ enum LeaseCmd {
         intent: String,
         #[arg(long, default_value = "10m")]
         ttl: String,
+        #[arg(long)]
+        json: bool,
     },
     Release {
         set: String,
+        #[arg(long)]
+        json: bool,
     },
     Renew {
         set: String,
         #[arg(long, default_value = "10m")]
         ttl: String,
+        #[arg(long)]
+        json: bool,
     },
     /// The leases the local changes need, and who holds them.
     Needed {
@@ -757,11 +767,20 @@ fn workspace_human(ws: &Workspace) -> Result<String> {
     }
 }
 
-/// Signs and submits a human operation; prints the decision.
-pub(crate) fn submit(c: &mut Client, human: &str, repo: &str, op: Op) -> Result<Value> {
+/// Signs and submits a human operation; prints the decision and returns
+/// it, a denial included, for the commands that go over several
+/// repositories and report at the end.
+pub(crate) fn submit_outcome(c: &mut Client, human: &str, repo: &str, op: Op) -> Result<Value> {
     let sig = ctx::sign(human, repo, &op)?;
     let r = call(c, "human.submit", json!({"op": op, "sig": sig}))?;
     print_decision(&r);
+    Ok(r)
+}
+
+/// As [`submit_outcome`]; a denial is an error, so the command exits 1.
+pub(crate) fn submit(c: &mut Client, human: &str, repo: &str, op: Op) -> Result<Value> {
+    let r = submit_outcome(c, human, repo, op)?;
+    ctx::denied(&r)?;
     Ok(r)
 }
 
@@ -1010,6 +1029,7 @@ fn run(cmd: Cmd) -> Result<()> {
             import,
             branch,
             human,
+            json: as_json,
         } => {
             let human = human_name(human)?;
             let key = ctx::human_public(&human)?;
@@ -1020,13 +1040,25 @@ fn run(cmd: Cmd) -> Result<()> {
                 json!({"repo": repo, "human": human, "human_key": key, "import_from": import, "branch": branch}),
             )?;
             let op: Op = serde_json::from_value(prep["op"].clone())?;
-            for w in prep["warnings"].as_array().into_iter().flatten() {
-                eprintln!("warning: {}", w.as_str().unwrap_or_default());
+            if !as_json {
+                for w in prep["warnings"].as_array().into_iter().flatten() {
+                    eprintln!("warning: {}", w.as_str().unwrap_or_default());
+                }
             }
             let sig = ctx::sign(&human, &repo, &op)?;
             let r = call(&mut c, "repo.init", json!({"op": op, "sig": sig}))?;
-            print_decision(&r);
-            Ok(())
+            if as_json {
+                let Op::RepoInit { trunk, .. } = &op else {
+                    bail!("repo.prepare_init did not return an init")
+                };
+                ctx::print_json(&json!({
+                    "repo": repo, "trunk": trunk, "seq": r["seq"], "decision": r["decision"],
+                    "warnings": prep["warnings"],
+                }))?;
+            } else {
+                print_decision(&r);
+            }
+            ctx::denied(&r)
         }
         Cmd::Session(SessionCmd::Start {
             repo,
@@ -1136,10 +1168,20 @@ fn run(cmd: Cmd) -> Result<()> {
             }
             ctx::denied(&r)
         }
-        Cmd::Workspace(WorkspaceCmd::Create { dir, repo, human }) => {
+        Cmd::Workspace(WorkspaceCmd::Create {
+            dir,
+            repo,
+            human,
+            json: as_json,
+        }) => {
             let human = human_name(human)?;
             let mut c = human_client(&repo, &human)?;
             let ws = Workspace::create(&mut c, &ctx::absolute(&dir)?, &repo, None, Some(human))?;
+            if as_json {
+                return ctx::print_json(&json!({
+                    "workspace": ws.root, "repo": repo, "base": ws.meta.base,
+                }));
+            }
             println!(
                 "workspace {} at {}",
                 ws.root.display(),
@@ -1283,7 +1325,7 @@ fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Lease(l) => {
             let (mut c, ws) = agent_client()?;
-            let r = match l {
+            let (r, as_json) = match l {
                 LeaseCmd::Needed { json: as_json } => {
                     let r = mcp::lease_needed(&mut c, &ws)?;
                     if as_json {
@@ -1298,6 +1340,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     kind,
                     intent,
                     ttl,
+                    json: as_json,
                 } => {
                     let kind = match kind.as_str() {
                         "edit" => LeaseKind::Edit,
@@ -1314,22 +1357,39 @@ fn run(cmd: Cmd) -> Result<()> {
                         "lease.acquire",
                         json!({"items": items, "intent": intent, "ttl_ms": ctx::duration_ms(&ttl)?}),
                     )?;
-                    if let Some(set) = r["set"].as_str()
+                    if !as_json
+                        && let Some(set) = r["set"].as_str()
                         && r["decision"]["outcome"] == "allow"
                     {
                         println!("lease set {set}");
                     }
-                    r
+                    (r, as_json)
                 }
-                LeaseCmd::Release { set } => call(&mut c, "lease.release", json!({"set": set}))?,
-                LeaseCmd::Renew { set, ttl } => call(
-                    &mut c,
-                    "lease.renew",
-                    json!({"set": set, "ttl_ms": ctx::duration_ms(&ttl)?}),
-                )?,
+                LeaseCmd::Release { set, json: as_json } => {
+                    let mut r = call(&mut c, "lease.release", json!({"set": set}))?;
+                    r["set"] = json!(set);
+                    (r, as_json)
+                }
+                LeaseCmd::Renew {
+                    set,
+                    ttl,
+                    json: as_json,
+                } => {
+                    let ttl_ms = ctx::duration_ms(&ttl)?;
+                    let mut r = call(&mut c, "lease.renew", json!({"set": set, "ttl_ms": ttl_ms}))?;
+                    r["set"] = json!(set);
+                    (r, as_json)
+                }
             };
-            print_decision(&r);
-            Ok(())
+            if as_json {
+                ctx::print_json(&json!({
+                    "seq": r["seq"], "decision": r["decision"], "set": r["set"],
+                    "details": ctx::details(&r),
+                }))?;
+            } else {
+                print_decision(&r);
+            }
+            ctx::denied(&r)
         }
         Cmd::Fetch {
             repo,
@@ -1382,7 +1442,7 @@ fn run(cmd: Cmd) -> Result<()> {
             if as_json {
                 ctx::print_json(&json!({
                     "change": r["change"], "commit": r["commit"], "base": r["base"], "seq": r["seq"],
-                    "decision": r["decision"], "status": status,
+                    "decision": r["decision"], "status": status, "details": ctx::details(&r),
                 }))?;
             } else {
                 print_decision(&r);
@@ -1472,7 +1532,7 @@ fn run(cmd: Cmd) -> Result<()> {
             if as_json {
                 ctx::print_json(&json!({
                     "change": change, "commit": commit, "seq": r["seq"],
-                    "decision": r["decision"], "status": status,
+                    "decision": r["decision"], "status": status, "details": ctx::details(&r),
                 }))?;
             } else {
                 print_decision(&r);

@@ -328,6 +328,16 @@ fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
         json!({"harness": "claude-code", "harness_session": "h", "sudo_without_password": false}),
     );
     assert_eq!(bound["scratch"], json!([scratch_s]));
+    let bound = e.ok(
+        "hook.bind",
+        None,
+        Some(&token),
+        json!({"harness": "gemini", "harness_session": "h", "sudo_without_password": false}),
+    );
+    assert_eq!(
+        bound["notes"],
+        json!(["no locked profile for harness gemini"])
+    );
 
     let ws = e.root.join("ws");
     let before = log_len(&mut e);

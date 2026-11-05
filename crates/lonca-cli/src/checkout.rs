@@ -50,7 +50,7 @@ fn rev(dir: &Path, r: &str) -> Option<GitId> {
 pub fn repo_name(dir: &Path, flag: Option<String>) -> Result<String> {
     // An agent's workspace is a repository too, and an agent writes its
     // config: `git` must not run there.
-    if Workspace::find(dir).is_some() {
+    if Workspace::encloses(dir) {
         bail!("this is a Lonca workspace: use `lonca sync` and `lonca propose`");
     }
     git(dir, &["rev-parse", "--git-dir"])

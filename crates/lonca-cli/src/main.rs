@@ -858,6 +858,8 @@ fn scratch_roots(workspace: &Path, dirs: &[PathBuf]) -> Result<Vec<String>> {
 /// The human a workspace was created for, else the default identity.
 fn workspace_human(ws: &Workspace) -> Result<String> {
     match &ws.meta.human {
+        // It names key files, and workspace.json can be edited.
+        Some(h) if h.contains('/') || h.starts_with('.') => bail!("bad human name {h:?}"),
         Some(h) => Ok(h.clone()),
         None => ctx::default_human(),
     }

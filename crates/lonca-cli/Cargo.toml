@@ -23,8 +23,8 @@ rustix = { version = "1.1.5", features = ["fs"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 similar = "3.2.0"
+tempfile = "3.27.0"
 ureq = { version = "3.4.2", features = ["json"] }
 
 [dev-dependencies]
 lonca-audit = { path = "../lonca-audit" }
-tempfile = "3.27.0"

@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
+use ignore::Match;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use lonca_core::{FileEntry, FileMode, GitId};
 use lonca_daemon::Client;
 use lonca_daemon::protocol::{FileChange, LocalFile, TreeFile};
@@ -65,10 +67,10 @@ fn b64() -> base64::engine::GeneralPurpose {
 impl Workspace {
     pub fn find(start: &Path) -> Option<Workspace> {
         let mut cur = Some(start);
+        let file = meta_file("workspace.json");
         while let Some(dir) = cur {
-            let f = dir.join(META_DIR).join("workspace.json");
-            if let Ok(bytes) = fs::read(&f) {
-                let meta: Meta = serde_json::from_slice(&bytes).ok()?;
+            if let Ok(Some(local)) = wsfs::read(dir, &file) {
+                let meta: Meta = serde_json::from_slice(&local.bytes).ok()?;
                 return Some(Workspace {
                     root: dir.to_path_buf(),
                     meta,
@@ -77,6 +79,13 @@ impl Workspace {
             cur = dir.parent();
         }
         None
+    }
+
+    /// Is `start` in a workspace, even one whose metadata no longer reads?
+    pub fn encloses(start: &Path) -> bool {
+        let file = Path::new(META_DIR).join("workspace.json");
+        let there = |dir: &Path| fs::symlink_metadata(dir.join(&file)).is_ok();
+        start.ancestors().any(there)
     }
 
     pub fn current() -> Result<Workspace> {
@@ -175,7 +184,10 @@ impl Workspace {
         wsfs::write(dir, &meta_file(".gitignore"), b"*\n", wsfs::REGULAR)?;
         if git {
             gitdir::init(dir)?;
-            ws.write_git_base(&files)?;
+            let (blobs, time_ms) = (blobs_of(&files)?, ctx::now_ms());
+            let contents = blobs.iter().map(Vec::as_slice);
+            gitdir::first_base(dir, &ws.meta.base, &ws.meta.manifest, contents, time_ms)?;
+            ws.exclude_from_git()?;
         }
         Ok(ws)
     }
@@ -183,11 +195,7 @@ impl Workspace {
     /// Moves `.git` to the base. `files` are those whose content it may
     /// not hold yet.
     fn write_git_base<'a>(&self, files: impl IntoIterator<Item = &'a TreeFile>) -> Result<()> {
-        let blobs = files
-            .into_iter()
-            .filter(|f| f.mode != FileMode::Submodule)
-            .map(content)
-            .collect::<Result<Vec<_>>>()?;
+        let blobs = blobs_of(files)?;
         gitdir::set_base(
             &self.root,
             &self.meta.base,
@@ -234,24 +242,10 @@ impl Workspace {
                 }
             }
         }
-        let walker = ignore::WalkBuilder::new(&self.root)
-            .hidden(false)
-            .git_ignore(true)
-            .git_global(false)
-            .git_exclude(false)
-            .require_git(false)
-            .filter_entry(|e| !matches!(e.file_name().to_str(), Some(".lonca") | Some(".git")))
-            .build();
-        for entry in walker {
-            let entry = entry?;
-            if !entry.file_type().is_some_and(|t| t.is_file()) {
-                continue;
-            }
-            let rel = entry
-                .path()
-                .strip_prefix(&self.root)?
-                .to_string_lossy()
-                .replace('\\', "/");
+        let mut found = Vec::new();
+        let mut ignored = IgnoreFiles::new(&self.root);
+        walk(&self.root, "", &mut ignored, &mut found)?;
+        for rel in found {
             let known = [&self.meta.trunk_copies, &self.meta.generated];
             if self.meta.manifest.contains_key(&rel) || known.iter().any(|l| l.contains(&rel)) {
                 continue;
@@ -579,6 +573,86 @@ pub fn fetch(
     Ok(files)
 }
 
+/// The `.gitignore` and `.ignore` of each directory, read through `wsfs`: a
+/// walker that opens them by path would follow a symlink, or hang on a FIFO.
+/// One that can not be read counts for nothing.
+struct IgnoreFiles<'a> {
+    root: &'a Path,
+    by_dir: BTreeMap<String, Gitignore>,
+}
+
+impl<'a> IgnoreFiles<'a> {
+    fn new(root: &'a Path) -> Self {
+        let by_dir = BTreeMap::new();
+        Self { root, by_dir }
+    }
+
+    fn rules(&mut self, dir: &str) -> &Gitignore {
+        let root = self.root;
+        self.by_dir.entry(dir.to_string()).or_insert_with(|| {
+            let mut rules = GitignoreBuilder::new(root.join(dir));
+            for name in [".gitignore", ".ignore"] {
+                let rel = in_dir(dir, name);
+                if let Ok(Some(local)) = wsfs::read(root, &rel) {
+                    for line in String::from_utf8_lossy(&local.bytes).lines() {
+                        let _ = rules.add_line(None, line);
+                    }
+                }
+            }
+            rules.build().unwrap_or_else(|_| Gitignore::empty())
+        })
+    }
+
+    /// Git's answer: the deepest file with a word about `rel` decides.
+    fn hides(&mut self, rel: &str, is_dir: bool) -> bool {
+        let path = self.root.join(rel);
+        let mut dir = rel;
+        loop {
+            dir = dir.rsplit_once('/').map_or("", |(parent, _)| parent);
+            match self.rules(dir).matched(&path, is_dir) {
+                Match::Ignore(_) => return true,
+                Match::Whitelist(_) => return false,
+                Match::None if dir.is_empty() => return false,
+                Match::None => {}
+            }
+        }
+    }
+}
+
+fn in_dir(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.to_string()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// The files under `dir` that are not ignored. Symlinks are skipped, and
+/// each path found is opened through `wsfs` after this: a directory swapped
+/// for a symlink meanwhile gets no further than its names.
+fn walk(root: &Path, dir: &str, ignored: &mut IgnoreFiles, out: &mut Vec<String>) -> Result<()> {
+    for entry in fs::read_dir(root.join(dir))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            bail!("{:?} in {dir:?}: Lonca paths are UTF-8", entry.file_name());
+        };
+        if matches!(name, META_DIR | ".git") {
+            continue;
+        }
+        let rel = in_dir(dir, name);
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            if !ignored.hides(&rel, true) {
+                walk(root, &rel, ignored, out)?;
+            }
+        } else if kind.is_file() && !ignored.hides(&rel, false) {
+            out.push(rel);
+        }
+    }
+    Ok(())
+}
+
 fn meta_file(name: &str) -> String {
     format!("{META_DIR}/{name}")
 }
@@ -588,6 +662,11 @@ fn unix_mode(mode: Option<FileMode>) -> u32 {
         Some(FileMode::Executable) => wsfs::EXECUTABLE,
         _ => wsfs::REGULAR,
     }
+}
+
+fn blobs_of<'a>(files: impl IntoIterator<Item = &'a TreeFile>) -> Result<Vec<Vec<u8>>> {
+    let real = files.into_iter().filter(|f| f.mode != FileMode::Submodule);
+    real.map(content).collect()
 }
 
 fn content(f: &TreeFile) -> Result<Vec<u8>> {
@@ -601,7 +680,7 @@ fn content(f: &TreeFile) -> Result<Vec<u8>> {
 
 fn write_file(root: &Path, f: &TreeFile) -> Result<()> {
     lonca_core::paths::validate_repo_path(&f.path)?;
-    if f.path == META_DIR || f.path.starts_with(".lonca/") {
+    if lonca_core::paths::is_workspace_metadata(&f.path) {
         bail!("refusing to write {} into workspace metadata", f.path);
     }
     wsfs::write(root, &f.path, &content(f)?, unix_mode(Some(f.mode)))
@@ -609,7 +688,123 @@ fn write_file(root: &Path, f: &TreeFile) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{encoded_len, plan_pages};
+    use super::{BTreeMap, GitId, Meta, Workspace, encoded_len, plan_pages};
+    use std::fs;
+    use std::path::Path;
+
+    fn workspace(root: &Path) -> Workspace {
+        let meta = Meta {
+            repo: "demo".into(),
+            base: GitId::of_blob(b"base"),
+            session: None,
+            human: None,
+            manifest: BTreeMap::new(),
+            submitted: None,
+            scratch_roots: vec![],
+            trunk_copies: vec![],
+            generated: vec![],
+            git: false,
+        };
+        let root = root.to_path_buf();
+        Workspace { root, meta }
+    }
+
+    fn local(root: &Path) -> Vec<String> {
+        let changes = workspace(root).changes().unwrap();
+        changes.into_iter().map(|c| c.path).collect()
+    }
+
+    fn put(root: &Path, files: &[(&str, &str)]) {
+        for (path, text) in files {
+            let at = root.join(path);
+            fs::create_dir_all(at.parent().unwrap()).unwrap();
+            fs::write(at, text).unwrap();
+        }
+    }
+
+    #[test]
+    fn ignore_files_mean_what_they_mean_to_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        put(
+            r,
+            &[
+                (".gitignore", "*.log\n/build\n!keep.log\n"),
+                ("keep.log", "kept"),
+                ("drop.log", "gone"),
+                ("build/out", "gone"),
+                ("src/build/out", "only the root's build is ignored"),
+                ("src/.gitignore", "!src-keep.log\nlocal.txt\n"),
+                ("src/src-keep.log", "a deeper file wins"),
+                ("src/drop.log", "gone"),
+                ("src/local.txt", "gone"),
+                ("local.txt", "that rule stays in src"),
+                ("tools/.ignore", "scratch\n"),
+                ("tools/scratch", "gone"),
+                (".lonca/session", "never"),
+                ("sub/.git/config", "never"),
+                (".hidden", "dot files count"),
+            ],
+        );
+        let want = [
+            ".gitignore",
+            ".hidden",
+            "keep.log",
+            "local.txt",
+            "src/.gitignore",
+            "src/build/out",
+            "src/src-keep.log",
+            "tools/.ignore",
+        ];
+        assert_eq!(local(r), want);
+    }
+
+    #[test]
+    fn an_ignore_file_that_is_no_plain_file_counts_for_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        fs::write(out.path().join("rules"), "visible\n").unwrap();
+        std::os::unix::fs::symlink(out.path().join("rules"), r.join(".gitignore")).unwrap();
+        put(r, &[("visible", "x")]);
+        let fifo = r.join(".ignore");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(made.unwrap().success());
+        let changes = workspace(r).changes();
+        // The FIFO is not a file to propose, so it stays out; the read of it
+        // as an ignore file must not hang either.
+        assert_eq!(changes.unwrap().len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_that_is_not_utf8_is_refused_rather_than_renamed() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let name = std::ffi::OsStr::from_bytes(b"bad\xff");
+        fs::write(dir.path().join(name), "x").unwrap();
+        let e = format!("{:#}", workspace(dir.path()).changes().unwrap_err());
+        assert!(e.contains("Lonca paths are UTF-8"), "{e}");
+    }
+
+    #[test]
+    fn a_backslash_is_part_of_a_name() {
+        let dir = tempfile::tempdir().unwrap();
+        put(dir.path(), &[("a\\b", "x"), ("..\\up", "x")]);
+        assert_eq!(local(dir.path()), ["..\\up", "a\\b"]);
+    }
+
+    #[test]
+    fn a_workspace_is_seen_even_when_its_metadata_does_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = dir.path();
+        put(r, &[(".lonca/workspace.json", "not json"), ("a/b/c", "x")]);
+        assert!(Workspace::find(&r.join("a/b")).is_none());
+        assert!(Workspace::encloses(&r.join("a/b")));
+        assert!(Workspace::encloses(r));
+        let other = tempfile::tempdir().unwrap();
+        assert!(!Workspace::encloses(other.path()));
+    }
 
     #[test]
     fn pages_fill_to_the_budget_in_order_and_refuse_what_never_fits() {

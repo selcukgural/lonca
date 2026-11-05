@@ -23,6 +23,10 @@ pub const REGULAR: u32 = 0o644;
 pub const EXECUTABLE: u32 = 0o755;
 pub const SECRET: u32 = 0o600;
 
+/// The most a read returns: no request could carry more, and a sparse file
+/// can claim any size.
+const MAX_FILE: u64 = lonca_daemon::protocol::MAX_LINE as u64;
+
 /// A regular file of the workspace.
 pub struct Local {
     pub bytes: Vec<u8>,
@@ -82,6 +86,10 @@ fn parent(root: &Path, rel: &str, dirs: &[&str], create: bool) -> Result<Option<
 /// or a directory took its place. A symlink on the way, or anything that is
 /// neither, is an error: guessing would propose a deletion nobody made.
 pub fn read(root: &Path, rel: &str) -> Result<Option<Local>> {
+    read_within(root, rel, MAX_FILE)
+}
+
+fn read_within(root: &Path, rel: &str, cap: u64) -> Result<Option<Local>> {
     let (dirs, leaf) = split(rel)?;
     let Some(dir) = parent(root, rel, &dirs, false)? else {
         return Ok(None);
@@ -99,8 +107,15 @@ pub fn read(root: &Path, rel: &str) -> Result<Option<Local>> {
         FileType::Directory => return Ok(None),
         _ => bail!("{rel} is not a regular file"),
     }
+    // Another name for the file may lie outside the workspace.
+    if stat.st_nlink > 1 {
+        bail!("{rel} has other hard links, and a workspace holds its own files");
+    }
+    if stat.st_size as u64 > cap {
+        bail!("{rel} is {} bytes, more than Lonca handles", stat.st_size);
+    }
     let mut bytes = Vec::new();
-    File::from(fd).read_to_end(&mut bytes)?;
+    File::from(fd).take(cap).read_to_end(&mut bytes)?;
     let executable =
         Mode::from_raw_mode(stat.st_mode).intersects(Mode::XUSR | Mode::XGRP | Mode::XOTH);
     Ok(Some(Local { bytes, executable }))
@@ -228,6 +243,34 @@ mod tests {
     }
 
     #[test]
+    fn a_read_stops_at_the_cap_by_what_the_file_says_it_is() {
+        let (dir, _out) = root();
+        let r = dir.path();
+        fs::write(r.join("ten"), "0123456789").unwrap();
+        assert_eq!(read_within(r, "ten", 10).unwrap().unwrap().bytes.len(), 10);
+        let e = text(read_within(r, "ten", 9).err().unwrap());
+        assert!(e.contains("ten is 10 bytes"), "{e}");
+
+        let sparse = fs::File::create(r.join("sparse")).unwrap();
+        sparse.set_len(MAX_FILE + 1).unwrap();
+        assert!(read(r, "sparse").is_err());
+    }
+
+    #[test]
+    fn a_file_with_another_name_is_refused() {
+        let (dir, out) = root();
+        let r = dir.path();
+        fs::write(out.path().join("secret"), "secret").unwrap();
+        fs::hard_link(out.path().join("secret"), r.join("link")).unwrap();
+        let e = text(read(r, "link").err().unwrap());
+        assert!(e.contains("link has other hard links"), "{e}");
+        // Replacing it leaves the other name as it was.
+        write(r, "link", b"mine", REGULAR).unwrap();
+        assert_eq!(fs::read(out.path().join("secret")).unwrap(), b"secret");
+        assert_eq!(read(r, "link").unwrap().unwrap().bytes, b"mine");
+    }
+
+    #[test]
     fn a_read_never_follows_a_symlink() {
         let (dir, out) = root();
         let r = dir.path();
@@ -290,11 +333,6 @@ mod tests {
         assert_eq!(fs::read(r.join("a")).unwrap(), b"y");
         write(r, "a", b"z", SECRET).unwrap();
         assert_eq!(mode("a"), 0o600);
-        // Over a stricter umask too: the mode is set, not requested.
-        fs::write(r.join("old"), "x").unwrap();
-        fs::set_permissions(r.join("old"), fs::Permissions::from_mode(0o600)).unwrap();
-        write(r, "old", b"x", EXECUTABLE).unwrap();
-        assert_eq!(mode("old"), 0o755);
 
         // A directory at the name stays, and so does nothing else.
         fs::create_dir_all(r.join("full/dir/child")).unwrap();

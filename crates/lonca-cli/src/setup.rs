@@ -6,13 +6,13 @@
 use std::fs;
 
 use anyhow::{Context, Result, bail};
-use lonca_core::paths::validate_repo_path;
+use lonca_core::paths::{is_workspace_metadata, validate_repo_path};
 use lonca_daemon::Client;
 use lonca_policy::harness::{Filled, Setup, rules};
 use serde_json::{Value, json};
 
 use crate::ctx;
-use crate::workspace::{META_DIR, Workspace};
+use crate::workspace::Workspace;
 use crate::wsfs;
 
 pub struct Prepared {
@@ -133,10 +133,10 @@ impl Prepared {
 /// into workspace metadata.
 fn check_target(ws: &Workspace, path: &str) -> Result<()> {
     validate_repo_path(path)?;
-    let parts: Vec<&str> = path.split('/').collect();
-    if parts[0].eq_ignore_ascii_case(META_DIR) {
+    if is_workspace_metadata(path) {
         bail!("refusing to write {path} into workspace metadata");
     }
+    let parts: Vec<&str> = path.split('/').collect();
     let hint = "pass what it needs as flags instead: lonca harness setup --print";
     if ws.meta.manifest.contains_key(path) {
         bail!("{path} is a file of the repository; {hint}");

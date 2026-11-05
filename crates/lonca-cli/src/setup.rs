@@ -161,11 +161,8 @@ fn write_new(target: &Path, text: &str) -> Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
-    match fs::remove_file(target) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e.into()),
-    }
+    // Whatever can not be removed makes `create_new` fail below.
+    let _ = fs::remove_file(target);
     let mut f = fs::OpenOptions::new()
         .write(true)
         .create_new(true)

@@ -3215,12 +3215,21 @@ fn session_start_sets_up_and_the_repository_s_own_files_win() {
     let ws2 = r.join("ws2");
     assert!(ws2.join(".gemini/settings.json").exists());
 
+    let o = start("ws4", "claude-code");
+    assert!(o.status.success(), "{}", text(&o.stderr));
+
     let hws = r.join("hws");
     e.run(&hws, &["sync"]);
     std::fs::create_dir_all(hws.join(".gemini")).unwrap();
     std::fs::write(hws.join(".gemini/settings.json"), "{}\n").unwrap();
     assert!(e.run(&hws, &["propose", "-i", "theirs"]).contains("allow"));
     e.settle();
+
+    // Trunk moving past what setup wrote does not make it a local change.
+    let ws4 = r.join("ws4");
+    e.run(&ws4, &["sync"]);
+    let diff = e.run(&ws4, &["diff"]);
+    assert!(diff.contains("no local changes"), "{diff}");
 
     e.run(&ws2, &["sync"]);
     let body = std::fs::read_to_string(ws2.join(".gemini/settings.json")).unwrap();

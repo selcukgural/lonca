@@ -597,6 +597,7 @@ mod tests {
             w.message.starts_with("propose has no argument `symbols`"),
             "{w}"
         );
+        assert_eq!(w.to_string(), w.message);
         assert_eq!(w.expected["required"], json!(["intent"]));
         let body = error_body(&w.into());
         assert_eq!(body["code"], "invalid");

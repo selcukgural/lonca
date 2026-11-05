@@ -106,6 +106,14 @@ impl Trust {
         }
     }
 
+    pub fn uid(&self) -> u32 {
+        self.uid
+    }
+
+    pub fn is_hardened(&self) -> bool {
+        self.hardened
+    }
+
     /// What this machine says. A test build reads its own environment and
     /// never the machine's file: the tests stay hermetic, and the variable
     /// does not exist in a release build, where an agent could set it.
@@ -288,5 +296,9 @@ mod tests {
                 hardened: false
             }
         );
+        assert_eq!(Trust::cooperative().uid(), current_uid());
+        assert!(!Trust::cooperative().is_hardened());
+        assert_eq!(Trust::hardened(280).uid(), 280);
+        assert!(Trust::hardened(280).is_hardened());
     }
 }

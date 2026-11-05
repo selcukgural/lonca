@@ -101,6 +101,9 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   encoding when empty.
 - **Version 11** adds the `unproposed` observation (see "Stopping with
   unproposed work").
+- **Version 12** adds no field: a lease or an interest needs an intent, and
+  a waiting interest stops new leases that conflict with it (see "The lease
+  queue"). Older entries need no intent and their interests stop nobody.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -1028,8 +1031,9 @@ before the counterparty that negotiated for it, and a parent had to release
 a symbol and race everyone to hand it to a sub-agent (#42).
 
 - **`lease.interest {items, intent}`** is a request to be next. It holds
-  nothing and blocks nobody, so it adds no hold-and-wait and no deadlock. It
-  takes the `lease.acquire` right, on the same scope and symbols as an acquire,
+  nothing and nobody waits on it. From format 12 it does stop others for a
+  limited time (below), so two sessions that each hold something and wait for
+  the other's type deny each other's widening until the cap ends it. It takes the `lease.acquire` right, on the same scope and symbols as an acquire,
   and it needs something to wait for: an interest in a free symbol is refused
   (`lease_free`), or it would be a way to reserve anything. A session waits
   for overlapping items once (`interest_exists`).
@@ -1071,7 +1075,51 @@ a symbol and race everyone to hand it to a sub-agent (#42).
   rule holds. Changes of earlier sessions of the workspace count as the
   caller's. A notification of a signature change is left to #43, which needs it.
 - **No gate on the format.** A log without interests has no reservations, so
-  older entries replay untouched.
+  older entries replay untouched. Format 12 gates what follows.
+- **A waiting interest goes first, for a while (format 12).** Before, a wide
+  interest starved: while `Type` was wanted, small leases inside it were still
+  granted, one after another, and the reservation came only once nothing was
+  held. Now, for `leases.interest_block_ms` (default 10 minutes) from its entry,
+  an interest denies other sessions' new leases that conflict with it
+  (`lease_wanted:<session>`). `decide()` has no tree, so `path#Type` and
+  `path#func` look the same, and it needs none: an interest in something held
+  stopped others anyway, so the rule only changes anything where the interest
+  is wider than what is held. It reaches further than a lease could, since a
+  lease on `Type` would be denied while a member is held, but an agent could
+  lease the free members one by one, and it needs something to wait for and
+  the same scope. The cap reaches the fold through the decision
+  (`interest_block_ms=N`), and an interest of an older format has
+  `blocks_until_ms` 0.
+- **The cap is per held set, not per interest.** An independent review broke a
+  cap per interest: a waiter leased a free member, which ended its interest, and
+  registered again; child sessions took turns. So the first interest that runs
+  into a set writes its end on the set (`stop_until_ms`), and no later interest
+  that runs into that set, or into an older interest, goes past it, whoever
+  registers it. A new set over what the session holds keeps it, like
+  `acquired_ms`, and also keeps who wanted the set (format 12), which closes a
+  way past `max_hold_minutes` as well. A leased part of what is waited for does
+  not end the interest. After the cap the interest stays in line without the
+  right, and small leases are possible again until that set is gone: the wide
+  change gets ten minutes of priority per holder, not a guarantee.
+- **What it does not stop.** What the session holds, exactly as held: a
+  `lease_release` with items acquires the rest under a new set first. What is
+  reserved for it, or inside that: a reservation is a turn, and a younger
+  interest does not take it back. An older interest of the session that
+  conflicts with it: age goes first. Everyone else is stopped, the holder of what
+  is waited for included: it keeps what it has and can finish, but it can not
+  widen. It reads who waits, and why, and they settle it with `negotiate`.
+- **An interest can line up behind one.** What an interest stops counts as
+  something to wait for, so it is not `lease_free`, and it is not served while
+  an older one stops it.
+- **Every lease says why (format 12).** `decide()` can not tell a wide lease
+  from a small one by the string, apart from `rename` and `<file>`/`<module>`.
+  Computing the width in the daemon from trunk and recording it for the auditor
+  was the other way; a required non-empty `intent` on every `lease.acquire` and
+  `lease.interest` is simpler, and the reason already reaches the second agent
+  through `details.intent` (`intent_required`). For a wide change or a delete,
+  the rules and the tool's text ask why it needs that much and for the issue
+  number. That part is asked, not checked: no fixed form of a reference fits
+  every project.
 
 ## Sections of files without a grammar
 

@@ -41,6 +41,10 @@ max_hold_minutes = 120
 # When a set is freed, the oldest registered interest in it has this long to
 # acquire it before anyone else can.
 reservation_ms = 60000
+# From the moment an interest is registered, no other session can take a new
+# lease that conflicts with it for this long, so a wide change is not starved
+# by small ones. The interest stays in line after that, without this right.
+interest_block_ms = 600000
 
 [changes]
 max_files = 200
@@ -230,6 +234,8 @@ pub struct Leases {
     /// it.
     pub max_hold_minutes: i64,
     pub reservation_ms: i64,
+    /// How long a waiting interest stops new leases that conflict with it.
+    pub interest_block_ms: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -406,6 +412,7 @@ impl Default for Leases {
             heartbeat_timeout_ms: 300_000,
             max_hold_minutes: 120,
             reservation_ms: 60_000,
+            interest_block_ms: 600_000,
         }
     }
 }
@@ -589,10 +596,11 @@ impl PolicyBundle {
         if config.leases.heartbeat_timeout_ms <= 0
             || config.leases.max_hold_minutes <= 0
             || config.leases.reservation_ms <= 0
+            || config.leases.interest_block_ms <= 0
         {
             return Err(format!(
-                "{CONFIG_FILE}: leases.heartbeat_timeout_ms, leases.max_hold_minutes and \
-                 leases.reservation_ms must be positive"
+                "{CONFIG_FILE}: leases.heartbeat_timeout_ms, leases.max_hold_minutes, \
+                 leases.reservation_ms and leases.interest_block_ms must be positive"
             ));
         }
         if !matches!(config.observation.network.as_str(), "taint" | "deny") {

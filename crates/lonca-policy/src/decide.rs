@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use lonca_core::oplog::FORMAT_LEASE_LIVENESS;
+use lonca_core::oplog::{FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS};
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, ENGINE_DEFS,
@@ -28,8 +28,8 @@ use lonca_core::paths::{
 
 use crate::config::{CRITICAL_ESCALATE, CVal, CedarOutcome, PolicyBundle};
 use crate::state::{
-    ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, LEASES_KEPT, RELEASED, RESERVATION_WINDOW,
-    Session, State,
+    ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, INTEREST_BLOCK, LEASES_KEPT, RELEASED,
+    RESERVATION_WINDOW, Session, State,
 };
 use crate::symbols;
 
@@ -162,15 +162,12 @@ fn is_key_op(op: &Op) -> bool {
 }
 
 /// What a lease request and an interest in one have in common.
-fn check_lease_request(
-    s: &Session,
-    items: &[LeaseItem],
-    intent: &str,
-    max_items: usize,
-    v: &mut Verdict,
-) {
-    if items.is_empty() || items.len() > max_items {
+fn check_lease_request(s: &Session, items: &[LeaseItem], intent: &str, ctx: &Ctx, v: &mut Verdict) {
+    if items.is_empty() || items.len() > ctx.policy.config.leases.max_items {
         v.deny("lease_item_count");
+    }
+    if ctx.format >= FORMAT_LEASE_INTENT && intent.trim().is_empty() {
+        v.deny("intent_required");
     }
     if intent.len() > 500 {
         v.deny("intent_too_long");
@@ -743,9 +740,12 @@ pub fn decide(
             if *ttl_ms <= 0 || *ttl_ms > cfg.leases.max_ttl_minutes * 60_000 {
                 v.deny("lease_ttl");
             }
-            check_lease_request(s, items, intent, cfg.leases.max_items, &mut v);
+            check_lease_request(s, items, intent, ctx, &mut v);
             if let Some(holder) = state.reserved_against(own, items, t) {
                 v.deny(format!("lease_reserved:{holder}"));
+            }
+            for i in state.wanted_against(own, items, t) {
+                v.deny(format!("lease_wanted:{}", i.session));
             }
             for held in state.active_leases(t) {
                 if held.lease.session == own {
@@ -765,16 +765,10 @@ pub fn decide(
         }
         Op::LeaseInterest { items, intent } => {
             let own = actor.session().unwrap_or_default();
-            check_lease_request(
-                &state.sessions[own],
-                items,
-                intent,
-                cfg.leases.max_items,
-                &mut v,
-            );
+            check_lease_request(&state.sessions[own], items, intent, ctx, &mut v);
             // Nothing to wait for means nothing to hold: an interest in a
             // free symbol would be a way to reserve it.
-            if !state.held_or_reserved(own, items, t) {
+            if !state.taken(own, items, t) {
                 v.deny("lease_free");
             }
             if state.waiting(own, items) {
@@ -782,6 +776,10 @@ pub fn decide(
             }
             v.info
                 .push(format!("{RESERVATION_WINDOW}{}", cfg.leases.reservation_ms));
+            if ctx.format >= FORMAT_LEASE_INTENT {
+                v.info
+                    .push(format!("{INTEREST_BLOCK}{}", cfg.leases.interest_block_ms));
+            }
         }
         Op::LeaseRelease { set } => match state.leases.get(set) {
             None => v.deny("unknown_lease_set"),

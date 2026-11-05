@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### A wide change gets its turn, and every lease says why (log format 12)
+
+A waiting `lease.interest` now goes first: for `leases.interest_block_ms`
+(default 10 minutes) other sessions can not take a new lease that conflicts with
+it, so small leases do not keep a change to a whole type or file waiting while
+what stands in its way finishes. The denial is `lease_wanted:<session>`, and it
+says who waits, and why; `lease_needed` reports it too. The time counts per held
+set, however many sessions wait. After it the interest stays in line without
+stopping anyone.
+
+`lease.acquire` and `lease.interest` now need an `intent`; a blank one is denied
+`intent_required`, and `lonca lease acquire` and `lonca lease interest` need
+`--intent`. **A client of its own that sent a blank intent has to send one now.**
+For a wide change, a rename or a delete, the rules ask why it needs that much and
+for the issue number. The rules now also say to read `status` before leasing.
+
 ### Agents can reach each other
 
 A message sent with `negotiate` now reaches the agent it is for. It arrives with

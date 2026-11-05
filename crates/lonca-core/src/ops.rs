@@ -503,8 +503,9 @@ pub enum Op {
     LeaseRelease { set: String },
     #[serde(rename = "lease.renew")]
     LeaseRenew { set: String, ttl_ms: i64 },
-    /// Holds nothing and blocks nobody: when what conflicts with `items` is
-    /// freed, the oldest interest gets a short reservation.
+    /// Holds nothing: when what conflicts with `items` is freed, the oldest
+    /// interest gets a short reservation. Until then, for a limited time,
+    /// no new lease can be taken that conflicts with `items`.
     #[serde(rename = "lease.interest")]
     LeaseInterest {
         items: Vec<LeaseItem>,

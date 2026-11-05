@@ -3184,7 +3184,11 @@ fn entries_of_an_older_format_know_no_liveness() {
 
 #[test]
 fn liveness_limits_must_be_positive() {
-    for bad in ["heartbeat_timeout_ms = 300000", "max_hold_minutes = 120"] {
+    for bad in [
+        "heartbeat_timeout_ms = 300000",
+        "max_hold_minutes = 120",
+        "interest_block_ms = 600000",
+    ] {
         let (name, _) = bad.split_once(" = ").unwrap();
         for value in ["0", "-1"] {
             let config = DEFAULT_CONFIG.replace(bad, &format!("{name} = {value}"));
@@ -3196,6 +3200,7 @@ fn liveness_limits_must_be_positive() {
         PolicyBundle::parse(
             &DEFAULT_CONFIG
                 .replace("max_hold_minutes = 120", "max_hold_minutes = 1")
+                .replace("interest_block_ms = 600000", "interest_block_ms = 1")
                 .replace("heartbeat_timeout_ms = 300000", "heartbeat_timeout_ms = 1"),
             DEFAULT_POLICY
         )
@@ -3722,6 +3727,378 @@ fn a_freed_lease_goes_to_the_oldest_interest_for_a_window() {
     h.assert_replay();
 }
 
+const TYPE: &str = "src/a.rs#Type";
+const MEMBER_A: &str = "src/a.rs#Type.a";
+const MEMBER_B: &str = "src/a.rs#Type.b";
+
+fn acquire_intent(set: &str, sym: &str, intent: &str) -> Op {
+    Op::LeaseAcquire {
+        set: set.into(),
+        items: vec![LeaseItem {
+            symbol: sym.into(),
+            kind: LeaseKind::Edit,
+        }],
+        intent: intent.into(),
+        ttl_ms: 10 * MIN,
+    }
+}
+
+/// a holds one member, b waits for the whole type.
+fn wide_interest() -> H {
+    let mut h = three_sessions();
+    assert!(
+        h.lease("a", "l1", &[(MEMBER_A, LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert!(interest(&mut h, "b", TYPE).is_allow());
+    h
+}
+
+/// Whoever holds a lease on something says why, so the agent it stops can
+/// read it.
+#[test]
+fn a_lease_and_an_interest_need_an_intent() {
+    let mut h = three_sessions();
+    for empty in ["", " \n\t"] {
+        let d = h.agent("a", acquire_intent("l1", F, empty));
+        assert!(denied_with(&d, "intent_required"), "{d:?}");
+    }
+    assert!(h.agent("a", acquire_intent("l1", F, "x")).is_allow());
+    let empty = Op::LeaseInterest {
+        items: vec![LeaseItem {
+            symbol: F.into(),
+            kind: LeaseKind::Edit,
+        }],
+        intent: " ".into(),
+    };
+    let d = h.agent("b", empty);
+    assert!(denied_with(&d, "intent_required"), "{d:?}");
+    h.assert_replay();
+}
+
+/// The hole this closes: small leases kept coming while a wide change
+/// waited, and the wide change never got its turn.
+#[test]
+fn a_waiting_interest_stops_new_leases_that_conflict_with_it() {
+    let mut h = wide_interest();
+    let d = h.lease("c", "l2", &[(MEMBER_B, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_wanted:b"), "{d:?}");
+    assert_eq!(d.reasons.len(), 1, "{d:?}");
+    let d = h.lease("c", "l2", &[(TYPE, LeaseKind::Insert)]);
+    assert!(denied_with(&d, "lease_wanted:b"), "{d:?}");
+    // The one in its way too: it has what it has, and no more.
+    let d = h.lease("a", "l2", &[(MEMBER_B, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_wanted:b"), "{d:?}");
+    // The waiter is not stopped by itself, only by what is held.
+    assert!(
+        h.lease("b", "l3", &[(MEMBER_B, LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert_eq!(h.chain.state.interests.len(), 1, "b keeps its place");
+    let d = interest(&mut h, "b", TYPE);
+    assert!(denied_with(&d, "interest_exists"), "{d:?}");
+    let other = [("src/a.rs#Other.a", LeaseKind::Edit)];
+    assert!(h.lease("c", "l4", &other).is_allow());
+    h.assert_replay();
+}
+
+/// The cap is per set: however many sessions take turns waiting, in a relay
+/// or a stack, nobody is stopped longer than the first one stopped them.
+#[test]
+fn a_line_of_interests_does_not_stretch_the_cap() {
+    let mut h = wide_interest();
+    let since = h.log.last().unwrap().entry.time_ms;
+    let until = since + 600_000;
+    h.now = since + 5 * MIN;
+    assert!(h.agent("a", renew("l1", 10 * MIN)).is_allow());
+    assert!(interest(&mut h, "c", "src/a.rs#<file>").is_allow());
+    let ends = |h: &H| -> Vec<i64> {
+        let i = h.chain.state.interests.values();
+        i.map(|i| i.blocks_until_ms).collect()
+    };
+    assert_eq!(ends(&h), [until, until]);
+    assert_eq!(h.chain.state.leases["l1"].stop_until_ms, Some(until));
+    // The set remembers it when those who waited are gone.
+    for s in ["b", "c"] {
+        let end = Op::SessionEnd {
+            session: s.into(),
+            reason: "done".into(),
+        };
+        assert!(h.human("ayse", end).is_allow());
+    }
+    h.start("d", &["src/**"]);
+    assert!(interest(&mut h, "d", TYPE).is_allow());
+    assert_eq!(ends(&h), [until]);
+    h.assert_replay();
+}
+
+/// The first interest in a set: its own time, and the set takes it.
+#[test]
+fn an_interest_with_nothing_ahead_gets_the_whole_cap() {
+    let mut h = wide_interest();
+    let since = h.log.last().unwrap().entry.time_ms;
+    assert!(
+        h.lease("c", "l2", &[("src/b.rs#g", LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.now = since + 5 * MIN;
+    assert!(interest(&mut h, "a", "src/b.rs#g").is_allow());
+    let time = h.log.last().unwrap().entry.time_ms;
+    assert_eq!(
+        h.chain.state.leases["l2"].stop_until_ms,
+        Some(time + 600_000)
+    );
+    h.assert_replay();
+}
+
+/// The older interest goes first, whatever the younger one asks for.
+#[test]
+fn a_younger_interest_does_not_stop_an_older_one() {
+    let mut h = wide_interest();
+    assert!(interest(&mut h, "c", "src/a.rs#<file>").is_allow());
+    let b_goes_on = [(MEMBER_B, LeaseKind::Edit)];
+    assert!(h.lease("b", "l2", &b_goes_on).is_allow());
+    let d = h.lease("c", "l3", &[("src/a.rs#Type.c", LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_wanted:b"), "{d:?}");
+    // Older in something else gives no place in this line.
+    let d = h.lease("a", "l3", &[("src/a.rs#Other.a", LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_wanted:c"), "{d:?}");
+    h.assert_replay();
+}
+
+/// A new set over what is held stays wanted, as it stays held: a fresh id
+/// gets past neither the hold limit nor the cap.
+#[test]
+fn a_new_set_over_what_is_held_stays_wanted() {
+    let mut h = wide_interest();
+    let until = h.chain.state.leases["l1"].stop_until_ms;
+    assert!(until.is_some());
+    assert!(
+        h.lease("a", "l2", &[(MEMBER_A, LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert!(h.agent("a", release("l1")).is_allow());
+    let l = &h.chain.state.leases["l2"];
+    assert!(l.interest.contains_key("b"), "{l:?}");
+    assert_eq!(l.stop_until_ms, until);
+    h.assert_replay();
+    // A set of its own, with nothing in common, starts clean.
+    let other = [("src/b.rs#g", LeaseKind::Edit)];
+    assert!(h.lease("a", "l3", &other).is_allow());
+    let l = &h.chain.state.leases["l3"];
+    assert!(l.interest.is_empty() && l.stop_until_ms.is_none(), "{l:?}");
+    // In an older format the new set started clean, and replays so.
+    let mut old = h.log.clone();
+    for o in &mut old {
+        o.entry.format = 11;
+        o.entry
+            .decision
+            .reasons
+            .retain(|r| !r.starts_with("interest_block_ms="));
+    }
+    let s = State::replay(&old);
+    assert!(s.leases["l2"].interest.is_empty());
+}
+
+/// `lease_needed` says what an acquire would say.
+#[test]
+fn a_stopped_lease_is_not_reported_free() {
+    let h = wide_interest();
+    let t = h.now + 1;
+    let state = &h.chain.state;
+    let report = lonca_policy::details::lease_report(state, "c", &edit(MEMBER_B), t);
+    assert_eq!(report.len(), 1, "{report:?}");
+    assert_eq!(report[0].code, "lease_wanted");
+    assert_eq!(report[0].symbol, TYPE);
+    assert_eq!(lonca_policy::details::to_acquire(&report), []);
+    let missing = lonca_policy::details::lease_missing(state, "c", &edit(MEMBER_B), t);
+    assert_eq!(missing[0].code, "lease_wanted");
+    let held = lonca_policy::details::lease_missing(state, "c", &edit(MEMBER_A), t);
+    let codes: Vec<&str> = held.iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["lease_missing", "lease_wanted"], "{held:?}");
+}
+
+/// The right to stop others has a time cap, from the interest's own entry:
+/// a waiter that never gets its turn does not stop a file for good.
+#[test]
+fn an_interest_stops_others_for_a_limited_time_and_stays_in_line() {
+    let mut h = wide_interest();
+    let since = h.log.last().unwrap().entry.time_ms;
+    let reasons = &h.log.last().unwrap().entry.decision.reasons;
+    assert_eq!(
+        reasons,
+        &["reservation_ms=60000", "interest_block_ms=600000"]
+    );
+    let until = since + 600_000;
+    assert_eq!(
+        h.chain
+            .state
+            .interests
+            .values()
+            .next()
+            .unwrap()
+            .blocks_until_ms,
+        until
+    );
+
+    // a stays on it, so b goes on waiting.
+    h.now = since + 5 * MIN;
+    assert!(h.agent("a", renew("l1", 10 * MIN)).is_allow());
+    h.now = until - 2;
+    let d = h.lease("c", "l2", &[(MEMBER_B, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_wanted:b"), "{d:?}");
+    assert_eq!(h.log.last().unwrap().entry.time_ms, until - 1);
+    // The next entry is at `until`.
+    assert!(
+        h.lease("c", "l2", &[(MEMBER_B, LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert_eq!(h.log.last().unwrap().entry.time_ms, until);
+    assert_eq!(h.chain.state.interests.len(), 1, "still in line");
+    h.assert_replay();
+}
+
+#[test]
+fn an_interest_of_a_session_that_ended_stops_nobody() {
+    let mut h = wide_interest();
+    assert!(
+        h.human(
+            "ayse",
+            Op::SessionEnd {
+                session: "b".into(),
+                reason: "done".into(),
+            }
+        )
+        .is_allow()
+    );
+    assert!(
+        h.lease("c", "l2", &[(MEMBER_B, LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.assert_replay();
+}
+
+/// What the session already has is no new lease: `lease_release` with items
+/// acquires the rest under a new set first.
+#[test]
+fn a_partial_release_is_not_stopped_by_an_interest() {
+    let mut h = three_sessions();
+    let both = [(MEMBER_A, LeaseKind::Edit), (MEMBER_B, LeaseKind::Edit)];
+    assert!(h.lease("a", "l1", &both).is_allow());
+    assert!(interest(&mut h, "b", TYPE).is_allow());
+    assert!(
+        h.lease("a", "l2", &[(MEMBER_A, LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.assert_replay();
+}
+
+/// A reservation is a turn: a younger interest in the same symbol does not
+/// take it back. Inside a wider reservation the same; outside it, the
+/// younger interest counts.
+#[test]
+fn a_reservation_is_not_stopped_by_a_younger_interest() {
+    let mut h = wide_interest();
+    assert!(interest(&mut h, "c", TYPE).is_allow());
+    assert!(h.agent("a", release("l1")).is_allow());
+    // An entry opens b's window, and its interest has become a reservation.
+    let other = [("src/b.rs#g", LeaseKind::Edit)];
+    assert!(h.lease("a", "l9", &other).is_allow());
+    assert_eq!(h.chain.state.reservations[0].session, "b");
+    let beyond = [("src/a.rs#<file>", LeaseKind::Edit)];
+    let d = h.lease("b", "l2", &beyond);
+    assert!(denied_with(&d, "lease_wanted:c"), "{d:?}");
+    assert!(
+        h.lease("b", "l2", &[(MEMBER_A, LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.assert_replay();
+}
+
+/// In line behind a wide interest: there is something to wait for, and the
+/// wide one goes first until its time is over.
+#[test]
+fn an_interest_lines_up_behind_a_wide_one() {
+    let mut h = wide_interest();
+    let since = h.log.last().unwrap().entry.time_ms;
+    assert!(interest(&mut h, "c", MEMBER_B).is_allow());
+    assert!(h.chain.state.reservations.is_empty());
+    let d = interest(&mut h, "c", "src/a.rs#Other.a");
+    assert!(denied_with(&d, "lease_free"), "{d:?}");
+    // Nobody holds what c waits for, and a new entry serves it only once
+    // b no longer goes first.
+    h.now = since + 5 * MIN;
+    assert!(h.agent("a", renew("l1", 10 * MIN)).is_allow());
+    h.now = since + 600_000 - 2;
+    assert!(h.agent("a", renew("l1", 10 * MIN)).is_allow());
+    assert_eq!(h.log.last().unwrap().entry.time_ms, since + 600_000 - 1);
+    assert!(h.chain.state.reservations.is_empty(), "b goes first");
+    assert!(h.agent("a", renew("l1", 10 * MIN)).is_allow());
+    assert_eq!(h.log.last().unwrap().entry.time_ms, since + 600_000);
+    assert_eq!(h.chain.state.reservations[0].session, "c");
+    h.assert_replay();
+}
+
+/// A denial by a holder and by a waiter still counts as wanting the holder's
+/// set, for the hold limit.
+#[test]
+fn a_denial_by_a_holder_and_a_waiter_counts_for_the_hold_limit() {
+    let mut h = wide_interest();
+    let both = [(MEMBER_A, LeaseKind::Edit), (MEMBER_B, LeaseKind::Edit)];
+    let d = h.lease("c", "l2", &both);
+    assert!(denied_with(&d, "lease_held:"), "{d:?}");
+    assert!(denied_with(&d, "lease_wanted:b"), "{d:?}");
+    assert!(h.chain.state.leases["l1"].interest.contains_key("c"));
+    h.assert_replay();
+}
+
+/// Entries of format 11 mean what they meant: no intent needed, and an
+/// interest stops nobody.
+#[test]
+fn entries_of_an_older_format_need_no_intent_and_stop_nobody() {
+    let h = wide_interest();
+    let mut old = h.log.clone();
+    for o in &mut old {
+        o.entry.format = 11;
+        o.entry
+            .decision
+            .reasons
+            .retain(|r| !r.starts_with("interest_block_ms="));
+    }
+    let s = State::replay(&old);
+    let i = s.interests.values().next().unwrap();
+    assert_eq!(i.blocks_until_ms, 0);
+    assert_eq!(i.window_ms, 60_000);
+
+    let bundle = PolicyBundle::default_bundle();
+    let t = h.now + 1;
+    let ctx = |format| Ctx {
+        format,
+        time_ms: t,
+        policy: &bundle,
+        facts: None,
+        evidence: &[],
+        symbols_engine: None,
+    };
+    let actor = Actor::Agent {
+        name: "bot-c".into(),
+        session: "c".into(),
+    };
+    let op = acquire_intent("l2", MEMBER_B, "");
+    let d = decide(&s, &actor, &op, None, &ctx(12));
+    assert!(denied_with(&d, "intent_required"), "{d:?}");
+    assert!(decide(&s, &actor, &op, None, &ctx(11)).is_allow());
+    let op = Op::LeaseInterest {
+        items: vec![LeaseItem {
+            symbol: MEMBER_A.into(),
+            kind: LeaseKind::Edit,
+        }],
+        intent: "w".into(),
+    };
+    let d = decide(&s, &actor, &op, None, &ctx(11));
+    assert_eq!(d.reasons, ["reservation_ms=60000"]);
+}
+
 /// A window that nobody used passes to the next in the queue.
 #[test]
 fn a_window_that_ran_out_passes_on() {
@@ -4239,7 +4616,9 @@ fn a_lease_request_may_be_as_long_as_the_limits_and_no_longer() {
     let d = request(&mut h, "long", 1, 501);
     assert!(denied_with(&d, "intent_too_long"), "{d:?}");
     assert!(request(&mut h, "long", 1, 500).is_allow());
-    assert!(request(&mut h, "one", 1, 0).is_allow());
+    assert!(request(&mut h, "one", 1, 1).is_allow());
+    let d = request(&mut h, "none", 1, 0);
+    assert!(denied_with(&d, "intent_required"), "{d:?}");
     h.assert_replay();
 }
 

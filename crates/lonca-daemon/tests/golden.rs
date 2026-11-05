@@ -84,7 +84,31 @@ fn golden_repo() -> Env {
     liveness(&mut e);
     continuation(&mut e);
     queue(&mut e);
+    wide_wait(&mut e);
     e
+}
+
+/// From format 12: a waiting interest stops a new lease inside what it
+/// waits for, and goes first when what it waits for is freed.
+fn wide_wait(e: &mut Env) {
+    let a = e.session("s18", &["wide.md"]);
+    let b = e.session("s19", &["wide.md"]);
+    let c = e.session("s20", &["wide.md"]);
+    let (member, whole) = ("wide.md#Part.one", "wide.md#Part");
+    let set = e.lease(&a, member)["set"].clone();
+    let item = json!([{"symbol": whole, "kind": "edit"}]);
+    let r = e.ok(
+        "lease.interest",
+        None,
+        Some(&b),
+        json!({"items": item, "intent": "the whole part"}),
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let d = e.lease(&c, "wide.md#Part.two");
+    assert_eq!(d["decision"]["reasons"][0], "lease_wanted:s19", "{d}");
+    e.ok("lease.release", None, Some(&a), json!({ "set": set }));
+    let r = e.lease(&b, whole);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
 }
 
 /// From format 10: an interest gets the freed set, a yield moves a set in
@@ -732,6 +756,24 @@ fn golden_v11_log_still_verifies_replays_and_audits() {
     let left = s.sessions["s3"].unproposed.as_ref().expect("the mark");
     assert_eq!(left.paths, ["notes.md"]);
     assert_eq!(left.rounds, 1);
+}
+
+#[test]
+fn golden_v12_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v12.bundle",
+        "87b5b88c192477f7954a709b57521bb6e08754c25dfc9ea0f14be0898650f33a",
+        12,
+    );
+    let stopped = ops
+        .iter()
+        .any(|o| o.entry.decision.reasons == ["lease_wanted:s19"]);
+    assert!(stopped, "a new lease stopped by a waiting interest");
+    let (_dir, store) = load("oplog-v12.bundle");
+    let s = lonca_policy::state::State::replay(&OpLog::new(&store).read_all().unwrap());
+    assert!(s.interests.is_empty(), "served");
+    let wide = s.leases.values().find(|l| l.session == "s19").expect("set");
+    assert_eq!(wide.items[0].symbol, "wide.md#Part");
 }
 
 #[test]

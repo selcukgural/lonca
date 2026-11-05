@@ -1131,7 +1131,7 @@ impl Service {
         let interests: Vec<Value> = s
             .interests
             .iter()
-            .map(|(seq, i)| json!({"seq": seq, "session": i.session, "items": i.items, "intent": i.intent}))
+            .map(|(seq, i)| json!({"seq": seq, "session": i.session, "items": i.items, "intent": i.intent, "blocks_until_ms": i.blocks_until_ms}))
             .collect();
         Ok(json!({
             "interests": interests, "reservations": s.reservations_at(now),
@@ -2067,6 +2067,7 @@ impl Service {
         let state = &r.chain.state;
         let mut out = details::lease_held(state, session, items, now);
         out.extend(details::lease_reserved(state, session, items, now));
+        out.extend(details::lease_wanted(state, session, items, now));
         out
     }
 

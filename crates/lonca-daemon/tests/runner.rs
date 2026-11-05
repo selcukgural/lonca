@@ -1595,7 +1595,7 @@ fn the_oldest_interest_gets_the_freed_set_and_hears_of_it() {
         "lease.interest",
         None,
         Some(&a),
-        json!({"items": [{"symbol": "src/lib.rs#refund", "kind": "edit"}]}),
+        json!({"items": [{"symbol": "src/lib.rs#refund", "kind": "edit"}], "intent": "next"}),
     );
     assert_eq!(free["decision"]["reasons"][0], "lease_free", "{free}");
     let r = e.ok(
@@ -1777,4 +1777,47 @@ fn two_agents_add_to_a_manifest_and_a_changelog_at_once() {
     );
     let report = lonca_audit::audit(&store, lonca_audit::Options::default()).unwrap();
     assert!(report.ok(), "{:#?}", report.findings);
+}
+
+/// The agent a wide interest stops reads who it is and what it is for, and
+/// an acquire of what the session already has says nothing of it.
+#[test]
+fn a_new_lease_stopped_by_a_waiting_interest_hears_why() {
+    let mut e = Env::new();
+    e.init(None);
+    let [a, b, c] = ["a", "b", "c"].map(|s| e.session(s, &["src/**"]));
+    let (member, whole) = ("src/lib.rs#Ledger.add", "src/lib.rs#Ledger");
+    e.lease(&a, member);
+    let r = e.ok(
+        "lease.interest",
+        None,
+        Some(&b),
+        json!({"items": [{"symbol": whole, "kind": "edit"}], "intent": "split Ledger, #7"}),
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    let until = s["interests"][0]["blocks_until_ms"].as_i64().unwrap();
+    assert!(until > e.now() + 500_000, "{s}");
+
+    let d = e.lease(&c, "src/lib.rs#Ledger.total");
+    assert_eq!(d["decision"]["reasons"][0], "lease_wanted:b", "{d}");
+    assert_eq!(d["details"][0]["code"], "lease_wanted", "{d}");
+    assert_eq!(d["details"][0]["symbol"], whole);
+    assert_eq!(d["details"][0]["needed_kind"], "edit");
+    assert_eq!(d["details"][0]["holder_session"], "b");
+    assert_eq!(d["details"][0]["holder_agent"], "bot-b");
+    assert_eq!(d["details"][0]["intent"], "split Ledger, #7");
+    assert_eq!(d["details"][0]["expires_ms"], until);
+    let advice = d["advice"].as_str().unwrap();
+    assert!(
+        advice.contains("is waiting for src/lib.rs#Ledger"),
+        "{advice}"
+    );
+    assert!(advice.contains("split Ledger, #7"), "{advice}");
+
+    // What a partial release keeps.
+    let kept = e.lease(&a, member);
+    assert_eq!(kept["decision"]["outcome"], "allow", "{kept}");
+    assert_eq!(kept["details"], json!([]), "{kept}");
+    assert_eq!(kept["advice"], Value::Null, "{kept}");
 }

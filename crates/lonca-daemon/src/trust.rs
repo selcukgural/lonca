@@ -201,7 +201,7 @@ mod tests {
         // not be looked at is no reason to expect the current uid.
         std::fs::write(dir.path().join("plain"), "").unwrap();
         let unreadable = configured_uid(&dir.path().join("plain/daemon.toml"), me);
-        assert!(unreadable.is_err(), "{unreadable:?}");
+        assert!(unreadable.is_err());
 
         std::fs::write(&file, "daemon_uid = 280\n").unwrap();
         chmod(&file, 0o644);

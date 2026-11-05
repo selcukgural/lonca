@@ -3,6 +3,7 @@
 mod advise;
 mod checkout;
 mod ctx;
+mod doctor;
 mod hook;
 mod keys;
 mod mcp;
@@ -312,6 +313,14 @@ enum Cmd {
     },
     /// Run the merge queue now.
     Queue,
+    /// Check the setup: daemon, socket, hooks, sandbox, humans, logs.
+    Doctor {
+        /// Claude Code's managed settings, if not at the system's path.
+        #[arg(long)]
+        managed_settings: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Claude Code hook handler (reads the hook event on stdin).
     Hook,
     /// MCP server for agents (stdio).
@@ -819,6 +828,10 @@ fn agent_client() -> Result<(Client, Workspace)> {
 fn run(cmd: Cmd) -> Result<()> {
     let is_reject = matches!(cmd, Cmd::Reject { .. });
     match cmd {
+        Cmd::Doctor {
+            managed_settings,
+            json: as_json,
+        } => doctor::run(managed_settings, as_json),
         Cmd::Daemon {
             home,
             backups,

@@ -96,7 +96,11 @@ pub fn exit_code(e: &anyhow::Error) -> u8 {
         if let Some(c) = cause.downcast_ref::<MethodError>() {
             return if c.code == "io" { 2 } else { 1 };
         }
-        if cause.downcast_ref::<Refused>().is_some() {
+        if cause.downcast_ref::<Refused>().is_some()
+            || cause
+                .downcast_ref::<crate::doctor::ChecksFailed>()
+                .is_some()
+        {
             return 1;
         }
         if cause.downcast_ref::<Unreachable>().is_some() {

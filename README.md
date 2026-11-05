@@ -158,6 +158,16 @@ as an enrolled human. The same command continues a repository whose
 `daemon.key` was lost; `lonca daemon-key rotate` replaces a key that is
 still there. See [docs/decisions.md](docs/decisions.md), "Daemon keys".
 
+## Checking a setup
+
+`lonca doctor` shows what most first runs trip over: which mode is running,
+the socket and the daemon, Claude Code's managed settings, the sandbox, `git`
+and `lsof`, and for each repository whether your human can act on it and
+whether its log verifies. Each line passes, warns or fails with what to do
+about it; a failure exits 1. `--json` is for scripts. It prints no token, no
+key and no path to one, and a Secure Enclave key is never prompted for: log
+in first.
+
 ## Backup, restore and moving to another machine
 
 A repository is its bare store: trunk, the operation log, the policy and

@@ -13,6 +13,8 @@ if [ -e "$MANAGED" ] && grep -q "/Library/Lonca/bin/lonca hook" "$MANAGED"; then
     rm -f "$MANAGED"
 fi
 rm -rf /Library/Lonca/bin /Library/Lonca/run
+# Left behind, it would hold every later client to a daemon that is gone.
+rm -f /Library/Lonca/daemon.toml
 if [ $purge = 1 ]; then
     rm -rf /Library/Lonca
     dscl . -delete /Users/_lonca 2>/dev/null || true

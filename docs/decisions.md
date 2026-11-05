@@ -665,6 +665,45 @@ intent is free text, and it says nothing of when the lease ends;
   itself refused. A denied decision is not a failure: it is a logged
   result, with `decision` and `details`.
 
+## Clients verify the daemon
+
+The daemon checked its peer's uid; no client checked the daemon. The hook,
+the MCP server and the CLI take the socket path from the environment, so any
+process answering there received the session token and decided what the hook
+allowed (#52, design §3.3, measure 2).
+
+- **`Client::connect` is the only way to a client, and it checks.** Before
+  connecting: the path is a socket, not a link, and belongs to the daemon's
+  uid; in hardened mode its directory belongs to the daemon or root and
+  nobody else can write it. After connecting and before a byte is sent:
+  `getpeereid` / `SO_PEERCRED` says the daemon's uid. The peer check is the
+  one that counts, because a file can change between the look and the
+  connect.
+- **Which uid.** The installers write `daemon_uid = N` to
+  `/Library/Lonca/daemon.toml` or `/etc/lonca/daemon.toml`, root-owned, in a
+  root-owned directory, writable by nobody else. No file means cooperative:
+  the current uid. A file in any other state is an error, never a fallback
+  to cooperative mode, or replacing it would choose the daemon.
+- **Cooperative mode defends nothing here**, and says so: a fake daemon of
+  the same account passes. It runs as the developer; there is no boundary
+  between the two.
+- **`LONCA_SOCKET` stays.** The environment is the agent's to set, and that
+  is why it is not what is trusted: pointed anywhere, the peer must still
+  be the daemon's uid.
+- **The test seam is `LONCA_TEST_DAEMON_UID`**, read only in a debug build,
+  `cfg!(debug_assertions)`. A debug build also ignores the machine's file,
+  so the tests stay hermetic on a machine with a hardened install. A
+  release build reads the file alone: a variable an agent can set must not
+  name the daemon.
+- **Failure.** Exit 2 on the CLI, as for an unreachable daemon; the hook
+  blocks (fails closed). A hardened install from before this change has no
+  file, so its clients expect their own uid and refuse the daemon until
+  the installer runs again.
+- **Not done:** comparing the daemon's public key from `ping` with the one
+  pinned in `repo.init`. It is optional in the issue: the uid check already
+  stops a process of another account, and the key would only add a
+  defence against the daemon's own account.
+
 ## Reject, and a pending proposal whose session ends
 
 The only human decision on an escalated operation was `approve`; a

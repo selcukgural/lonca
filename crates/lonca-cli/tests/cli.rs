@@ -40,6 +40,7 @@ impl Env {
             .env_remove("LONCA_HUMAN")
             .env_remove("LONCA_WORKSPACE")
             .env_remove("LONCA_SE")
+            .env_remove("LONCA_TEST_DAEMON_UID")
             .env_remove("LONCA_ADVISOR_DAILY_CALLS")
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove("ANTHROPIC_AUTH_TOKEN")
@@ -2137,4 +2138,100 @@ fn a_workspace_is_created_with_json() {
     assert_eq!(w["repo"], "demo");
     assert_eq!(w["base"], status["trunk"]);
     assert!(r.join("w1/.lonca").is_dir());
+}
+
+/// A fake daemon on a socket: whatever reaches it is kept.
+fn fake_daemon(sock: &Path) -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = seen.clone();
+    let listener = std::os::unix::net::UnixListener::bind(sock).unwrap();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            use std::io::Read;
+            let mut buf = [0u8; 4096];
+            let Ok(mut conn) = conn else { return };
+            let _ = conn.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+            while let Ok(n) = conn.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                kept.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+        }
+    });
+    seen
+}
+
+fn current_uid() -> u32 {
+    lonca_daemon::trust::current_uid()
+}
+
+/// `LONCA_SOCKET` pointing at a process that is not the daemon: the hook
+/// blocks the call, the CLI and the MCP server stop, and the token never
+/// leaves the workspace (issue #52).
+#[test]
+fn a_fake_daemon_gets_no_token_and_the_hook_blocks() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let fake = e.root.join("f");
+    let seen = fake_daemon(&fake);
+    let other = (current_uid() + 1).to_string();
+    let run = |args: &[&str], input: &[u8]| {
+        let mut child = e
+            .cmd(&ws, args)
+            .env("LONCA_SOCKET", &fake)
+            .env("LONCA_TEST_DAEMON_UID", &other)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    let input = format!(
+        r#"{{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{{"file_path":"x"}},"cwd":"{}"}}"#,
+        ws.display()
+    );
+    let o = run(&["hook"], input.as_bytes());
+    assert_eq!(o.status.code(), Some(2), "fails closed");
+    let stderr = text(&o.stderr);
+    assert!(stderr.contains("nothing was sent"), "{stderr}");
+    assert!(!stderr.contains("is `lonca daemon` running"), "{stderr}");
+
+    let o = run(&["session", "heartbeat", "--json"], b"");
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+    let o = run(&["mcp"], b"");
+    assert_ne!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(seen.lock().unwrap().as_slice(), b"", "not a byte");
+}
+
+/// With the uid the file names, a hardened client talks to its daemon; the
+/// socket's directory is what it asks of it beyond a cooperative client.
+#[test]
+fn a_hardened_client_trusts_the_daemon_it_was_told_of() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let me = current_uid().to_string();
+    let run = |e: &Env| {
+        e.cmd(&ws, &["session", "heartbeat"])
+            .env("LONCA_TEST_DAEMON_UID", &me)
+            .output()
+            .unwrap()
+    };
+    let o = run(&e);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+
+    use std::os::unix::fs::PermissionsExt;
+    let open = std::fs::Permissions::from_mode(0o777);
+    std::fs::set_permissions(&e.root, open).unwrap();
+    let o = run(&e);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+    assert!(
+        text(&o.stderr).contains("writable by others"),
+        "{}",
+        text(&o.stderr)
+    );
 }

@@ -2,11 +2,12 @@
 # Lonca hardened install for Linux (systemd).
 #
 #   sudo packaging/linux/install-hardened.sh [--bin DIR]
-#   packaging/linux/install-hardened.sh --render DIR [--dev-uid N]
+#   packaging/linux/install-hardened.sh --render DIR [--dev-uid N] [--daemon-uid N]
 #
 # Same layout as the macOS installer: a lonca system user owns the daemon's
 # state, binaries are root-owned, the socket admits the developer's uid only,
-# and Claude Code's managed settings lock hooks and sandbox (bubblewrap).
+# /etc/lonca/daemon.toml tells clients the daemon's uid, and Claude Code's
+# managed settings lock hooks and sandbox (bubblewrap).
 set -eu
 
 PREFIX=/opt/lonca
@@ -14,6 +15,8 @@ BIN_DIR=$PREFIX/bin
 HOME_DIR=/var/lib/lonca
 BACKUP_DIR=/var/lib/lonca-backups
 SOCKET=/run/lonca/lonca.sock
+DAEMON_CONFIG_DIR=/etc/lonca
+DAEMON_CONFIG=$DAEMON_CONFIG_DIR/daemon.toml
 UNIT=/etc/systemd/system/lonca.service
 MANAGED=/etc/claude-code/managed-settings.json
 PROXY_PORT=8471
@@ -21,11 +24,13 @@ PROXY_PORT=8471
 src_bin=""
 render=""
 dev_uid=""
+daemon_uid=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --bin) src_bin=$2; shift 2 ;;
         --render) render=$2; shift 2 ;;
         --dev-uid) dev_uid=$2; shift 2 ;;
+        --daemon-uid) daemon_uid=$2; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -58,6 +63,15 @@ WantedBy=multi-user.target
 EOF
 }
 
+# Clients read this before they trust the socket (docs/decisions.md,
+# "Clients verify the daemon"): root-owned, like the binaries.
+daemon_toml() {
+    cat <<EOF
+# The daemon runs as this uid. A client refuses any other process on the socket.
+daemon_uid = $1
+EOF
+}
+
 managed_settings() {
     cat <<EOF
 {
@@ -84,6 +98,7 @@ if [ -n "$render" ]; then
     mkdir -p "$render"
     unit "${dev_uid:-1000}" > "$render/lonca.service"
     managed_settings > "$render/managed-settings.json"
+    daemon_toml "${daemon_uid:-0}" > "$render/daemon.toml"
     echo "rendered $render/lonca.service and $render/managed-settings.json"
     exit 0
 fi
@@ -106,6 +121,10 @@ install -d -o lonca -g lonca -m 0750 "$BACKUP_DIR"
 for b in lonca lonca-audit; do
     [ -x "$src_bin/$b" ] && install -o root -g root -m 0755 "$src_bin/$b" "$BIN_DIR/$b"
 done
+install -d -o root -g root -m 0755 "$DAEMON_CONFIG_DIR"
+daemon_toml "$(id -u lonca)" > "$DAEMON_CONFIG"
+chown root:root "$DAEMON_CONFIG"
+chmod 0644 "$DAEMON_CONFIG"
 unit "$dev_uid" > "$UNIT"
 chmod 0644 "$UNIT"
 install -d -o root -g root -m 0755 /etc/claude-code

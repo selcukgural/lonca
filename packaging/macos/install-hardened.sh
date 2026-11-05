@@ -2,7 +2,7 @@
 # Lonca hardened install for macOS (sertleştirilmiş iş birlikçi mod).
 #
 #   sudo packaging/macos/install-hardened.sh [--bin DIR]   install
-#   packaging/macos/install-hardened.sh --render DIR [--dev-uid N]
+#   packaging/macos/install-hardened.sh --render DIR [--dev-uid N] [--daemon-uid N]
 #                                                          write the generated
 #                                                          files to DIR only
 #
@@ -15,6 +15,8 @@
 #     group lonca, so the developer can copy them off the machine
 #   - runs the daemon from launchd as _lonca; its socket accepts the
 #     developer's uid only
+#   - names the daemon's uid in /Library/Lonca/daemon.toml, root-owned: clients
+#     refuse any other process on the socket
 #   - installs Claude Code managed settings: Lonca hooks for every tool,
 #     managed hooks only, hook failures block, sandbox locked to the Lonca
 #     network proxy
@@ -28,6 +30,7 @@ HOME_DIR=$PREFIX/home
 RUN_DIR=$PREFIX/run
 BACKUP_DIR=$PREFIX/backups
 SOCKET=$RUN_DIR/lonca.sock
+DAEMON_CONFIG=$PREFIX/daemon.toml
 PLIST=/Library/LaunchDaemons/dev.lonca.daemon.plist
 MANAGED_DIR="/Library/Application Support/ClaudeCode"
 MANAGED="$MANAGED_DIR/managed-settings.json"
@@ -37,11 +40,13 @@ LABEL=dev.lonca.daemon
 src_bin=""
 render=""
 dev_uid=""
+daemon_uid=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --bin) src_bin=$2; shift 2 ;;
         --render) render=$2; shift 2 ;;
         --dev-uid) dev_uid=$2; shift 2 ;;
+        --daemon-uid) daemon_uid=$2; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -80,6 +85,15 @@ plist() {
 EOF
 }
 
+# Clients read this before they trust the socket (docs/decisions.md,
+# "Clients verify the daemon"): root-owned, like the binaries.
+daemon_toml() {
+    cat <<EOF
+# The daemon runs as this uid. A client refuses any other process on the socket.
+daemon_uid = $1
+EOF
+}
+
 managed_settings() {
     cat <<EOF
 {
@@ -106,6 +120,7 @@ if [ -n "$render" ]; then
     mkdir -p "$render"
     plist "${dev_uid:-501}" > "$render/$LABEL.plist"
     managed_settings > "$render/managed-settings.json"
+    daemon_toml "${daemon_uid:-0}" > "$render/daemon.toml"
     echo "rendered $render/$LABEL.plist and $render/managed-settings.json"
     exit 0
 fi
@@ -161,6 +176,10 @@ for b in lonca lonca-audit lonca-se; do
         install -o root -g wheel -m 0755 "$src_bin/$b" "$BIN_DIR/$b"
     fi
 done
+
+daemon_toml "$(id -u _lonca)" > "$DAEMON_CONFIG"
+chown root:wheel "$DAEMON_CONFIG"
+chmod 0644 "$DAEMON_CONFIG"
 
 plist "$dev_uid" > "$PLIST"
 chown root:wheel "$PLIST"

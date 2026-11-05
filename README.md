@@ -145,7 +145,9 @@ session start the hook tells the agent Lonca's rules.
 The hardened installers (macOS launchd, Linux systemd) create the `_lonca`
 system user, install root-owned binaries, lock Claude Code's hooks and
 sandbox through managed settings and route sandboxed network traffic
-through Lonca's proxy. They never edit sudoers; read their advice about
+through Lonca's proxy. They name the daemon's uid in a root-owned file, and
+the hook, the MCP server and the CLI refuse to send a token to any other
+process on the socket. They never edit sudoers; read their advice about
 sudo's credential cache. `--render DIR` shows the generated files without
 installing anything.
 

@@ -3,9 +3,10 @@
 # update: a new harness needs no new Lonca. See docs/guide/runners.md.
 
 [claude-code]
-events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse" }
+events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse", stop = "Stop" }
 deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+stop_deny = { decision = "block", reason = "{reason}" }
 
 [claude-code.setup]
 flags = ["--mcp-config", { file = ".mcp.json" }, "--settings", { file = ".claude/settings.local.json" }]
@@ -28,6 +29,8 @@ permissions = { allow = ["mcp__lonca__*"] }
 SessionStart = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook", onFailure = "block" }] }]
 PreToolUse = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook", onFailure = "block" }] }]
 PostToolUse = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook", onFailure = "block" }] }]
+# Never "block": a failure here must end the turn, not keep it going.
+Stop = [{ hooks = [{ type = "command", command = "lonca hook --fail-open" }] }]
 
 [claude-code.tools]
 Read = { kind = "read", fields = ["file_path"] }
@@ -59,9 +62,10 @@ TodoWrite = { kind = "inert" }
 ToolSearch = { kind = "inert" }
 
 [codex]
-events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse" }
+events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse", stop = "Stop" }
 deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+stop_deny = { decision = "block", reason = "{reason}" }
 
 # Codex skips a project's .codex/ until a person trusts the directory, so a
 # file in a new workspace does nothing: everything goes in as flags.
@@ -78,6 +82,7 @@ flags = [
   "-c", "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
   "-c", "hooks.PreToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
   "-c", "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
+  "-c", "hooks.Stop=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex --fail-open\"}]}]",
 ]
 
 [codex.setup.env]
@@ -93,9 +98,10 @@ spawn_agent = { kind = "inert" }
 update_plan = { kind = "inert" }
 
 [gemini]
-events = { session_start = "SessionStart", before_tool = "BeforeTool", after_tool = "AfterTool" }
+events = { session_start = "SessionStart", before_tool = "BeforeTool", after_tool = "AfterTool", stop = "AfterAgent" }
 deny = { decision = "deny", reason = "{reason}" }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+stop_deny = { decision = "deny", reason = "{reason}" }
 mcp_prefix = "mcp_"
 mcp_separator = "_"
 
@@ -114,6 +120,7 @@ mcpServers = { lonca = { command = "lonca", args = ["mcp"], cwd = "{workspace}",
 SessionStart = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook --harness gemini" }] }]
 BeforeTool = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook --harness gemini" }] }]
 AfterTool = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook --harness gemini" }] }]
+AfterAgent = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook --harness gemini --fail-open" }] }]
 
 [gemini.tools]
 read_file = { kind = "read", fields = ["file_path"] }
@@ -133,9 +140,10 @@ exit_plan_mode = { kind = "inert" }
 write_todos = { kind = "inert" }
 
 [opencode]
-events = { session_start = "session_start", before_tool = "before_tool", after_tool = "after_tool" }
+events = { session_start = "session_start", before_tool = "before_tool", after_tool = "after_tool", stop = "stop" }
 deny = { deny = "{reason}" }
 context = { context = "{context}" }
+stop_deny = { resume = "{reason}" }
 mcp_prefix = ""
 mcp_separator = "_"
 
@@ -216,6 +224,25 @@ export default {
     await ctx.tool.hook("execute.after", (event) => {
       hook({ hook_event_name: "after_tool", tool_name: event.tool, tool_input: event.input, session_id: event.sessionID });
     });
+    // OpenCode has no stop hook to answer, so a turn that ended is prompted.
+    // Not one a person interrupted or one that failed. Only a session that
+    // used a tool can hold work, and a failure ends the turn.
+    const stopped = (sessionID) => {
+      const r = spawnSync("lonca", ["hook", "--harness", "opencode", "--fail-open"], {
+        cwd: directory,
+        input: JSON.stringify({ hook_event_name: "stop", session_id: sessionID, cwd: directory }),
+        encoding: "utf8",
+      });
+      const out = (r.stdout ?? "").trim();
+      return out ? JSON.parse(out).resume : undefined;
+    };
+    (async () => {
+      for await (const event of ctx.event.subscribe({ types: ["session.execution.succeeded"] })) {
+        const sessionID = event.data.sessionID;
+        const text = started.has(sessionID) ? stopped(sessionID) : undefined;
+        if (text) await ctx.session.prompt({ sessionID, text });
+      }
+    })().catch((e) => console.error(`lonca: ${e}`));
   },
 };
 '''

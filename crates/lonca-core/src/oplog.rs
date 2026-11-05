@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::canonical::{canonical_bytes, digest_of};
 use crate::error::{Error, Result};
 use crate::keys::{KeyPair, verify_hex};
-use crate::ops::{Actor, Attestation, Decision, Facts, HumanSignature, NegotiationMsg, Op};
+use crate::ops::{
+    Actor, Attestation, Decision, Facts, HumanSignature, NegotiationMsg, ObsKind, Op,
+};
 use crate::store::{CommitSpec, FileEntry, FileMap, FileMode, GitId, Store};
 
 pub const OPLOG_REF: &str = "refs/lonca/oplog";
@@ -32,8 +34,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// leases (they are pinned to the change) and prunes dead lease sets;
 /// version 8 gives heartbeats and denied acquires a meaning for leases;
 /// version 9 lets a `session.start` continue an earlier session; version 10
-/// adds `lease.interest`, `to` on a yield and `leases` on `cap.attenuate`.
-pub const FORMAT_CURRENT: u32 = 10;
+/// adds `lease.interest`, `to` on a yield and `leases` on `cap.attenuate`;
+/// version 11 adds the `unproposed` observation.
+pub const FORMAT_CURRENT: u32 = 11;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -59,6 +62,8 @@ pub const FORMAT_SESSION_CONTINUE: u32 = 9;
 /// The first format with `lease.interest`, a yield to a session and lease
 /// sets carried by `cap.attenuate`.
 pub const FORMAT_LEASE_QUEUE: u32 = 10;
+/// The first format with the `unproposed` observation.
+pub const FORMAT_UNPROPOSED: u32 = 11;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -119,6 +124,13 @@ impl OpEntry {
             | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
             Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
             Op::Reject { .. } => FORMAT_REJECT,
+            Op::Observe { ref events, .. }
+                if events
+                    .iter()
+                    .any(|e| matches!(e.kind, ObsKind::Unproposed { .. })) =>
+            {
+                FORMAT_UNPROPOSED
+            }
             Op::LeaseInterest { .. }
             | Op::Negotiate {
                 message: NegotiationMsg::Yield { to: Some(_), .. },
@@ -740,6 +752,40 @@ mod tests {
         for op in [negotiate(None), attenuate(vec![])] {
             assert_eq!(at(&op, 2).min_format(), FORMAT_LEGACY, "{op:?}");
         }
+    }
+
+    #[test]
+    fn the_unproposed_observation_needs_format_11() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let observe = |kind| Op::Observe {
+            session: "s".into(),
+            events: vec![crate::ops::Observation {
+                phase: crate::ops::Phase::Post,
+                kind,
+                external: false,
+            }],
+        };
+        let at = |op: &Op, format| OpEntry {
+            format,
+            op: op.clone(),
+            ..next(&g, 2000)
+        };
+        let report = observe(ObsKind::Unproposed {
+            paths: vec![],
+            total: 0,
+        });
+        assert_eq!(at(&report, 11).min_format(), FORMAT_UNPROPOSED);
+        let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(&report, format), &key)]);
+        assert!(chain(11).is_ok());
+        let err = chain(10).unwrap_err();
+        assert!(err.to_string().contains("needs log format 11"), "{err}");
+        assert_eq!(
+            at(&observe(ObsKind::Heartbeat), 2).min_format(),
+            FORMAT_LEGACY
+        );
     }
 
     #[test]

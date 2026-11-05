@@ -33,6 +33,10 @@ pub struct Profile {
     pub deny: Value,
     /// The answer that adds to the session's context; `{context}` is filled in.
     pub context: Value,
+    /// The answer that sends an agent back instead of letting it stop;
+    /// `{reason}` is filled in. Comes with `events.stop`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_deny: Option<Value>,
     /// How the harness names an MCP tool: prefix, server, separator, tool.
     #[serde(default = "default_mcp_prefix")]
     pub mcp_prefix: String,
@@ -61,6 +65,10 @@ pub struct Events {
     pub session_start: String,
     pub before_tool: String,
     pub after_tool: String,
+    /// The agent is about to finish its turn. A harness that has no such
+    /// event goes without.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<String>,
 }
 
 /// Where the event's parts are in the JSON on stdin.
@@ -117,6 +125,7 @@ pub enum Event {
     SessionStart,
     BeforeTool,
     AfterTool,
+    Stop,
 }
 
 impl Profile {
@@ -125,12 +134,22 @@ impl Profile {
     pub fn event_of(&self, name: &str) -> Option<Event> {
         let e = &self.events;
         [
-            (&e.session_start, Event::SessionStart),
-            (&e.before_tool, Event::BeforeTool),
-            (&e.after_tool, Event::AfterTool),
+            (Some(&e.session_start), Event::SessionStart),
+            (Some(&e.before_tool), Event::BeforeTool),
+            (Some(&e.after_tool), Event::AfterTool),
+            (e.stop.as_ref(), Event::Stop),
         ]
         .into_iter()
-        .find_map(|(n, event)| (n == name).then_some(event))
+        .find_map(|(n, event)| (n? == name).then_some(event))
+    }
+
+    /// `events.stop` and `stop_deny` mean nothing apart: an event with no
+    /// answer could tell an agent nothing.
+    pub fn check(&self) -> Result<(), String> {
+        if self.events.stop.is_some() != self.stop_deny.is_some() {
+            return Err("events.stop and stop_deny go together".into());
+        }
+        Ok(())
     }
 
     /// What this harness puts before the name of a tool of `lonca mcp`.
@@ -260,6 +279,23 @@ const RULES: &str = "\
 - Editing a file is not delivering it: nothing reaches the repository until you propose it.
 - Reading untrusted paths or files outside this workspace taints the session; whether web fetches, network commands and other MCP servers do is the repository's policy ([taint] in lonca.toml). Tainted changes need human review.";
 
+/// The most names of files [`stop_message`] writes out.
+const STOP_MESSAGE_PATHS: usize = 20;
+
+/// What an agent is told when it stops with work nobody proposed.
+pub fn stop_message(tool_prefix: &str, paths: &[String], total: u64) -> String {
+    let shown = paths.iter().take(STOP_MESSAGE_PATHS);
+    let mut files = shown.map(String::as_str).collect::<Vec<_>>().join(", ");
+    let named = paths.len().min(STOP_MESSAGE_PATHS) as u64;
+    if total > named {
+        files.push_str(&format!(" and {} more", total - named));
+    }
+    format!(
+        "Lonca: this workspace has changes that are not in a standing proposal, so they have not reached the repository: {files}. Run {p}lease_needed and lease what it lists, check with {p}preview, then submit with {p}propose. If you can not, say why in your final answer.",
+        p = tool_prefix
+    )
+}
+
 /// Lonca's rules for an agent, from the one text every harness gets.
 /// `about` follows "governed by Lonca", `tool_prefix` goes before each tool's
 /// name (empty for the neutral names), `scratch` are the session's roots.
@@ -339,6 +375,64 @@ mod tests {
         assert_eq!(gemini.event_of("AfterTool"), Some(Event::AfterTool));
         assert_eq!(gemini.event_of("PreToolUse"), None);
         assert_eq!(built_in()["codex"].event_of("BeforeTool"), None);
+    }
+
+    #[test]
+    fn every_built_in_profile_has_a_stop_event_and_its_answer() {
+        let names = [
+            ("claude-code", "Stop"),
+            ("codex", "Stop"),
+            ("gemini", "AfterAgent"),
+            ("opencode", "stop"),
+        ];
+        for (harness, stop) in names {
+            let p = &built_in()[harness];
+            assert_eq!(p.event_of(stop), Some(Event::Stop), "{harness}");
+            p.check().unwrap();
+            let answer = p.stop_deny.as_ref().unwrap();
+            assert!(render(answer, "reason", "R").to_string().contains('R'));
+        }
+    }
+
+    #[test]
+    fn a_harness_with_no_stop_event_has_no_stop() {
+        let mut p = built_in()["codex"].clone();
+        p.events.stop = None;
+        p.stop_deny = None;
+        p.check().unwrap();
+        assert_eq!(p.event_of("Stop"), None);
+        assert_eq!(p.event_of("SessionStart"), Some(Event::SessionStart));
+    }
+
+    #[test]
+    fn a_stop_event_and_its_answer_come_together() {
+        let mut p = built_in()["codex"].clone();
+        p.stop_deny = None;
+        assert!(p.check().unwrap_err().contains("go together"));
+        let mut p = built_in()["codex"].clone();
+        p.events.stop = None;
+        assert!(p.check().is_err());
+    }
+
+    #[test]
+    fn the_stop_message_names_files_and_what_to_do_with_the_harness_s_tools() {
+        let paths: Vec<String> = (0..25).map(|i| format!("f{i}")).collect();
+        let m = stop_message("mcp__lonca__", &paths[..2], 2);
+        assert!(
+            m.contains("repository: f0, f1. Run mcp__lonca__lease_needed"),
+            "{m}"
+        );
+        assert!(m.contains("mcp__lonca__preview") && m.contains("mcp__lonca__propose"));
+
+        // Twenty names at most, and the rest is a number: of what the log
+        // listed, and of what it did not.
+        let m = stop_message("", &paths, 25);
+        assert!(m.contains("f19 and 5 more."), "{m}");
+        assert!(!m.contains("f20"), "{m}");
+        let m = stop_message("", &paths[..3], 40);
+        assert!(m.contains("f2 and 37 more."), "{m}");
+        let m = stop_message("", &paths[..20], 20);
+        assert!(m.contains("f19. Run"), "{m}");
     }
 
     #[test]

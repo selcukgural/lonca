@@ -343,7 +343,18 @@ pub enum ObsKind {
         tool: String,
     },
     Heartbeat,
+    /// What the workspace held that no standing proposal of the session
+    /// carries, when the agent stopped or ended its session. `paths` lists
+    /// at most [`MAX_UNPROPOSED_PATHS`] of `total`; a `total` of 0 says the
+    /// work is gone or delivered.
+    Unproposed {
+        paths: Vec<String>,
+        total: u64,
+    },
 }
+
+/// The most paths one [`ObsKind::Unproposed`] names.
+pub const MAX_UNPROPOSED_PATHS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observation {

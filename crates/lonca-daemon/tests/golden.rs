@@ -17,6 +17,7 @@ use common::*;
 use lonca_audit::{Options, audit};
 use lonca_core::canonical::canonical_bytes;
 use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_LEGACY};
+use lonca_core::ops::ObsKind;
 use lonca_symbols::engine::ENGINE_CURRENT;
 use std::collections::BTreeSet;
 
@@ -62,7 +63,13 @@ fn golden_repo() -> Env {
         .expect("lease set")
         .to_string();
     e.ok("lease.release", None, Some(&t), json!({ "set": set }));
-    e.ok("session.end", None, Some(&t), json!({}));
+    // It ends with work nobody proposed: an `unproposed` observation.
+    e.ok(
+        "session.end",
+        None,
+        Some(&t),
+        json!({"files": [{"path": "notes.md", "entry": null}]}),
+    );
     e.human(Op::Freeze {
         reason: "golden".into(),
     });
@@ -706,6 +713,25 @@ fn golden_v10_log_still_verifies_replays_and_audits() {
     let queue: Vec<_> = s.leases.values().filter(|l| l.session == "s16").collect();
     assert_eq!(queue.len(), 1, "yielded to s16, delegated, given back");
     assert_eq!(queue[0].delegated_from, None);
+}
+
+#[test]
+fn golden_v11_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v11.bundle",
+        "81244b1c0db63ccf554a1d308a6853f19f9af63cd4e132e6e8bdb5de68db5bb7",
+        11,
+    );
+    let reported = ops.iter().any(|o| {
+        matches!(&o.entry.op, Op::Observe { events, .. }
+            if events.iter().any(|e| matches!(&e.kind, ObsKind::Unproposed { total: 1, .. })))
+    });
+    assert!(reported, "s3 ended with work it never proposed");
+    let (_dir, store) = load("oplog-v11.bundle");
+    let s = lonca_policy::state::State::replay(&OpLog::new(&store).read_all().unwrap());
+    let left = s.sessions["s3"].unproposed.as_ref().expect("the mark");
+    assert_eq!(left.paths, ["notes.md"]);
+    assert_eq!(left.rounds, 1);
 }
 
 #[test]

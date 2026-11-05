@@ -97,6 +97,8 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 10** adds `lease.interest`, `to` on a yield and `leases` on
   `cap.attenuate` (see "The lease queue"). The fields are left out of the
   encoding when empty.
+- **Version 11** adds the `unproposed` observation (see "Stopping with
+  unproposed work").
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -385,6 +387,40 @@ fetch; no second format, and plain `git` can read a backup.
   bundle reader in `lonca-audit` (the auditor stays free of the `git`
   binary; verify a bundle by fetching it into a bare store first).
 
+## Stopping with unproposed work
+
+Nothing reaches the repository until an agent proposes it, and an agent can
+stop first: seen live with Codex and with OpenCode, where the person who
+started it read "done" and the work stayed in the workspace (issue #121).
+
+- **The stop event is data.** `events.stop` and `stop_deny` in a profile, both
+  or neither. A harness with no such event is unchanged, and `lonca session
+  end` still records what was left.
+- **The client reports, the daemon compares.** Only the client sees the
+  workspace, so `hook.stop` sends `(path, mode, blob)` of each local change,
+  and the daemon checks them against the commits of the session's standing
+  proposals. A changed file stays a local change until `sync`, so "there are
+  local changes" would not do. A proposal of the session it continues counts,
+  another session's does not, and a rejected, withdrawn or conflicted change
+  delivered nothing.
+- **In the log, as an observation.** `status` must tell "stopped" from "done"
+  after a restart, so the mark comes from the fold, like everything else
+  `status` says. A report is written only when it says something new, so an
+  agent that stops for ever can not fill the log.
+- **The count is of stops without progress.** A proposal that stands clears
+  it, because a long session may stop many times and deliver each time. A
+  denied proposal does not, so an agent that can not propose still ends.
+- **A failure ends the turn.** Tool hooks fail closed; this one must not. A
+  harness reads exit status 2 on its stop event as "go on", so a daemon that
+  is down would keep an agent going with nobody counting. Stop hooks run
+  with `--fail-open`, and nothing depends on them: this is a reminder, not a
+  control. The agent's own hooks can be skipped, so the absence of a mark
+  proves nothing; a proposal is the only evidence of delivery.
+- **A proposal that a sync merged is reported.** After `sync` a file holds
+  the merge, which differs from the pending proposal, so the agent is told
+  to propose again. It costs a round, and #107 makes the new proposal
+  replace the old one.
+
 ## Daemon authentication
 
 Who may connect is decided by the socket (its mode, group and the uid
@@ -434,6 +470,7 @@ A01/A07, zero trust: every request authenticated).
 | `hook.event` | agent | |
 | `hook.input` | agent | |
 | `hook.bind` | agent | |
+| `hook.stop` | agent | |
 | `harness.setup` | agent | |
 | `queue.run` | any human | drains every merge queue now |
 

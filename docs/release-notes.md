@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### An agent that stops with unproposed work is told so (#121)
+
+An agent could edit, say "done" and stop, with the work left in its workspace.
+Now a harness's stop event sends it back with what is unproposed and what to
+do next, up to `[sessions] stop_rounds` times (3). After that `status` lists
+the session under `unproposed work`, so a runner can tell "stopped" from
+"done". `lonca session end` records the same for a harness with no stop event.
+Claude Code, Codex, Gemini CLI and OpenCode have it, through `lonca harness
+setup`; for your own profile, `events.stop` and `stop_deny`.
+
+Log format 11: this release can read older logs, older releases refuse a log
+it has written to.
+
 ### OpenCode, and fixing a harness before Lonca does
 
 OpenCode joins the built-in profiles, tested with 2.2. It has no command hooks,

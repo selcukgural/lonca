@@ -18,8 +18,8 @@ use lonca_core::oplog::FORMAT_LEASE_LIVENESS;
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, Facts,
-    HumanKey, HumanSignature, LeaseItem, LeaseKind, NegotiationMsg, ObsKind, ObservationLevel, Op,
-    Outcome, Scope,
+    HumanKey, HumanSignature, LeaseItem, LeaseKind, MAX_UNPROPOSED_PATHS, NegotiationMsg, ObsKind,
+    Observation, ObservationLevel, Op, Outcome, Scope,
 };
 use lonca_core::paths::{
     path_matches, path_pattern_within, symbol_matches, symbol_pattern_within,
@@ -925,6 +925,13 @@ pub fn decide(
                 v.deny("unknown_session");
             }
             if events.len() > 256 {
+                v.deny("too_many_events");
+            }
+            let listed = |e: &Observation| match &e.kind {
+                ObsKind::Unproposed { paths, .. } => paths.len(),
+                _ => 0,
+            };
+            if events.iter().map(listed).any(|n| n > MAX_UNPROPOSED_PATHS) {
                 v.deny("too_many_events");
             }
             // `State::apply` has no policy: the timeout travels in the

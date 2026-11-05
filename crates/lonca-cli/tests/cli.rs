@@ -3348,3 +3348,130 @@ fn opencode_is_set_up_from_its_built_in_profile() {
         "{out}"
     );
 }
+
+/// An agent that stops with work nobody proposed, through the documented
+/// hook (issue #121). A daemon that is down must end the turn: exit status 2
+/// would tell the harness to go on, for ever.
+#[test]
+fn a_stop_with_unproposed_work_goes_back_to_the_agent_and_a_failure_ends_the_turn() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    let start = [
+        "session",
+        "start",
+        "--repo",
+        "demo",
+        "--agent",
+        "claude",
+        "--paths",
+        "**",
+        "--workspace",
+        "w1",
+    ];
+    e.run(r, &start);
+    let ws = r.join("w1");
+    let stop = format!(
+        r#"{{"hook_event_name":"Stop","session_id":"h1","cwd":"{}"}}"#,
+        ws.display()
+    );
+
+    // Nothing local: the turn ends, with no answer.
+    let o = e.hook(&ws, &stop);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert_eq!(text(&o.stdout), "");
+
+    std::fs::write(ws.join("new.rs"), "pub fn f() {}\n").unwrap();
+    let o = e.hook(&ws, &stop);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let out: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(out["decision"], "block", "{out}");
+    let reason = out["reason"].as_str().unwrap();
+    assert!(reason.contains("new.rs"), "{reason}");
+
+    let status = e.run(&ws, &["status"]);
+    assert!(status.contains("unproposed work:"), "{status}");
+    assert!(
+        status.contains("1 file(s) after 1 stop(s): new.rs"),
+        "{status}"
+    );
+
+    // Daemon down: with the flag the stop passes, without it the hook blocks.
+    let down = |args: &[&str]| {
+        use std::io::Write;
+        let mut c = e.cmd(&ws, args);
+        c.env("LONCA_SOCKET", r.join("nope"));
+        let mut child = c
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stop.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let o = down(&["hook", "--fail-open"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert_eq!(text(&o.stdout), "");
+    assert!(!text(&o.stderr).is_empty(), "the failure is reported");
+    assert_eq!(down(&["hook"]).status.code(), Some(2));
+
+    // `session end` puts it on the record for a harness with no stop event.
+    let out = e.run(&ws, &["session", "end", "--json"]);
+    let ended: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(ended["unproposed"], serde_json::json!(["new.rs"]), "{out}");
+    assert_eq!(ended["unproposed_total"], 1);
+    let status = e.run(r, &["status", "--repo", "demo"]);
+    assert!(status.contains("new.rs"), "ended, still shown: {status}");
+}
+
+/// A deleted file is local work too, and `session end` says so in words.
+#[test]
+fn session_end_says_when_work_was_left_behind() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    let start = [
+        "session",
+        "start",
+        "--repo",
+        "demo",
+        "--agent",
+        "claude",
+        "--paths",
+        "**",
+        "--workspace",
+        "w1",
+    ];
+    e.run(r, &start);
+    let ws = r.join("w1");
+    let out = e.run(&ws, &["session", "end"]);
+    assert!(!out.contains("left unproposed"), "{out}");
+
+    e.run(
+        r,
+        &[
+            "session",
+            "start",
+            "--repo",
+            "demo",
+            "--agent",
+            "claude",
+            "--paths",
+            "**",
+            "--workspace",
+            "w2",
+        ],
+    );
+    let ws = r.join("w2");
+    std::fs::write(ws.join("new.rs"), "x\n").unwrap();
+    let out = e.run(&ws, &["session", "end"]);
+    assert!(out.contains("left unproposed: 1 file(s)"), "{out}");
+}

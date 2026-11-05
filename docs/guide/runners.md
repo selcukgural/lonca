@@ -164,16 +164,37 @@ Outside a workspace, or in a human workspace, the hook does nothing.
 Lonca knows no harness in its code: `lonca hook --harness <name>` hands
 the event to the daemon, which reads it with that harness's **profile**.
 Profiles for Claude Code, Codex, Gemini CLI and OpenCode come with Lonca
-(`crates/lonca-policy/src/harnesses.toml`). Use the same three events:
+(`crates/lonca-policy/src/harnesses.toml`). Use the same four events:
 
 | | Claude Code | Codex | Gemini CLI |
 |---|---|---|---|
 | Events | `SessionStart`, `PreToolUse`, `PostToolUse` | the same | `SessionStart`, `BeforeTool`, `AfterTool` |
+| Stop event | `Stop` | `Stop` | `AfterAgent` |
 | Command | `lonca hook` | `lonca hook --harness codex` | `lonca hook --harness gemini` |
 
 An event the named harness does not have exits 2, so a hook set up for the
 wrong harness blocks instead of watching nothing. `onFailure: block` is
 Claude Code's: check what yours does when a hook fails.
+
+The stop event is the exception: give it `--fail-open`. Harnesses read exit
+status 2 there as "go on", so without the flag a daemon that is down would
+keep an agent working for ever. `lonca harness setup` writes it for you.
+
+### An agent that stops with unproposed work
+
+Nothing reaches the repository until it is proposed, and an agent can say
+"done" first. On the stop event `lonca hook` sends the workspace's local
+changes to the daemon. If no standing proposal carries them, the agent is
+told what is unproposed and what to do next, and goes on.
+
+That happens `[sessions] stop_rounds` times in a row (3 by default; a proposal
+that stands starts over, and 0 only records), so an agent that can not
+propose still ends. Then `status` lists the session under `unproposed work`,
+and `status.sessions[].unproposed` has the files: read this to tell "stopped"
+from "done". `lonca session end` records the same, for a harness with no
+stop event.
+
+A mark means work was left. Its absence proves nothing: only a proposal does.
 
 Only Claude Code has a locked setup so far (`hook.bind` gives
 `hooks_sandbox` with its managed settings). Other harnesses are
@@ -224,6 +245,8 @@ content = { server = { command = "lonca", args = ["mcp"], cwd = "{workspace}" } 
 
 `kind` is `read`, `write`, `shell`, `fetch`, `search` or `inert`. `fields`
 are tried in order. `headers` are for a tool whose paths are inside a text.
+`events.stop` and `stop_deny`, the answer that sends the agent back with
+`{reason}` filled in, are optional and go together.
 A tool not in the table is observed and taints (`[taint] unknown_tools`).
 The same table replaces a built-in profile, as a whole, for a harness that has
 moved on faster than Lonca: no new release is needed. `lonca harness show

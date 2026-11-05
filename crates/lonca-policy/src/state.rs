@@ -48,6 +48,21 @@ pub struct Session {
     pub continued_from: Option<String>,
     /// The session that took this one's workspace over.
     pub continued_by: Option<String>,
+    /// Work its workspace held the last time it stopped, until a proposal
+    /// or a clean stop.
+    pub unproposed: Option<Unproposed>,
+}
+
+/// What a session left behind, as reported when it stopped.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Unproposed {
+    /// At most `MAX_UNPROPOSED_PATHS` of `total`.
+    pub paths: Vec<String>,
+    pub total: u64,
+    /// Reports since the last proposal or clean stop: how many times the
+    /// session stopped with this work.
+    pub rounds: u32,
+    pub seen_ms: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -470,6 +485,14 @@ impl State {
             && let Some(session) = e.actor.session()
         {
             self.pin(session, *change, e.facts.as_ref(), e.time_ms);
+        }
+        // A proposal that stands is progress: the next stop starts over. An
+        // agent that can only get denied keeps counting, and ends.
+        if e.decision.outcome != Outcome::Deny
+            && matches!(e.op, Op::ChangePropose { .. })
+            && let Some(s) = e.actor.session().and_then(|s| self.sessions.get_mut(s))
+        {
+            s.unproposed = None;
         }
         match e.decision.outcome {
             Outcome::Allow => self.effects(
@@ -941,6 +964,7 @@ impl State {
                         heartbeat: None,
                         continued_from: old.as_ref().map(|o| o.id.clone()),
                         continued_by: None,
+                        unproposed: None,
                     },
                 );
                 if let Some(old) = old {
@@ -990,6 +1014,7 @@ impl State {
                             heartbeat: None,
                             continued_from: None,
                             continued_by: None,
+                            unproposed: None,
                         },
                     );
                 }
@@ -1188,6 +1213,15 @@ impl State {
                                 s.writes.insert(path.clone());
                             }
                             ObsKind::Shell { .. } => s.shell_seen = true,
+                            ObsKind::Unproposed { paths, total } => {
+                                let rounds = s.unproposed.as_ref().map_or(0, |u| u.rounds);
+                                s.unproposed = (*total > 0).then(|| Unproposed {
+                                    paths: paths.clone(),
+                                    total: *total,
+                                    rounds: rounds.saturating_add(1),
+                                    seen_ms: time_ms,
+                                });
+                            }
                             _ => {}
                         }
                         if ev.external && s.taint.is_none() {
@@ -1279,6 +1313,7 @@ fn describe(k: &ObsKind) -> String {
         ObsKind::Mcp { tool } => format!("mcp {tool}"),
         ObsKind::Other { tool } => format!("tool {tool}"),
         ObsKind::Heartbeat => "heartbeat".into(),
+        ObsKind::Unproposed { total, .. } => format!("{total} unproposed file(s)"),
     }
 }
 

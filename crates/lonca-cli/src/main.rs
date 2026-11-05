@@ -341,6 +341,10 @@ enum Cmd {
         /// gemini, opencode, or one the repository's policy describes.
         #[arg(long, default_value = "claude-code")]
         harness: String,
+        /// A failure lets the harness go on instead of blocking: for the
+        /// stop event, where blocking would keep an agent working for ever.
+        #[arg(long)]
+        fail_open: bool,
     },
     /// MCP server for agents (stdio).
     Mcp,
@@ -661,7 +665,7 @@ fn main() -> ExitCode {
         }
     };
     match cli.cmd {
-        Cmd::Hook { harness } => hook::run(&harness),
+        Cmd::Hook { harness, fail_open } => hook::run(&harness, fail_open),
         cmd => match run(cmd) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -1323,13 +1327,19 @@ fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Session(SessionCmd::End { json: as_json }) => {
             let (mut c, ws) = agent_client()?;
-            let r = call(&mut c, "session.end", json!({}))?;
+            let files = ws.local_files()?;
+            let r = call(&mut c, "session.end", json!({ "files": files }))?;
             if as_json {
                 ctx::print_json(&json!({
                     "session": ws.meta.session, "seq": r["seq"], "decision": r["decision"],
+                    "unproposed": r["unproposed"], "unproposed_total": r["unproposed_total"],
                 }))?;
             } else {
                 print_decision(&r);
+                let total = r["unproposed_total"].as_u64().unwrap_or(0);
+                if total > 0 {
+                    println!("left unproposed: {total} file(s) never reached the repository");
+                }
             }
             ctx::denied(&r)
         }
@@ -2080,6 +2090,23 @@ fn run(cmd: Cmd) -> Result<()> {
     }
 }
 
+/// A session that stopped with work nobody proposed: "done" and "stopped"
+/// read differently here, for a session that has ended too.
+fn left_unproposed(session: &Value) -> Option<String> {
+    let left = session.get("unproposed").filter(|u| !u.is_null())?;
+    let paths: Vec<&str> = left["paths"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    Some(format!(
+        "{} {} file(s) after {} stop(s): {}",
+        session["id"].as_str().unwrap_or(""),
+        left["total"],
+        left["rounds"],
+        paths.join(", ")
+    ))
+}
+
 fn print_status(s: &Value) {
     println!("repo   {}", s["repo"].as_str().unwrap_or(""));
     println!("trunk  {}", s["trunk"].as_str().unwrap_or(""));
@@ -2109,6 +2136,14 @@ fn print_status(s: &Value) {
             x["task"].as_str().unwrap_or(""),
             taint
         );
+    }
+    let sessions = s["sessions"].as_array().cloned().unwrap_or_default();
+    let left: Vec<String> = sessions.iter().filter_map(left_unproposed).collect();
+    if !left.is_empty() {
+        println!("unproposed work:");
+        for line in left {
+            println!("  {line}");
+        }
     }
     println!("leases:");
     for l in s["leases"].as_array().cloned().unwrap_or_default() {
@@ -2177,6 +2212,23 @@ fn pin_note(lease: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{lease_need_lines, pin_note, source};
+
+    #[test]
+    fn a_session_that_left_work_reads_as_one_line() {
+        let s = serde_json::json!({"id": "s1", "unproposed": {"paths": ["a", "b"], "total": 5, "rounds": 2}});
+        assert_eq!(
+            super::left_unproposed(&s).unwrap(),
+            "s1 5 file(s) after 2 stop(s): a, b"
+        );
+        assert_eq!(
+            super::left_unproposed(&serde_json::json!({"id": "s1"})),
+            None
+        );
+        assert_eq!(
+            super::left_unproposed(&serde_json::json!({"unproposed": null})),
+            None
+        );
+    }
 
     #[test]
     fn needed_leases_read_as_one_line_each() {

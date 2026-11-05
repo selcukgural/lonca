@@ -3,7 +3,7 @@
 use std::io::{BufRead, Write};
 
 use lonca_core::ops::{Claim, Decision, HumanSignature, LeaseItem, NegotiationMsg, Op, Scope};
-use lonca_core::{ChangeId, FileMode, GitId};
+use lonca_core::{ChangeId, FileEntry, FileMode, GitId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -307,6 +307,29 @@ pub struct HookInput {
     pub input: Value,
     /// Absolute path of the workspace root the hook resolved.
     pub workspace: String,
+}
+
+/// One file a workspace differs in from its base, as it would be in a tree.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LocalFile {
+    pub path: String,
+    /// `None`: the file is deleted.
+    #[serde(default)]
+    pub entry: Option<FileEntry>,
+}
+
+/// `hook.stop`: the agent is about to finish its turn, with these changes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HookStop {
+    pub harness: String,
+    pub files: Vec<LocalFile>,
+}
+
+/// `session.end`: what the workspace held, when the client knows.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SessionEnd {
+    #[serde(default)]
+    pub files: Option<Vec<LocalFile>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

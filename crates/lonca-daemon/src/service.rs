@@ -12,15 +12,17 @@ use lonca_core::canonical::random_id;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp};
 use lonca_core::ops::{
-    Actor, BindChecks, Claim, HumanKey, LeaseItem, ObsKind, Observation, Op, Phase,
+    Actor, BindChecks, Claim, HumanKey, LeaseItem, MAX_UNPROPOSED_PATHS, ObsKind, Observation, Op,
+    Phase,
 };
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::decide::{level_for, valid_token};
 use lonca_policy::details;
-use lonca_policy::harness::{Event, render};
+use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
+use lonca_policy::state::ChangeStatus;
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate};
 use lonca_verify::Verifier;
@@ -78,6 +80,102 @@ fn encoded_len(bytes: u64) -> u64 {
 }
 
 type Hr = std::result::Result<Value, (String, String)>;
+
+/// What [`report_unproposed`] found.
+struct LeftBehind {
+    /// The names fit to show, at most `MAX_UNPROPOSED_PATHS`.
+    paths: Vec<String>,
+    total: u64,
+    /// The rounds so far, this one included.
+    round: u32,
+    /// There are rounds left, so the agent is sent back.
+    told: bool,
+}
+
+/// A name that may be shown to a person and to a model: a workspace can hold
+/// files no repository path could be, and those still count in the total.
+fn showable(path: &str) -> bool {
+    lonca_core::paths::validate_repo_path(path).is_ok() && !path.chars().any(char::is_control)
+}
+
+/// `files`, less what a standing proposal of this workspace's sessions
+/// carries, exactly. A rejected, withdrawn or conflicted change delivered
+/// nothing, so its files are still to do.
+fn unproposed(r: &RepoHandle, session: &str, files: Vec<LocalFile>) -> Result<Vec<String>> {
+    let state = &r.chain.state;
+    let standing = state.changes.values().filter(|c| {
+        matches!(
+            c.status,
+            ChangeStatus::Pending { .. } | ChangeStatus::Queued | ChangeStatus::Integrated { .. }
+        ) && c
+            .actor
+            .session()
+            .is_some_and(|s| state.continues(session, s))
+    });
+    let mut left = files;
+    for change in standing {
+        if left.is_empty() {
+            break;
+        }
+        let tree = r.store.commit_files(&change.commit)?;
+        left.retain(|f| tree.get(&f.path) != f.entry.as_ref());
+    }
+    Ok(left.into_iter().map(|f| f.path).collect())
+}
+
+/// Puts what a session left on the record. The log takes a report only when
+/// it says something new, so an agent that stops for ever can not fill it:
+/// past `limit` an unchanged list is written once.
+fn report_unproposed(
+    r: &mut RepoHandle,
+    session: &str,
+    files: Vec<LocalFile>,
+    limit: u32,
+    now: i64,
+) -> std::result::Result<LeftBehind, (String, String)> {
+    let left = unproposed(r, session, files).or_fail()?;
+    let total = left.len() as u64;
+    let paths: Vec<String> = left
+        .into_iter()
+        .filter(|p| showable(p))
+        .take(MAX_UNPROPOSED_PATHS)
+        .collect();
+    let mark = r
+        .chain
+        .state
+        .sessions
+        .get(session)
+        .and_then(|s| s.unproposed.as_ref());
+    let rounds = mark.map_or(0, |m| m.rounds);
+    let told = total > 0 && rounds < limit;
+    let unchanged = mark.is_some_and(|m| m.total == total && m.paths == paths);
+    let news = if total == 0 {
+        mark.is_some()
+    } else {
+        told || !unchanged
+    };
+    if news {
+        let op = Op::Observe {
+            session: session.to_string(),
+            events: vec![Observation {
+                phase: Phase::Post,
+                kind: ObsKind::Unproposed {
+                    paths: paths.clone(),
+                    total,
+                },
+                external: false,
+            }],
+        };
+        r.submit(Submission::new(Actor::Daemon, op), now)
+            .or_fail()?;
+    }
+    Ok(LeftBehind {
+        paths,
+        total,
+        round: rounds + u32::from(told),
+        told,
+    })
+}
 
 /// The runner-facing protocol number (`docs/protocol.md`). It goes up
 /// when a shape changes in a way a client must know about; adding a
@@ -190,6 +288,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("hook.event", Cred::Agent),
     ("hook.input", Cred::Agent),
     ("hook.bind", Cred::Agent),
+    ("hook.stop", Cred::Agent),
     ("harness.setup", Cred::Agent),
     ("queue.run", Cred::AnyHuman),
 ];
@@ -532,11 +631,12 @@ impl Service {
             "cap.attenuate" => self.attenuate(req, params(p)?),
             "lease.interest" => self.lease_interest(req, params(p)?),
             "events" => self.events(req, params(p)?),
-            "session.end" => self.agent_end(req),
+            "session.end" => self.agent_end(req, params(p)?),
             "session.heartbeat" => self.heartbeat(req),
             "hook.event" => self.hook_event(req, params(p)?),
             "hook.input" => self.hook_input(req, params(p)?),
             "hook.bind" => self.hook_bind(req, params(p)?),
+            "hook.stop" => self.hook_stop(req, params(p)?),
             "harness.setup" => self.harness_setup(req, params(p)?),
             "queue.run" => Ok(json!({"integrated": self.process_all()})),
             m => fail("unknown_method", format!("unknown method {m}")),
@@ -964,6 +1064,7 @@ impl Service {
                     "taint": x.taint, "active": s.session_active(&x.id, now), "expires_ms": x.expires_ms,
                     "last_seen_ms": x.heartbeat.map(|h| h.seen_ms),
                     "continued_from": x.continued_from, "continued_by": x.continued_by,
+                    "unproposed": x.unproposed,
                 })
             })
             .collect();
@@ -2123,13 +2224,18 @@ impl Service {
         Ok(out)
     }
 
-    fn agent_end(&self, req: &Request) -> Hr {
+    fn agent_end(&self, req: &Request, end: SessionEnd) -> Hr {
         let mut guard = self.lock();
         let now = self.now();
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let session = actor.session().expect("agent").to_string();
         let inner = &mut *guard;
         let r = Self::repo(inner, &repo)?;
+        // Nobody is told anything here: it is on the record for `status`.
+        let left = match end.files {
+            Some(files) => Some(report_unproposed(r, &session, files, 0, now)?),
+            None => None,
+        };
         let op = Op::SessionEnd {
             session: session.clone(),
             reason: "ended by agent".into(),
@@ -2138,7 +2244,12 @@ impl Service {
         if signed.entry.decision.is_allow() {
             Self::revoke_tokens(inner, &repo, &session)?;
         }
-        Ok(logged(&signed))
+        let mut out = logged(&signed);
+        if let Some(left) = left {
+            out["unproposed"] = json!(left.paths);
+            out["unproposed_total"] = json!(left.total);
+        }
+        Ok(out)
     }
 
     // ---------------------------------------------------------------- hooks
@@ -2236,6 +2347,9 @@ impl Service {
                     "tool_prefix": profile.tool_prefix(),
                 }));
             }
+            // The hook comes back with `hook.stop`: only it can see the
+            // workspace, and no event but this one needs that.
+            Some(Event::Stop) => return Ok(json!({"phase": "stop"})),
             Some(Event::BeforeTool) => "PreToolUse",
             Some(Event::AfterTool) => "PostToolUse",
             None => {
@@ -2259,6 +2373,33 @@ impl Service {
         if out["decision"] == "deny" {
             let reason = out["reason"].as_str().unwrap_or("").to_string();
             out["output"] = render(&profile.deny, "reason", &reason);
+        }
+        Ok(out)
+    }
+
+    /// The agent is about to finish its turn: what it left is recorded, and
+    /// while rounds remain it is told to go on, in the harness's shape.
+    fn hook_stop(&self, req: &Request, h: HookStop) -> Hr {
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        let policy = r.policy().or_fail()?;
+        let limit = policy.config.sessions.stop_rounds;
+        let Some(profile) = policy.config.harness(&h.harness).cloned() else {
+            return fail("invalid", format!("unknown harness {}", h.harness));
+        };
+        let Some(answer) = &profile.stop_deny else {
+            return fail("invalid", format!("{} has no stop event", h.harness));
+        };
+        let left = report_unproposed(r, &session, h.files, limit, now)?;
+        let mut out = json!({
+            "unproposed": left.paths, "total": left.total, "round": left.round, "limit": limit,
+        });
+        if left.told {
+            let reason = stop_message(&profile.tool_prefix(), &left.paths, left.total);
+            out["output"] = render(answer, "reason", &reason);
         }
         Ok(out)
     }

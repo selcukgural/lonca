@@ -6,6 +6,11 @@
 //! nothing. Inside one it reports every tool call to the daemon and blocks
 //! the call when the daemon says so — or when the daemon can not be reached
 //! (fail closed: exit status 2).
+//!
+//! The stop event is the exception (`--fail-open`). A harness reads exit
+//! status 2 there as "go on", so a daemon that is down would keep an agent
+//! working for ever, with no one counting the rounds. Nothing is protected
+//! by a stop hook: it reminds, and a failure ends the turn.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -53,7 +58,7 @@ fn sudo_without_password() -> bool {
     }
 }
 
-pub fn run(harness: &str) -> ExitCode {
+pub fn run(harness: &str, fail_open: bool) -> ExitCode {
     let mut input = String::new();
     if std::io::stdin()
         .take(MAX_INPUT)
@@ -85,6 +90,10 @@ pub fn run(harness: &str) -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(None) => ExitCode::SUCCESS,
+        Err(e) if fail_open => {
+            eprintln!("lonca: {e:#}");
+            ExitCode::SUCCESS
+        }
         Err(e) => block(&format!(
             "lonca: {e:#}; blocking this tool call (fail closed)"
         )),
@@ -101,7 +110,23 @@ fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
     if r["phase"] == "session_start" {
         return bind(&mut client, harness, &r, ws).map(Some);
     }
+    if r["phase"] == "stop" {
+        // Whatever the flags, a stop that fails here ends the turn.
+        return Ok(stop(&mut client, harness, ws).unwrap_or_else(|e| {
+            eprintln!("lonca: {e:#}");
+            None
+        }));
+    }
     Ok((r["decision"] == "deny").then(|| r["output"].clone()))
+}
+
+/// Tells the daemon what the workspace holds; the answer, if there is one,
+/// sends the agent back.
+fn stop(client: &mut Client, harness: &str, ws: &Workspace) -> Result<Option<Value>> {
+    let files = ws.local_files()?;
+    let params = json!({"harness": harness, "files": files});
+    let r = ctx::call(client, "hook.stop", params)?;
+    Ok(r.get("output").cloned())
 }
 
 /// Binds the session and answers with Lonca's rules.

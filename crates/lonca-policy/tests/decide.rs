@@ -3122,7 +3122,6 @@ fn liveness_limits_must_be_positive() {
     );
 }
 
-<<<<<<< HEAD
 // ------------------------------------------------------- continued sessions
 
 fn taint(session: &str) -> Op {
@@ -3370,7 +3369,7 @@ fn a_revocation_reaches_every_earlier_session_of_the_workspace() {
     assert!(!h.chain.state.session_active("d", h.now));
     h.assert_replay();
 }
-=======
+
 // ------------------------------------------------------- agent config paths
 
 /// What instructs or configures an agent goes the way of what runs code: a
@@ -3408,4 +3407,3 @@ fn agent_instructions_and_tool_config_are_critical() {
         h.assert_replay();
     }
 }
->>>>>>> origin/main

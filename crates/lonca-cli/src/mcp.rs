@@ -38,9 +38,22 @@ const DEFAULT_TTL_MINUTES: i64 = 10;
 /// How long the heartbeat waits to try again after a failed call.
 const RETRY_BEAT_MS: i64 = 30_000;
 
-/// Three chances before the timeout.
-fn beat_interval_ms(timeout_ms: i64) -> i64 {
-    (timeout_ms / 3).max(1_000)
+/// A tool's `ttl_minutes`, or the default.
+fn ttl_ms(args: &Value) -> i64 {
+    args["ttl_minutes"].as_i64().unwrap_or(DEFAULT_TTL_MINUTES) * 60_000
+}
+
+/// Three chances before the timeout a heartbeat's answer names.
+fn beat_interval_ms(beat: &Value) -> i64 {
+    beat["timeout_ms"]
+        .as_i64()
+        .map_or(RETRY_BEAT_MS, |t| (t / 3).max(1_000))
+}
+
+/// The TTL an automatic renewal asks for: the default, within the policy.
+fn renewal_ttl_ms(beat: &Value) -> i64 {
+    let max = beat["max_ttl_ms"].as_i64().unwrap_or(i64::MAX);
+    ttl_ms(&Value::Null).min(max)
 }
 
 /// The sets of a heartbeat's answer that would run out before the next
@@ -60,9 +73,8 @@ fn due_for_renewal(beat: &Value, interval_ms: i64) -> Vec<String> {
 /// One heartbeat; renews what is due. Returns how long to wait.
 fn beat(c: &mut Client) -> Result<i64> {
     let r = ctx::call(c, "session.heartbeat", json!({}))?;
-    let interval = beat_interval_ms(r["timeout_ms"].as_i64().unwrap_or(RETRY_BEAT_MS * 3));
-    let max = r["max_ttl_ms"].as_i64().unwrap_or(i64::MAX);
-    let ttl = (DEFAULT_TTL_MINUTES * 60_000).min(max);
+    let interval = beat_interval_ms(&r);
+    let ttl = renewal_ttl_ms(&r);
     for set in due_for_renewal(&r, interval) {
         // Denied means the hold limit, or the set just ended: the agent
         // finds out when it next uses the lease.
@@ -149,7 +161,7 @@ impl Server {
                     .into_iter()
                     .map(|symbol| LeaseItem { symbol, kind })
                     .collect();
-                let ttl = args["ttl_minutes"].as_i64().unwrap_or(DEFAULT_TTL_MINUTES) * 60_000;
+                let ttl = ttl_ms(args);
                 ctx::call(
                     c,
                     "lease.acquire",
@@ -158,7 +170,7 @@ impl Server {
             }
             "lease_release" => ctx::call(c, "lease.release", json!({"set": args["set"]})),
             "lease_renew" => {
-                let ttl = args["ttl_minutes"].as_i64().unwrap_or(DEFAULT_TTL_MINUTES) * 60_000;
+                let ttl = ttl_ms(args);
                 ctx::call(c, "lease.renew", json!({"set": args["set"], "ttl_ms": ttl}))
             }
             "preview" => {
@@ -280,15 +292,30 @@ pub fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{beat_interval_ms, due_for_renewal, tools};
+    use super::{beat_interval_ms, due_for_renewal, renewal_ttl_ms, tools, ttl_ms};
     use serde_json::json;
 
     #[test]
     fn the_heartbeat_beats_three_times_per_timeout_and_at_most_once_a_second() {
-        assert_eq!(beat_interval_ms(300_000), 100_000);
-        assert_eq!(beat_interval_ms(3_000), 1_000);
-        assert_eq!(beat_interval_ms(2_999), 1_000);
-        assert_eq!(beat_interval_ms(1), 1_000);
+        let interval = |timeout_ms: i64| beat_interval_ms(&json!({"timeout_ms": timeout_ms}));
+        assert_eq!(interval(300_000), 100_000);
+        assert_eq!(interval(3_000), 1_000);
+        assert_eq!(interval(2_999), 1_000);
+        assert_eq!(interval(1), 1_000);
+        assert_eq!(beat_interval_ms(&json!({})), 30_000, "retry");
+    }
+
+    #[test]
+    fn a_ttl_is_given_in_minutes_and_defaults_to_ten() {
+        assert_eq!(ttl_ms(&json!({"ttl_minutes": 3})), 180_000);
+        assert_eq!(ttl_ms(&json!({})), 600_000);
+    }
+
+    #[test]
+    fn an_automatic_renewal_stays_within_the_policy() {
+        assert_eq!(renewal_ttl_ms(&json!({"max_ttl_ms": 1_800_000})), 600_000);
+        assert_eq!(renewal_ttl_ms(&json!({"max_ttl_ms": 300_000})), 300_000);
+        assert_eq!(renewal_ttl_ms(&json!({})), 600_000);
     }
 
     #[test]

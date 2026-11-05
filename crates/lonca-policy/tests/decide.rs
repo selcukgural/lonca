@@ -2460,6 +2460,11 @@ fn pins_outlive_the_end_of_their_session() {
             h.lease("a", "l1", &[(f, LeaseKind::Edit), (g, LeaseKind::Edit)])
                 .is_allow()
         );
+        let unrelated = "src/b.rs#other";
+        assert!(
+            h.lease("b", "other", &[(unrelated, LeaseKind::Edit)])
+                .is_allow()
+        );
         let c = ChangeId::random();
         assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
         if ended {
@@ -2468,6 +2473,10 @@ fn pins_outlive_the_end_of_their_session() {
                 reason: "done".into(),
             };
             assert!(h.agent("a", end).is_allow());
+            // At once, and only for that session.
+            assert_eq!(h.chain.state.leases["l1"].items.len(), 1);
+            assert_eq!(h.chain.state.leases["other"].items.len(), 1);
+            assert_eq!(held(&h, "b"), [unrelated]);
         } else {
             h.now += 121 * MIN;
             h.start_observed("b2", &["src/**"]);

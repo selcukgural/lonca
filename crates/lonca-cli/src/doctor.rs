@@ -273,6 +273,12 @@ fn repository_checks(human: &str, repo: &str) -> Result<Vec<Check>> {
     Ok(out)
 }
 
+/// A Secure Enclave key signs a login with a prompt, and a session that is
+/// about to end would be renewed by one.
+fn would_prompt(enclave_key: bool, session_expires_ms: Option<i64>, now_ms: i64) -> bool {
+    enclave_key && !session_expires_ms.is_some_and(|e| e > now_ms + 30_000)
+}
+
 /// Nothing here prompts: a Secure Enclave key without a live session is
 /// asked to log in first. The errors stay out of the output, since a login
 /// failure names the directory of the keys.
@@ -284,8 +290,8 @@ fn humans_checks() -> Vec<Check> {
             "run `lonca human keygen <name>`",
         )];
     };
-    let live = ctx::read_session(&human).is_some_and(|s| s.expires_ms > ctx::now_ms() + 30_000);
-    if ctx::se_key_path(&human).exists() && !live {
+    let session = ctx::read_session(&human).map(|s| s.expires_ms);
+    if would_prompt(ctx::se_key_path(&human).exists(), session, ctx::now_ms()) {
         return vec![warn(
             "human",
             format!("{human} has no session, and opening one would prompt"),
@@ -552,6 +558,16 @@ mod tests {
         assert_eq!(level("enclave", true), Level::Pass);
         assert_eq!(level("file", true), Level::Warn);
         assert_eq!(level("nobody", false), Level::Warn);
+    }
+
+    #[test]
+    fn only_an_enclave_key_without_a_live_session_would_prompt() {
+        let now = 1_000_000;
+        assert!(!would_prompt(false, None, now), "a file key never does");
+        assert!(would_prompt(true, None, now));
+        assert!(!would_prompt(true, Some(now + 30_001), now));
+        assert!(would_prompt(true, Some(now + 30_000), now), "about to end");
+        assert!(would_prompt(true, Some(now), now));
     }
 
     #[test]

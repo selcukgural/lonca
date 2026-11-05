@@ -2658,3 +2658,32 @@ fn doctor_says_when_it_can_not_look_at_repositories() {
     let report = parse(&text(&no_home.stdout));
     assert_eq!(checks(&report, "human")["detail"], "no human identity");
 }
+
+/// A repository that asks for what this human's key can not give.
+#[test]
+fn doctor_warns_of_a_file_key_in_a_repository_that_requires_presence() {
+    let e = Env::new();
+    let r = &e.root;
+    agent_workspace(&e);
+    let shown = e.run(r, &["policy", "show", "--repo", "demo"]);
+    let (_, rest) = shown.split_once("==> lonca.toml <==\n").unwrap();
+    let (config, policy) = rest.split_once("==> policy.cedar <==\n").unwrap();
+    let config = config.replace("require_presence = false", "require_presence = true");
+    std::fs::write(r.join("c.toml"), config.trim_end()).unwrap();
+    std::fs::write(r.join("p.cedar"), policy.trim_end()).unwrap();
+    let args = [
+        "policy", "set", "--repo", "demo", "--config", "c.toml", "--policy", "p.cedar",
+    ];
+    assert!(e.run(r, &args).contains("allow"));
+
+    let out = e.cmd(r, &["doctor", "--json"]).output().unwrap();
+    let report = parse(&text(&out.stdout));
+    let human = checks(&report, "human demo");
+    assert_eq!(human["level"], "warn", "{report}");
+    assert!(
+        human["detail"]
+            .as_str()
+            .unwrap()
+            .contains("requires presence")
+    );
+}

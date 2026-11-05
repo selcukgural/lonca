@@ -75,7 +75,34 @@ fn golden_repo() -> Env {
     rejection(&mut e);
     pins(&mut e);
     liveness(&mut e);
+    continuation(&mut e);
     e
+}
+
+/// From format 9: a session with a change in flight is continued; the
+/// pin passes on, a human approves, integration releases it.
+fn continuation(e: &mut Env) {
+    e.human_change(vec![file("cont.md", "first\n")], "continued file");
+    e.svc.process_all();
+    let base = e.trunk();
+    let a = e.session("s14", &["cont.md"]);
+    e.lease(&a, "cont.md#<file>");
+    let r = e.propose(
+        &a,
+        &base,
+        vec![file("cont.md", "continued\n")],
+        &["cont.md#<file>"],
+    );
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let seq = r["seq"].as_u64().expect("seq");
+    let c = e.continue_session("s15", "s14", &["cont.md"]);
+    assert_eq!(c["decision"]["outcome"], "allow", "{c}");
+    let d = e.human(Op::Approve {
+        target_seq: seq,
+        note: "golden".into(),
+    });
+    assert_eq!(d["decision"]["outcome"], "allow", "{d}");
+    e.svc.process_all();
 }
 
 /// From format 8: a session beats and stops, its lease goes at the
@@ -177,6 +204,7 @@ fn scratch_roots(e: &mut Env) {
             scratch: vec!["/tmp/golden/scratch".into(), "/tmp/golden/logs".into()],
         },
         expires_ms: e.now() + 3_600_000,
+        continues: None,
     };
     let r = e.human(start);
     allowed(r.clone());
@@ -252,6 +280,7 @@ fn human_keys(e: &mut Env) {
             scratch: vec![],
         },
         expires_ms: e.now() + 3_600_000,
+        continues: None,
     };
     let body = json!({"op": start, "sig": sign_ed25519(&bora, "bora", "demo", &start, e.now())});
     // Bora submits on bora's own session (logins are not log entries).
@@ -479,6 +508,7 @@ fn scratch_roots_in_an_old_format_entry_are_refused() {
             scratch: vec!["/tmp/s".into()],
         },
         expires_ms: e.now() + 60_000,
+        continues: None,
     };
     assert_eq!(e.human(start)["decision"]["outcome"], "allow");
     assert!(*formats(&e).last().unwrap() >= 5);
@@ -587,6 +617,33 @@ fn golden_v8_log_still_verifies_replays_and_audits() {
     assert!(s.sessions["s13"].heartbeat.is_none());
     let holders: Vec<&str> = s.leases.values().map(|l| l.session.as_str()).collect();
     assert_eq!(holders, ["s11", "s13"]);
+}
+
+#[test]
+fn golden_v9_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v9.bundle",
+        "daa7ce053bda8c6360435f9e13faf3ffc8fe7901f3fbe2f08b472c57f25933bd",
+        9,
+    );
+    let continued: Vec<_> = ops
+        .iter()
+        .filter_map(|o| match &o.entry.op {
+            Op::SessionStart {
+                session,
+                continues: Some(c),
+                ..
+            } => Some((session.as_str(), c.session.as_str(), c.widen)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(continued, [("s15", "s14", false)]);
+    let (_dir, store) = load("oplog-v9.bundle");
+    let s = lonca_policy::state::State::replay(&OpLog::new(&store).read_all().unwrap());
+    assert_eq!(s.sessions["s14"].ended.as_deref(), Some("continued by s15"));
+    assert_eq!(s.sessions["s14"].continued_by.as_deref(), Some("s15"));
+    assert_eq!(s.sessions["s15"].continued_from.as_deref(), Some("s14"));
+    assert!(s.sessions["s15"].ended.is_none());
 }
 
 #[test]

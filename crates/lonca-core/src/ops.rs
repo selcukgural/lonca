@@ -383,6 +383,14 @@ pub struct HumanKey {
     pub public: String,
 }
 
+/// A new session taking over the workspace of an earlier one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Continuation {
+    pub session: String,
+    /// The human asked for a scope wider than the earlier session's.
+    pub widen: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op")]
 pub enum Op {
@@ -430,6 +438,9 @@ pub enum Op {
         task: String,
         scope: Scope,
         expires_ms: i64,
+        /// The session whose workspace this one takes over.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        continues: Option<Continuation>,
     },
     #[serde(rename = "session.bind")]
     SessionBind {

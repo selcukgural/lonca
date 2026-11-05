@@ -284,6 +284,7 @@ fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
         task: "T".into(),
         scope,
         expires_ms: now + 3_600_000,
+        continues: None,
     };
     // Refused roots: relative, with `..`, a trailing slash, too many.
     for bad in ["scratch", "/tmp/../x", "/tmp/x/", "/", "/tmp/./x"] {
@@ -1515,4 +1516,52 @@ fn details_of_a_pinned_item_name_the_change_not_a_time() {
     let r = e.lease(&b, "src/lib.rs#charge");
     assert_eq!(r["details"][0]["pinned_to"], p["change"], "{r}");
     assert_eq!(r["details"][0]["expires_ms"], Value::Null);
+}
+
+/// A session that is over is told so, and its heartbeat writes nothing:
+/// a client that goes on beating must not fill the log (issue #98).
+#[test]
+fn an_expired_session_can_not_beat() {
+    let mut e = Env::new();
+    e.init(None);
+    let a = e.session("a", &["src/**"]);
+    e.ok("session.heartbeat", None, Some(&a), json!({}));
+    let before = log_len(&mut e);
+    e.advance(3_600_001);
+    let r = e.call("session.heartbeat", None, Some(&a), json!({}));
+    assert_eq!(code(r), "session_inactive");
+    assert_eq!(log_len(&mut e), before);
+}
+
+/// The old token stops at the continuation, the status tells both ends
+/// of it, and the entry names what it continues.
+#[test]
+fn a_continuation_replaces_the_token_of_the_session_it_ends() {
+    let mut e = Env::new();
+    e.init(None);
+    let a = e.session("a", &["src/**"]);
+    let r = e.continue_session("b", "a", &["src/**"]);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let b = r["token"].as_str().unwrap().to_string();
+    assert_ne!(a, b);
+
+    let old = e.call("session.heartbeat", None, Some(&a), json!({}));
+    assert_eq!(code(old), "unauthenticated");
+    e.ok("session.heartbeat", None, Some(&b), json!({}));
+
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    let all = s["sessions"].as_array().unwrap();
+    let session = |id: &str| all.iter().find(|x| x["id"] == id).unwrap();
+    assert_eq!(session("a")["active"], false);
+    assert_eq!(session("a")["continued_by"], "b");
+    assert_eq!(session("a")["continued_from"], Value::Null);
+    assert_eq!(session("b")["active"], true);
+    assert_eq!(session("b")["continued_from"], "a");
+    assert_eq!(session("b")["continued_by"], Value::Null);
+
+    // A refused continuation changes nothing: the old token still works.
+    let r = e.continue_session("c", "b", &["docs/**"]);
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    assert_eq!(r["token"], Value::Null);
+    e.ok("session.heartbeat", None, Some(&b), json!({}));
 }

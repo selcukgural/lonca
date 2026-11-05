@@ -267,8 +267,10 @@ with a signed `daemon.rotate` through `human.submit`.
 - **session**: `{"id", "agent", "task", "parent": string | null,
   "level": "unobserved" | "hooks" | "hooks_sandbox" | "isolated",
   "taint": string | null, "active": boolean, "expires_ms": time,
-  "last_seen_ms": time | null}`. `last_seen_ms` is the last heartbeat;
-  `null` means none yet.
+  "last_seen_ms": time | null, "continued_from": string | null,
+  "continued_by": string | null}`. `last_seen_ms` is the last heartbeat;
+  `null` means none yet. `continued_from` and `continued_by` link the
+  sessions of one workspace; `parent` is a capability's origin.
 - **detail**: `{"code", "symbol", "needed_kind": lease kind,
   "holder_session": string | null, "holder_agent": string | null,
   "intent": string | null, "expires_ms": time | null, "set": string |
@@ -573,7 +575,9 @@ lives by its TTL alone. Pinned items ignore the timeout. Result:
 `{"seq", "decision", "now_ms": time, "timeout_ms": integer,
 "max_ttl_ms": integer, "leases": [{"set", "expires_ms"}]}`: the caller's
 own leases, on the daemon's clock. Send one every `timeout_ms / 3`.
-`lonca mcp` does, and renews what is about to run out.
+`lonca mcp` does, and renews what is about to run out. A session that
+has ended or expired gets the error `session_inactive`, and nothing is
+logged; stop beating.
 
 ### `hook.event`
 
@@ -603,6 +607,7 @@ within two seconds of a proposal; the call is for tests and scripts.
 | `invalid` | the request does not fit: bad params, missing `repo`, a value out of range |
 | `unauthenticated` | no token, or one that is unknown, ended or expired; a login that did not verify |
 | `forbidden` | a token of the wrong kind, for another repository, or not enrolled; a signature by another human |
+| `session_inactive` | `session.heartbeat` of a session that has ended or expired; nothing is logged |
 | `unknown_method` | not in the table |
 | `not_found` | no such repository or change; a path not in the commit (`blobs`) |
 | `too_large` | a `blobs` page, or one file, does not fit the line cap |
@@ -636,7 +641,11 @@ The `reasons` of a decision. The ones a runner acts on:
   `merge_conflict`, `conflict:<symbol>`: the integration failed; the
   change's status says more.
 - `session_ended`, `session_inactive`, `unknown_session`,
-  `session_ttl`: the session is over; start a new one.
+  `session_ttl`: the session is over; start a new one, or continue the
+  workspace (`lonca session start --continue`).
+- `session_continued`, `continue_child_session`,
+  `scope_widening:<what>`: this continuation is refused; see "CLI for
+  runners".
 - `frozen:<reason>`: the repository is frozen; a human unfreezes it.
 - `bad_human_signature`, `stale_human_signature`, `bad_nonce`,
   `nonce_reused`, `presence_required`, `not_enrolled`,
@@ -671,10 +680,20 @@ Exit codes:
   (0600), nowhere else. `--scratch DIR` (repeatable) names a directory
   outside the workspace for the agent's notes and logs; see
   `docs/guide/runners.md`.
+- `session start --continue DIR [--widen] --json`: the same, with
+  `"continues": old session id` (`null` for a plain start). The new
+  session takes over `DIR`: files, base, manifest and the change it
+  proposed stay, the old session ends, its token stops working. Taint,
+  observation level and what was seen written carry over; leases do not,
+  except that items pinned to a change in flight pass to the new session.
+  `--paths` wider than the old session's is denied
+  (`scope_widening:<what>`) without `--widen`. See `docs/guide/runners.md`.
 - `session end --json` (in the agent's workspace): `{"session", "seq",
   "decision"}`.
 - `session heartbeat --json` (in the agent's workspace): `{"session",
-  "seq", "timeout_ms", "leases"}`.
+  "seq", "timeout_ms", "leases"}`. A session that has ended or expired
+  exits 1 (`session_inactive`, or `unauthenticated` once its token is
+  gone) with nothing on stdout.
 - `sync --json`: `{"base_before": id, "base_after": id, "updated":
   [path], "merged": [path], "conflicts": [{"path", "trunk_copy"}]}`.
   A conflict leaves the local file as it was and writes trunk's version
@@ -725,7 +744,10 @@ still needs a signature.
   `change.diff`, `change.get.evidence` (#80); the `reject` operation
   (#81); `trunk.bundle`, `trunk.distance` (#83); `--json` on `lease`,
   `init` and `workspace create`, `details` in `propose --json`, and a
-  denial exits 1 on every command (#97).
+  denial exits 1 on every command (#97); `continues` on `session.start`,
+  `session start --continue`, `status.sessions[].continued_from` and
+  `continued_by`, `session.heartbeat` refused when the session is over,
+  and `session_inactive` from every `lonca mcp` tool after that (#98).
   `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,

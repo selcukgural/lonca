@@ -952,6 +952,7 @@ impl Service {
                     "id": x.id, "agent": x.agent, "task": x.task, "parent": x.parent, "level": x.level,
                     "taint": x.taint, "active": s.session_active(&x.id, now), "expires_ms": x.expires_ms,
                     "last_seen_ms": x.heartbeat.map(|h| h.seen_ms),
+                    "continued_from": x.continued_from, "continued_by": x.continued_by,
                 })
             })
             .collect();
@@ -1795,9 +1796,14 @@ impl Service {
             return Ok(out);
         }
         match &op.entry.op {
-            Op::SessionStart { session, .. } => {
+            Op::SessionStart {
+                session, continues, ..
+            } => {
                 let token = inner.tokens.issue(&name, session).or_fail()?;
                 out["token"] = json!(token);
+                if let Some(c) = continues {
+                    Self::revoke_tokens(inner, &name, &c.session)?;
+                }
             }
             Op::PolicyUpdate { policy } => {
                 let r = Self::repo(inner, &name)?;
@@ -2085,6 +2091,11 @@ impl Service {
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
+        // Refused here and not in the log: a client that does not stop
+        // beating must not fill it.
+        if !r.chain.state.session_active(&session, now) {
+            return fail("session_inactive", "this session has ended or expired");
+        }
         let limits = r.policy().or_fail()?.config.leases.clone();
         let beat = Observation {
             phase: Phase::Pre,

@@ -16,9 +16,9 @@ use std::collections::BTreeSet;
 
 use lonca_core::oplog::FORMAT_LEASE_LIVENESS;
 use lonca_core::ops::{
-    Actor, Attestation, BindChecks, CheckKind, CheckResult, Decision, Facts, HumanKey,
-    HumanSignature, LeaseItem, LeaseKind, NegotiationMsg, ObsKind, ObservationLevel, Op, Outcome,
-    Scope,
+    Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, Facts,
+    HumanKey, HumanSignature, LeaseItem, LeaseKind, NegotiationMsg, ObsKind, ObservationLevel, Op,
+    Outcome, Scope,
 };
 use lonca_core::paths::{
     path_matches, path_pattern_within, symbol_matches, symbol_pattern_within,
@@ -153,6 +153,26 @@ fn is_key_op(op: &Op) -> bool {
             | Op::DaemonRotate { .. }
             | Op::DaemonRecover { .. }
     )
+}
+
+/// A session can be continued once, by one successor, and only a session
+/// a human started: a child's scope and lifetime are its parent's.
+fn check_continuation(state: &State, c: &Continuation, scope: &Scope, v: &mut Verdict) {
+    let Some(old) = state.sessions.get(&c.session) else {
+        v.deny("unknown_session");
+        return;
+    };
+    if old.parent.is_some() {
+        v.deny("continue_child_session");
+    }
+    if old.continued_by.is_some() {
+        v.deny("session_continued");
+    }
+    if !c.widen
+        && let Err(e) = scope_within(scope, &old.scope)
+    {
+        v.deny(format!("scope_widening:{e}"));
+    }
 }
 
 /// An Ed25519 public key as the daemon writes it: 32 bytes, lowercase hex,
@@ -536,6 +556,7 @@ pub fn decide(
             task,
             scope,
             expires_ms,
+            continues,
             ..
         } => {
             if !valid_token(session, 64) || !valid_token(agent, 64) {
@@ -550,6 +571,9 @@ pub fn decide(
             validate_scope(scope, &mut v);
             if *expires_ms <= t || *expires_ms - t > cfg.sessions.max_ttl_minutes * 60_000 {
                 v.deny("session_ttl");
+            }
+            if let Some(c) = continues {
+                check_continuation(state, c, scope, &mut v);
             }
         }
         Op::SessionBind {
@@ -716,7 +740,7 @@ pub fn decide(
                     && !c
                         .actor
                         .session()
-                        .is_some_and(|s| state.descends_from(s, own))
+                        .is_some_and(|s| state.descends_from(s, own) || state.continues(own, s))
                 {
                     v.deny("not_own_change");
                 }

@@ -711,6 +711,28 @@ mod tests {
     }
 
     #[test]
+    fn a_url_is_found_anywhere_in_a_text() {
+        assert_eq!(
+            first_url("see http://a.example/x now"),
+            Some("http://a.example/x")
+        );
+        assert_eq!(first_url("https://b.example"), Some("https://b.example"));
+        assert_eq!(first_url("ftp://c.example and words"), None);
+    }
+
+    #[test]
+    fn each_git_command_that_reaches_a_remote_counts_as_network() {
+        let external = |command: &str| {
+            let input = json!({"command": command});
+            translate(&ev("PreToolUse", "Bash", input), &policy()).0[0].external
+        };
+        for command in ["git clone x", "git fetch origin", "git pull", "curl x"] {
+            assert!(external(command), "{command}");
+        }
+        assert!(!external("git status"));
+    }
+
+    #[test]
     fn shell_commands() {
         let (o, v) = translate(
             &ev("PreToolUse", "Bash", json!({"command": "cargo test -q"})),

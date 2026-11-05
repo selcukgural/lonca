@@ -2821,10 +2821,9 @@ fn undo_reverses_a_change_under_a_later_one_in_the_same_file() {
     std::fs::write(hws.join("src/lib.rs"), &charge).unwrap();
     land(&e, &hws, "double");
     let log = parse(&e.run(r, &["log", "--repo", "demo", "--json"]));
-    let entries = log.as_array().unwrap().iter();
+    let mut entries = log.as_array().unwrap().iter();
     let integrated = entries
-        .filter(|o| o["entry"]["op"]["op"] == "change.integrate")
-        .next_back()
+        .rfind(|o| o["entry"]["op"]["op"] == "change.integrate")
         .unwrap()["entry"]["seq"]
         .as_u64()
         .unwrap()

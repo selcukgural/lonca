@@ -277,10 +277,36 @@ status 2 or a `deny` answer into its own refusal. A harness with no hooks at all
 
 Taint means: the session read content from outside (a web page, an
 untrusted path, another MCP server). Its changes need a human's
-approval and may not touch critical paths. The repository decides what
+approval and, unless the policy says otherwise, may not touch critical
+paths. The repository decides what
 taints (`[taint] fetch`, `shell_network`, `mcp_servers`); a runner
 whose workers must read the web sets `fetch = false` and lists its own
 MCP server, and keeps the human approval as the control.
+
+### Critical paths in cooperative mode
+
+In cooperative mode every session is `unobserved`: hooks from `--settings`
+are not proof, since the agent could have changed them. So every change waits
+for a person, and a change to `[paths] critical` (`Cargo.toml`, `package.json`,
+`.github/**`, ...) is denied outright, `unobserved_critical_path`, with nobody
+to ask. A worker can not add a dependency.
+
+If a person really does review every change, say so in the signed policy:
+
+```toml
+[observation]
+unobserved_critical = "escalate"
+```
+
+The change is then pending with `critical_path:<path>` and integrates once
+approved. Do not use `unobserved_is_tainted = false` for this: the denial goes,
+but so does the review, and changes integrate with nobody looking.
+
+`[taint] critical` is the same word for tainted sessions, and it is separate: a
+taint says content from outside really did enter the session, so it stays
+`deny` unless you decide otherwise. A session that is both needs both words
+open. Set `critical = "escalate"` only if whoever approves reads those changes
+knowing the worker may have been told what to write.
 
 ## Reading results
 

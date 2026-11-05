@@ -99,12 +99,16 @@ unobserved_is_tainted = true
 network = "taint"
 # Let sandboxed commands reach loopback, private and link-local addresses.
 allow_private_network = false
+# What a change to a critical path costs a session nobody fully observes:
+# "deny" refuses it, "escalate" makes it wait for a human like any other
+# change of that session. Applies while unobserved_is_tainted is on.
+unobserved_critical = "deny"
 
 [taint]
 # Which observed tool calls mark a session tainted (content from outside
-# entered it; tainted changes need human review and may not touch
-# critical paths). Reads of untrusted paths and files outside the
-# workspace always taint.
+# entered it; tainted changes need human review, and `critical` below says
+# whether they may touch critical paths). Reads of untrusted paths and files
+# outside the workspace always taint.
 # Web fetches and searches.
 fetch = true
 # Shell commands that reach the network (curl, ssh, git fetch, ...).
@@ -117,6 +121,10 @@ mcp_servers = []
 unknown_tools = true
 # Tools, by the name the harness gives them, that do not.
 safe_tools = []
+# What a change to a critical path costs a tainted session: "deny" or
+# "escalate", as for an unobserved one. Separate, because a taint says more:
+# content from outside really did enter the session.
+critical = "deny"
 
 [approvals]
 # With fewer enrolled humans than a rule requires, require all of them.
@@ -308,12 +316,17 @@ pub fn valid_env_name(name: &str) -> bool {
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
+/// The words of `unobserved_critical` and `[taint] critical`.
+pub const CRITICAL_DENY: &str = "deny";
+pub const CRITICAL_ESCALATE: &str = "escalate";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Observation {
     pub unobserved_is_tainted: bool,
     pub network: String,
     pub allow_private_network: bool,
+    pub unobserved_critical: String,
 }
 
 /// Which observations taint a session (`[taint]`). Policy data: the
@@ -327,6 +340,7 @@ pub struct Taint {
     pub mcp_servers: Vec<String>,
     pub unknown_tools: bool,
     pub safe_tools: Vec<String>,
+    pub critical: String,
 }
 
 impl Taint {
@@ -459,6 +473,7 @@ impl Default for Observation {
             unobserved_is_tainted: true,
             network: "taint".into(),
             allow_private_network: false,
+            unobserved_critical: CRITICAL_DENY.into(),
         }
     }
 }
@@ -471,6 +486,7 @@ impl Default for Taint {
             mcp_servers: vec![],
             unknown_tools: true,
             safe_tools: vec![],
+            critical: CRITICAL_DENY.into(),
         }
     }
 }
@@ -583,6 +599,17 @@ impl PolicyBundle {
             return Err(format!(
                 "{CONFIG_FILE}: observation.network must be taint or deny"
             ));
+        }
+        for (key, word) in [
+            (
+                "observation.unobserved_critical",
+                &config.observation.unobserved_critical,
+            ),
+            ("taint.critical", &config.taint.critical),
+        ] {
+            if word != CRITICAL_DENY && word != CRITICAL_ESCALATE {
+                return Err(format!("{CONFIG_FILE}: {key} must be deny or escalate"));
+            }
         }
         let v = &config.verification;
         for name in v.env_passthrough.iter().chain(v.env.keys()) {

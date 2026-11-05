@@ -26,7 +26,7 @@ use lonca_core::paths::{
     validate_path_pattern, validate_repo_path, validate_symbol_pattern,
 };
 
-use crate::config::{CVal, CedarOutcome, PolicyBundle};
+use crate::config::{CRITICAL_ESCALATE, CVal, CedarOutcome, PolicyBundle};
 use crate::state::{
     ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, LEASES_KEPT, RELEASED, RESERVATION_WINDOW,
     Session, State,
@@ -1182,12 +1182,16 @@ fn propose(
             let unobserved =
                 s.level == ObservationLevel::Unobserved && cfg.observation.unobserved_is_tainted;
             if s.taint.is_some() || unobserved {
+                // Each state answers for itself: opening one word leaves a
+                // session in the other state refused. Only the known word
+                // opens; `PolicyBundle::parse` refuses any other.
+                let open = |word: &str| word == CRITICAL_ESCALATE;
                 if !critical.is_empty() {
-                    v.deny(if s.taint.is_some() {
-                        "tainted_critical_path"
-                    } else {
-                        "unobserved_critical_path"
-                    });
+                    if s.taint.is_some() && !open(&cfg.taint.critical) {
+                        v.deny("tainted_critical_path");
+                    } else if unobserved && !open(&cfg.observation.unobserved_critical) {
+                        v.deny("unobserved_critical_path");
+                    }
                 }
                 v.escalate(
                     if s.taint.is_some() {

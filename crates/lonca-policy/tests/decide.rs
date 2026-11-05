@@ -3485,6 +3485,164 @@ fn agent_instructions_and_tool_config_are_critical() {
     }
 }
 
+// ----------------------------------------------- what a critical path costs
+
+/// The shipped policy with the two words of issue #103.
+fn critical_config(unobserved: &str, tainted: &str) -> String {
+    DEFAULT_CONFIG
+        .replace(
+            "unobserved_critical = \"deny\"",
+            &format!("unobserved_critical = \"{unobserved}\""),
+        )
+        .replace(
+            "\ncritical = \"deny\"",
+            &format!("\ncritical = \"{tainted}\""),
+        )
+}
+
+fn critical_words(unobserved: &str, tainted: &str) -> PolicyBundle {
+    PolicyBundle::parse(&critical_config(unobserved, tainted), DEFAULT_POLICY).unwrap()
+}
+
+/// A session, observed or not, that has leased Cargo.toml and may be tainted.
+fn at_cargo_toml(policy: PolicyBundle, observed: bool, tainted: bool) -> H {
+    let mut h = H::with_policy(policy);
+    if observed {
+        h.start_observed("s1", &["**"]);
+        h.wrote("s1", "Cargo.toml");
+    } else {
+        h.start("s1", &["**"]);
+    }
+    let sym = "Cargo.toml#<file>";
+    assert!(h.lease("s1", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+    if tainted {
+        let taint = Op::Taint {
+            session: "s1".into(),
+            reason: "read the web".into(),
+        };
+        assert!(h.daemon(taint, vec![]).is_allow());
+    }
+    h
+}
+
+fn propose_cargo_toml(h: &mut H) -> (ChangeId, Decision) {
+    let c = ChangeId::random();
+    let d = h.propose("s1", c, edit("Cargo.toml#<file>"));
+    (c, d)
+}
+
+#[test]
+fn an_open_repository_lets_an_unobserved_critical_change_wait_for_a_human() {
+    let mut h = at_cargo_toml(critical_words("escalate", "deny"), false, false);
+    let (c, d) = propose_cargo_toml(&mut h);
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    for reason in ["critical_path:Cargo.toml", "unobserved_session"] {
+        assert!(d.reasons.contains(&reason.to_string()), "{d:?}");
+    }
+    assert!(h.chain.state.queue.is_empty(), "nothing lands by itself");
+    let ChangeStatus::Pending { seq } = h.chain.state.changes[&c].status else {
+        panic!("{:?}", h.chain.state.changes[&c].status);
+    };
+    let approve = Op::Approve {
+        target_seq: seq,
+        note: "read it".into(),
+    };
+    let d = h.human("ayse", approve);
+    assert!(d.is_allow() && d.reasons.contains(&"released".to_string()));
+    assert_eq!(h.chain.state.queue, vec![c]);
+    assert_eq!(h.chain.state.changes[&c].provenance, Provenance::Reviewed);
+    h.assert_replay();
+}
+
+#[test]
+fn the_shipped_policy_denies_a_critical_path_to_both_kinds_of_session() {
+    let mut h = at_cargo_toml(PolicyBundle::default_bundle(), false, false);
+    let (_, d) = propose_cargo_toml(&mut h);
+    assert!(denied_with(&d, "unobserved_critical_path"), "{d:?}");
+    h.assert_replay();
+    let mut h = at_cargo_toml(PolicyBundle::default_bundle(), true, true);
+    let (_, d) = propose_cargo_toml(&mut h);
+    assert!(denied_with(&d, "tainted_critical_path"), "{d:?}");
+    h.assert_replay();
+    // Words spelled out as the default mean the default.
+    let mut h = at_cargo_toml(critical_words("deny", "deny"), false, false);
+    assert!(denied_with(
+        &propose_cargo_toml(&mut h).1,
+        "unobserved_critical_path"
+    ));
+    h.assert_replay();
+}
+
+#[test]
+fn opening_one_word_does_not_open_the_other() {
+    // Tainted and observed: only the tainted word counts.
+    let mut h = at_cargo_toml(critical_words("escalate", "deny"), true, true);
+    assert!(denied_with(
+        &propose_cargo_toml(&mut h).1,
+        "tainted_critical_path"
+    ));
+    h.assert_replay();
+    let mut h = at_cargo_toml(critical_words("deny", "escalate"), true, true);
+    let (_, d) = propose_cargo_toml(&mut h);
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    assert!(d.reasons.contains(&"tainted_session".to_string()), "{d:?}");
+    assert!(d.reasons.contains(&"critical_path:Cargo.toml".to_string()));
+    h.assert_replay();
+
+    // Unobserved and clean: only the unobserved word counts.
+    let mut h = at_cargo_toml(critical_words("deny", "escalate"), false, false);
+    assert!(denied_with(
+        &propose_cargo_toml(&mut h).1,
+        "unobserved_critical_path"
+    ));
+    h.assert_replay();
+
+    // Both at once: each has to be open.
+    let mut h = at_cargo_toml(critical_words("escalate", "deny"), false, true);
+    assert!(denied_with(
+        &propose_cargo_toml(&mut h).1,
+        "tainted_critical_path"
+    ));
+    h.assert_replay();
+    let mut h = at_cargo_toml(critical_words("deny", "escalate"), false, true);
+    assert!(denied_with(
+        &propose_cargo_toml(&mut h).1,
+        "unobserved_critical_path"
+    ));
+    h.assert_replay();
+    let mut h = at_cargo_toml(critical_words("escalate", "escalate"), false, true);
+    assert_eq!(propose_cargo_toml(&mut h).1.outcome, Outcome::Escalate);
+    h.assert_replay();
+}
+
+/// An observed, clean session pays only the human's review, whatever the
+/// words say: they are about sessions nobody fully observes.
+#[test]
+fn the_words_change_nothing_for_an_observed_clean_session() {
+    let mut h = at_cargo_toml(critical_words("deny", "deny"), true, false);
+    let (_, d) = propose_cargo_toml(&mut h);
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    assert!(!d.reasons.contains(&"unobserved_session".to_string()));
+    h.assert_replay();
+}
+
+#[test]
+fn a_word_nobody_defined_is_refused_when_the_policy_is_read() {
+    for (unobserved, tainted, key) in [
+        ("open", "deny", "observation.unobserved_critical"),
+        ("deny", "allow", "taint.critical"),
+        ("", "deny", "observation.unobserved_critical"),
+        ("Escalate", "deny", "observation.unobserved_critical"),
+    ] {
+        let config = critical_config(unobserved, tainted);
+        let e = PolicyBundle::parse(&config, DEFAULT_POLICY).err().unwrap();
+        assert!(
+            e.contains(&format!("{key} must be deny or escalate")),
+            "{e}"
+        );
+    }
+}
+
 // -------------------------------------------------------- the lease queue
 
 fn interest(h: &mut H, session: &str, sym: &str) -> Decision {

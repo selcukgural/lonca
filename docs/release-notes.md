@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### A critical path can wait for a person instead of being refused (#103)
+
+An unobserved or tainted session was denied any change to `[paths] critical`,
+with no way to ask anyone, so a cooperative worker could not add a dependency.
+`[observation] unobserved_critical` and `[taint] critical` take `deny` (the
+default) or `escalate`, separately, through a signed policy update. A policy
+that uses them can not be read by an older release.
+
 ### An agent that stops with unproposed work is told so (#121)
 
 An agent could edit, say "done" and stop, with the work left in its workspace.

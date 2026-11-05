@@ -630,6 +630,36 @@ mod tests {
         );
     }
 
+    /// The move is in `theirs` next to an edit that merges in place, so the
+    /// symbol merge has something to apply and only the move can send the
+    /// file to the line merge.
+    #[test]
+    fn from_engine_2_a_move_next_to_an_edit_is_not_lost() {
+        let f = |n: &str, v: u8| format!("fn {n}() -> u8 {{\n    {v}\n}}\n");
+        let parts = [f("v", 1), f("w", 2), f("x", 3), f("y", 4), f("z", 5)];
+        let base = parts.join("\n\n\n");
+        let moved = [&parts[1], &parts[2], &parts[3], &parts[4], &parts[0]]
+            .map(String::as_str)
+            .join("\n\n\n")
+            .replace("    2\n", "    20\n");
+        let ours = base.replace("    4\n", "    40\n");
+        let m = merge_text_at(2, "x.rs", &base, &ours, &moved).unwrap();
+        assert!(m.find("fn z").unwrap() < m.find("fn v").unwrap(), "{m}");
+        assert!(m.contains("    20\n") && m.contains("    40\n"), "{m}");
+    }
+
+    /// Only three containers merge member by member: a side where the
+    /// symbol is a leaf makes it one conflict, named by the symbol.
+    #[test]
+    fn a_symbol_that_is_a_container_on_only_some_sides_conflicts_whole() {
+        let b = "mod m {\n    fn a() {}\n}\n";
+        let t = "mod m {\n    fn a() -> u8 { 1 }\n}\n";
+        assert_eq!(
+            merge_text_at(2, "x.rs", b, "mod m;\n", t),
+            Err(vec!["x.rs#m".into()])
+        );
+    }
+
     #[test]
     fn from_engine_2_a_move_inside_a_container_counts_too() {
         let b = "impl C {\n    fn a() {}\n\n\n\n    fn b() {}\n\n\n\n    fn c() {}\n}\n";

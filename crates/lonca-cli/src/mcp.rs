@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow, bail};
 use lonca_core::ops::{Claim, LeaseItem, LeaseKind, NegotiationMsg, TestDelta};
 use lonca_daemon::Client;
+use lonca_symbols::sections::{Format, sections};
 use serde_json::{Value, json};
 
 use crate::ctx;
@@ -68,6 +69,15 @@ fn beat_interval_ms(beat: &Value) -> i64 {
 fn renewal_ttl_ms(beat: &Value) -> i64 {
     let max = beat["max_ttl_ms"].as_i64().unwrap_or(i64::MAX);
     ttl_ms(&Value::Null).min(max)
+}
+
+/// The sections of a file that has them, as `symbols` lists symbols.
+fn section_ids(path: &str, text: &str) -> Option<Vec<Value>> {
+    let format = Format::detect(path)?;
+    let list = sections(format, text)?.into_iter();
+    let ids =
+        list.map(|s| json!({"id": format!("{path}#{}", s.name), "container": null, "test": false}));
+    Some(ids.collect())
 }
 
 /// The sets of a heartbeat's answer that would run out before the next
@@ -259,6 +269,9 @@ impl Server {
                     .ok_or_else(|| anyhow!("path required"))?;
                 lonca_core::paths::validate_repo_path(path)?;
                 let text = std::fs::read_to_string(self.ws.root.join(path))?;
+                if let Some(list) = section_ids(path, &text) {
+                    return Ok(json!({"symbols": list}));
+                }
                 let lang = lonca_symbols::Lang::detect(path).ok_or_else(|| {
                     anyhow!("no symbol support for {path}; lease {path}#<file> instead")
                 })?;
@@ -441,8 +454,8 @@ pub fn run() -> Result<()> {
 mod tests {
     use super::{
         LeaseItem, LeaseKind, RETRY_BEAT_MS, anyhow, beat_interval_ms, ctx, due_for_renewal,
-        error_body, next_beat, remainder, renewal_ttl_ms, requested_items, session_over, tools,
-        ttl_ms,
+        error_body, next_beat, remainder, renewal_ttl_ms, requested_items, section_ids,
+        session_over, tools, ttl_ms,
     };
     use serde_json::json;
 
@@ -521,6 +534,14 @@ mod tests {
             error_body(&e),
             json!({"code": "forbidden", "message": "no", "details": []})
         );
+    }
+
+    #[test]
+    fn sections_are_listed_like_symbols() {
+        let ids = section_ids("a.md", "# One\nx\n# Two\ny\n").unwrap();
+        assert_eq!(ids[1]["id"], "a.md#Two");
+        assert_eq!(section_ids("a.md", "plain\n"), None);
+        assert_eq!(section_ids("a.rs", "# One\n# Two\n"), None);
     }
 
     #[test]

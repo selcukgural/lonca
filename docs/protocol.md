@@ -107,7 +107,11 @@ unknown method: `unknown_method`, whatever the token.
   there can be proposed. A child scope may keep or drop them, not add.
 - **lease item**: `{"symbol": "path#Qualified.name", "kind": "edit" |
   "insert" | "rename"}`; for `insert` the symbol is the container
-  (`path#Type` or `path#<file>`).
+  (`path#Type` or `path#<file>`). Markdown, TOML, JSON and YAML files
+  have sections as symbols (`README.md#Install.Linux`,
+  `Cargo.toml#dependencies.serde`); adding to the end of a Markdown section
+  is the addition `path#Section.<append>`, which takes an `insert` lease on
+  the section. A file that does not parse is `path#<file>`.
 - **claim**: `{"intent": string, "edits": [symbol], "adds": [symbol],
   "deletes": [symbol], "deleted_files": [path], "signature_changes":
   [symbol], "tests": {"added", "modified", "deleted", "skipped"},
@@ -788,7 +792,8 @@ still needs a signature.
   `scope.scratch`, `hook.bind.scratch`, `session start --scratch`
   (#78); `tree[].size`, `blobs`, `repo.prepare_init.warnings` (#79);
   `change.diff`, `change.get.evidence` (#80); the `reject` operation
-  (#81); `trunk.bundle`, `trunk.distance` (#83); `--json` on `lease`,
+  (#81); `trunk.bundle`, `trunk.distance` (#83); sections as symbols
+  (#46); `--json` on `lease`,
   `init` and `workspace create`, `details` in `propose --json`, and a
   denial exits 1 on every command (#97); `continues` on `session.start`,
   `session start --continue`, `status.sessions[].continued_from` and

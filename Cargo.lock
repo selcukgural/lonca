@@ -2324,6 +2324,7 @@ dependencies = [
  "serde_json",
  "similar",
  "tempfile",
+ "toml",
  "tree-sitter",
  "tree-sitter-c-sharp",
  "tree-sitter-go",

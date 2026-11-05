@@ -1683,3 +1683,88 @@ fn the_inbox_is_derived_from_the_log() {
     assert_eq!(mine["events"][0]["from"], "a");
     assert_eq!(mine["events"][0]["thread"], "t");
 }
+
+/// Two agents, one manifest and one changelog, no whole-file lease
+/// (issue #46). A `Cargo.toml` would behave the same, with a human on top:
+/// it is a critical path, which only observed sessions can propose to.
+#[test]
+fn two_agents_add_to_a_manifest_and_a_changelog_at_once() {
+    const MANIFEST: &str = "[package]\nname = \"x\"\n\n[dependencies]\nserde = \"1\"\n";
+    const LOG: &str = "# Changes\n\n- first\n\n# Older\n\n- zero\n";
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(
+        vec![file("deps.toml", MANIFEST), file("CHANGELOG.md", LOG)],
+        "seed",
+    );
+    e.svc.process_all();
+    let base = e.trunk();
+    let a = e.session("a", &["**"]);
+    let b = e.session("b", &["**"]);
+    let items = json!([
+        {"symbol": "deps.toml#dependencies", "kind": "insert"},
+        {"symbol": "CHANGELOG.md#Changes", "kind": "insert"},
+    ]);
+    for t in [&a, &b] {
+        let got = e.ok(
+            "lease.acquire",
+            None,
+            Some(t),
+            json!({"items": items, "intent": "add", "ttl_ms": 600_000}),
+        );
+        assert_eq!(got["decision"]["outcome"], "allow", "{got}");
+    }
+    let change = |dep: &str, line: &str| {
+        vec![
+            file("deps.toml", &format!("{MANIFEST}{dep} = \"1\"\n")),
+            file(
+                "CHANGELOG.md",
+                &LOG.replace("- first\n", &format!("- first\n{line}\n")),
+            ),
+        ]
+    };
+    let propose = |e: &mut Env, t: &str, dep: &str, line: &str| {
+        let claim = Claim {
+            intent: "add".into(),
+            adds: vec![
+                "CHANGELOG.md#Changes.<append>".into(),
+                format!("deps.toml#dependencies.{dep}"),
+            ],
+            ..Default::default()
+        };
+        let r = e.ok(
+            "change.propose",
+            None,
+            Some(t),
+            json!({"base": base, "files": change(dep, line), "claim": claim}),
+        );
+        assert_ne!(r["decision"]["outcome"], "deny", "{r}");
+        r["seq"].as_u64().unwrap()
+    };
+    let first = propose(&mut e, &a, "anyhow", "- a");
+    let second = propose(&mut e, &b, "clap", "- b");
+    for seq in [first, second] {
+        let d = e.human(Op::Approve {
+            target_seq: seq,
+            note: String::new(),
+        });
+        assert_eq!(d["decision"]["outcome"], "allow", "{d}");
+        e.svc.process_all();
+    }
+    let trunk = e.trunk();
+    let store = e.store();
+    let read = |path: &str| {
+        let blob = store.commit_files(&trunk).unwrap()[path].blob.clone();
+        String::from_utf8(store.read_blob(&blob).unwrap()).unwrap()
+    };
+    assert_eq!(
+        read("deps.toml"),
+        format!("{MANIFEST}clap = \"1\"\nanyhow = \"1\"\n"),
+    );
+    assert_eq!(
+        read("CHANGELOG.md"),
+        "# Changes\n\n- first\n- a\n- b\n\n# Older\n\n- zero\n"
+    );
+    let report = lonca_audit::audit(&store, lonca_audit::Options::default()).unwrap();
+    assert!(report.ok(), "{:#?}", report.findings);
+}

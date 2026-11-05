@@ -1,0 +1,107 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.yaml#jobs.build"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.yaml"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.yaml#jobs.test"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.yaml"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "name: ci\njobs:\n  build:\n    runs: b\n  test:\n    runs: c\n"
+  },
+  "path": "src/sample.yaml",
+  "symbols": {
+    "base": [
+      {
+        "name": "name",
+        "text": "name: ci\n"
+      },
+      {
+        "name": "jobs",
+        "text": "jobs:\n"
+      },
+      {
+        "name": "jobs.build",
+        "text": "  build:\n    runs: a\n"
+      }
+    ],
+    "ours": [
+      {
+        "name": "name",
+        "text": "name: ci\n"
+      },
+      {
+        "name": "jobs",
+        "text": "jobs:\n"
+      },
+      {
+        "name": "jobs.build",
+        "text": "  build:\n    runs: b\n"
+      }
+    ],
+    "theirs": [
+      {
+        "name": "name",
+        "text": "name: ci\n"
+      },
+      {
+        "name": "jobs",
+        "text": "jobs:\n"
+      },
+      {
+        "name": "jobs.build",
+        "text": "  build:\n    runs: a\n"
+      },
+      {
+        "name": "jobs.test",
+        "text": "  test:\n    runs: c\n"
+      }
+    ]
+  }
+}

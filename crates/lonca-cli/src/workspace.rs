@@ -14,6 +14,7 @@ use base64::Engine;
 use lonca_core::{FileMode, GitId};
 use lonca_daemon::Client;
 use lonca_daemon::protocol::{FileChange, TreeFile};
+use lonca_symbols::engine::ENGINE_CURRENT;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -365,7 +366,7 @@ impl Workspace {
                         std::str::from_utf8(&trunk_text),
                     ) {
                         (Ok(b), Ok(o), Ok(t)) if m.content_b64.is_some() && new.is_some() => {
-                            lonca_symbols::merge::merge_text(&path, b, o, t).ok()
+                            lonca_symbols::merge::merge_text_at(ENGINE_CURRENT, &path, b, o, t).ok()
                         }
                         _ => None,
                     };

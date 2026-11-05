@@ -2738,3 +2738,107 @@ fn a_worker_waits_for_a_lease_and_hears_when_it_is_free() {
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert!(text(&out.stdout).contains("allow"), "{}", text(&out.stdout));
 }
+
+const TWO_FNS: &str =
+    "pub fn charge(a: u64) -> u64 {\n    a\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n";
+
+/// A human's change from a workspace, integrated, the workspace synced.
+fn land(e: &Env, hws: &Path, intent: &str) {
+    e.run(hws, &["propose", "-i", intent]);
+    e.settle();
+    e.run(hws, &["sync"]);
+}
+
+/// Sync merges what both sides edited, and leaves what only one side still
+/// has to a human: a file deleted here or on trunk is a conflict, however
+/// cleanly the text would merge (issue #46 moved this code under test).
+#[test]
+fn sync_merges_two_edits_and_refuses_a_file_only_one_side_has() {
+    let e = Env::new();
+    agent_workspace(&e);
+    let r = &e.root;
+    let hws = r.join("hws");
+    let f = |name: &str| format!("pub fn {name}() {{}}\n");
+    std::fs::write(hws.join("src/two.rs"), f("two")).unwrap();
+    std::fs::write(hws.join("src/three.rs"), f("three")).unwrap();
+    land(&e, &hws, "seed");
+    e.run(r, &["workspace", "create", "h2", "--repo", "demo"]);
+    let h2 = r.join("h2");
+
+    // Here: another function edited, one file deleted, one grown.
+    let refund = TWO_FNS.replace(
+        "refund(a: u64) -> u64 {\n    a",
+        "refund(a: u64) -> u64 {\n    a + 1",
+    );
+    std::fs::write(h2.join("src/lib.rs"), &refund).unwrap();
+    std::fs::remove_file(h2.join("src/two.rs")).unwrap();
+    std::fs::write(h2.join("src/three.rs"), f("three") + &f("more")).unwrap();
+    // On trunk: one function edited, the deleted file grown, the grown one
+    // deleted.
+    let charge = TWO_FNS.replace(
+        "charge(a: u64) -> u64 {\n    a",
+        "charge(a: u64) -> u64 {\n    a * 2",
+    );
+    std::fs::write(hws.join("src/lib.rs"), &charge).unwrap();
+    std::fs::write(hws.join("src/two.rs"), f("two") + &f("extra")).unwrap();
+    std::fs::remove_file(hws.join("src/three.rs")).unwrap();
+    land(&e, &hws, "trunk moves");
+
+    let synced = parse(&e.run(&h2, &["sync", "--json"]));
+    assert_eq!(synced["merged"], json!(["src/lib.rs"]), "{synced}");
+    let conflicts = synced["conflicts"].as_array().unwrap();
+    let paths: Vec<&str> = conflicts
+        .iter()
+        .map(|c| c["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, ["src/three.rs", "src/two.rs"], "{synced}");
+    let merged = std::fs::read_to_string(h2.join("src/lib.rs")).unwrap();
+    assert!(
+        merged.contains("a * 2") && merged.contains("a + 1"),
+        "{merged}"
+    );
+    // Trunk's version is beside the deleted file; nothing is resurrected.
+    assert!(!h2.join("src/two.rs").exists());
+    let side = std::fs::read_to_string(h2.join("src/two.rs.trunk")).unwrap();
+    assert!(side.contains("extra"), "{side}");
+    assert!(!h2.join("src/three.rs.trunk").exists(), "trunk has none");
+    let kept = std::fs::read_to_string(h2.join("src/three.rs")).unwrap();
+    assert!(kept.contains("more"), "{kept}");
+}
+
+/// Undoing a change that a later one built on takes out that change alone.
+#[test]
+fn undo_reverses_a_change_under_a_later_one_in_the_same_file() {
+    let e = Env::new();
+    agent_workspace(&e);
+    let r = &e.root;
+    let hws = r.join("hws");
+    e.run(&hws, &["sync"]);
+    let charge = TWO_FNS.replace(
+        "charge(a: u64) -> u64 {\n    a",
+        "charge(a: u64) -> u64 {\n    a * 2",
+    );
+    std::fs::write(hws.join("src/lib.rs"), &charge).unwrap();
+    land(&e, &hws, "double");
+    let log = parse(&e.run(r, &["log", "--repo", "demo", "--json"]));
+    let mut entries = log.as_array().unwrap().iter();
+    let integrated = entries
+        .rfind(|o| o["entry"]["op"]["op"] == "change.integrate")
+        .unwrap()["entry"]["seq"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let both = charge.replace(
+        "refund(a: u64) -> u64 {\n    a",
+        "refund(a: u64) -> u64 {\n    a + 1",
+    );
+    std::fs::write(hws.join("src/lib.rs"), &both).unwrap();
+    land(&e, &hws, "refund");
+
+    e.run(r, &["undo", &integrated, "--repo", "demo"]);
+    e.settle();
+    e.run(&hws, &["sync"]);
+    let now = std::fs::read_to_string(hws.join("src/lib.rs")).unwrap();
+    assert!(!now.contains("a * 2"), "{now}");
+    assert!(now.contains("a + 1"), "{now}");
+}

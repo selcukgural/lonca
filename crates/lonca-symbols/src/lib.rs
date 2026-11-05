@@ -9,6 +9,7 @@ pub mod facts;
 pub mod integrate;
 pub mod lang;
 pub mod merge;
+pub mod sections;
 
 pub use extract::{Parsed, Sym, parse};
 pub use facts::{Analysis, analyze};

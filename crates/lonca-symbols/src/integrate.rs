@@ -35,13 +35,12 @@ pub fn integrate(
     change: &GitId,
 ) -> Result<Integration> {
     engine::check(engine)?;
-    // Engine 0 is the only version so far; later versions dispatch here.
     let base_files = store.commit_files(base)?;
     let ours = store.commit_files(trunk)?;
     let theirs = store.commit_files(change)?;
     let read = |id: &GitId| store.read_blob(id);
     let write = |b: &[u8]| store.write_blob(b);
-    let r = merge3(&base_files, &ours, &theirs, &read, &write)?;
+    let r = merge3(engine, &base_files, &ours, &theirs, &read, &write)?;
     if !r.conflicts.is_empty() {
         return Ok(Integration {
             merged: None,
@@ -80,5 +79,5 @@ pub fn facts_of(store: &Store, engine: u32, base: &GitId, commit: &GitId) -> Res
     engine::check(engine)?;
     let b = store.commit_files(base)?;
     let n = store.commit_files(commit)?;
-    analyze(&b, &n, &|id| store.read_blob(id))
+    analyze(engine, &b, &n, &|id| store.read_blob(id))
 }

@@ -177,6 +177,27 @@ entry format, so they have their own version
     differs goes to the line merge too. So a change only of layout between
     symbols is applied, not dropped, or reported as a conflict.
 
+## Harness profiles
+
+Which harnesses Lonca can read is data, not code (issue #109). A profile
+says what a harness calls its events, where the parts of an event are, what
+its tools do and how it wants an answer. Three come with Lonca
+(`crates/lonca-policy/src/harnesses.toml`); `[harnesses.<name>]` in
+`lonca.toml` adds or replaces one.
+
+- **In the signed policy, read by the daemon.** What a tool counts as decides
+  what taints a session, so it can not come from a file an agent can write,
+  or from the hook program's environment. `hook.input` takes the raw event
+  and the daemon does the reading, so a root-owned hook program stays the
+  same for every harness.
+- **Replay does not need them.** Observations are logged as they were made;
+  a profile changes what future events mean, like `[taint]`.
+- **What stays out of reach of a profile:** a harness that can not run a
+  command before a tool call can not be observed at all. It still works
+  through `lonca mcp` or the CLI, unobserved. How far a harness can be locked
+  (managed settings, sandbox) is checked per harness and exists for Claude
+  Code only; that is issue #21.
+
 ## Human keys
 
 A human key can be replaced, withdrawn and recovered (design §5.4). All
@@ -411,6 +432,7 @@ A01/A07, zero trust: every request authenticated).
 | `session.end` | agent | |
 | `session.heartbeat` | agent | |
 | `hook.event` | agent | |
+| `hook.input` | agent | |
 | `hook.bind` | agent | |
 | `queue.run` | any human | drains every merge queue now |
 

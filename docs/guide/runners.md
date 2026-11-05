@@ -1,8 +1,11 @@
 # Running agents on Lonca
 
 What a runner (imece, a CI job, a script) installs and runs so that a
-worker's Claude Code session is observed by Lonca and its changes go
-through the daemon. The daemon's protocol is `docs/protocol.md`; this
+worker's session is observed by Lonca and its changes go through the
+daemon. Leases, claims and the merge queue work the same for any agent
+that can reach `lonca mcp` or the `lonca` command; the hooks below add
+observation. The steps use Claude Code; "Other harnesses" lists what
+differs. The daemon's protocol is `docs/protocol.md`; this
 page is the harness side.
 
 ## One worker, step by step
@@ -96,8 +99,9 @@ installers write these for you):
 }
 ```
 
-- `matcher` is `*` (or absent): every tool. Lonca ignores what it does
-  not know and never blocks a tool it does not understand.
+- `matcher` is `*` (or absent): every tool. A tool Lonca does not know
+  is observed, not blocked, and taints the session (`[taint]
+  unknown_tools`, `safe_tools`).
 - `onFailure: block`: when the hook can not reach the daemon it exits
   2 and the tool call is blocked (fail closed). Without it an
   unreachable daemon would let everything through unobserved.
@@ -118,6 +122,62 @@ else `~/.lonca/lonca.sock`). Nothing else: the hook and the MCP server
 find the workspace from `cwd` (upwards to the first
 `.lonca/workspace.json`) and read the token from `.lonca/session`.
 Outside a workspace, or in a human workspace, the hook does nothing.
+
+## Other harnesses
+
+Lonca knows no harness in its code: `lonca hook --harness <name>` hands
+the event to the daemon, which reads it with that harness's **profile**.
+Profiles for Claude Code, Codex and Gemini CLI come with Lonca
+(`crates/lonca-policy/src/harnesses.toml`). Use the same three events:
+
+| | Claude Code | Codex | Gemini CLI |
+|---|---|---|---|
+| Events | `SessionStart`, `PreToolUse`, `PostToolUse` | the same | `SessionStart`, `BeforeTool`, `AfterTool` |
+| Command | `lonca hook` | `lonca hook --harness codex` | `lonca hook --harness gemini` |
+
+An event the named harness does not have exits 2, so a hook set up for the
+wrong harness blocks instead of watching nothing. `onFailure: block` is
+Claude Code's: check what yours does when a hook fails.
+
+Only Claude Code has a locked setup so far (`hook.bind` gives
+`hooks_sandbox` with its managed settings). Other harnesses are
+`unobserved`, so their changes wait for a human.
+
+### Any other harness
+
+A harness that can run a command with a JSON event on stdin needs no new
+Lonca, only a table in `lonca.toml`, set with `lonca policy set`. It lives
+in the signed policy because what a tool counts as decides what taints a
+session; an agent can not choose it.
+
+```toml
+[harnesses.acme]
+events = { session_start = "begin", before_tool = "about_to", after_tool = "did" }
+# Where the parts are in its JSON; these are the defaults.
+fields = { event = "hook_event_name", tool = "tool_name", input = "tool_input", cwd = "cwd", session = "session_id" }
+# What it wants back. {reason} and {context} are filled in.
+deny = { allowed = false, why = "{reason}" }
+context = { say = "{context}" }
+# How it names MCP tools; these are the defaults (mcp__server__tool).
+mcp_prefix = "mcp__"
+mcp_separator = "__"
+
+[harnesses.acme.tools]
+open = { kind = "read", fields = ["path"] }
+save = { kind = "write", fields = ["path"] }
+patch = { kind = "write", fields = ["text"], headers = ["+++ "] }
+run = { kind = "shell", fields = ["line"] }
+get = { kind = "fetch", fields = ["url"] }
+find = { kind = "search" }
+plan = { kind = "inert" }
+```
+
+`kind` is `read`, `write`, `shell`, `fetch`, `search` or `inert`. `fields`
+are tried in order. `headers` are for a tool whose paths are inside a text.
+A tool not in the table is observed and taints (`[taint] unknown_tools`).
+The same table replaces a built-in profile, for a harness that has moved on
+faster than Lonca. A harness with no hooks at all still works through
+`lonca mcp` or the CLI, unobserved.
 
 ## What the hooks do
 

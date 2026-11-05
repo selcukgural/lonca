@@ -1,17 +1,20 @@
-//! `lonca hook`: the Claude Code hook handler.
+//! `lonca hook`: the handler for harness hooks. It knows no harness: the
+//! daemon reads each event with the harness's profile (`--harness <name>`).
 //!
-//! Configured (ideally in root-owned managed settings) for SessionStart,
-//! PreToolUse and PostToolUse. Outside a Lonca agent workspace it does
+//! Configured (ideally in root-owned managed settings) for session start and
+//! before and after every tool call. Outside a Lonca agent workspace it does
 //! nothing. Inside one it reports every tool call to the daemon and blocks
 //! the call when the daemon says so — or when the daemon can not be reached
 //! (fail closed: exit status 2).
 
 use std::io::Read;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use lonca_daemon::Client;
+use lonca_policy::harness::render;
 use serde_json::{Value, json};
 
 use crate::ctx;
@@ -50,7 +53,7 @@ fn sudo_without_password() -> bool {
     }
 }
 
-pub fn run() -> ExitCode {
+pub fn run(harness: &str) -> ExitCode {
     let mut input = String::new();
     if std::io::stdin()
         .take(MAX_INPUT)
@@ -62,18 +65,21 @@ pub fn run() -> ExitCode {
     let Ok(v) = serde_json::from_str::<Value>(&input) else {
         return block("lonca: hook input is not JSON");
     };
+    // Before the workspace is known there is no policy to ask where a
+    // harness keeps this, and a hook runs in the session's directory anyway.
     let cwd = v
         .get("cwd")
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
-    let Some(ws) = Workspace::find(Path::new(&cwd)) else {
+    let Some(ws) = Workspace::find(&cwd) else {
         return ExitCode::SUCCESS;
     };
     if ws.meta.session.is_none() {
         return ExitCode::SUCCESS;
     }
-    match handle(&v, &ws, &cwd) {
+    match handle(harness, &v, &ws) {
         Ok(Some(out)) => {
             println!("{out}");
             ExitCode::SUCCESS
@@ -85,48 +91,49 @@ pub fn run() -> ExitCode {
     }
 }
 
-fn handle(v: &Value, ws: &Workspace, cwd: &str) -> Result<Option<Value>> {
-    let event = v
-        .get("hook_event_name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+/// Knows no harness: the daemon reads the event with the profile in the
+/// signed policy and says what to answer.
+fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
     let mut client = ctx::connect()?;
     client.token = Some(ws.token()?);
-    match event {
-        "SessionStart" => {
-            let harness_session = v
-                .get("session_id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let r = ctx::call(
-                &mut client,
-                "hook.bind",
-                json!({
-                    "harness": "claude-code",
-                    "harness_session": harness_session,
-                    "sudo_without_password": sudo_without_password(),
-                    "workspace": ws.root,
-                }),
-            )?;
-            let level = r["level"].as_str().unwrap_or("unobserved");
-            let session = ws.meta.session.clone().unwrap_or_default();
-            // The roots come from the daemon's answer (the log), not from
-            // the workspace file.
-            let scratch: Vec<&str> = r["scratch"]
-                .as_array()
-                .map(|a| a.iter().filter_map(Value::as_str).collect())
-                .unwrap_or_default();
-            let where_to_write = if scratch.is_empty() {
-                "- Edit files only inside this workspace.".to_string()
-            } else {
-                format!(
-                    "- Edit files only inside this workspace. Notes, logs and throwaway files go to your scratch directory ({}); nothing there is part of the repository or of a proposal.",
-                    scratch.join(", ")
-                )
-            };
-            let context = format!(
-                "This workspace is governed by Lonca (repository {repo}, session {session}, observation level {level}).\n\
+    let params = json!({"harness": harness, "input": v, "workspace": ws.root});
+    let r = ctx::call(&mut client, "hook.input", params)?;
+    if r["phase"] == "session_start" {
+        return bind(&mut client, harness, &r, ws).map(Some);
+    }
+    Ok((r["decision"] == "deny").then(|| r["output"].clone()))
+}
+
+/// Binds the session and answers with Lonca's rules.
+fn bind(client: &mut Client, harness: &str, start: &Value, ws: &Workspace) -> Result<Value> {
+    let r = ctx::call(
+        client,
+        "hook.bind",
+        json!({
+            "harness": harness,
+            "harness_session": start["session"],
+            "sudo_without_password": sudo_without_password(),
+            "workspace": ws.root,
+        }),
+    )?;
+    let level = r["level"].as_str().unwrap_or("unobserved");
+    let session = ws.meta.session.clone().unwrap_or_default();
+    // The roots come from the daemon's answer (the log), not from
+    // the workspace file.
+    let scratch: Vec<&str> = r["scratch"]
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let where_to_write = if scratch.is_empty() {
+        "- Edit files only inside this workspace.".to_string()
+    } else {
+        format!(
+            "- Edit files only inside this workspace. Notes, logs and throwaway files go to your scratch directory ({}); nothing there is part of the repository or of a proposal.",
+            scratch.join(", ")
+        )
+    };
+    let context = format!(
+        "This workspace is governed by Lonca (repository {repo}, session {session}, observation level {level}).\n\
                  - Before editing a function, method or type, lease it: mcp__lonca__lease_acquire with symbols like \"src/file.rs#Type.method\" (mcp__lonca__symbols lists them).\n\
                  {where_to_write}\n\
                  - mcp__lonca__lease_needed says which leases your local changes need and who holds them.\n\
@@ -134,33 +141,7 @@ fn handle(v: &Value, ws: &Workspace, cwd: &str) -> Result<Option<Value>> {
                  - After your change integrates, run mcp__lonca__sync before continuing. Integration releases the leases the change needed: lease a symbol again before editing it again.\n\
                  - If a symbol is leased by another agent, ask it with mcp__lonca__negotiate or wait.\n\
                  - Reading untrusted paths or files outside this workspace taints the session; whether web fetches, network commands and other MCP servers do is the repository's policy ([taint] in lonca.toml). Tainted changes need human review.",
-                repo = ws.meta.repo
-            );
-            Ok(Some(
-                json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}),
-            ))
-        }
-        "PreToolUse" | "PostToolUse" => {
-            let r = ctx::call(
-                &mut client,
-                "hook.event",
-                json!({
-                    "hook_event_name": event,
-                    "tool_name": v.get("tool_name"),
-                    "tool_input": v.get("tool_input").cloned().unwrap_or(Value::Null),
-                    "cwd": cwd,
-                    "workspace": ws.root,
-                }),
-            )?;
-            if event == "PreToolUse" && r["decision"] == "deny" {
-                return Ok(Some(json!({"hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": r["reason"],
-                }})));
-            }
-            Ok(None)
-        }
-        _ => Ok(None),
-    }
+        repo = ws.meta.repo
+    );
+    Ok(render(&start["context"], "context", &context))
 }

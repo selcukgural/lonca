@@ -11,6 +11,7 @@ pub mod config;
 pub mod decide;
 pub mod details;
 pub mod events;
+pub mod harness;
 pub mod human;
 pub mod state;
 pub mod symbols;

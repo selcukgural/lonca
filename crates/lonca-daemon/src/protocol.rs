@@ -275,7 +275,8 @@ pub struct LogQuery {
     pub wait_ms: Option<i64>,
 }
 
-/// A harness hook event (Claude Code's hook input, reduced to what Lonca uses).
+/// A harness hook event, reduced to what Lonca uses. `hook.input` makes one
+/// from what a harness sent; tool names stay the harness's own.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct HookEvent {
     pub hook_event_name: String,
@@ -285,6 +286,19 @@ pub struct HookEvent {
     pub tool_input: Value,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Absolute path of the workspace root the hook resolved.
+    pub workspace: String,
+    /// The harness profile to read it with; none means `claude-code`.
+    #[serde(default)]
+    pub harness: Option<String>,
+}
+
+/// What a hook received from its harness, untouched: the daemon reads it with
+/// the harness's profile from the policy.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HookInput {
+    pub harness: String,
+    pub input: Value,
     /// Absolute path of the workspace root the hook resolved.
     pub workspace: String,
 }

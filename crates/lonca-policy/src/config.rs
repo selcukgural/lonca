@@ -2,6 +2,7 @@
 //! (rules). Both live in the commit that `refs/lonca/policy` points to, never
 //! in a code branch.
 
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use cedar_policy::{
@@ -57,7 +58,7 @@ critical = [
   "**/build.gradle", "**/build.gradle.kts", "**/conftest.py",
   # Agent instructions and settings.
   "**/CLAUDE.md", "**/AGENTS.md", "**/GEMINI.md", "**/.cursorrules", "**/.windsurfrules",
-  "**/.mcp.json", ".claude/**", ".cursor/**", ".codex/**",
+  "**/.mcp.json", ".claude/**", ".cursor/**", ".codex/**", ".gemini/**",
   # Tooling that runs code on checkout, on build or in an editor.
   ".cargo/config.toml", ".cargo/config", "rust-toolchain", "rust-toolchain.toml",
   "**/.envrc", ".vscode/**", ".devcontainer/**", "**/Dockerfile",
@@ -108,6 +109,10 @@ shell_network = true
 # `mcp__<server>__<tool>`); every other server's tools do. Lonca's own
 # tools never taint.
 mcp_servers = []
+# Tools Lonca does not know could read anything, so they taint.
+unknown_tools = true
+# Tools, by the name the harness gives them, that do not.
+safe_tools = []
 
 [approvals]
 # With fewer enrolled humans than a rule requires, require all of them.
@@ -127,6 +132,10 @@ window_minutes = 5
 [integrity]
 # What to do when a ref changes behind the daemon's back: "restore" or "freeze".
 on_unmediated = "restore"
+
+# Harness profiles. Lonca knows claude-code, codex and gemini; a table here
+# adds another or replaces one (docs/guide/runners.md, "Any other harness").
+# [harnesses.acme]
 "#;
 
 pub const DEFAULT_POLICY: &str = r#"// Lonca policy. Requests are allowed unless a rule below forbids them.
@@ -175,6 +184,16 @@ pub struct Config {
     pub negotiation: Negotiation,
     pub reverts: Reverts,
     pub integrity: Integrity,
+    /// Harness profiles of this repository, over the built-in ones.
+    pub harnesses: BTreeMap<String, crate::harness::Profile>,
+}
+
+impl Config {
+    /// The profile of a harness: this repository's, else the built-in one.
+    pub fn harness(&self, name: &str) -> Option<&crate::harness::Profile> {
+        let built_in = || crate::harness::built_in().get(name);
+        self.harnesses.get(name).or_else(built_in)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -300,6 +319,8 @@ pub struct Taint {
     pub fetch: bool,
     pub shell_network: bool,
     pub mcp_servers: Vec<String>,
+    pub unknown_tools: bool,
+    pub safe_tools: Vec<String>,
 }
 
 impl Taint {
@@ -441,6 +462,8 @@ impl Default for Taint {
             fetch: true,
             shell_network: true,
             mcp_servers: vec![],
+            unknown_tools: true,
+            safe_tools: vec![],
         }
     }
 }

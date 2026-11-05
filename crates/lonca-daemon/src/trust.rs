@@ -197,6 +197,11 @@ mod tests {
         let me = current_uid();
         let file = dir.path().join("daemon.toml");
         assert_eq!(configured_uid(&file, me).unwrap(), None, "no file");
+        // Only a file that is not there means cooperative: one that can
+        // not be looked at is no reason to expect the current uid.
+        std::fs::write(dir.path().join("plain"), "").unwrap();
+        let unreadable = configured_uid(&dir.path().join("plain/daemon.toml"), me);
+        assert!(unreadable.is_err(), "{unreadable:?}");
 
         std::fs::write(&file, "daemon_uid = 280\n").unwrap();
         chmod(&file, 0o644);

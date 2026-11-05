@@ -20,6 +20,10 @@ pub const DEFAULT_CONFIG: &str = r#"# Lonca repository configuration. Lives on r
 
 [sessions]
 max_ttl_minutes = 480
+# How many times in a row an agent that stops with work nobody proposed is
+# told so and sent back, for a harness with a stop event. A proposal starts
+# the count over. 0 only records it, for `status`.
+stop_rounds = 3
 
 [leases]
 max_ttl_minutes = 30
@@ -201,6 +205,7 @@ impl Config {
 #[serde(deny_unknown_fields, default)]
 pub struct Sessions {
     pub max_ttl_minutes: i64,
+    pub stop_rounds: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -373,6 +378,7 @@ impl Default for Sessions {
     fn default() -> Self {
         Self {
             max_ttl_minutes: 480,
+            stop_rounds: 3,
         }
     }
 }
@@ -545,6 +551,11 @@ impl PolicyBundle {
     pub fn parse(config_text: &str, policy_text: &str) -> Result<Self, String> {
         let config: Config =
             toml::from_str(config_text).map_err(|e| format!("{CONFIG_FILE}: {e}"))?;
+        for (name, profile) in &config.harnesses {
+            profile
+                .check()
+                .map_err(|e| format!("{CONFIG_FILE}: harness {name}: {e}"))?;
+        }
         for p in config.paths.critical.iter().chain(&config.paths.untrusted) {
             let ok = p.starts_with("**/") || lonca_core::paths::validate_path_pattern(p).is_ok();
             if !ok {

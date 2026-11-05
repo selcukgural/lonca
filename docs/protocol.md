@@ -272,9 +272,15 @@ with a signed `daemon.rotate` through `human.submit`.
   "level": "unobserved" | "hooks" | "hooks_sandbox" | "isolated",
   "taint": string | null, "active": boolean, "expires_ms": time,
   "last_seen_ms": time | null, "continued_from": string | null,
-  "continued_by": string | null}`. `last_seen_ms` is the last heartbeat;
-  `null` means none yet. `continued_from` and `continued_by` link the
-  sessions of one workspace; `parent` is a capability's origin.
+  "continued_by": string | null, "unproposed": {"paths": [path], "total":
+  integer, "rounds": integer, "seen_ms": time} | null}`. `last_seen_ms` is
+  the last heartbeat; `null` means none yet. `continued_from` and
+  `continued_by` link the sessions of one workspace; `parent` is a
+  capability's origin. `unproposed` is what the workspace held the last time
+  the session stopped or ended, with no standing proposal carrying it:
+  `paths` names at most 32 of `total` files, and `rounds` counts the stops
+  since the last proposal. It says a session did not finish; `null` does not
+  prove that one did, since only a client reports it.
 - **detail**: `{"code", "symbol", "needed_kind": lease kind,
   "holder_session": string | null, "holder_agent": string | null,
   "intent": string | null, "expires_ms": time | null, "set": string |
@@ -600,8 +606,11 @@ plus `"session"` and `"token"` when allowed.
 
 ### `session.end`
 
-*agent.* `params: {}`. Ends the agent's own session; its token stops
-working. Logged.
+*agent.* `{"files": [local file] | null}`. Ends the agent's own session;
+its token stops working. Logged. `files` are the workspace's local changes,
+as for `hook.stop`: what no standing proposal carries is recorded for
+`status`, and the result adds `"unproposed"` ([path]) and
+`"unproposed_total"` (integer). Without `files` nothing is recorded.
 
 ### `session.heartbeat`
 
@@ -637,8 +646,9 @@ daemon reads `input` with the harness's profile from the policy
 profile, or an event it does not have, is `invalid`. A session start gives
 `{"phase": "session_start", "session": string, "context": template,
 "tool_prefix": string}`: call `hook.bind`, then fill `{context}`, naming the
-tools with `tool_prefix`. A tool call gives what `hook.event`
-gives, plus `"output"` on a denial: the answer in the harness's shape.
+tools with `tool_prefix`. A stop gives `{"phase": "stop"}`: call `hook.stop`.
+A tool call gives what `hook.event` gives, plus `"output"` on a denial: the
+answer in the harness's shape.
 
 ### `hook.bind`
 
@@ -646,6 +656,21 @@ gives, plus `"output"` on a denial: the answer in the harness's shape.
 "sudo_without_password": boolean, "workspace": absolute path | null}`.
 Logged, plus `"level"` (observation level), `"notes"` ([string]) and
 `"scratch"` ([absolute path], the session's scratch roots from the log).
+
+### `hook.stop`
+
+*agent.* The agent is about to finish its turn. `{"harness": string,
+"files": [local file]}`, where a **local file** is `{"path": path, "entry":
+{"mode": string, "blob": id} | null}`: one local change, `null` for a
+deletion. The daemon compares them with the session's standing proposals
+(pending, queued or integrated, from this session and those it continues)
+and answers `{"unproposed": [path], "total": integer, "round": integer,
+"limit": integer}`, plus `"output"`, the answer that sends the agent back in
+the harness's shape, while `round` is within `[sessions] stop_rounds`.
+Without `output` the turn ends. A harness with no stop event is `invalid`.
+A report goes in the log as an `unproposed` observation when it says
+something new. It is a reminder and a record, not a check: the client
+computes `files`.
 
 ### `harness.setup`
 
@@ -839,7 +864,9 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   denial exits 1 on every command (#97); `continues` on `session.start`,
   `session start --continue`, `status.sessions[].continued_from` and
   `continued_by`, `session.heartbeat` refused when the session is over,
-  and `session_inactive` from every `lonca mcp` tool after that (#98).
+  and `session_inactive` from every `lonca mcp` tool after that (#98);
+  `hook.stop`, `phase: "stop"` in `hook.input`, `files` on `session.end` and
+  `status.sessions[].unproposed` (#121).
   `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,

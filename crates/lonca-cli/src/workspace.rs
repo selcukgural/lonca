@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
-use lonca_core::{FileMode, GitId};
+use lonca_core::{FileEntry, FileMode, GitId};
 use lonca_daemon::Client;
-use lonca_daemon::protocol::{FileChange, TreeFile};
+use lonca_daemon::protocol::{FileChange, LocalFile, TreeFile};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::merge::{merge_around_conflicts, merge_text_at};
 use serde::{Deserialize, Serialize};
@@ -260,6 +260,25 @@ impl Workspace {
         }
         out.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(out)
+    }
+
+    /// [`Workspace::changes`] as tree entries, with no content: what the
+    /// daemon needs to tell a proposed file from one nobody proposed.
+    pub fn local_files(&self) -> Result<Vec<LocalFile>> {
+        let local = |c: FileChange| {
+            let entry = match c.content_b64 {
+                Some(text) => Some(FileEntry {
+                    mode: c.mode.unwrap_or(FileMode::Regular),
+                    blob: GitId::of_blob(&b64().decode(text)?),
+                }),
+                None => None,
+            };
+            Ok(LocalFile {
+                path: c.path,
+                entry,
+            })
+        };
+        self.changes()?.into_iter().map(local).collect()
     }
 
     /// Brings trunk into the workspace, keeping local edits. Files edited

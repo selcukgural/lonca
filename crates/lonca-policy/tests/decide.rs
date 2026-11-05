@@ -16,6 +16,8 @@ use lonca_policy::state::{ChangeStatus, Provenance, State};
 
 const REPO: &str = "demo";
 const T0: i64 = 1_760_000_000_000;
+use lonca_core::ops::MAX_UNPROPOSED_PATHS;
+
 const MIN: i64 = 60_000;
 
 fn gid(c: char) -> GitId {
@@ -2763,6 +2765,57 @@ fn heartbeat(h: &mut H, session: &str) -> Decision {
         },
         vec![],
     )
+}
+
+fn unproposed(h: &mut H, session: &str, paths: Vec<String>, total: u64) -> Decision {
+    h.daemon(
+        Op::Observe {
+            session: session.into(),
+            events: vec![Observation {
+                phase: Phase::Post,
+                kind: ObsKind::Unproposed { paths, total },
+                external: false,
+            }],
+        },
+        vec![],
+    )
+}
+
+/// What a session left: counted by the fold, cleared by a proposal or a
+/// clean report, and bounded in size.
+#[test]
+fn a_session_s_unproposed_work_is_on_the_record_until_it_is_gone() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    let mark = |h: &H| h.chain.state.sessions["s1"].unproposed.clone();
+    assert_eq!(mark(&h), None);
+
+    let d = unproposed(&mut h, "s1", vec!["src/a.rs".into()], 3);
+    assert!(d.is_allow(), "{d:?}");
+    let m = mark(&h).unwrap();
+    assert_eq!(
+        (m.paths.as_slice(), m.total, m.rounds),
+        (&["src/a.rs".to_string()][..], 3, 1)
+    );
+    assert_eq!(m.seen_ms, h.now);
+    unproposed(&mut h, "s1", vec![], 2);
+    let m = mark(&h).unwrap();
+    assert_eq!((m.paths.len(), m.total, m.rounds), (0, 2, 2));
+    // Nothing is tainted by it, and nothing else of the session changes.
+    assert_eq!(h.chain.state.sessions["s1"].taint, None);
+
+    unproposed(&mut h, "s1", vec![], 0);
+    assert_eq!(mark(&h), None);
+    unproposed(&mut h, "s1", vec![], 1);
+    assert_eq!(mark(&h).unwrap().rounds, 1, "the count starts over");
+
+    let full = vec!["x".to_string(); MAX_UNPROPOSED_PATHS];
+    assert!(unproposed(&mut h, "s1", full.clone(), 99).is_allow());
+    let over = vec!["x".to_string(); MAX_UNPROPOSED_PATHS + 1];
+    let d = unproposed(&mut h, "s1", over, 99);
+    assert!(denied_with(&d, "too_many_events"), "{d:?}");
+    assert_eq!(mark(&h).unwrap().paths.len(), MAX_UNPROPOSED_PATHS);
+    h.assert_replay();
 }
 
 /// Renewing: your own live set, up to the longest TTL, and nothing else.

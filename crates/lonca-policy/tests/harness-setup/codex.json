@@ -20,7 +20,9 @@
     "-c",
     "hooks.PreToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
     "-c",
-    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]"
+    "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
+    "-c",
+    "hooks.Stop=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex --fail-open\"}]}]"
   ],
   "env": {
     "LONCA_SOCKET": "/s/lonca.sock"

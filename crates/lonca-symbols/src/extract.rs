@@ -60,12 +60,12 @@ impl Sym {
         &src[self.start..self.end]
     }
 
-    /// What `engine` compares as this symbol's own text.
     /// This symbol's code and where its members stood in it.
     pub fn placed(&self) -> Placed<'_> {
         (&self.own_exact, &self.spots)
     }
 
+    /// What `engine` compares as this symbol's own text.
     pub fn own_at(&self, engine: u32) -> &str {
         if engine >= ENGINE_EXACT {
             &self.own_exact
@@ -203,10 +203,8 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
         .collect();
     cut.sort();
     let residual = normalize(&remove_spans(src, 0, src.len(), &cut));
-    let import_names = imports
-        .iter()
-        .map(|&(s, e)| format!("import {}", normalize(&src[s..e])));
-    let import_names: Vec<String> = import_names.collect();
+    // By their order: an import's text can change, its place stays.
+    let import_names: Vec<String> = (0..imports.len()).map(|i| format!("import {i}")).collect();
     let import_marks = imports.iter().zip(&import_names);
     let marks: Vec<Mark> = syms
         .iter()
@@ -909,8 +907,11 @@ mod tests {
             "x = 1\ndef a(): pass\ndef b(): pass\n",
             "x = 1\ndef b(): pass\ndef a(): pass\n"
         ));
-        // An import is a place too.
+        // An import is a place too, with its comment or a twin of it.
         assert!(moved("import o\nx = 1\n", "x = 1\nimport o\n"));
+        assert!(moved("# a\nimport o\nx = 1\n", "x = 1\n# b\nimport o\n"));
+        let twice = "import o\nx = 1\nimport o\ndef f(): pass\n";
+        assert!(moved(twice, "import o\nimport o\nx = 1\ndef f(): pass\n"));
         // A comment and its symbol are one: one spot, not two.
         let p = py("# about\n# a\ndef a(): pass\n");
         assert_eq!(p.spots.len(), 1);

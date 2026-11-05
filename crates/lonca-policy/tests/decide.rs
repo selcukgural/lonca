@@ -3105,3 +3105,41 @@ fn liveness_limits_must_be_positive() {
         .is_ok()
     );
 }
+
+// ------------------------------------------------------- agent config paths
+
+/// What instructs or configures an agent goes the way of what runs code: a
+/// human approves it, and a tainted session does not touch it (issue #55).
+#[test]
+fn agent_instructions_and_tool_config_are_critical() {
+    for path in [
+        "CLAUDE.md",
+        "crates/x/CLAUDE.md",
+        ".mcp.json",
+        ".cargo/config.toml",
+        ".claude/settings.json",
+        ".imece/check",
+        ".lonca/workspace.json",
+    ] {
+        let mut h = H::new();
+        h.start_observed("s1", &["**"]);
+        h.wrote("s1", path);
+        let sym = format!("{path}#<file>");
+        assert!(h.lease("s1", "l1", &[(&sym, LeaseKind::Edit)]).is_allow());
+        let d = h.propose("s1", ChangeId::random(), edit(&sym));
+        assert_eq!(d.outcome, Outcome::Escalate, "{path}: {d:?}");
+        assert!(
+            d.reasons.contains(&format!("critical_path:{path}")),
+            "{path}: {d:?}"
+        );
+
+        let taint = Op::Taint {
+            session: "s1".into(),
+            reason: "read the web".into(),
+        };
+        assert!(h.daemon(taint, vec![]).is_allow());
+        let d = h.propose("s1", ChangeId::random(), edit(&sym));
+        assert!(denied_with(&d, "tainted_critical_path"), "{path}: {d:?}");
+        h.assert_replay();
+    }
+}

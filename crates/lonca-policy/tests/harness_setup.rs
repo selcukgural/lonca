@@ -11,7 +11,7 @@ fn every_built_in_harness_gets_the_files_and_flags_of_its_fixture() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/harness-setup");
     assert_eq!(
         built_in().len(),
-        3,
+        4,
         "a new built-in harness needs a fixture"
     );
     for (name, profile) in built_in() {

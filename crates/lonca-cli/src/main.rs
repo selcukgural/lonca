@@ -338,7 +338,7 @@ enum Cmd {
     /// Harness hook handler (reads the hook event on stdin).
     Hook {
         /// The harness profile to read the event with: claude-code, codex,
-        /// gemini, or one the repository's policy describes.
+        /// gemini, opencode, or one the repository's policy describes.
         #[arg(long, default_value = "claude-code")]
         harness: String,
     },
@@ -482,8 +482,9 @@ enum HarnessCmd {
     /// Give a harness the rules, the MCP server and the hooks, as its
     /// profile says. Run in a workspace.
     Setup {
-        /// claude-code, codex, gemini, or one the repository's policy
-        /// describes. Another name still gets the rules and the MCP server.
+        /// claude-code, codex, gemini, opencode, or one the repository's
+        /// policy describes. Another name still gets the rules and the MCP
+        /// server.
         harness: String,
         /// Write nothing: show the flags and the files.
         #[arg(long)]
@@ -491,6 +492,10 @@ enum HarnessCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Print a built-in profile as a table for lonca.toml. There it replaces
+    /// the built-in one, signed with `lonca policy set`: for a harness that
+    /// has changed before Lonca has.
+    Show { harness: String },
 }
 
 // Built once, from the command line.
@@ -1277,6 +1282,13 @@ fn run(cmd: Cmd) -> Result<()> {
                 return ctx::print_json(&prepared.report(&written));
             }
             prepared.print(&written, print)
+        }
+        Cmd::Harness(HarnessCmd::Show { harness }) => {
+            let Some(table) = lonca_policy::harness::built_in_table(&harness) else {
+                bail!("no built-in profile for harness {harness}");
+            };
+            print!("{}", table.map_err(anyhow::Error::msg)?);
+            Ok(())
         }
         Cmd::Rules => {
             println!(

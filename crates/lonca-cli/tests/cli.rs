@@ -3300,3 +3300,51 @@ fn a_tool_call_with_an_argument_it_does_not_take() {
     assert_eq!(gap["claimed"], json!(["src/lib.rs#nope"]), "{body}");
     assert_eq!(gap["facts"], body["facts"]["edits"], "{body}");
 }
+
+/// A person fixes a harness that moved on: the built-in profile, as a table,
+/// is the start.
+#[test]
+fn a_built_in_profile_is_printed_for_the_policy() {
+    let e = Env::new();
+    let table = e.run(&e.root, &["harness", "show", "opencode"]);
+    assert!(table.contains("[harnesses.opencode"), "{table}");
+    assert!(table.contains(".opencode/plugins/lonca.js"), "{table}");
+    let o = e
+        .cmd(&e.root, &["harness", "show", "nobody"])
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(text(&o.stderr).contains("no built-in profile for harness nobody"));
+}
+
+/// OpenCode from its built-in profile: what setup writes stays out of the
+/// diff, and a refusal comes in the shape the plugin reads.
+#[test]
+fn opencode_is_set_up_from_its_built_in_profile() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = parse(&e.run(&ws, &["harness", "setup", "opencode", "--json"]));
+    assert_eq!(r["known"], true);
+    let written = [
+        ".opencode/lonca-rules.md",
+        ".opencode/plugins/lonca.js",
+        "opencode.json",
+    ];
+    assert_eq!(r["written"], json!(written));
+    let rules = std::fs::read_to_string(ws.join(".opencode/lonca-rules.md")).unwrap();
+    assert!(rules.contains("`edits` ("), "{rules}");
+    assert!(e.run(&ws, &["diff"]).contains("no local changes"));
+    let event = json!({
+        "hook_event_name": "before_tool", "tool_name": "write", "cwd": ws,
+        "tool_input": {"path": "/etc/hosts"},
+    });
+    let o = e.hook_as(&ws, &event.to_string(), &["hook", "--harness", "opencode"]);
+    let out: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert!(
+        out["deny"]
+            .as_str()
+            .unwrap()
+            .contains("outside the workspace"),
+        "{out}"
+    );
+}

@@ -278,6 +278,16 @@ pub fn rules(about: &str, tool_prefix: &str, scratch: &[&str]) -> String {
     format!("This workspace is governed by Lonca{about}.\n{body}")
 }
 
+/// A built-in profile as a `[harnesses.<name>]` table for `lonca.toml`. A
+/// profile there replaces the built-in one as a whole, so this is where a
+/// change of a harness starts that Lonca has not caught up with.
+pub fn built_in_table(name: &str) -> Option<Result<String, String>> {
+    let profile = built_in().get(name)?;
+    let harnesses = BTreeMap::from([(name, profile)]);
+    let table = BTreeMap::from([("harnesses", harnesses)]);
+    Some(toml::to_string(&table).map_err(|e| e.to_string()))
+}
+
 /// `template` with `{key}` replaced in every string.
 pub fn render(template: &Value, key: &str, text: &str) -> Value {
     let hole = format!("{{{key}}}");
@@ -299,7 +309,7 @@ mod tests {
 
     #[test]
     fn the_built_in_profiles_parse_and_every_edit_tool_names_its_field() {
-        for name in ["claude-code", "codex", "gemini"] {
+        for name in ["claude-code", "codex", "gemini", "opencode"] {
             let p = built_in().get(name).unwrap_or_else(|| panic!("{name}"));
             for (tool, rule) in &p.tools {
                 let needs = matches!(
@@ -309,6 +319,16 @@ mod tests {
                 assert_eq!(rule.fields.is_empty(), !needs, "{name} {tool}");
             }
         }
+    }
+
+    #[test]
+    fn a_built_in_table_is_the_same_profile_when_a_policy_reads_it() {
+        for (name, profile) in built_in() {
+            let text = built_in_table(name).unwrap().unwrap();
+            let config: crate::config::Config = toml::from_str(&text).unwrap();
+            assert_eq!(&config.harnesses[name], profile, "{name}");
+        }
+        assert!(built_in_table("nobody").is_none());
     }
 
     #[test]

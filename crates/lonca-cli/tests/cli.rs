@@ -1837,3 +1837,94 @@ fn an_mcp_worker_renews_its_lease_and_the_server_beats_for_it() {
     assert!(beat["seq"].is_u64());
     assert!(e.run(&ws, &["session", "heartbeat"]).contains("allow"));
 }
+
+/// Mixed kinds in one set, what the local diff needs, a partial release
+/// and a failure, all over the MCP stdio loop.
+#[test]
+fn mcp_leases_mixed_kinds_says_what_is_needed_and_releases_part_of_a_set() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let mut mcp = Mcp::start(&e, &ws);
+
+    let (_, none) = mcp.tool("lease_needed", json!({}));
+    assert_eq!(none, json!({"changes": 0, "leases": [], "acquire": []}));
+
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n\npub fn extra() {}\n",
+    )
+    .unwrap();
+    let (err, needed) = mcp.tool("lease_needed", json!({}));
+    assert!(!err, "{needed}");
+    assert_eq!(needed["changes"], 1);
+    assert_eq!(
+        needed["acquire"],
+        json!([
+            {"symbol": "src/lib.rs#<file>", "kind": "insert"},
+            {"symbol": "src/lib.rs#charge", "kind": "edit"},
+        ])
+    );
+    let out = e.run(&ws, &["lease", "needed", "--json"]);
+    let cli: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(cli, needed);
+    assert!(
+        e.run(&ws, &["lease", "needed"])
+            .contains("edit src/lib.rs#charge: free")
+    );
+
+    // What lease_needed says goes straight into lease_acquire, all or nothing.
+    let (err, got) = mcp.tool(
+        "lease_acquire",
+        json!({"items": needed["acquire"], "intent": "both"}),
+    );
+    assert!(!err, "{got}");
+    assert_eq!(got["decision"]["outcome"], "allow", "{got}");
+    let set = got["set"].as_str().unwrap().to_string();
+    let (_, needed) = mcp.tool("lease_needed", json!({}));
+    assert_eq!(needed["acquire"], json!([]));
+    assert_eq!(needed["leases"][0]["code"], "held_by_you");
+
+    // Part of the set goes, the rest stays for the time it had left.
+    let expires = status_json(&e)["leases"][0]["expires_ms"].as_i64().unwrap();
+    let (err, part) = mcp.tool(
+        "lease_release",
+        json!({"set": set, "items": [{"symbol": "src/lib.rs#charge", "kind": "edit"}]}),
+    );
+    assert!(!err, "{part}");
+    assert_eq!(part["decision"]["outcome"], "allow", "{part}");
+    assert_eq!(
+        part["kept"],
+        json!([{"symbol": "src/lib.rs#<file>", "kind": "insert"}])
+    );
+    let leases = status_json(&e)["leases"].clone();
+    assert_eq!(leases.as_array().unwrap().len(), 1, "{leases}");
+    assert_eq!(leases[0]["set"], part["set"]);
+    assert_eq!(leases[0]["items"], part["kept"]);
+    assert_eq!(leases[0]["intent"], "both");
+    let left = expires - leases[0]["expires_ms"].as_i64().unwrap();
+    assert!(left.abs() < 60_000, "{left}");
+
+    // The last item: nothing is kept, no new set.
+    let new_set = part["set"].as_str().unwrap().to_string();
+    let (err, last) = mcp.tool(
+        "lease_release",
+        json!({"set": new_set, "items": [{"symbol": "src/lib.rs#<file>", "kind": "insert"}]}),
+    );
+    assert!(!err, "{last}");
+    assert_eq!(last["set"], serde_json::Value::Null);
+    assert_eq!(status_json(&e)["leases"], json!([]));
+
+    // Failures are JSON with a code.
+    let (err, body) = mcp.tool(
+        "lease_release",
+        json!({"set": "nope", "items": [{"symbol": "src/lib.rs#charge", "kind": "edit"}]}),
+    );
+    assert!(err);
+    assert_eq!(body["code"], "invalid", "{body}");
+    assert_eq!(body["details"], json!([]));
+    assert!(body["message"].as_str().unwrap().contains("nope"));
+    // A whole-set release of an unknown set stays a logged denial.
+    let (err, denied) = mcp.tool("lease_release", json!({"set": "nope"}));
+    assert!(!err);
+    assert_eq!(denied["decision"]["reasons"][0], "unknown_lease_set");
+}

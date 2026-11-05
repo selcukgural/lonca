@@ -255,6 +255,15 @@ with a signed `daemon.rotate` through `human.submit`.
   "taint": string | null, "active": boolean, "expires_ms": time,
   "last_seen_ms": time | null}`. `last_seen_ms` is the last heartbeat;
   `null` means none yet.
+- **detail**: `{"code", "symbol", "needed_kind": lease kind,
+  "holder_session": string | null, "holder_agent": string | null,
+  "intent": string | null, "expires_ms": time | null, "set": string |
+  null, "pinned_to": change id | null}`. What stands between a client
+  and a lease: derived from the state when the daemon answers, never
+  logged. `expires_ms` is `null` for a pinned item, which does not
+  expire; wait for `pinned_to` to leave the queue. `code` is
+  `lease_held`, `lease_missing`, `held_by_you` or `free`; the holder's
+  fields are set when someone holds the symbol.
 - **lease**: `{"set", "session", "items": [lease item], "intent",
   "expires_ms", "pinned": [{"change": change id, "items": [lease
   item]}]}`; only what is held now. `items` are the set's live items:
@@ -476,7 +485,10 @@ a recovery the log refused, `git`.
 string, "ttl_ms": integer}`. Logged, plus `"set"`: the lease set's id
 (generated when not given). Denied with
 `lease_held:<symbol>:<session>:<intent>` when another session holds an
-item, a pinned one included. The intent is free text and comes last.
+item, a pinned one included. The intent is free text and comes last, so
+read `"details"` instead of splitting the reason: [detail], one per held
+item however many requested items run into it, empty when nothing is
+in the way.
 
 ### `lease.release`
 
@@ -499,7 +511,8 @@ runs out by its TTL.
 *agent.* `{"change": change id | null, "base": id, "files": [file
 change], "claim": claim}`. Builds the commit on `base`, computes the
 facts, decides. Logged, plus `"change"`, `"commit"`, `"facts"`,
-`"syntax_errors"`. `outcome: "escalate"` means the change waits for a
+`"syntax_errors"`, `"details"` ([detail], one per lease the proposal
+lacks: `lease_missing` with the holder if there is one). `outcome: "escalate"` means the change waits for a
 human (`status.pending`); `"allow"` means it is queued and the merge
 queue integrates it (`status.changes[].status`). A denied change is
 logged with its reasons (`claim_mismatch:edits`, `lease_missing:…`,
@@ -513,7 +526,10 @@ logged with its reasons (`claim_mismatch:edits`, `lease_missing:…`,
 
 *agent.* `{"base": id, "files": [file change]}`. The facts a proposal
 would have, without logging: `{"facts": facts, "syntax_errors":
-[string]}`.
+[string], "leases": [detail], "acquire": [lease item]}`. `leases` says
+where each lease the facts need stands: `held_by_you`, `free`, or one
+`lease_held` per holder. `acquire` is the free ones, ready for
+`lease.acquire`.
 
 ### `negotiate`
 

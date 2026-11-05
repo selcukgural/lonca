@@ -634,6 +634,37 @@ agents could not renew at all, and renewing had no limit (#39).
 - **Limits are positive**: `parse` refuses `heartbeat_timeout_ms` or
   `max_hold_minutes` at or below zero.
 
+## Lease details and agent ergonomics
+
+`lease_held:<symbol>:<session>:<intent>` can not be parsed, because the
+intent is free text, and it says nothing of when the lease ends;
+`lease_missing:<symbol>` does not say which kind is needed (#48).
+
+- **Reasons stay; details are added.** `Decision::reasons` are logged and
+  replayed, so they do not change. `lease.acquire` and `change.propose`
+  also answer `details`, built by `crates/lonca-policy/src/details.rs`
+  from the state after the decision. They are never logged and never an
+  input of `decide()`, so no log format changes, and they carry session
+  ids and intents, which every client may read anyway, never a token.
+- **One rule.** `details::lease_report` uses `symbols::lease_needs`, the
+  rule behind `lease_missing` and pinning. `facts.preview` answers it as
+  `leases`, with the free ones as `acquire`, ready for `lease.acquire`.
+  It adds nothing to the log: a worker can ask as often as it likes.
+- **`needed_kind` is the weakest kind that will do** (`edit` for an edit,
+  `insert` for an addition, `rename` for a deletion), which conflicts
+  with the fewest others.
+- **A pinned item has `expires_ms: null` and `pinned_to`.** There is no
+  time to wait for: the client watches the change.
+- **Partial release is the MCP server's**, not an operation: it acquires
+  what stays under a new set for the time the old one had left, then
+  releases the old one. Acquiring first means nothing is free in between
+  and a refusal changes nothing. A new set over held symbols keeps the
+  hold time (see "Lease liveness"). Pinned items stay in the old set.
+- **MCP failures** are `{code, message, details}` as JSON text with
+  `isError`: the daemon's error code, or `invalid` for what the server
+  itself refused. A denied decision is not a failure: it is a logged
+  result, with `decision` and `details`.
+
 ## Reject, and a pending proposal whose session ends
 
 The only human decision on an escalated operation was `approve`; a

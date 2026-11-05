@@ -129,6 +129,7 @@ fn handle(v: &Value, ws: &Workspace, cwd: &str) -> Result<Option<Value>> {
                 "This workspace is governed by Lonca (repository {repo}, session {session}, observation level {level}).\n\
                  - Before editing a function, method or type, lease it: mcp__lonca__lease_acquire with symbols like \"src/file.rs#Type.method\" (mcp__lonca__symbols lists them).\n\
                  {where_to_write}\n\
+                 - mcp__lonca__lease_needed says which leases your local changes need and who holds them.\n\
                  - Check your changes with mcp__lonca__preview, then submit with mcp__lonca__propose, declaring exactly the symbols you changed.\n\
                  - After your change integrates, run mcp__lonca__sync before continuing. Integration releases the leases the change needed: lease a symbol again before editing it again.\n\
                  - If a symbol is leased by another agent, ask it with mcp__lonca__negotiate or wait.\n\

@@ -17,11 +17,18 @@ use crate::workspace::Workspace;
 fn tools() -> Value {
     let s = |props: Value, required: &[&str]| json!({"type": "object", "properties": props, "required": required});
     let list = json!({"type": "array", "items": {"type": "string"}});
+    let kind = json!({"type": "string", "enum": ["edit", "insert", "rename"]});
+    let items = json!({"type": "array", "items": {
+        "type": "object",
+        "properties": {"symbol": {"type": "string"}, "kind": kind},
+        "required": ["symbol", "kind"],
+    }});
     json!([
         {"name": "status", "description": "Repository state: trunk, queue, all active leases (who holds what and why), your session and your changes.", "inputSchema": s(json!({}), &[])},
         {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method).", "inputSchema": s(json!({"path": {"type": "string", "description": "file path relative to the workspace root"}}), &["path"])},
-        {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). A denial lists who holds the symbol and why.", "inputSchema": s(json!({"symbols": list, "kind": {"type": "string", "enum": ["edit", "insert", "rename"]}, "intent": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["symbols", "intent"])},
-        {"name": "lease_release", "description": "Release a lease set you hold. Items pinned to a change in flight stay until the change leaves the queue; integration releases them without this call.", "inputSchema": s(json!({"set": {"type": "string"}}), &["set"])},
+        {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it, their intent, and when it expires (or the change it is pinned to).", "inputSchema": s(json!({"items": items, "symbols": list, "kind": kind, "intent": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["intent"])},
+        {"name": "lease_needed", "description": "The leases your local changes need, computed by Lonca: for each symbol the kind needed and whether you hold it, it is free, or who holds it. `acquire` lists the free ones as items for lease_acquire.", "inputSchema": s(json!({}), &[])},
+        {"name": "lease_release", "description": "Release a lease set you hold, or only the items you name: the rest stays yours, under a new set id with the time it had left. Items pinned to a change in flight stay until the change leaves the queue; integration releases them without this call.", "inputSchema": s(json!({"set": {"type": "string"}, "items": items}), &["set"])},
         {"name": "lease_renew", "description": "Extend a lease set you hold, for ttl_minutes from now. While this server runs it renews your sets for you, so call this only to ask for a longer TTL. Past the hold limit a renewal is denied (lease_hold_limit) while another session wants the symbols.", "inputSchema": s(json!({"set": {"type": "string"}, "ttl_minutes": {"type": "integer"}}), &["set"])},
         {"name": "preview", "description": "Facts of your local changes as Lonca computes them: symbols edited/added/deleted, signature changes, test changes, files. Use this to write an accurate claim.", "inputSchema": s(json!({}), &[])},
         {"name": "propose", "description": "Submit your local changes. The claim must list exactly the symbols you changed (compare with preview); a mismatch is refused. Integration happens in the merge queue after build/test verification.", "inputSchema": s(json!({
@@ -93,6 +100,94 @@ fn keep_alive(mut c: Client) {
     }
 }
 
+/// `items`, or `symbols` with one `kind` (default edit), or both.
+fn requested_items(args: &Value) -> Result<Vec<LeaseItem>> {
+    let kind = match args["kind"].as_str().unwrap_or("edit") {
+        "edit" => LeaseKind::Edit,
+        "insert" => LeaseKind::Insert,
+        "rename" => LeaseKind::Rename,
+        k => bail!("unknown lease kind {k}"),
+    };
+    let mut items: Vec<LeaseItem> = match args.get("items") {
+        Some(v) => serde_json::from_value(v.clone())?,
+        None => vec![],
+    };
+    let symbols = strings(args, "symbols").into_iter();
+    items.extend(symbols.map(|symbol| LeaseItem { symbol, kind }));
+    Ok(items)
+}
+
+/// What a partial release keeps under a new set: the items not released
+/// and not pinned (those stay in the old set until their change leaves).
+fn remainder(lease: &Value, released: &[LeaseItem]) -> Result<Vec<LeaseItem>> {
+    let items: Vec<LeaseItem> = serde_json::from_value(lease["items"].clone())?;
+    let pins = lease["pinned"].as_array().cloned().unwrap_or_default();
+    let mut pinned = Vec::new();
+    for p in pins {
+        pinned.extend(serde_json::from_value::<Vec<LeaseItem>>(
+            p["items"].clone(),
+        )?);
+    }
+    if let Some(i) = released.iter().find(|i| !items.contains(i)) {
+        bail!("{} ({:?}) is not in this lease set", i.symbol, i.kind);
+    }
+    let kept = |i: &LeaseItem| !released.contains(i) && !pinned.contains(i);
+    Ok(items.into_iter().filter(kept).collect())
+}
+
+/// Releases some items of a set: acquires the rest under a new set first,
+/// then releases the old one, so nothing is free in between and a refusal
+/// changes nothing.
+fn release_items(c: &mut Client, set: &str, released: Vec<LeaseItem>) -> Result<Value> {
+    let st = ctx::call(c, "status", json!({}))?;
+    let leases = st["leases"].as_array().cloned().unwrap_or_default();
+    let Some(lease) = leases.iter().find(|l| l["set"] == set) else {
+        bail!("unknown lease set {set}");
+    };
+    let kept = remainder(lease, &released)?;
+    let left = lease["expires_ms"].as_i64().unwrap_or(0) - st["now_ms"].as_i64().unwrap_or(0);
+    let mut new_set = Value::Null;
+    if !kept.is_empty() {
+        let intent = &lease["intent"];
+        let r = ctx::call(
+            c,
+            "lease.acquire",
+            json!({"items": kept, "intent": intent, "ttl_ms": left}),
+        )?;
+        if r["decision"]["outcome"] != "allow" {
+            return Ok(r);
+        }
+        new_set = r["set"].clone();
+    }
+    let mut out = ctx::call(c, "lease.release", json!({"set": set}))?;
+    out["set"] = new_set;
+    out["kept"] = json!(kept);
+    Ok(out)
+}
+
+/// The leases the workspace's local changes need, for `lease_needed` and
+/// `lonca lease needed`.
+pub fn lease_needed(c: &mut Client, ws: &Workspace) -> Result<Value> {
+    let changes = ws.changes()?;
+    if changes.is_empty() {
+        return Ok(json!({"changes": 0, "leases": [], "acquire": []}));
+    }
+    let r = ctx::call(
+        c,
+        "facts.preview",
+        json!({"base": ws.meta.base, "files": changes}),
+    )?;
+    Ok(json!({"changes": changes.len(), "leases": r["leases"], "acquire": r["acquire"]}))
+}
+
+/// A failed tool call, for the model and for a runner reading it.
+fn error_body(e: &anyhow::Error) -> Value {
+    match e.downcast_ref::<ctx::MethodError>() {
+        Some(m) => json!({"code": m.code, "message": m.message, "details": []}),
+        None => json!({"code": "invalid", "message": format!("{e:#}"), "details": []}),
+    }
+}
+
 struct Server {
     ws: Workspace,
     client: Client,
@@ -151,16 +246,7 @@ impl Server {
                 )
             }
             "lease_acquire" => {
-                let kind = match args["kind"].as_str().unwrap_or("edit") {
-                    "edit" => LeaseKind::Edit,
-                    "insert" => LeaseKind::Insert,
-                    "rename" => LeaseKind::Rename,
-                    k => bail!("unknown lease kind {k}"),
-                };
-                let items: Vec<LeaseItem> = strings(args, "symbols")
-                    .into_iter()
-                    .map(|symbol| LeaseItem { symbol, kind })
-                    .collect();
+                let items = requested_items(args)?;
                 let ttl = ttl_ms(args);
                 ctx::call(
                     c,
@@ -168,7 +254,14 @@ impl Server {
                     json!({"items": items, "intent": args["intent"], "ttl_ms": ttl}),
                 )
             }
-            "lease_release" => ctx::call(c, "lease.release", json!({"set": args["set"]})),
+            "lease_needed" => lease_needed(c, &self.ws),
+            "lease_release" => match args.get("items") {
+                Some(items) => {
+                    let set = args["set"].as_str().unwrap_or_default();
+                    release_items(c, set, serde_json::from_value(items.clone())?)
+                }
+                None => ctx::call(c, "lease.release", json!({"set": args["set"]})),
+            },
             "lease_renew" => {
                 let ttl = ttl_ms(args);
                 ctx::call(c, "lease.renew", json!({"set": args["set"], "ttl_ms": ttl}))
@@ -274,7 +367,8 @@ pub fn run() -> Result<()> {
                         json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v)?}], "isError": false})
                     }
                     Err(e) => {
-                        json!({"content": [{"type": "text", "text": format!("{e:#}")}], "isError": true})
+                        let body = serde_json::to_string_pretty(&error_body(&e))?;
+                        json!({"content": [{"type": "text", "text": body}], "isError": true})
                     }
                 })
             }
@@ -292,8 +386,88 @@ pub fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{beat_interval_ms, due_for_renewal, renewal_ttl_ms, tools, ttl_ms};
+    use super::{
+        LeaseItem, LeaseKind, beat_interval_ms, due_for_renewal, error_body, remainder,
+        renewal_ttl_ms, requested_items, tools, ttl_ms,
+    };
     use serde_json::json;
+
+    fn item(symbol: &str, kind: LeaseKind) -> LeaseItem {
+        LeaseItem {
+            symbol: symbol.into(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn items_come_mixed_as_one_kind_or_both() {
+        let got = |args| requested_items(&args).unwrap();
+        assert_eq!(
+            got(json!({"items": [
+                {"symbol": "a#f", "kind": "edit"}, {"symbol": "a#<file>", "kind": "insert"}
+            ]})),
+            [
+                item("a#f", LeaseKind::Edit),
+                item("a#<file>", LeaseKind::Insert)
+            ]
+        );
+        assert_eq!(
+            got(json!({"symbols": ["a#f"]})),
+            [item("a#f", LeaseKind::Edit)]
+        );
+        assert_eq!(
+            got(
+                json!({"items": [{"symbol": "a#f", "kind": "rename"}], "symbols": ["a#g"], "kind": "insert"})
+            ),
+            [
+                item("a#f", LeaseKind::Rename),
+                item("a#g", LeaseKind::Insert)
+            ]
+        );
+        for bad in [
+            json!({"symbols": ["a#f"], "kind": "own"}),
+            json!({"items": [{"symbol": "a#f", "kind": "own"}]}),
+        ] {
+            assert!(requested_items(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_partial_release_keeps_the_rest_but_not_what_is_pinned() {
+        let (f, g, h) = (
+            item("a#f", LeaseKind::Edit),
+            item("a#g", LeaseKind::Edit),
+            item("a#h", LeaseKind::Edit),
+        );
+        let lease = json!({
+            "items": [f, g, h],
+            "pinned": [{"change": "c", "items": [h]}],
+        });
+        let kept = |released: &LeaseItem| remainder(&lease, std::slice::from_ref(released));
+        assert_eq!(kept(&f).unwrap(), vec![g.clone()]);
+        assert_eq!(kept(&h).unwrap(), vec![f.clone(), g.clone()]);
+        let foreign = item("a#g", LeaseKind::Insert);
+        let err = remainder(&lease, &[foreign]).unwrap_err().to_string();
+        assert!(err.contains("a#g"), "{err}");
+    }
+
+    #[test]
+    fn errors_have_a_code_a_message_and_details() {
+        let e = anyhow::anyhow!("no local changes");
+        assert_eq!(
+            error_body(&e),
+            json!({"code": "invalid", "message": "no local changes", "details": []})
+        );
+        let e = anyhow::Error::new(crate::ctx::MethodError {
+            method: "lease.renew".into(),
+            code: "forbidden".into(),
+            message: "no".into(),
+        });
+        assert_eq!(
+            error_body(&e),
+            json!({"code": "forbidden", "message": "no", "details": []})
+        );
+    }
 
     #[test]
     fn the_heartbeat_beats_three_times_per_timeout_and_at_most_once_a_second() {
@@ -346,6 +520,7 @@ mod tests {
             "status",
             "symbols",
             "lease_acquire",
+            "lease_needed",
             "lease_release",
             "lease_renew",
             "preview",

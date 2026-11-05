@@ -1337,3 +1337,182 @@ fn a_heartbeat_keeps_leases_and_stopping_frees_them() {
         "unauthenticated"
     );
 }
+
+/// A denial says who holds what, as data: the intent is quoted, however
+/// many colons it has, each held item appears once, and nothing of this
+/// reaches the log.
+#[test]
+fn a_denied_lease_carries_details_and_the_log_entry_stays_as_it_was() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let a = e.session("a", &["src/**"]);
+    let b = e.session("b", &["src/**"]);
+    let intent = "fix: the \"charge\": rounding";
+    let item = |symbol: &str, kind: &str| json!({"symbol": symbol, "kind": kind});
+    let got = e.ok(
+        "lease.acquire",
+        None,
+        Some(&a),
+        json!({"items": [item("src/lib.rs#charge", "edit")], "intent": intent, "ttl_ms": 600_000}),
+    );
+    assert_eq!(got["details"], json!([]), "{got}");
+    let set = got["set"].clone();
+    let expires = e.ok("status", Some("demo"), None, json!({}))["leases"][0]["expires_ms"].clone();
+
+    // Two requested items run into one held item: one detail.
+    let r = e.ok(
+        "lease.acquire",
+        None,
+        Some(&b),
+        json!({"items": [item("src/lib.rs#charge", "edit"), item("src/lib.rs#<file>", "edit")],
+               "intent": "mine", "ttl_ms": 600_000}),
+    );
+    assert_eq!(r["decision"]["outcome"], "deny");
+    let details = r["details"].as_array().unwrap();
+    assert_eq!(details.len(), 1, "{r}");
+    let d = &details[0];
+    assert_eq!(d["code"], "lease_held");
+    assert_eq!(d["symbol"], "src/lib.rs#charge");
+    assert_eq!(d["needed_kind"], "edit");
+    assert_eq!(d["holder_session"], "a");
+    assert_eq!(d["holder_agent"], "bot-a");
+    assert_eq!(d["intent"], intent);
+    assert_eq!(d["expires_ms"], expires);
+    assert_eq!(d["set"], set);
+    assert_eq!(d["pinned_to"], Value::Null);
+    assert!(!r.to_string().contains(&a) && !r.to_string().contains(&b));
+
+    // The entry has the old reasons and no trace of the details.
+    let seq = r["seq"].as_u64().unwrap();
+    let logged = e.ok("log", Some("demo"), None, json!({"from": seq, "limit": 1}));
+    let entry = &logged[0]["entry"];
+    assert_eq!(
+        entry["decision"]["reasons"][0],
+        format!("lease_held:src/lib.rs#charge:a:{intent}")
+    );
+    assert_eq!(entry["decision"]["reasons"].as_array().unwrap().len(), 1);
+    assert!(!entry.to_string().contains("details"), "{entry}");
+    assert!(!entry.to_string().contains("holder_session"));
+    let report = lonca_audit::audit(&e.store(), lonca_audit::Options::default()).unwrap();
+    assert!(report.ok(), "{:#?}", report.findings);
+}
+
+/// A proposal lacking a lease is told which kind it needed and who holds
+/// it; `facts.preview` says the same before anyone proposes.
+#[test]
+fn a_proposal_and_a_preview_say_which_leases_are_missing() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let base = e.trunk();
+    let a = e.session("a", &["src/**"]);
+    let b = e.session("b", &["src/**"]);
+    e.lease(&a, "src/lib.rs#charge");
+    let both = LIB
+        .replacen("    a\n", "    a + 1\n", 1)
+        .replacen("    a\n", "    a + 2\n", 1)
+        + "\npub fn extra() {}\n";
+    let files = vec![file("src/lib.rs", &both)];
+    let p = e.ok(
+        "facts.preview",
+        None,
+        Some(&b),
+        json!({"base": base, "files": files}),
+    );
+    let by = |list: &Value, symbol: &str| {
+        let all = list.as_array().unwrap();
+        all.iter().find(|d| d["symbol"] == symbol).unwrap().clone()
+    };
+    let leases = p["leases"].clone();
+    assert_eq!(leases.as_array().unwrap().len(), 3, "{p}");
+    let charge = by(&leases, "src/lib.rs#charge");
+    assert_eq!(charge["code"], "lease_held");
+    assert_eq!(charge["holder_session"], "a");
+    assert_eq!(by(&leases, "src/lib.rs#refund")["code"], "free");
+    let file_lease = by(&leases, "src/lib.rs#<file>");
+    assert_eq!(file_lease["code"], "free");
+    assert_eq!(file_lease["needed_kind"], "insert");
+    assert_eq!(
+        p["acquire"],
+        json!([
+            {"symbol": "src/lib.rs#<file>", "kind": "insert"},
+            {"symbol": "src/lib.rs#refund", "kind": "edit"},
+        ])
+    );
+
+    let claim = Claim {
+        intent: "both".into(),
+        edits: vec!["src/lib.rs#charge".into(), "src/lib.rs#refund".into()],
+        adds: vec!["src/lib.rs#extra".into()],
+        ..Default::default()
+    };
+    let r = e.ok(
+        "change.propose",
+        None,
+        Some(&b),
+        json!({"base": base, "files": files, "claim": claim}),
+    );
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    let details = r["details"].clone();
+    assert_eq!(details.as_array().unwrap().len(), 3, "{r}");
+    assert!(
+        details
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["code"] == "lease_missing")
+    );
+    assert_eq!(by(&details, "src/lib.rs#charge")["holder_session"], "a");
+    assert_eq!(
+        by(&details, "src/lib.rs#refund")["holder_session"],
+        Value::Null
+    );
+
+    // Holding the leases, the report says so and the proposal has no details.
+    let t = e.session("c", &["src/**"]);
+    e.lease(&t, "src/lib.rs#refund");
+    let one = LIB.replacen(
+        "pub fn refund(a: u64) -> u64 {\n    a\n",
+        "pub fn refund(a: u64) -> u64 {\n    0\n",
+        1,
+    );
+    let files = vec![file("src/lib.rs", &one)];
+    let p = e.ok(
+        "facts.preview",
+        None,
+        Some(&t),
+        json!({"base": base, "files": files}),
+    );
+    assert_eq!(p["leases"][0]["code"], "held_by_you");
+    assert_eq!(p["acquire"], json!([]));
+    let r = e.propose(&t, &base, files, &["src/lib.rs#refund"]);
+    assert_ne!(r["decision"]["outcome"], "deny", "{r}");
+    assert_eq!(r["details"], json!([]));
+}
+
+/// A pinned item has no expiry to wait for: details name the change.
+#[test]
+fn details_of_a_pinned_item_name_the_change_not_a_time() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let base = e.trunk();
+    let a = e.session("a", &["src/**"]);
+    let b = e.session("b", &["src/**"]);
+    e.lease(&a, "src/lib.rs#charge");
+    let new = LIB.replacen("    a\n", "    a + 1\n", 1);
+    let p = e.propose(
+        &a,
+        &base,
+        vec![file("src/lib.rs", &new)],
+        &["src/lib.rs#charge"],
+    );
+    assert_eq!(p["decision"]["outcome"], "escalate", "{p}");
+    let r = e.lease(&b, "src/lib.rs#charge");
+    assert_eq!(r["details"][0]["pinned_to"], p["change"], "{r}");
+    assert_eq!(r["details"][0]["expires_ms"], Value::Null);
+}

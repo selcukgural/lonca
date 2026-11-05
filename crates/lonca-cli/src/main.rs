@@ -537,6 +537,11 @@ enum LeaseCmd {
         #[arg(long, default_value = "10m")]
         ttl: String,
     },
+    /// The leases the local changes need, and who holds them.
+    Needed {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1277,8 +1282,17 @@ fn run(cmd: Cmd) -> Result<()> {
             Ok(())
         }
         Cmd::Lease(l) => {
-            let (mut c, _) = agent_client()?;
+            let (mut c, ws) = agent_client()?;
             let r = match l {
+                LeaseCmd::Needed { json: as_json } => {
+                    let r = mcp::lease_needed(&mut c, &ws)?;
+                    if as_json {
+                        ctx::print_json(&r)?;
+                    } else {
+                        print_lease_needs(&r);
+                    }
+                    return Ok(());
+                }
                 LeaseCmd::Acquire {
                     symbols,
                     kind,
@@ -1878,6 +1892,30 @@ fn print_status(s: &Value) {
     }
 }
 
+/// One line for each lease a change needs.
+fn lease_need_lines(report: &Value) -> Vec<String> {
+    let needs = report["leases"].as_array().cloned().unwrap_or_default();
+    let line = |d: &Value| {
+        let what = format!(
+            "{} {}",
+            d["needed_kind"].as_str().unwrap_or(""),
+            d["symbol"].as_str().unwrap_or("")
+        );
+        match (d["code"].as_str(), d["holder_session"].as_str()) {
+            (_, Some(holder)) => format!("{what}: held by {holder}"),
+            (Some("held_by_you"), None) => format!("{what}: yours"),
+            _ => format!("{what}: free"),
+        }
+    };
+    needs.iter().map(line).collect()
+}
+
+fn print_lease_needs(report: &Value) {
+    for l in lease_need_lines(report) {
+        println!("{l}");
+    }
+}
+
 /// What `lonca status` adds to a lease set with pins.
 fn pin_note(lease: &Value) -> String {
     match lease["pinned"].as_array().map_or(0, Vec::len) {
@@ -1888,7 +1926,24 @@ fn pin_note(lease: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{pin_note, source};
+    use super::{lease_need_lines, pin_note, source};
+
+    #[test]
+    fn needed_leases_read_as_one_line_each() {
+        let report = serde_json::json!({"leases": [
+            {"code": "held_by_you", "needed_kind": "edit", "symbol": "a#f"},
+            {"code": "free", "needed_kind": "insert", "symbol": "a#<file>"},
+            {"code": "lease_held", "needed_kind": "rename", "symbol": "a#g", "holder_session": "s2"},
+        ]});
+        assert_eq!(
+            lease_need_lines(&report),
+            [
+                "edit a#f: yours",
+                "insert a#<file>: free",
+                "rename a#g: held by s2"
+            ]
+        );
+    }
 
     #[test]
     fn status_marks_a_lease_set_with_pins() {

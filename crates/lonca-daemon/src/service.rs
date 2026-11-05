@@ -16,6 +16,7 @@ use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::decide::{level_for, valid_token};
+use lonca_policy::details;
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate};
@@ -1909,15 +1910,22 @@ impl Service {
 
     fn lease_acquire(&self, req: &Request, p: LeaseAcquire) -> Hr {
         let set = p.set.clone().unwrap_or_else(|| random_id("lse"));
-        let mut out = self.agent_op(req, |_| {
-            Ok(Op::LeaseAcquire {
-                set: set.clone(),
-                items: p.items.clone(),
-                intent: p.intent.clone(),
-                ttl_ms: p.ttl_ms,
-            })
-        })?;
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        Self::reconcile(r, now)?;
+        let op = Op::LeaseAcquire {
+            set: set.clone(),
+            items: p.items.clone(),
+            intent: p.intent,
+            ttl_ms: p.ttl_ms,
+        };
+        let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
+        let mut out = logged(&signed);
         out["set"] = json!(set);
+        out["details"] = json!(details::lease_held(&r.chain.state, &session, &p.items, now));
         Ok(out)
     }
 
@@ -1987,6 +1995,12 @@ impl Service {
         out["commit"] = json!(commit);
         out["facts"] = json!(analysis.facts);
         out["syntax_errors"] = json!(analysis.syntax_errors);
+        out["details"] = json!(details::lease_missing(
+            &r.chain.state,
+            &session,
+            &analysis.facts,
+            now
+        ));
         Ok(out)
     }
 
@@ -2011,7 +2025,12 @@ impl Service {
             )
             .or_fail()?;
         let a = facts_of(&r.store, ENGINE_CURRENT, &p.base, &commit).or_fail()?;
-        Ok(json!({"facts": a.facts, "syntax_errors": a.syntax_errors}))
+        let session = actor.session().expect("agent");
+        let leases = details::lease_report(&r.chain.state, session, &a.facts, now);
+        Ok(json!({
+            "facts": a.facts, "syntax_errors": a.syntax_errors,
+            "acquire": details::to_acquire(&leases), "leases": leases,
+        }))
     }
 
     fn attenuate(&self, req: &Request, p: Attenuate) -> Hr {

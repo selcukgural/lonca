@@ -110,6 +110,12 @@ MCP server, and keeps the human approval as the control.
 
 ## Reading results
 
+- `lonca lease needed --json` in a workspace (the `lease_needed` MCP
+  tool): the leases the local diff needs, who holds them, and `acquire`,
+  the free ones as items for `lease_acquire`.
+- `details` in a `lease.acquire` or `change.propose` answer: who holds
+  what, their intent, the expiry or the change it is pinned to. Read
+  these instead of parsing `decision.reasons`.
 - `lonca status --json` (agent token or human session): sessions with
   their level and taint, leases, changes with their status, pending
   entries with change, intent, agent, task, time and files.

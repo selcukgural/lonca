@@ -171,6 +171,7 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
             &e.op,
             e.human.as_ref(),
             &Ctx {
+                format: e.format,
                 time_ms: e.time_ms,
                 policy: &policy,
                 facts: e.facts.as_ref(),

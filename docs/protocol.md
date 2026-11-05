@@ -252,7 +252,9 @@ with a signed `daemon.rotate` through `human.submit`.
 
 - **session**: `{"id", "agent", "task", "parent": string | null,
   "level": "unobserved" | "hooks" | "hooks_sandbox" | "isolated",
-  "taint": string | null, "active": boolean, "expires_ms": time}`.
+  "taint": string | null, "active": boolean, "expires_ms": time,
+  "last_seen_ms": time | null}`. `last_seen_ms` is the last heartbeat;
+  `null` means none yet.
 - **lease**: `{"set", "session", "items": [lease item], "intent",
   "expires_ms", "pinned": [{"change": change id, "items": [lease
   item]}]}`; only what is held now. `items` are the set's live items:
@@ -486,7 +488,11 @@ stay until the change leaves the queue; the rest of the set ends.
 *agent.* `{"set": string, "ttl_ms": integer | null}` (default 600 000).
 Logged. An expired set is removed from the state by the next log entry,
 so a late renew is denied with `lease_expired` or `unknown_lease_set`;
-both mean: acquire again.
+both mean: acquire again. A set held for `leases.max_hold_minutes` or
+longer is denied with `lease_hold_limit` while another session wants
+it (it was denied an overlapping `lease.acquire` within the last
+`leases.max_ttl_minutes`): stop renewing, propose or release; the set
+runs out by its TTL.
 
 ### `change.propose`
 
@@ -526,6 +532,18 @@ A child session with a narrower scope. Logged, plus `"session"` and
 
 *agent.* `params: {}`. Ends the agent's own session; its token stops
 working. Logged.
+
+### `session.heartbeat`
+
+*agent.* `params: {}`. The session is alive. Logged as an `observe`
+entry. From the first heartbeat on, the session's leases hold only
+while it goes on: `timeout_ms` after the last one they are free, and a
+later heartbeat does not bring them back. A session that never sent one
+lives by its TTL alone. Pinned items ignore the timeout. Result:
+`{"seq", "decision", "now_ms": time, "timeout_ms": integer,
+"max_ttl_ms": integer, "leases": [{"set", "expires_ms"}]}`: the caller's
+own leases, on the daemon's clock. Send one every `timeout_ms / 3`.
+`lonca mcp` does, and renews what is about to run out.
 
 ### `hook.event`
 
@@ -574,6 +592,8 @@ The `reasons` of a decision. The ones a runner acts on:
 - `lease_missing:<symbol>`, `lease_held:<symbol>:<session>:<intent>`,
   `lease_expired`, `invalid_lease_set`, `unknown_lease_set`,
   `not_own_lease`: acquire or renew the lease, then propose again.
+- `lease_hold_limit`: the set has been held too long and someone is
+  waiting; finish or let it run out, then acquire again.
 - `claim_mismatch:<field>` (`edits`, `adds`, `deletes`, `deleted_files`,
   `signature_changes`, `tests`): the claim does not match the facts;
   `facts.preview` says what the facts are.
@@ -622,6 +642,8 @@ Exit codes:
   `docs/guide/runners.md`.
 - `session end --json` (in the agent's workspace): `{"session", "seq",
   "decision"}`.
+- `session heartbeat --json` (in the agent's workspace): `{"session",
+  "seq", "timeout_ms", "leases"}`.
 - `sync --json`: `{"base_before": id, "base_after": id, "updated":
   [path], "merged": [path], "conflicts": [{"path", "trunk_copy"}]}`.
   A conflict leaves the local file as it was and writes trunk's version

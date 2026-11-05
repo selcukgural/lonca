@@ -83,6 +83,7 @@ impl Chain {
             &sub.op,
             sub.human.as_ref(),
             &Ctx {
+                format: FORMAT_CURRENT,
                 time_ms,
                 policy,
                 facts: sub.facts.as_ref(),
@@ -134,6 +135,7 @@ pub fn replay_checked(
                 &e.op,
                 e.human.as_ref(),
                 &Ctx {
+                    format: e.format,
                     time_ms: e.time_ms,
                     policy: &policy,
                     facts: e.facts.as_ref(),

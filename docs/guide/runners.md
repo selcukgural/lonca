@@ -26,8 +26,14 @@ page is the harness side.
    `cwd` and, if the worker gets a scratch directory, `--add-dir` for
    it. Give it the settings below (hooks) and the MCP entry.
 3. **The worker works.** The SessionStart hook injects Lonca's rules;
-   `lonca mcp` offers `lease_acquire`, `preview`, `propose`, `sync`,
-   `status`, `negotiate`, …; every tool call goes through `lonca hook`.
+   `lonca mcp` offers `lease_acquire`, `lease_renew`, `preview`,
+   `propose`, `sync`, `status`, `negotiate`, …; every tool call goes
+   through `lonca hook`. While it runs it sends heartbeats and renews
+   the worker's lease sets, so a turn longer than the TTL keeps its
+   leases; when the harness dies, so does `lonca mcp`, and the leases are
+   free `leases.heartbeat_timeout_ms` later (5 minutes by default). A
+   runner that does not use `lonca mcp` calls `lonca session heartbeat`
+   every third of that, or lives by the TTL (`lonca lease renew`).
 4. **The worker is done.** Its `propose` leaves a change that is queued
    (`allow`) or waiting for a human (`escalate`, in `status.pending`
    and `lonca pending --json`). The person approves (`lonca approve

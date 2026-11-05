@@ -338,6 +338,7 @@ impl H {
                 &e.op,
                 e.human.as_ref(),
                 &Ctx {
+                    format: e.format,
                     time_ms: e.time_ms,
                     policy: &self.policy,
                     facts: e.facts.as_ref(),
@@ -2691,7 +2692,7 @@ fn entries_of_an_older_format_neither_pin_nor_prune() {
         "unknown_lease_set"
     ));
     let mut old = h.log.clone();
-    assert!(old.iter().all(|o| o.entry.format == 7));
+    assert!(old.iter().all(|o| o.entry.format >= 7));
     for o in &mut old {
         o.entry.format = 6;
     }
@@ -2700,4 +2701,407 @@ fn entries_of_an_older_format_neither_pin_nor_prune() {
     assert!(s.leases.values().all(|l| l.pins.is_empty()), "not pinned");
     assert_eq!(s.active_leases(h.now).count(), 0);
     h.assert_replay();
+}
+
+// ---------------------------------------------------------------- liveness
+
+fn renew(set: &str, ttl_ms: i64) -> Op {
+    Op::LeaseRenew {
+        set: set.into(),
+        ttl_ms,
+    }
+}
+
+fn heartbeat(h: &mut H, session: &str) -> Decision {
+    h.daemon(
+        Op::Observe {
+            session: session.into(),
+            events: vec![Observation {
+                phase: Phase::Pre,
+                kind: ObsKind::Heartbeat,
+                external: false,
+            }],
+        },
+        vec![],
+    )
+}
+
+/// Renewing: your own live set, up to the longest TTL, and nothing else.
+#[test]
+fn renewal_is_for_the_holder_of_a_live_set_within_the_ttl() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+
+    h.now += 9 * MIN;
+    assert!(h.agent("a", renew("l1", 30 * MIN)).is_allow());
+    assert_eq!(h.chain.state.leases["l1"].expires_ms, h.now + 30 * MIN);
+
+    let d = h.agent("b", renew("l1", 10 * MIN));
+    assert!(denied_with(&d, "not_own_lease"), "{d:?}");
+    let d = h.agent("a", renew("l1", 30 * MIN + 1));
+    assert!(denied_with(&d, "lease_ttl"), "{d:?}");
+    for ttl in [0, -1] {
+        assert!(denied_with(&h.agent("a", renew("l1", ttl)), "lease_ttl"));
+    }
+    assert!(denied_with(
+        &h.agent("a", renew("nope", 10 * MIN)),
+        "unknown_lease_set"
+    ));
+
+    // The first entry after the end still finds the set; it is refused
+    // and pruned, and then there is nothing to renew.
+    h.now = h.chain.state.leases["l1"].expires_ms - 1;
+    assert!(denied_with(
+        &h.agent("a", renew("l1", MIN)),
+        "lease_expired"
+    ));
+    assert!(!h.chain.state.leases.contains_key("l1"));
+    assert!(denied_with(
+        &h.agent("a", renew("l1", MIN)),
+        "unknown_lease_set"
+    ));
+    h.assert_replay();
+}
+
+/// The holder stops reporting: at the timeout, not before, the lease is
+/// free. A session that comes back finds what it held gone.
+#[test]
+fn a_silent_holder_loses_its_lease_at_the_heartbeat_timeout() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let d = heartbeat(&mut h, "a");
+    assert_eq!(d.reasons, ["heartbeat_timeout=300000"]);
+    let seen = h.now;
+    assert_eq!(h.chain.state.sessions["a"].heartbeat.unwrap().seen_ms, seen);
+
+    // Exactly at the timeout it still holds: submit adds one ms.
+    h.now = seen + 5 * MIN - 1;
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    h.now = seen + 5 * MIN;
+    assert!(h.lease("b", "l2", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(!h.chain.state.leases.contains_key("l1"), "pruned");
+
+    assert!(heartbeat(&mut h, "a").is_allow());
+    assert_eq!(held(&h, "a"), Vec::<String>::new());
+    assert_eq!(held(&h, "b"), [f]);
+    assert!(denied_with(
+        &h.agent("a", renew("l1", MIN)),
+        "unknown_lease_set"
+    ));
+    h.assert_replay();
+}
+
+/// A session that comes back before anyone prunes it finds nothing either:
+/// a beat after the timeout does not raise the dead, or two sessions could
+/// hold one symbol.
+#[test]
+fn a_late_heartbeat_does_not_revive_a_lease() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(heartbeat(&mut h, "a").is_allow());
+    h.now += 6 * MIN;
+    assert!(denied_with(
+        &h.agent("a", renew("l1", MIN)),
+        "lease_expired"
+    ));
+    h.assert_replay();
+
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(heartbeat(&mut h, "a").is_allow());
+    h.now += 6 * MIN;
+    assert!(heartbeat(&mut h, "a").is_allow());
+    assert!(h.chain.state.leases.is_empty());
+    h.assert_replay();
+}
+
+/// Beats keep the session alive past the timeout; the TTL still applies,
+/// and sessions that never beat are not affected.
+#[test]
+fn heartbeats_extend_liveness_not_the_ttl() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("quiet", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("quiet", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    for _ in 0..3 {
+        assert!(heartbeat(&mut h, "a").is_allow());
+        h.now += 4 * MIN;
+        assert_eq!(held(&h, "a").len() + held(&h, "quiet").len(), {
+            if h.now - T0 < 10 * MIN { 2 } else { 0 }
+        });
+    }
+    assert!(h.lease("b", "l3", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("b", "l4", &[(g, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+/// Pinned items ignore the timeout while their change is in flight.
+#[test]
+fn a_pinned_item_ignores_the_heartbeat_timeout() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    assert!(
+        h.lease("a", "l1", &[(f, LeaseKind::Edit), (g, LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert!(heartbeat(&mut h, "a").is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+    h.now += 6 * MIN;
+    assert_eq!(held(&h, "a"), [f]);
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    assert!(h.lease("b", "l3", &[(g, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+/// A policy with a hold limit that fits in a session of two hours.
+fn short_hold() -> H {
+    let config = DEFAULT_CONFIG.replace("max_hold_minutes = 120", "max_hold_minutes = 60");
+    H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap())
+}
+
+/// Holds `l1` on `f` for 55 minutes as session `a`, and returns the time
+/// it was acquired.
+fn hold(h: &mut H, f: &str) -> i64 {
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let start = h.now;
+    for minutes in [9, 30, 55] {
+        h.now = start + minutes * MIN;
+        assert!(h.agent("a", renew("l1", 30 * MIN)).is_allow());
+    }
+    start
+}
+
+/// The hold limit bites only when someone else is asking.
+#[test]
+fn renewal_past_the_hold_limit_is_refused_while_another_session_wants_the_set() {
+    let mut h = short_hold();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    let start = hold(&mut h, f);
+    // Past the limit with nobody waiting: renewed.
+    h.now = start + 61 * MIN;
+    assert!(h.agent("a", renew("l1", 30 * MIN)).is_allow());
+
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    assert_eq!(
+        h.chain.state.leases["l1"]
+            .interest
+            .keys()
+            .collect::<Vec<_>>(),
+        ["b"]
+    );
+    let expires = h.chain.state.leases["l1"].expires_ms;
+    h.now += MIN;
+    let d = h.agent("a", renew("l1", 30 * MIN));
+    assert!(denied_with(&d, "lease_hold_limit"), "{d:?}");
+    assert_eq!(h.chain.state.leases["l1"].expires_ms, expires, "unchanged");
+
+    // The set runs out and the session that asked gets it.
+    h.now = expires;
+    assert!(h.lease("b", "l2", &[(f, LeaseKind::Edit)]).is_allow());
+    h.assert_replay();
+}
+
+#[test]
+fn the_hold_limit_starts_exactly_at_the_limit() {
+    let mut h = short_hold();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    let start = hold(&mut h, f);
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    h.now = start + 60 * MIN - 2;
+    assert!(h.agent("a", renew("l1", 30 * MIN)).is_allow());
+    h.now = start + 60 * MIN - 1;
+    assert!(denied_with(
+        &h.agent("a", renew("l1", 30 * MIN)),
+        "lease_hold_limit"
+    ));
+    h.assert_replay();
+}
+
+/// Interest fades: a session that stopped asking, or stopped existing,
+/// holds nobody back.
+#[test]
+fn interest_fades_with_time_and_with_the_session_that_asked() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    let asked = h.now;
+    let l = h.chain.state.leases["l1"].clone();
+    let window = 30 * MIN;
+    assert!(h.chain.state.contended(&l, asked + window, window));
+    assert!(!h.chain.state.contended(&l, asked + window + 1, window));
+    let end = Op::SessionEnd {
+        session: "b".into(),
+        reason: "gave up".into(),
+    };
+    assert!(h.agent("b", end).is_allow());
+    assert!(!h.chain.state.contended(&l, asked + 1, window));
+    h.assert_replay();
+}
+
+/// Only a denial for what others hold is interest: a session outside its
+/// scope, or a denial for another reason, does not block anyone.
+#[test]
+fn only_a_denial_for_a_held_symbol_registers_interest() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("narrow", &["docs/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(
+        h.lease("a", "own", &[("src/b.rs#g", LeaseKind::Edit)])
+            .is_allow()
+    );
+    let d = h.lease("narrow", "l2", &[(f, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "scope_path"), "{d:?}");
+    assert!(h.chain.state.leases["l1"].interest.is_empty());
+    let d = h.lease(
+        "b",
+        "l3",
+        &[(f, LeaseKind::Edit), ("src/c.rs#h", LeaseKind::Insert)],
+    );
+    assert!(denied_with(&d, "lease_held"), "{d:?}");
+    let s = &h.chain.state;
+    assert!(s.leases["l1"].interest.contains_key("b"));
+    assert!(s.leases["own"].interest.is_empty(), "no conflict there");
+    h.assert_replay();
+}
+
+/// A fresh set over what the session already holds does not start the
+/// hold again.
+#[test]
+fn a_new_set_over_held_symbols_continues_the_hold() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let start = h.now;
+    h.now += 5 * MIN;
+    assert!(h.lease("a", "l2", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("a", "l3", &[(g, LeaseKind::Edit)]).is_allow());
+    let s = &h.chain.state;
+    assert_eq!(s.leases["l2"].acquired_ms, start);
+    assert_eq!(s.leases["l3"].acquired_ms, h.now);
+    h.assert_replay();
+}
+
+/// The meaning changed with format 8: an older heartbeat keeps nothing
+/// alive, an older denial registers no interest, and an older renewal
+/// has no hold limit. Replaying the same entries as format 7 proves it.
+#[test]
+fn entries_of_an_older_format_know_no_liveness() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(denied_with(
+        &h.lease("b", "l2", &[(f, LeaseKind::Edit)]),
+        "lease_held"
+    ));
+    assert!(heartbeat(&mut h, "a").is_allow());
+    let mut old = h.log.clone();
+    for o in &mut old {
+        assert_eq!(o.entry.format, 8);
+        o.entry.format = 7;
+        if matches!(o.entry.op, Op::Observe { .. }) {
+            o.entry.decision.reasons.clear();
+        }
+    }
+    let s = State::replay(&old);
+    assert!(s.leases["l1"].interest.is_empty());
+    let late_ms = h.now + 1000 * MIN;
+    assert!(!s.session_lost("a", late_ms));
+    // decide() with the entry's format: no hold limit, no timeout reason.
+    let bundle = PolicyBundle::default_bundle();
+    let ctx = |format, time_ms| Ctx {
+        format,
+        time_ms,
+        policy: &bundle,
+        facts: None,
+        evidence: &[],
+    };
+    let actor = Actor::Agent {
+        name: "bot-a".into(),
+        session: "a".into(),
+    };
+    let mut held_long = h.chain.state.clone();
+    let l = held_long.leases.get_mut("l1").unwrap();
+    l.acquired_ms -= 500 * MIN;
+    let t = h.now + 1;
+    let op = renew("l1", MIN);
+    assert!(denied_with(
+        &decide(&held_long, &actor, &op, None, &ctx(8, t)),
+        "lease_hold_limit"
+    ));
+    assert!(decide(&held_long, &actor, &op, None, &ctx(7, t)).is_allow());
+    held_long.sessions.get_mut("a").unwrap().heartbeat = Some(lonca_policy::state::Heartbeat {
+        seen_ms: t - 6 * MIN,
+        timeout_ms: 5 * MIN,
+    });
+    held_long.leases.get_mut("l1").unwrap().interest.clear();
+    assert!(denied_with(
+        &decide(&held_long, &actor, &op, None, &ctx(8, t)),
+        "lease_expired"
+    ));
+    assert!(decide(&held_long, &actor, &op, None, &ctx(7, t)).is_allow());
+    h.assert_replay();
+}
+
+#[test]
+fn liveness_limits_must_be_positive() {
+    for bad in ["heartbeat_timeout_ms = 300000", "max_hold_minutes = 120"] {
+        let (name, _) = bad.split_once(" = ").unwrap();
+        for value in ["0", "-1"] {
+            let config = DEFAULT_CONFIG.replace(bad, &format!("{name} = {value}"));
+            let err = PolicyBundle::parse(&config, DEFAULT_POLICY).err().unwrap();
+            assert!(err.contains("must be positive"), "{err}");
+        }
+    }
+    assert!(
+        PolicyBundle::parse(
+            &DEFAULT_CONFIG
+                .replace("max_hold_minutes = 120", "max_hold_minutes = 1")
+                .replace("heartbeat_timeout_ms = 300000", "heartbeat_timeout_ms = 1"),
+            DEFAULT_POLICY
+        )
+        .is_ok()
+    );
 }

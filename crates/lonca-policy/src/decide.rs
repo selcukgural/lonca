@@ -14,9 +14,11 @@
 
 use std::collections::BTreeSet;
 
+use lonca_core::oplog::FORMAT_LEASE_LIVENESS;
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckKind, CheckResult, Decision, Facts, HumanKey,
-    HumanSignature, LeaseItem, LeaseKind, NegotiationMsg, ObservationLevel, Op, Outcome, Scope,
+    HumanSignature, LeaseItem, LeaseKind, NegotiationMsg, ObsKind, ObservationLevel, Op, Outcome,
+    Scope,
 };
 use lonca_core::paths::{
     path_matches, path_pattern_within, symbol_matches, symbol_pattern_within,
@@ -24,10 +26,12 @@ use lonca_core::paths::{
 };
 
 use crate::config::{CVal, CedarOutcome, PolicyBundle};
-use crate::state::{ActiveLease, ChangeStatus, LEASES_KEPT, RELEASED, State};
+use crate::state::{ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, LEASES_KEPT, RELEASED, State};
 use crate::symbols;
 
 pub struct Ctx<'a> {
+    /// The format of the entry: what a recorded operation means.
+    pub format: u32,
     pub time_ms: i64,
     pub policy: &'a PolicyBundle,
     pub facts: Option<&'a Facts>,
@@ -673,14 +677,23 @@ pub fn decide(
         Op::LeaseRenew { set, ttl_ms } => match state.leases.get(set) {
             None => v.deny("unknown_lease_set"),
             Some(l) => {
+                let liveness = ctx.format >= FORMAT_LEASE_LIVENESS;
                 if Some(l.session.as_str()) != actor.session() {
                     v.deny("not_own_lease");
                 }
-                if l.expires_ms <= t {
+                if l.expires_ms <= t || (liveness && state.session_lost(&l.session, t)) {
                     v.deny("lease_expired");
                 }
                 if *ttl_ms <= 0 || *ttl_ms > cfg.leases.max_ttl_minutes * 60_000 {
                     v.deny("lease_ttl");
+                }
+                // Interest is a denied acquire, retried at least as often
+                // as the longest TTL.
+                if liveness
+                    && t - l.acquired_ms >= cfg.leases.max_hold_minutes * 60_000
+                    && state.contended(l, t, cfg.leases.max_ttl_minutes * 60_000)
+                {
+                    v.deny("lease_hold_limit");
                 }
             }
         },
@@ -796,6 +809,14 @@ pub fn decide(
             }
             if events.len() > 256 {
                 v.deny("too_many_events");
+            }
+            // `State::apply` has no policy: the timeout travels in the
+            // decision and the auditor recomputes it.
+            if ctx.format >= FORMAT_LEASE_LIVENESS
+                && events.iter().any(|e| e.kind == ObsKind::Heartbeat)
+            {
+                let timeout = cfg.leases.heartbeat_timeout_ms;
+                v.info.push(format!("{HEARTBEAT_TIMEOUT}{timeout}"));
             }
         }
         Op::Taint { session, .. } => {

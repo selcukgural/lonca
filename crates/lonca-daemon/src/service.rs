@@ -11,7 +11,7 @@ use base64::Engine;
 use lonca_core::canonical::random_id;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp};
-use lonca_core::ops::{Actor, BindChecks, Claim, HumanKey, Op};
+use lonca_core::ops::{Actor, BindChecks, Claim, HumanKey, ObsKind, Observation, Op, Phase};
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
@@ -174,6 +174,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("lease.acquire", Cred::Agent),
     ("lease.release", Cred::Agent),
     ("lease.renew", Cred::Agent),
+    ("session.heartbeat", Cred::Agent),
     ("change.propose", Cred::Agent),
     ("change.withdraw", Cred::Agent),
     ("facts.preview", Cred::Agent),
@@ -522,6 +523,7 @@ impl Service {
             }
             "cap.attenuate" => self.attenuate(req, params(p)?),
             "session.end" => self.agent_end(req),
+            "session.heartbeat" => self.heartbeat(req),
             "hook.event" => self.hook_event(req, params(p)?),
             "hook.bind" => self.hook_bind(req, params(p)?),
             "queue.run" => Ok(json!({"integrated": self.process_all()})),
@@ -948,6 +950,7 @@ impl Service {
                 json!({
                     "id": x.id, "agent": x.agent, "task": x.task, "parent": x.parent, "level": x.level,
                     "taint": x.taint, "active": s.session_active(&x.id, now), "expires_ms": x.expires_ms,
+                    "last_seen_ms": x.heartbeat.map(|h| h.seen_ms),
                 })
             })
             .collect();
@@ -2055,6 +2058,42 @@ impl Service {
 
     // ---------------------------------------------------------------- hooks
 
+    /// The caller is alive: logged, and answered with what it needs to go
+    /// on: the timeout, and its leases to renew against the daemon's clock.
+    fn heartbeat(&self, req: &Request) -> Hr {
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        let limits = r.policy().or_fail()?.config.leases.clone();
+        let beat = Observation {
+            phase: Phase::Pre,
+            kind: ObsKind::Heartbeat,
+            external: false,
+        };
+        let op = Op::Observe {
+            session: session.clone(),
+            events: vec![beat],
+        };
+        let signed = r
+            .submit(Submission::new(Actor::Daemon, op), now)
+            .or_fail()?;
+        let leases: Vec<Value> = r
+            .chain
+            .state
+            .active_leases(now)
+            .filter(|a| a.lease.session == session)
+            .map(|a| json!({"set": a.lease.set, "expires_ms": a.lease.expires_ms}))
+            .collect();
+        let mut out = logged(&signed);
+        out["now_ms"] = json!(now);
+        out["timeout_ms"] = json!(limits.heartbeat_timeout_ms);
+        out["max_ttl_ms"] = json!(limits.max_ttl_minutes * 60_000);
+        out["leases"] = json!(leases);
+        Ok(out)
+    }
+
     fn hook_event(&self, req: &Request, ev: HookEvent) -> Hr {
         let mut guard = self.lock();
         let now = self.now();
@@ -2200,9 +2239,9 @@ impl Service {
             };
             allow &= policy.config.observation.network == "taint";
             allow_private &= policy.config.observation.allow_private_network;
-            let ev = lonca_core::ops::Observation {
-                phase: lonca_core::ops::Phase::Pre,
-                kind: lonca_core::ops::ObsKind::Fetch {
+            let ev = Observation {
+                phase: Phase::Pre,
+                kind: ObsKind::Fetch {
                     host: host.to_string(),
                 },
                 external: true,

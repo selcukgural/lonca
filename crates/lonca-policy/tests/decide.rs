@@ -3787,3 +3787,139 @@ fn a_delegation_needs_the_parents_own_live_set_within_the_childs_scope() {
     assert_eq!(h.chain.state.leases["l1"].session, "a");
     h.assert_replay();
 }
+
+fn acquire_for(h: &mut H, set: &str, ttl_ms: i64) -> Decision {
+    let op = Op::LeaseAcquire {
+        set: set.into(),
+        items: vec![LeaseItem {
+            symbol: F.into(),
+            kind: LeaseKind::Edit,
+        }],
+        intent: "ttl".into(),
+        ttl_ms,
+    };
+    h.agent("a", op)
+}
+
+/// The bounds of a lease's TTL, on both sides of each.
+#[test]
+fn a_lease_ttl_is_positive_and_within_the_maximum() {
+    let mut h = three_sessions();
+    let max = 30 * MIN;
+    for ttl in [0, -1, max + 1] {
+        let d = acquire_for(&mut h, "l1", ttl);
+        assert!(denied_with(&d, "lease_ttl"), "{ttl}: {d:?}");
+    }
+    assert!(acquire_for(&mut h, "l1", max).is_allow());
+    assert!(acquire_for(&mut h, "l2", 1).is_allow());
+    h.assert_replay();
+}
+
+/// The inbox reports what happened to the session's own work, its earlier
+/// sessions' included, and nobody else's.
+#[test]
+fn an_integration_is_news_for_the_workspace_that_proposed_it() {
+    use lonca_policy::events::{Event, for_session};
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(F)).outcome, Outcome::Escalate);
+    assert!(h.continue_as("a2", "a", &["src/**"], false).is_allow());
+    let approved = pending_seq(&h, c);
+    assert!(h.human("ayse", approve(approved)).is_allow());
+    assert!(integrate(&mut h, c, Some(gid('e')), &[]).is_allow());
+    let integrated = h.log.last().unwrap().entry.seq;
+
+    let events = |h: &H, s: &str| for_session(&h.chain.state, s, &h.log, h.now);
+    let want = vec![
+        Event::Approved {
+            seq: integrated - 1,
+            target_seq: approved,
+        },
+        Event::Integrated {
+            seq: integrated,
+            change: c,
+        },
+    ];
+    assert_eq!(events(&h, "a"), want);
+    assert_eq!(events(&h, "a2"), want, "the workspace's earlier session");
+    assert_eq!(events(&h, "b"), []);
+
+    let g = "src/a.rs#g";
+    assert!(h.lease("a2", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    let c2 = ChangeId::random();
+    assert_eq!(h.propose("a2", c2, edit(g)).outcome, Outcome::Escalate);
+    assert!(h.human("ayse", approve(pending_seq(&h, c2))).is_allow());
+    let d = integrate(&mut h, c2, None, &["src/a.rs#g"]);
+    assert!(denied_with(&d, "merge_conflict"), "{d:?}");
+    let conflicted = h.log.last().unwrap().entry.seq;
+    assert_eq!(
+        events(&h, "a2").last(),
+        Some(&Event::Conflicted {
+            seq: conflicted,
+            change: c2,
+            conflicts: vec!["src/a.rs#g".into()],
+        })
+    );
+
+    // It merged and the decision refused it: not a conflict, not a landing.
+    assert!(h.lease("a2", "l3", &[(g, LeaseKind::Edit)]).is_allow());
+    let c3 = ChangeId::random();
+    assert_eq!(h.propose("a2", c3, edit(g)).outcome, Outcome::Escalate);
+    assert!(h.human("ayse", approve(pending_seq(&h, c3))).is_allow());
+    let d = integrate(&mut h, c3, Some(gid('f')), &["x"]);
+    assert!(denied_with(&d, "conflicts_with_merge"), "{d:?}");
+    let failed = h.log.last().unwrap().entry.seq;
+    assert_eq!(
+        events(&h, "a2").last(),
+        Some(&Event::Failed {
+            seq: failed,
+            change: c3,
+            reasons: vec!["conflicts_with_merge".into()],
+        })
+    );
+    assert_eq!(events(&h, "b"), [], "not news for anyone else");
+    h.assert_replay();
+}
+
+/// A yield and a delegation arrive as leases received; the message of a
+/// yield arrives too.
+#[test]
+fn a_lease_handed_over_is_in_the_inbox() {
+    use lonca_policy::events::{Event, for_session};
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.agent("a", msg_to("b", "t1", "l1", Some("b"))).is_allow());
+    let seq = h.log.last().unwrap().entry.seq;
+    let got = for_session(&h.chain.state, "b", &h.log, h.now);
+    assert_eq!(
+        got,
+        [
+            Event::LeaseReceived {
+                seq,
+                set: "l1".into(),
+                from: Some("a".into()),
+            },
+            Event::Message {
+                seq,
+                thread: "t1".into(),
+                from: Some("a".into()),
+            },
+        ]
+    );
+    let op = child_op(&h, "b", "kid", &["l1"]);
+    assert!(h.agent("b", op).is_allow());
+    let seq = h.log.last().unwrap().entry.seq;
+    assert_eq!(
+        for_session(&h.chain.state, "kid", &h.log, h.now),
+        [Event::LeaseReceived {
+            seq,
+            set: "l1".into(),
+            from: Some("b".into()),
+        }]
+    );
+    // From the middle of the log, the sequence numbers stay right.
+    let tail = &h.log[seq as usize..];
+    assert_eq!(for_session(&h.chain.state, "b", tail, h.now), []);
+    h.assert_replay();
+}

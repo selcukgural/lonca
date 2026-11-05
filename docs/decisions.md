@@ -815,8 +815,10 @@ a symbol and race everyone to hand it to a sub-agent (#42).
   `lease_expired`): a pin stays with its change. Both handovers check
   `scope.paths` only, like a lease's own scope check would on the path; symbol
   patterns of the receiver are not re-checked.
-- **`events {from}`** is the inbox: a change integrated or conflicted, approved
-  or rejected, a message, a lease received, a reservation. It is derived from
+- **`events {from}`** is the inbox: a change integrated, conflicted or failed
+  in verification, approved or rejected, a message, a lease received, a
+  reservation. A failed integration is logged as a denial, so the inbox reads
+  those entries too. It is derived from
   the log and the state for the caller and never written, so the single-writer
   rule holds. Changes of earlier sessions of the workspace count as the
   caller's. A notification of a signature change is left to #43, which needs it.

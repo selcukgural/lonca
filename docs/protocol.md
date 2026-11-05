@@ -531,7 +531,8 @@ the session already waits for it.
 
 Pass `next` as the next `from`. An event has a `kind`:
 `integrated` (`seq`, `change`), `conflicted` (`seq`, `change`,
-`conflicts`), `approved` (`seq`, `target_seq`), `rejected` (`seq`,
+`conflicts`), `failed` (`seq`, `change`, `reasons`: verification refused
+it), `approved` (`seq`, `target_seq`), `rejected` (`seq`,
 `target_seq`, `reason`), `message` (`seq`, `thread`, `from`),
 `lease_received` (`seq`, `set`, `from`), and `reserved` (`items`,
 `until_ms`), which is the state now and is reported on every call while

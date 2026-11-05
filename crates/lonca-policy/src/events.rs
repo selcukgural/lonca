@@ -20,6 +20,12 @@ pub enum Event {
         change: ChangeId,
         conflicts: Vec<String>,
     },
+    /// It merged, and the decision refused it: failed verification.
+    Failed {
+        seq: u64,
+        change: ChangeId,
+        reasons: Vec<String>,
+    },
     /// A human approved it, or said why not.
     Approved { seq: u64, target_seq: u64 },
     Rejected {
@@ -69,27 +75,37 @@ pub fn for_session(state: &State, session: &str, ops: &[SignedOp], now_ms: i64) 
     for o in ops {
         let e = &o.entry;
         let seq = e.seq;
+        // A failed integration is logged as a denial: that is the news.
+        if let Op::ChangeIntegrate {
+            change,
+            merged,
+            conflicts,
+            ..
+        } = &e.op
+        {
+            if own_change(state, session, change) {
+                let change = *change;
+                out.push(match (merged, e.decision.is_allow()) {
+                    (None, _) => Event::Conflicted {
+                        seq,
+                        change,
+                        conflicts: conflicts.clone(),
+                    },
+                    (Some(_), true) => Event::Integrated { seq, change },
+                    (Some(_), false) => Event::Failed {
+                        seq,
+                        change,
+                        reasons: e.decision.reasons.clone(),
+                    },
+                });
+            }
+            continue;
+        }
         if !e.decision.is_allow() {
             continue;
         }
         let sender = e.actor.session().map(String::from);
         match &e.op {
-            Op::ChangeIntegrate {
-                change,
-                merged,
-                conflicts,
-                ..
-            } if own_change(state, session, change) => out.push(match merged {
-                Some(_) => Event::Integrated {
-                    seq,
-                    change: *change,
-                },
-                None => Event::Conflicted {
-                    seq,
-                    change: *change,
-                    conflicts: conflicts.clone(),
-                },
-            }),
             Op::Approve { target_seq, .. } if mine(*target_seq) => out.push(Event::Approved {
                 seq,
                 target_seq: *target_seq,

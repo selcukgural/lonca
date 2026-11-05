@@ -1609,6 +1609,7 @@ fn the_oldest_interest_gets_the_freed_set_and_hears_of_it() {
     assert_eq!(d["decision"]["reasons"][0], "lease_reserved:b");
     assert_eq!(d["details"][0]["code"], "lease_reserved", "{d}");
     assert_eq!(d["details"][0]["holder_session"], "b");
+    assert_eq!(d["details"][0]["holder_agent"], "bot-b");
     assert_eq!(d["details"][0]["symbol"], sym);
     let s = e.ok("status", Some("demo"), None, json!({}));
     let until = s["reservations"][0]["until_ms"].as_i64().unwrap();

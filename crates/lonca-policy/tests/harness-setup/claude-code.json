@@ -1,0 +1,14 @@
+{
+  "files": {
+    ".claude/settings.local.json": "{\n  \"enabledMcpjsonServers\": [\n    \"lonca\"\n  ],\n  \"env\": {\n    \"LONCA_SOCKET\": \"/s/lonca.sock\"\n  },\n  \"hooks\": {\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"lonca hook\",\n            \"onFailure\": \"block\",\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"*\"\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"lonca hook\",\n            \"onFailure\": \"block\",\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"*\"\n      }\n    ],\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"lonca hook\",\n            \"onFailure\": \"block\",\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"*\"\n      }\n    ]\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__lonca__*\"\n    ]\n  }\n}\n",
+    ".mcp.json": "{\n  \"mcpServers\": {\n    \"lonca\": {\n      \"args\": [\n        \"mcp\"\n      ],\n      \"command\": \"lonca\",\n      \"env\": {\n        \"LONCA_SOCKET\": \"/s/lonca.sock\",\n        \"LONCA_WORKSPACE\": \"/w\"\n      }\n    }\n  }\n}\n"
+  },
+  "flags": [
+    "--mcp-config",
+    "{\n  \"mcpServers\": {\n    \"lonca\": {\n      \"args\": [\n        \"mcp\"\n      ],\n      \"command\": \"lonca\",\n      \"env\": {\n        \"LONCA_SOCKET\": \"/s/lonca.sock\",\n        \"LONCA_WORKSPACE\": \"/w\"\n      }\n    }\n  }\n}\n",
+    "--settings",
+    "{\n  \"enabledMcpjsonServers\": [\n    \"lonca\"\n  ],\n  \"env\": {\n    \"LONCA_SOCKET\": \"/s/lonca.sock\"\n  },\n  \"hooks\": {\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"lonca hook\",\n            \"onFailure\": \"block\",\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"*\"\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"lonca hook\",\n            \"onFailure\": \"block\",\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"*\"\n      }\n    ],\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"lonca hook\",\n            \"onFailure\": \"block\",\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"*\"\n      }\n    ]\n  },\n  \"permissions\": {\n    \"allow\": [\n      \"mcp__lonca__*\"\n    ]\n  }\n}\n"
+  ],
+  "env": {},
+  "note": ""
+}

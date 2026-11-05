@@ -3051,3 +3051,243 @@ fn undo_reverses_a_change_under_a_later_one_in_the_same_file() {
     assert!(!now.contains("a * 2"), "{now}");
     assert!(now.contains("a + 1"), "{now}");
 }
+
+/// One text of the rules reaches a worker by every road, and the hook's has
+/// the harness's own tool names.
+#[test]
+fn the_rules_are_one_text_on_every_road() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let rules = e.run(&ws, &["rules"]);
+    assert!(rules.contains("lease it: lease_acquire with"), "{rules}");
+
+    let mut mcp = Mcp::start(&e, &ws);
+    let init = mcp.request("initialize", json!({"protocolVersion": "2025-06-18"}));
+    assert_eq!(init["instructions"].as_str().unwrap(), rules.trim_end());
+    let tools = mcp.request("tools/list", json!({}));
+    let tools = tools["tools"].as_array().unwrap();
+    assert!(tools.iter().all(|t| t["annotations"].is_object()));
+
+    let start = json!({"hook_event_name": "SessionStart", "session_id": "h1", "cwd": ws});
+    let start = start.to_string();
+    let cases = [("claude-code", "mcp__lonca__"), ("gemini", "mcp_lonca_")];
+    for (harness, prefix) in cases {
+        let o = e.hook_as(&ws, &start, &["hook", "--harness", harness]);
+        let out: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+        let context = out["hookSpecificOutput"]["additionalContext"].as_str();
+        let context = context.unwrap().replace(prefix, "");
+        let (_, body) = rules.split_once('\n').unwrap();
+        assert!(context.ends_with(body.trim_end()), "{harness}: {context}");
+    }
+}
+
+/// What setup writes reaches the harness and never the repository.
+#[test]
+fn a_harness_is_set_up_from_its_profile_and_its_files_are_never_a_change() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let setup = ["harness", "setup", "claude-code", "--json"];
+    let r = parse(&e.run(&ws, &setup));
+    assert_eq!(r["known"], true);
+    assert_eq!(
+        r["written"],
+        json!([".claude/settings.local.json", ".mcp.json"])
+    );
+    let read = |p: &str| std::fs::read_to_string(ws.join(p)).unwrap();
+    let mcp: serde_json::Value = serde_json::from_str(&read(".mcp.json")).unwrap();
+    let server = &mcp["mcpServers"]["lonca"];
+    assert_eq!(server["env"]["LONCA_SOCKET"], e.sock.to_str().unwrap());
+    assert_eq!(server["env"]["LONCA_WORKSPACE"], ws.to_str().unwrap());
+
+    assert_eq!(
+        e.run(&ws, &setup),
+        e.run(&ws, &setup),
+        "running it again is fine"
+    );
+    assert!(!e.run(&ws, &["diff"]).contains(".mcp.json"));
+    let lib =
+        read("src/lib.rs").replace("    a\n}\n\npub fn refund", "    a + 1\n}\n\npub fn refund");
+    std::fs::write(ws.join("src/lib.rs"), lib).unwrap();
+    e.run(
+        &ws,
+        &[
+            "lease",
+            "acquire",
+            "src/lib.rs#charge",
+            "--kind",
+            "edit",
+            "-i",
+            "x",
+        ],
+    );
+    let out = e.run(
+        &ws,
+        &["propose", "-i", "charge", "--edits", "src/lib.rs#charge"],
+    );
+    // The session may touch only src/**: a file of setup's here would be refused.
+    assert!(out.contains("escalate: unobserved_session"), "{out}");
+    let change = parse(&e.run(&e.root, &["status", "--repo", "demo", "--json"]));
+    assert!(!change.to_string().contains(".mcp.json"), "{change}");
+}
+
+/// A harness whose setup is flags writes nothing, a name with no profile
+/// still gets the rules and the server, and `--print` leaves the workspace
+/// alone.
+#[test]
+fn flags_for_a_runner_and_the_rules_for_a_harness_lonca_does_not_know() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = parse(&e.run(&ws, &["harness", "setup", "codex", "--json"]));
+    assert_eq!(r["written"], json!([]));
+    let flags: Vec<&str> = r["flags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    let cwd = format!("mcp_servers.lonca.cwd={}", ws.display());
+    assert!(flags.contains(&cwd.as_str()), "{flags:?}");
+    let rules = flags
+        .iter()
+        .find(|f| f.starts_with("developer_instructions="));
+    assert!(
+        rules
+            .unwrap()
+            .contains("nothing reaches the repository until you propose")
+    );
+    let text = e.run(&ws, &["harness", "setup", "codex"]);
+    assert!(text.contains("LONCA_SOCKET="), "{text}");
+    assert!(
+        text.contains("-c mcp_servers.lonca.command=lonca"),
+        "{text}"
+    );
+
+    let printed = e.run(&ws, &["harness", "setup", "claude-code", "--print"]);
+    assert!(printed.contains("--mcp-config"), "{printed}");
+    assert!(printed.contains("--- .mcp.json\n{"), "{printed}");
+    assert!(!ws.join(".mcp.json").exists());
+
+    let r = parse(&e.run(&ws, &["harness", "setup", "cursor", "--json"]));
+    assert_eq!(r["known"], false);
+    assert_eq!(r["written"], json!([]));
+    assert_eq!(r["mcp"]["args"], json!(["mcp"]));
+    assert_eq!(r["mcp"]["env"]["LONCA_WORKSPACE"], ws.to_str().unwrap());
+    assert!(r["rules"].as_str().unwrap().contains("lease_acquire"));
+    let text = e.run(&ws, &["harness", "setup", "cursor"]);
+    assert!(text.contains("no profile for harness cursor"), "{text}");
+    assert!(text.contains("\"command\": \"lonca\""), "{text}");
+}
+
+/// `session start --harness` leaves a workspace ready; a file of the
+/// repository at the same path is not overwritten, and the runner hears why;
+/// a file trunk brings later takes the generated one's place and counts.
+#[test]
+fn session_start_sets_up_and_the_repository_s_own_files_win() {
+    let e = Env::new();
+    agent_workspace(&e);
+    let r = &e.root;
+    let start = |dir: &str, harness: &str| {
+        e.cmd(
+            r,
+            &[
+                "session",
+                "start",
+                "--repo",
+                "demo",
+                "--agent",
+                "a",
+                "--paths",
+                "**",
+                "--workspace",
+                dir,
+                "--harness",
+                harness,
+                "--json",
+            ],
+        )
+        .output()
+        .unwrap()
+    };
+    let o = start("ws2", "gemini");
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(out["setup"]["written"], json!([".gemini/settings.json"]));
+    let ws2 = r.join("ws2");
+    assert!(ws2.join(".gemini/settings.json").exists());
+
+    let hws = r.join("hws");
+    e.run(&hws, &["sync"]);
+    std::fs::create_dir_all(hws.join(".gemini")).unwrap();
+    std::fs::write(hws.join(".gemini/settings.json"), "{}\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "theirs"]).contains("allow"));
+    e.settle();
+
+    e.run(&ws2, &["sync"]);
+    let body = std::fs::read_to_string(ws2.join(".gemini/settings.json")).unwrap();
+    assert_eq!(body, "{}\n", "trunk's file is the repository's");
+    std::fs::write(ws2.join(".gemini/settings.json"), "{\"mine\":1}\n").unwrap();
+    assert!(e.run(&ws2, &["diff"]).contains(".gemini/settings.json"));
+
+    let o = start("ws3", "gemini");
+    assert!(!o.status.success());
+    let err = text(&o.stderr);
+    assert!(
+        err.contains("its setup failed") && err.contains("file of the repository"),
+        "{err}"
+    );
+    assert!(err.contains("--print"), "{err}");
+}
+
+/// An argument the tool does not take: a read runs and says so, a change does
+/// not run, and a claim in the right place that is wrong says how.
+#[test]
+fn a_tool_call_with_an_argument_it_does_not_take() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let lib = std::fs::read_to_string(ws.join("src/lib.rs")).unwrap();
+    std::fs::write(ws.join("src/lib.rs"), lib.replace("    a\n", "    a + 1\n")).unwrap();
+    let mut mcp = Mcp::start(&e, &ws);
+
+    let (failed, status) = mcp.tool("status", json!({"verbose": true}));
+    assert!(!failed, "{status}");
+    let warning = status["warnings"][0].as_str().unwrap();
+    assert!(
+        warning.starts_with("status has no argument `verbose`"),
+        "{warning}"
+    );
+    assert_eq!(status["expected"]["type"], "object", "{status}");
+    let (_, plain) = mcp.tool("status", json!({}));
+    assert_eq!(plain.get("warnings"), None);
+    assert_eq!(plain.get("expected"), None);
+
+    let log = || parse(&e.run(&e.root, &["log", "--repo", "demo", "--json"]));
+    let before = log().as_array().unwrap().len();
+    let (failed, body) = mcp.tool(
+        "propose",
+        json!({"intent": "x", "symbols": ["src/lib.rs#charge"]}),
+    );
+    assert!(failed, "{body}");
+    assert_eq!(body["code"], "invalid", "{body}");
+    assert!(
+        body["expected"]["properties"]["edits"]["description"].is_string(),
+        "{body}"
+    );
+    let (failed, body) = mcp.tool("lease_acquire", json!({"intent": "x", "lease": 1}));
+    assert!(failed, "{body}");
+    assert_eq!(
+        log().as_array().unwrap().len(),
+        before,
+        "neither call reached the log"
+    );
+
+    let (failed, body) = mcp.tool(
+        "propose",
+        json!({"intent": "x", "edits": ["src/lib.rs#nope"]}),
+    );
+    assert!(!failed, "{body}");
+    assert_eq!(body["decision"]["outcome"], "deny", "{body}");
+    let gap = &body["claim_mismatch"][0];
+    assert_eq!(gap["field"], "edits", "{body}");
+    assert_eq!(gap["claimed"], json!(["src/lib.rs#nope"]), "{body}");
+    assert_eq!(gap["facts"], body["facts"]["edits"], "{body}");
+}

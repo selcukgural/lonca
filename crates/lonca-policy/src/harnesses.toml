@@ -7,6 +7,28 @@ events = { session_start = "SessionStart", before_tool = "PreToolUse", after_too
 deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
 
+[claude-code.setup]
+flags = ["--mcp-config", { file = ".mcp.json" }, "--settings", { file = ".claude/settings.local.json" }]
+
+[[claude-code.setup.files]]
+path = ".mcp.json"
+format = "json"
+content = { mcpServers = { lonca = { command = "lonca", args = ["mcp"], env = { LONCA_SOCKET = "{socket}", LONCA_WORKSPACE = "{workspace}" } } } }
+
+[[claude-code.setup.files]]
+path = ".claude/settings.local.json"
+format = "json"
+
+[claude-code.setup.files.content]
+enabledMcpjsonServers = ["lonca"]
+env = { LONCA_SOCKET = "{socket}" }
+permissions = { allow = ["mcp__lonca__*"] }
+
+[claude-code.setup.files.content.hooks]
+SessionStart = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook", onFailure = "block" }] }]
+PreToolUse = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook", onFailure = "block" }] }]
+PostToolUse = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook", onFailure = "block" }] }]
+
 [claude-code.tools]
 Read = { kind = "read", fields = ["file_path"] }
 NotebookRead = { kind = "read", fields = ["notebook_path"] }
@@ -41,6 +63,26 @@ events = { session_start = "SessionStart", before_tool = "PreToolUse", after_too
 deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
 
+# Codex skips a project's .codex/ until a person trusts the directory, so a
+# file in a new workspace does nothing: everything goes in as flags.
+[codex.setup]
+note = "Codex runs hooks only after a person reviews them with /hooks, or with --dangerously-bypass-hook-trust, which also runs any other hook you have unreviewed. Without them the rules and the MCP server still work. Add --skip-git-repo-check: the workspace is not a git repository."
+flags = [
+  "-c", "mcp_servers.lonca.command=lonca",
+  "-c", "mcp_servers.lonca.args=[\"mcp\"]",
+  "-c", "mcp_servers.lonca.cwd={workspace}",
+  "-c", "mcp_servers.lonca.env.LONCA_SOCKET={socket}",
+  "-c", "mcp_servers.lonca.env.LONCA_WORKSPACE={workspace}",
+  "-c", "mcp_servers.lonca.default_tools_approval_mode=approve",
+  "-c", "developer_instructions={rules}",
+  "-c", "hooks.SessionStart=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
+  "-c", "hooks.PreToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
+  "-c", "hooks.PostToolUse=[{hooks=[{type=\"command\",command=\"lonca hook --harness codex\"}]}]",
+]
+
+[codex.setup.env]
+LONCA_SOCKET = "{socket}"
+
 [codex.tools]
 Bash = { kind = "shell", fields = ["command"] }
 apply_patch = { kind = "write", fields = ["command"], headers = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "] }
@@ -56,6 +98,22 @@ deny = { decision = "deny", reason = "{reason}" }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
 mcp_prefix = "mcp_"
 mcp_separator = "_"
+
+[gemini.setup.env]
+LONCA_SOCKET = "{socket}"
+GEMINI_CLI_TRUST_WORKSPACE = "true"
+
+[[gemini.setup.files]]
+path = ".gemini/settings.json"
+format = "json"
+
+[gemini.setup.files.content]
+mcpServers = { lonca = { command = "lonca", args = ["mcp"], cwd = "{workspace}", env = { LONCA_SOCKET = "{socket}", LONCA_WORKSPACE = "{workspace}" }, trust = true } }
+
+[gemini.setup.files.content.hooks]
+SessionStart = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook --harness gemini" }] }]
+BeforeTool = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook --harness gemini" }] }]
+AfterTool = [{ matcher = "*", hooks = [{ type = "command", command = "lonca hook --harness gemini" }] }]
 
 [gemini.tools]
 read_file = { kind = "read", fields = ["file_path"] }

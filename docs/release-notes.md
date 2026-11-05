@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Rules and setup for every harness (#110)
+
+`lonca harness setup <name>` and `session start --harness <name>` give a
+harness the rules, the MCP server and the hooks, from its profile; `--print`
+writes nothing and shows the flags. `lonca rules` prints the rules, and MCP
+`instructions` now carry all of them. MCP tools have annotations. A tool that
+changes something refuses an argument it does not take, where before it ignored
+it; a tool that only reads runs and warns. A denied `propose` says what was
+claimed and what Lonca computed.
+
 ### Hooks for any harness (#109)
 
 `lonca hook --harness <name>` reads a harness's events and tools from a

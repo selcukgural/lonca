@@ -83,6 +83,41 @@ lonca session start --repo demo --agent claude --paths 'src/**' \
 - Revoking any session of the chain withdraws what all of them have in
   flight.
 
+## Setting up a harness
+
+The short way, for any harness with a profile:
+
+```sh
+lonca session start --repo demo --agent worker --paths 'src/**' \
+      --workspace /work/w1 --harness claude-code --json
+```
+
+or `lonca harness setup <name>` inside a workspace. It gives the harness the
+rules, the MCP server with its socket and workspace, approval of Lonca's own
+tools, and the hooks.
+
+| Harness | What setup does |
+|---|---|
+| `claude-code` | Writes `.mcp.json` and `.claude/settings.local.json`. `--print` gives `--mcp-config` and `--settings`. |
+| `codex` | Writes nothing: start it with the flags. Codex skips `.codex/` in a directory no person has trusted. |
+| `gemini` | Writes `.gemini/settings.json`; start it with the printed `env`. |
+
+- `--print` writes nothing and shows the flags, environment and files, for a
+  runner that keeps the workspace clean or a repository that tracks one of
+  these files. `--json` has all of it.
+- These files are never a local change, in no `diff` and no proposal. A file
+  the repository has, a local file or a symlink at a target stops the setup
+  before anything is written.
+- Codex's hooks need a person's review with `/hooks`, or
+  `--dangerously-bypass-hook-trust`, which also runs any other hook left
+  unreviewed: your choice, and Lonca does not add it. Without them the rules
+  and the MCP server still work. Add `--skip-git-repo-check`.
+- A name with no profile gets the rules and how to start `lonca mcp`, for you
+  to put where that harness reads them. `lonca rules` prints the rules
+  anywhere.
+- Generated hooks are cooperative: the agent can edit them, and they do not
+  raise the observation level.
+
 ## Claude Code settings
 
 Hooks, in the settings file the runner gives the worker (`settings.json`
@@ -170,13 +205,29 @@ run = { kind = "shell", fields = ["line"] }
 get = { kind = "fetch", fields = ["url"] }
 find = { kind = "search" }
 plan = { kind = "inert" }
+
+[harnesses.acme.setup]
+# Arguments for a runner: text, or { file = "..." } for a file's text.
+flags = ["--config", { file = ".acme/config.json" }]
+note = "What a person has to know."
+
+[harnesses.acme.setup.env]
+LONCA_SOCKET = "{socket}"
+
+# format is json, toml or text. {rules}, {socket} and {workspace} are filled in.
+[[harnesses.acme.setup.files]]
+path = ".acme/config.json"
+format = "json"
+content = { server = { command = "lonca", args = ["mcp"], cwd = "{workspace}" } }
 ```
 
 `kind` is `read`, `write`, `shell`, `fetch`, `search` or `inert`. `fields`
 are tried in order. `headers` are for a tool whose paths are inside a text.
 A tool not in the table is observed and taints (`[taint] unknown_tools`).
 The same table replaces a built-in profile, for a harness that has moved on
-faster than Lonca. A harness with no hooks at all still works through
+faster than Lonca. A harness with plugins instead of commands fits too: a
+`text` file in `setup` can be the plugin that calls `lonca hook` and turns exit
+status 2 or a `deny` answer into its own refusal. A harness with no hooks at all still works through
 `lonca mcp` or the CLI, unobserved.
 
 ## What the hooks do

@@ -7,6 +7,7 @@ mod doctor;
 mod hook;
 mod keys;
 mod mcp;
+mod setup;
 mod undo;
 mod workspace;
 
@@ -89,6 +90,11 @@ enum Cmd {
     /// Agent sessions.
     #[command(subcommand)]
     Session(SessionCmd),
+    /// Agent harnesses.
+    #[command(subcommand)]
+    Harness(HarnessCmd),
+    /// Print the rules an agent works by, with neutral tool names.
+    Rules,
     /// Workspaces.
     #[command(subcommand)]
     Workspace(WorkspaceCmd),
@@ -472,6 +478,24 @@ enum DaemonKeyCmd {
 }
 
 #[derive(Subcommand)]
+enum HarnessCmd {
+    /// Give a harness the rules, the MCP server and the hooks, as its
+    /// profile says. Run in a workspace.
+    Setup {
+        /// claude-code, codex, gemini, or one the repository's policy
+        /// describes. Another name still gets the rules and the MCP server.
+        harness: String,
+        /// Write nothing: show the flags and the files.
+        #[arg(long)]
+        print: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+// Built once, from the command line.
+#[allow(clippy::large_enum_variant)]
+#[derive(Subcommand)]
 enum SessionCmd {
     /// Start an agent session and create its workspace.
     Start {
@@ -509,6 +533,9 @@ enum SessionCmd {
         /// proposed. Repeatable; recorded in the session's scope.
         #[arg(long)]
         scratch: Vec<PathBuf>,
+        /// Set this harness up in the workspace (`lonca harness setup`).
+        #[arg(long)]
+        harness: Option<String>,
         #[arg(long = "as")]
         human: Option<String>,
         #[arg(long)]
@@ -638,6 +665,19 @@ fn main() -> ExitCode {
             }
         },
     }
+}
+
+/// Sets `harness` up in `ws`, or with `print` only says how.
+fn setup_harness(
+    ws: &mut Workspace,
+    harness: &str,
+    print: bool,
+) -> Result<(setup::Prepared, Vec<String>)> {
+    let mut client = connect()?;
+    client.token = Some(ws.token()?);
+    let prepared = setup::prepare(&mut client, ws, harness)?;
+    let written = if print { vec![] } else { prepared.write(ws)? };
+    Ok((prepared, written))
 }
 
 fn human_name(h: Option<String>) -> Result<String> {
@@ -1131,6 +1171,7 @@ fn run(cmd: Cmd) -> Result<()> {
             continue_dir,
             widen,
             scratch,
+            harness,
             human,
             json: as_json,
         }) => {
@@ -1199,11 +1240,18 @@ fn run(cmd: Cmd) -> Result<()> {
             ws.meta.session = Some(session.clone());
             ws.meta.scratch_roots = scratch.clone();
             ws.save()?;
+            let setup = match &harness {
+                Some(h) => Some(
+                    setup_harness(&mut ws, h, false)
+                        .with_context(|| format!("session {session} started, its setup failed"))?,
+                ),
+                None => None,
+            };
             if as_json {
                 return ctx::print_json(&json!({
                     "session": session, "workspace": ws.root, "expires_ms": expires_ms,
                     "paths": paths, "scratch": scratch, "seq": r["seq"], "decision": r["decision"],
-                    "continues": old,
+                    "continues": old, "setup": setup.as_ref().map(|(p, w)| p.report(w)),
                 }));
             }
             println!("session {session}; workspace {}", ws.root.display());
@@ -1213,6 +1261,28 @@ fn run(cmd: Cmd) -> Result<()> {
             for s in &scratch {
                 println!("scratch {s}");
             }
+            match setup {
+                Some((prepared, written)) => prepared.print(&written, false),
+                None => Ok(()),
+            }
+        }
+        Cmd::Harness(HarnessCmd::Setup {
+            harness,
+            print,
+            json: as_json,
+        }) => {
+            let mut ws = Workspace::current()?;
+            let (prepared, written) = setup_harness(&mut ws, &harness, print)?;
+            if as_json {
+                return ctx::print_json(&prepared.report(&written));
+            }
+            prepared.print(&written, print)
+        }
+        Cmd::Rules => {
+            println!(
+                "{}",
+                setup::neutral_rules(Workspace::current().ok().as_ref())
+            );
             Ok(())
         }
         Cmd::Session(SessionCmd::Revoke {

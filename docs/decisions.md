@@ -434,6 +434,7 @@ A01/A07, zero trust: every request authenticated).
 | `hook.event` | agent | |
 | `hook.input` | agent | |
 | `hook.bind` | agent | |
+| `harness.setup` | agent | |
 | `queue.run` | any human | drains every merge queue now |
 
 Credentials, from `Cred` in `service.rs` (the table above is checked
@@ -852,6 +853,46 @@ approval, and a tainted session may not touch it.
 - **`paths.untrusted` is unchanged.** Design §5.10 names imported issue text
   as an example, but nothing imports issue text yet, so there is no path
   to list. The hardened profile (#54) starts from this list.
+
+## Setting up a harness
+
+`lonca harness setup <name>` and `session start --harness` do what the
+profile's `setup` says: files to write, or flags and environment for a runner.
+Issue #110; no log format, the daemon only reads the policy.
+
+- **A profile, not code.** Holes `{rules}`, `{socket}`, `{workspace}` go
+  through each file format's own writer, so nothing in a path or the rules
+  changes a file's structure. A harness described in the policy gets setup with
+  no new Lonca, and any file format it reads, a plugin included: OpenCode has
+  no command hooks, and a text file bridging its plugin API to `lonca hook` was
+  enough.
+- **What setup writes is never a local change.** `generated` in
+  `.lonca/workspace.json`, like `trunk_copies`. It covers only paths the
+  repository does not have, so editing that list can hide nothing from a
+  proposal. A file trunk brings later takes the generated one's place.
+- **It writes only what is free.** A repository file, a local file, a symlink
+  anywhere on the path and `.lonca/` are refused before anything is written:
+  `--continue` runs it in a directory an agent has had, and a human's process
+  must not follow its links. A harness with its own file tracked uses
+  `--print`.
+- **Flags where files do nothing.** Codex skips a project's `.codex/` until a
+  person trusts the directory, and a new workspace is never trusted, so its
+  setup is flags. Its hooks also need a person's review by hash, or a flag
+  named dangerous that a runner must choose for itself: Lonca does not add
+  it. Gemini needs `GEMINI_CLI_TRUST_WORKSPACE`, in `env`.
+- **Cooperative.** Generated hooks live where the agent can write. They do not
+  raise the observation level; that takes managed settings (#21).
+- **One text of the rules** (`harness::rules`), neutral in `lonca rules`, MCP
+  `instructions` and setup, with the harness's tool names in the hook.
+- **Arguments a tool does not take.** Ignoring one left a model repeating a
+  call that could not work: two models sent a claim as `symbols`, Lonca saw an
+  empty claim and denied it, and each retry was a log entry. A tool that
+  changes something now refuses the call; a tool that only reads runs and
+  warns. Both send the tool's schema back, and every argument says what it is
+  for: the names alone were what the models guessed from. `symbols` is not mapped to `edits`: a claim is the
+  agent's own statement, and guessing it would remove the check.
+- **Tool annotations.** A tool counts as destructive until `mcp.rs` lists it,
+  so a new tool asks by default.
 
 ## The lease queue
 

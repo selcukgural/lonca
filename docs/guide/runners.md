@@ -101,6 +101,7 @@ tools, and the hooks.
 | `claude-code` | Writes `.mcp.json` and `.claude/settings.local.json`. `--print` gives `--mcp-config` and `--settings`. |
 | `codex` | Writes nothing: start it with the flags. Codex skips `.codex/` in a directory no person has trusted. |
 | `gemini` | Writes `.gemini/settings.json`; start it with the printed `env`. |
+| `opencode` | Writes `opencode.json`, its rules and a plugin that calls `lonca hook`. Its `execute` tool runs code and taints, so changes need a person. Tested with OpenCode 2.2. |
 
 - `--print` writes nothing and shows the flags, environment and files, for a
   runner that keeps the workspace clean or a repository that tracks one of
@@ -162,7 +163,7 @@ Outside a workspace, or in a human workspace, the hook does nothing.
 
 Lonca knows no harness in its code: `lonca hook --harness <name>` hands
 the event to the daemon, which reads it with that harness's **profile**.
-Profiles for Claude Code, Codex and Gemini CLI come with Lonca
+Profiles for Claude Code, Codex, Gemini CLI and OpenCode come with Lonca
 (`crates/lonca-policy/src/harnesses.toml`). Use the same three events:
 
 | | Claude Code | Codex | Gemini CLI |
@@ -224,8 +225,13 @@ content = { server = { command = "lonca", args = ["mcp"], cwd = "{workspace}" } 
 `kind` is `read`, `write`, `shell`, `fetch`, `search` or `inert`. `fields`
 are tried in order. `headers` are for a tool whose paths are inside a text.
 A tool not in the table is observed and taints (`[taint] unknown_tools`).
-The same table replaces a built-in profile, for a harness that has moved on
-faster than Lonca. A harness with plugins instead of commands fits too: a
+The same table replaces a built-in profile, as a whole, for a harness that has
+moved on faster than Lonca: no new release is needed. `lonca harness show
+<name>` prints the built-in one as a table to start from; change what moved
+and sign it with `lonca policy set`. It holds for that repository until you
+remove it. Profiles are not files beside the program, because what a tool
+counts as decides what taints a session, and an agent running as your account
+could rewrite such a file. A harness with plugins instead of commands fits too: a
 `text` file in `setup` can be the plugin that calls `lonca hook` and turns exit
 status 2 or a `deny` answer into its own refusal. A harness with no hooks at all still works through
 `lonca mcp` or the CLI, unobserved.

@@ -133,8 +133,9 @@ window_minutes = 5
 # What to do when a ref changes behind the daemon's back: "restore" or "freeze".
 on_unmediated = "restore"
 
-# Harness profiles. Lonca knows claude-code, codex and gemini; a table here
-# adds another or replaces one (docs/guide/runners.md, "Any other harness").
+# Harness profiles. Lonca knows claude-code, codex, gemini and opencode; a table
+# here adds another or replaces one (docs/guide/runners.md, "Any other harness").
+# `lonca harness show <name>` prints a built-in one to start from.
 # [harnesses.acme]
 "#;
 

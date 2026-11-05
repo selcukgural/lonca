@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### OpenCode, and fixing a harness before Lonca does
+
+OpenCode joins the built-in profiles, tested with 2.2. It has no command hooks,
+so setup writes a plugin that calls `lonca hook`. `lonca harness show <name>`
+prints a built-in profile as a table for `lonca.toml`, where it replaces the
+built-in one when a harness changes before Lonca has.
+
 ### Rules and setup for every harness (#110)
 
 `lonca harness setup <name>` and `session start --harness <name>` give a

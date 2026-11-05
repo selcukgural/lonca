@@ -1,0 +1,12 @@
+{
+  "files": {
+    ".opencode/lonca-rules.md": "RULES\n",
+    ".opencode/plugins/lonca.js": "import { spawnSync } from \"node:child_process\";\n\n// Bridges OpenCode's plugin hooks to `lonca hook`, which reads them with the\n// [opencode] profile. A failure blocks the tool call.\nexport default {\n  id: \"lonca\",\n  async setup(ctx) {\n    const directory = ctx.location.directory;\n    const hook = (event) => {\n      const r = spawnSync(\"lonca\", [\"hook\", \"--harness\", \"opencode\"], {\n        cwd: directory,\n        input: JSON.stringify({ ...event, cwd: directory }),\n        encoding: \"utf8\",\n      });\n      if (r.error) throw new Error(`lonca hook: ${r.error.message}`);\n      if (r.status !== 0) throw new Error(r.stderr || `lonca hook exited ${r.status}`);\n      const out = r.stdout.trim();\n      const answer = out ? JSON.parse(out) : {};\n      if (answer.deny) throw new Error(answer.deny);\n    };\n    const started = new Set();\n    await ctx.tool.hook(\"execute.before\", (event) => {\n      if (!started.has(event.sessionID)) {\n        started.add(event.sessionID);\n        hook({ hook_event_name: \"session_start\", session_id: event.sessionID });\n      }\n      hook({ hook_event_name: \"before_tool\", tool_name: event.tool, tool_input: event.input, session_id: event.sessionID });\n    });\n    await ctx.tool.hook(\"execute.after\", (event) => {\n      hook({ hook_event_name: \"after_tool\", tool_name: event.tool, tool_input: event.input, session_id: event.sessionID });\n    });\n  },\n};\n",
+    "opencode.json": "{\n  \"instructions\": [\n    \".opencode/lonca-rules.md\"\n  ],\n  \"mcp\": {\n    \"lonca\": {\n      \"command\": [\n        \"lonca\",\n        \"mcp\"\n      ],\n      \"cwd\": \"/w\",\n      \"enabled\": true,\n      \"environment\": {\n        \"LONCA_SOCKET\": \"/s/lonca.sock\",\n        \"LONCA_WORKSPACE\": \"/w\"\n      },\n      \"timeout\": 120000,\n      \"type\": \"local\"\n    }\n  },\n  \"permission\": {\n    \"lonca_*\": \"allow\"\n  }\n}\n"
+  },
+  "flags": [],
+  "env": {
+    "LONCA_SOCKET": "/s/lonca.sock"
+  },
+  "note": "OpenCode's execute tool runs code and is not described here, so a session that uses it is tainted and its changes need a person's approval. To decide otherwise, add it to [taint] safe_tools or to a profile of your own."
+}

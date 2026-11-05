@@ -131,3 +131,91 @@ ask_user = { kind = "inert" }
 enter_plan_mode = { kind = "inert" }
 exit_plan_mode = { kind = "inert" }
 write_todos = { kind = "inert" }
+
+[opencode]
+events = { session_start = "session_start", before_tool = "before_tool", after_tool = "after_tool" }
+deny = { deny = "{reason}" }
+context = { context = "{context}" }
+mcp_prefix = ""
+mcp_separator = "_"
+
+[opencode.tools]
+read = { kind = "read", fields = ["path", "filePath"] }
+list = { kind = "read", fields = ["path"] }
+glob = { kind = "read", fields = ["path"] }
+grep = { kind = "read", fields = ["path"] }
+write = { kind = "write", fields = ["path", "filePath"] }
+edit = { kind = "write", fields = ["path", "filePath"] }
+apply_patch = { kind = "write", fields = ["patchText"], headers = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "] }
+bash = { kind = "shell", fields = ["command"] }
+shell = { kind = "shell", fields = ["command"] }
+webfetch = { kind = "fetch", fields = ["url"] }
+websearch = { kind = "search" }
+codesearch = { kind = "search" }
+task = { kind = "inert" }
+todowrite = { kind = "inert" }
+todoread = { kind = "inert" }
+skill = { kind = "inert" }
+question = { kind = "inert" }
+
+# OpenCode has no command hooks: the plugin in setup calls `lonca hook`, with
+# event names of our own. Its `execute` tool runs code, so it is left out of the
+# table below: it taints, and a person approves what the session proposes.
+[opencode.setup]
+note = "OpenCode's execute tool runs code and is not described here, so a session that uses it is tainted and its changes need a person's approval. To decide otherwise, add it to [taint] safe_tools or to a profile of your own."
+
+[opencode.setup.env]
+LONCA_SOCKET = "{socket}"
+
+[[opencode.setup.files]]
+path = "opencode.json"
+format = "json"
+
+[opencode.setup.files.content]
+instructions = [".opencode/lonca-rules.md"]
+permission = { "lonca_*" = "allow" }
+mcp = { lonca = { type = "local", command = ["lonca", "mcp"], cwd = "{workspace}", enabled = true, timeout = 120000, environment = { LONCA_SOCKET = "{socket}", LONCA_WORKSPACE = "{workspace}" } } }
+
+[[opencode.setup.files]]
+path = ".opencode/lonca-rules.md"
+format = "text"
+content = "{rules}"
+
+[[opencode.setup.files]]
+path = ".opencode/plugins/lonca.js"
+format = "text"
+content = '''
+import { spawnSync } from "node:child_process";
+
+// Bridges OpenCode's plugin hooks to `lonca hook`, which reads them with the
+// [opencode] profile. A failure blocks the tool call.
+export default {
+  id: "lonca",
+  async setup(ctx) {
+    const directory = ctx.location.directory;
+    const hook = (event) => {
+      const r = spawnSync("lonca", ["hook", "--harness", "opencode"], {
+        cwd: directory,
+        input: JSON.stringify({ ...event, cwd: directory }),
+        encoding: "utf8",
+      });
+      if (r.error) throw new Error(`lonca hook: ${r.error.message}`);
+      if (r.status !== 0) throw new Error(r.stderr || `lonca hook exited ${r.status}`);
+      const out = r.stdout.trim();
+      const answer = out ? JSON.parse(out) : {};
+      if (answer.deny) throw new Error(answer.deny);
+    };
+    const started = new Set();
+    await ctx.tool.hook("execute.before", (event) => {
+      if (!started.has(event.sessionID)) {
+        started.add(event.sessionID);
+        hook({ hook_event_name: "session_start", session_id: event.sessionID });
+      }
+      hook({ hook_event_name: "before_tool", tool_name: event.tool, tool_input: event.input, session_id: event.sessionID });
+    });
+    await ctx.tool.hook("execute.after", (event) => {
+      hook({ hook_event_name: "after_tool", tool_name: event.tool, tool_input: event.input, session_id: event.sessionID });
+    });
+  },
+};
+'''

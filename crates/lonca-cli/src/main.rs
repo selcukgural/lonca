@@ -1282,7 +1282,13 @@ fn run(cmd: Cmd) -> Result<()> {
                 let conflicts: Vec<Value> = r
                     .conflicts
                     .iter()
-                    .map(|p| json!({"path": p, "trunk_copy": format!("{p}.trunk")}))
+                    .map(|p| {
+                        json!({
+                            "path": p,
+                            "trunk_copy": format!("{p}.trunk"),
+                            "symbols": r.symbols_of(p),
+                        })
+                    })
                     .collect();
                 return ctx::print_json(&json!({
                     "base_before": r.from, "base_after": r.to,
@@ -1299,6 +1305,9 @@ fn run(cmd: Cmd) -> Result<()> {
             );
             for p in &r.conflicts {
                 println!("  conflict: {p} (trunk version written to {p}.trunk)");
+                for s in r.symbols_of(p) {
+                    println!("    {s}");
+                }
             }
             Ok(())
         }

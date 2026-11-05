@@ -736,9 +736,12 @@ Exit codes:
   exits 1 (`session_inactive`, or `unauthenticated` once its token is
   gone) with nothing on stdout.
 - `sync --json`: `{"base_before": id, "base_after": id, "updated":
-  [path], "merged": [path], "conflicts": [{"path", "trunk_copy"}]}`.
-  A conflict leaves the local file as it was and writes trunk's version
-  to `trunk_copy` (`<path>.trunk`).
+  [path], "merged": [path], "conflicts": [{"path", "trunk_copy",
+  "symbols": [symbol]}]}`. In a conflict the `symbols` keep the local text
+  and every other change of trunk comes in; a file with no symbol merge, or
+  whose code outside symbols trunk changed, stays local as a whole.
+  Trunk's version is in `trunk_copy` (`<path>.trunk`) for reading: it is
+  never a local change and the next sync removes it.
 - `propose --json`: `{"change", "commit", "seq", "decision", "status":
   "queued" | "pending" | "denied", "details": [detail]}`. `denied` also
   exits 1. `details` is empty for a human's proposal, which needs no

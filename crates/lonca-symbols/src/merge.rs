@@ -170,6 +170,35 @@ pub fn merge_text_at(
     Ok(merged)
 }
 
+/// What is left of a file whose merge has conflicts: every change of `t`
+/// applied, except the conflicting symbols, which keep the text of `o`.
+/// `None` when the file has no such middle: no symbol merge, code outside
+/// symbols changed by `t`, or something moved. Used by a workspace sync, so
+/// that a conflict in one symbol does not hold back the rest of the file.
+pub fn merge_around_conflicts(
+    engine: u32,
+    path: &str,
+    b: &str,
+    o: &str,
+    t: &str,
+) -> Option<String> {
+    let lang = Lang::detect(path)?;
+    let (pb, po, pt) = (parse(lang, b), parse(lang, o), parse(lang, t));
+    if pb.has_error || po.has_error || pt.has_error {
+        return None;
+    }
+    if pt.residual_at(engine) != pb.residual_at(engine) {
+        return None;
+    }
+    let mut m = Merger::new(engine, path, b, o, t);
+    m.imports(&pb, &po, &pt);
+    m.level(&pb.syms, &po.syms, &pt.syms, None);
+    if m.moved {
+        return None;
+    }
+    m.apply().filter(|text| !parse(lang, text).has_error)
+}
+
 enum Sm {
     Merged(String),
     Conflict(Vec<String>),
@@ -215,7 +244,20 @@ fn by_name(syms: &[Sym]) -> BTreeMap<&str, &Sym> {
     syms.iter().map(|s| (s.name.as_str(), s)).collect()
 }
 
-impl Merger<'_> {
+impl<'a> Merger<'a> {
+    fn new(engine: u32, path: &'a str, b: &'a str, o: &'a str, t: &'a str) -> Self {
+        Merger {
+            engine,
+            path,
+            b,
+            o,
+            t,
+            edits: Vec::new(),
+            conflicts: Vec::new(),
+            moved: false,
+        }
+    }
+
     fn conflict(&mut self, name: &str) {
         self.conflicts.push(format!("{}#{name}", self.path));
     }
@@ -413,16 +455,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         }
         return Sm::Conflict(vec![format!("{path}#<module>")]);
     }
-    let mut m = Merger {
-        engine,
-        path,
-        b,
-        o,
-        t,
-        edits: Vec::new(),
-        conflicts: Vec::new(),
-        moved: false,
-    };
+    let mut m = Merger::new(engine, path, b, o, t);
     m.imports(&pb, &po, &pt);
     m.level(&pb.syms, &po.syms, &pt.syms, None);
     if !m.conflicts.is_empty() {
@@ -719,6 +752,73 @@ mod tests {
             Err(vec!["x.py#<module>".into()]),
             "both sides changed code outside symbols"
         );
+    }
+
+    #[test]
+    fn around_a_conflict_the_rest_of_the_file_comes_through() {
+        let cases = [
+            (
+                "x.rs",
+                "fn a() -> u8 {\n    1\n}\n\nfn b() -> u8 {\n    2\n}\n",
+            ),
+            ("x.py", "def a():\n    return 1\n\ndef b():\n    return 2\n"),
+            (
+                "x.ts",
+                "function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n",
+            ),
+            (
+                "x.cs",
+                "class C\n{\n    int a() { return 1; }\n    int b() { return 2; }\n}\n",
+            ),
+            (
+                "x.go",
+                "package p\n\nfunc a() int {\n\treturn 1\n}\n\nfunc b() int {\n\treturn 2\n}\n",
+            ),
+        ];
+        for (path, b) in cases {
+            let edit = |from: &str, to: &str| b.replacen(from, to, 1);
+            let mine = edit("1", "10");
+            let trunk = edit("1", "11").replacen('2', "22", 1);
+            assert!(merge_text_at(2, path, b, &mine, &trunk).is_err(), "{path}");
+            let kept = merge_around_conflicts(2, path, b, &mine, &trunk).unwrap();
+            assert!(kept.contains("22"), "trunk's other change: {kept}");
+            assert!(
+                kept.contains("10") && !kept.contains("11"),
+                "my symbol: {kept}"
+            );
+        }
+    }
+
+    #[test]
+    fn around_a_conflict_nothing_is_guessed() {
+        let (b, o) = (
+            "X = 1\n\ndef a():\n    return 1\n",
+            "X = 1\n\ndef a():\n    return 2\n",
+        );
+        // Trunk changed code outside symbols.
+        let t = "X = 2\n\ndef a():\n    return 3\n";
+        assert_eq!(merge_around_conflicts(2, "x.py", b, o, t), None);
+        // No symbol merge: unknown language, or a side that does not parse.
+        assert_eq!(merge_around_conflicts(2, "x.txt", b, o, o), None);
+        for (b2, o2, t2) in [("def (", o, o), (b, "def (", o), (b, o, "def (")] {
+            assert_eq!(merge_around_conflicts(2, "x.py", b2, o2, t2), None);
+        }
+        // Trunk moved something.
+        let (b, o) = (
+            "def a():\n    pass\n\ndef b():\n    pass\n",
+            "def a():\n    return 1\n\ndef b():\n    pass\n",
+        );
+        let t = "def b():\n    pass\n\ndef a():\n    pass\n";
+        assert_eq!(merge_around_conflicts(2, "x.py", b, o, t), None);
+    }
+
+    #[test]
+    fn around_a_conflict_new_members_still_come_in() {
+        let b = "class C {\n    int a;\n}\n";
+        let o = "class C {\n    long a;\n}\n";
+        let t = "class C {\n    short a;\n    int b;\n}\n";
+        let kept = merge_around_conflicts(2, "x.cs", b, o, t).unwrap();
+        assert!(kept.contains("long a") && kept.contains("int b"), "{kept}");
     }
 
     #[test]

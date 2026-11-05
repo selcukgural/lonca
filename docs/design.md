@@ -355,7 +355,7 @@ Kirlilik hem **oturumda** hem **içerikte** taşınır.
 
 - Daemon'un iki ön yüzü vardır: **MCP sunucusu** (agent'lar için) ve **CLI** (insanlar ve script'ler için). İkisi aynı işlemleri sunar.
 - **Araçlar:** `status`, `lease.acquire/release/list`, `change.propose` (yapısal beyanla), `change.status` (kuyruk durumu ve kanıtlar), `negotiate.*`, `history.query`, `cap.request` (insan onayına düşer).
-- **Hata yanıtları** makine tarafından okunabilir ve eyleme dönüktür. Örnek: `lease_held: holder=agent:Y, intent="...", expires_at=...`.
+- **Hata yanıtları** makine tarafından okunabilir ve eyleme dönüktür. Log'daki `reasons` kısa dizgiler olarak kalır; yanıtın `details` dizisi durumdan türetilir, loglanmaz: `{code, symbol, needed_kind, holder_session, holder_agent, intent, expires_ms, set, pinned_to}`.
 - MCP yalnızca taşıma katmanıdır. Yetki token'dan gelir; araç açıklamaları güvenlik sınırı değildir.
 
 ### 5.12 Agent müzakeresi (Basamak 2)
@@ -582,7 +582,7 @@ Faz 0'da kapananlar (gerekçeleri `docs/decisions.md`'de): temel **gitoxide + ke
 | §5.8 Merge Queue | Tamam (seri) | Kilit dışında merge + doğrulama; toplu (spekülatif) doğrulama yapılmadı. 20 agent / tek dosya testi 1 saniyenin altında geçiyor. |
 | §5.9 Verification | Tamam / kısmi | Sözdizimi, build, test, beyan–diff, test silme/atlama eskalasyonu. Değişen testlerde eski test paketini yeni koda karşı koşmak yapılmadı. |
 | §5.10 Köken / taint | Tamam | Hook gözlemleri, `unobserved` = kirli, gözlem–etki tutarlılığı, müzakerede yayılma, ağ proxy'si (lsof ile atıf). Kirliliği içerik düzeyinde taşıma (okunan kirli içerik) kısmen: değişikliklerin köken etiketi var, okuyanı kirletme yalnızca "güvenilmeyen yollar" üzerinden. |
-| §5.11 MCP + CLI | Tamam | `lonca mcp` (10 araç), `lonca hook`, kapsamlı CLI. |
+| §5.11 MCP + CLI | Tamam | `lonca mcp` (11 araç), `lonca hook`, kapsamlı CLI. |
 | §5.12 Müzakere | Tamam | Yapısal mesajlar, tur sınırı, `yield` ile kiralama devri. |
 | §5.13 Auditor | Tamam | Karar, Facts ve merge yeniden hesaplama; yayımlanmış log karşılaştırması; dondurma bayrağı. Karar kodunu paylaşıyor (açık soru duruyor). |
 | §5.14 AI Danışman | Tamam | `lonca advise`; günlük bütçe; diff kırpılmıyor, büyükse reddediliyor. Yalnızca sahte API'ye karşı test edildi. |

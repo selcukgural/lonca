@@ -39,14 +39,28 @@ max_files = 200
 max_file_bytes = 2097152
 
 [paths]
-# Changes here run code during build/test or define CI: they always need a
-# human approval, and tainted sessions may not touch them at all.
+# Changes here run code during build/test, define CI, or instruct and
+# configure the agents themselves: they always need a human approval, and
+# tainted sessions may not touch them at all. An agent reads CLAUDE.md after
+# its next sync, so a change to it is a prompt to every agent that follows.
 critical = [
-  ".github/**", ".gitlab-ci.yml", ".lonca/**",
+  ".github/**", ".gitlab-ci.yml", ".lonca/**", ".imece/**",
+  # Build and packaging.
   "**/build.rs", "**/Cargo.toml", "**/Cargo.lock",
   "**/package.json", "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml",
   "**/Makefile", "**/*.csproj", "**/Directory.Build.props", "**/Directory.Build.targets",
   "**/global.json", "**/NuGet.config", "**/pyproject.toml", "**/setup.py",
+  "**/go.mod", "**/go.sum", "**/Gemfile", "**/Gemfile.lock", "**/pom.xml",
+  "**/build.gradle", "**/build.gradle.kts", "**/conftest.py",
+  # Agent instructions and settings.
+  "**/CLAUDE.md", "**/AGENTS.md", "**/GEMINI.md", "**/.cursorrules", "**/.windsurfrules",
+  "**/.mcp.json", ".claude/**", ".cursor/**", ".codex/**",
+  # Tooling that runs code on checkout, on build or in an editor.
+  ".cargo/config.toml", ".cargo/config", "rust-toolchain", "rust-toolchain.toml",
+  "**/.envrc", ".vscode/**", ".devcontainer/**", "**/Dockerfile",
+  "**/docker-compose.yml", "**/docker-compose.yaml", "**/compose.yml", "**/compose.yaml",
+  "**/.npmrc", "**/.yarnrc", "**/.yarnrc.yml", "**/.pnpmfile.cjs",
+  "**/.gitattributes", ".gitmodules",
 ]
 # Reading these taints a session.
 untrusted = ["vendor/**", "third_party/**", "node_modules/**"]
@@ -326,7 +340,8 @@ pub struct Integrity {
 }
 
 // Defaults must equal DEFAULT_CONFIG (checked by a test): a key missing from
-// lonca.toml behaves like the shipped file.
+// lonca.toml behaves like the shipped file. `paths.critical` is the exception,
+// see `Paths::default`.
 
 impl Default for Sessions {
     fn default() -> Self {
@@ -358,6 +373,10 @@ impl Default for Changes {
 }
 
 impl Default for Paths {
+    /// `critical` is frozen at what a `lonca.toml` without the key has always
+    /// meant: a log replays under its policy, and a default that grew would
+    /// turn a recorded `allow` into an integrity failure. The list for new
+    /// repositories is in `DEFAULT_CONFIG`.
     fn default() -> Self {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect();
         Self {
@@ -683,6 +702,86 @@ impl PolicyBundle {
 mod tests {
     use super::*;
 
+    /// A default that shrinks does so silently for every new repository,
+    /// so each of these has to be taken out here as well. Patterns that
+    /// never match are the same failure: every path below must hit.
+    #[test]
+    fn the_default_critical_list_does_not_shrink() {
+        let bundle = PolicyBundle::default_bundle();
+        for path in [
+            // CI and Lonca's own state.
+            ".github/workflows/ci.yml",
+            ".github/copilot-instructions.md",
+            ".gitlab-ci.yml",
+            ".lonca/workspace.json",
+            ".lonca/session",
+            ".imece/check",
+            ".imece/worktree-setup.sh",
+            // Build and packaging.
+            "build.rs",
+            "crates/a/build.rs",
+            "Cargo.toml",
+            "crates/a/Cargo.toml",
+            "Cargo.lock",
+            "package.json",
+            "web/package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "Makefile",
+            "src/App.csproj",
+            "Directory.Build.props",
+            "Directory.Build.targets",
+            "global.json",
+            "NuGet.config",
+            "pyproject.toml",
+            "setup.py",
+            "go.mod",
+            "svc/go.sum",
+            "Gemfile",
+            "Gemfile.lock",
+            "pom.xml",
+            "build.gradle",
+            "app/build.gradle.kts",
+            "tests/conftest.py",
+            // Agent instructions and settings.
+            "CLAUDE.md",
+            "crates/a/CLAUDE.md",
+            "AGENTS.md",
+            "GEMINI.md",
+            ".cursorrules",
+            ".windsurfrules",
+            ".mcp.json",
+            ".claude/settings.json",
+            ".cursor/rules/a.mdc",
+            ".codex/config.toml",
+            // Tooling that runs code on checkout, on build or in an editor.
+            ".cargo/config.toml",
+            ".cargo/config",
+            "rust-toolchain",
+            "rust-toolchain.toml",
+            ".envrc",
+            ".vscode/tasks.json",
+            ".devcontainer/devcontainer.json",
+            "Dockerfile",
+            "svc/Dockerfile",
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "compose.yml",
+            "compose.yaml",
+            ".npmrc",
+            ".yarnrc",
+            ".yarnrc.yml",
+            ".pnpmfile.cjs",
+            ".gitattributes",
+            ".gitmodules",
+        ] {
+            assert!(bundle.is_critical(path), "{path}");
+        }
+        for path in ["src/lib.rs", "docs/CLAUDE.txt", "README.md", ".claude"] {
+            assert!(!bundle.is_critical(path), "{path}");
+        }
+    }
+
     fn agent() -> Actor {
         Actor::Agent {
             name: "bot".into(),
@@ -704,11 +803,24 @@ mod tests {
 
     #[test]
     fn code_defaults_equal_shipped_file() {
-        let shipped: Config = toml::from_str(DEFAULT_CONFIG).unwrap();
+        let mut shipped: Config = toml::from_str(DEFAULT_CONFIG).unwrap();
+        let defaults = Config::default();
+        let grown = &shipped.paths.critical;
+        assert!(defaults.paths.critical.iter().all(|p| grown.contains(p)));
+        shipped.paths.critical = defaults.paths.critical.clone();
         assert_eq!(
             toml::to_string(&shipped).unwrap(),
-            toml::to_string(&Config::default()).unwrap()
+            toml::to_string(&defaults).unwrap()
         );
+    }
+
+    /// See `Paths::default`: a policy that does not name its critical paths
+    /// must go on deciding as it did when its log was written.
+    #[test]
+    fn a_policy_without_critical_paths_keeps_the_old_meaning() {
+        let b = PolicyBundle::parse("[leases]\nmax_ttl_minutes = 10\n", DEFAULT_POLICY).unwrap();
+        assert!(b.is_critical("Cargo.toml"));
+        assert!(!b.is_critical("CLAUDE.md"));
     }
 
     #[test]

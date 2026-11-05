@@ -40,6 +40,7 @@ impl Env {
             .env_remove("LONCA_HUMAN")
             .env_remove("LONCA_WORKSPACE")
             .env_remove("LONCA_SE")
+            .env_remove("LONCA_TEST_DAEMON_UID")
             .env_remove("LONCA_ADVISOR_DAILY_CALLS")
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove("ANTHROPIC_AUTH_TOKEN")
@@ -2139,6 +2140,102 @@ fn a_workspace_is_created_with_json() {
     assert!(r.join("w1/.lonca").is_dir());
 }
 
+/// A fake daemon on a socket: whatever reaches it is kept.
+fn fake_daemon(sock: &Path) -> std::sync::Arc<std::sync::Mutex<Vec<u8>>> {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = seen.clone();
+    let listener = std::os::unix::net::UnixListener::bind(sock).unwrap();
+    std::thread::spawn(move || {
+        for conn in listener.incoming() {
+            use std::io::Read;
+            let mut buf = [0u8; 4096];
+            let Ok(mut conn) = conn else { return };
+            let _ = conn.set_read_timeout(Some(std::time::Duration::from_millis(100)));
+            while let Ok(n) = conn.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                kept.lock().unwrap().extend_from_slice(&buf[..n]);
+            }
+        }
+    });
+    seen
+}
+
+fn current_uid() -> u32 {
+    lonca_daemon::trust::current_uid()
+}
+
+/// `LONCA_SOCKET` pointing at a process that is not the daemon: the hook
+/// blocks the call, the CLI and the MCP server stop, and the token never
+/// leaves the workspace (issue #52).
+#[test]
+fn a_fake_daemon_gets_no_token_and_the_hook_blocks() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let fake = e.root.join("f");
+    let seen = fake_daemon(&fake);
+    let other = (current_uid() + 1).to_string();
+    let run = |args: &[&str], input: &[u8]| {
+        let mut child = e
+            .cmd(&ws, args)
+            .env("LONCA_SOCKET", &fake)
+            .env("LONCA_TEST_DAEMON_UID", &other)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input).unwrap();
+        child.wait_with_output().unwrap()
+    };
+
+    let input = format!(
+        r#"{{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{{"file_path":"x"}},"cwd":"{}"}}"#,
+        ws.display()
+    );
+    let o = run(&["hook"], input.as_bytes());
+    assert_eq!(o.status.code(), Some(2), "fails closed");
+    let stderr = text(&o.stderr);
+    assert!(stderr.contains("nothing was sent"), "{stderr}");
+    assert!(!stderr.contains("is `lonca daemon` running"), "{stderr}");
+
+    let o = run(&["session", "heartbeat", "--json"], b"");
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+    let o = run(&["mcp"], b"");
+    assert_ne!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(seen.lock().unwrap().as_slice(), b"", "not a byte");
+}
+
+/// With the uid the file names, a hardened client talks to its daemon; the
+/// socket's directory is what it asks of it beyond a cooperative client.
+#[test]
+fn a_hardened_client_trusts_the_daemon_it_was_told_of() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let me = current_uid().to_string();
+    let run = |e: &Env| {
+        e.cmd(&ws, &["session", "heartbeat"])
+            .env("LONCA_TEST_DAEMON_UID", &me)
+            .output()
+            .unwrap()
+    };
+    let o = run(&e);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+
+    use std::os::unix::fs::PermissionsExt;
+    let open = std::fs::Permissions::from_mode(0o777);
+    std::fs::set_permissions(&e.root, open).unwrap();
+    let o = run(&e);
+    assert_eq!(o.status.code(), Some(2), "{}", text(&o.stderr));
+    assert!(
+        text(&o.stderr).contains("writable by others"),
+        "{}",
+        text(&o.stderr)
+    );
+}
+
 fn session_args<'a>(paths: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
     let mut args = vec![
         "session", "start", "--repo", "demo", "--agent", "claude", "--paths", paths,
@@ -2420,6 +2517,175 @@ fn mcp_status_shows_the_change_the_workspace_proposed_under_its_old_session() {
     let (err, st) = mcp.tool("status", json!({}));
     assert!(!err, "{st}");
     assert_eq!(st["your_changes"][0]["change"], proposed["change"], "{st}");
+}
+
+fn checks(report: &serde_json::Value, name: &str) -> serde_json::Value {
+    let all = report["checks"].as_array().unwrap();
+    all.iter()
+        .find(|c| c["name"] == name)
+        .unwrap_or_else(|| panic!("no {name}: {report}"))
+        .clone()
+}
+
+/// One command that shows what is wrong, as data, and leaks nothing
+/// (issue #9).
+#[test]
+fn doctor_reports_the_setup_and_no_secrets() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    e.run(&ws, &["session", "heartbeat"]);
+    let missing = r.join("no-settings.json");
+    let args = [
+        "doctor",
+        "--json",
+        "--managed-settings",
+        missing.to_str().unwrap(),
+    ];
+    let out = e
+        .cmd(r, &args)
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .output()
+        .unwrap();
+    let stdout = text(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}{}", text(&out.stderr));
+    let report = parse(&stdout);
+    assert_eq!(report["ok"], true, "{report}");
+    assert_eq!(report["mode"], "cooperative");
+    assert_eq!(checks(&report, "mode")["level"], "pass");
+    assert_eq!(checks(&report, "socket")["level"], "pass");
+    assert_eq!(checks(&report, "daemon")["level"], "pass");
+    let hooks = checks(&report, "hooks");
+    assert_eq!(hooks["level"], "warn", "cooperative: {report}");
+    assert!(hooks["hint"].as_str().unwrap().contains("unobserved"));
+    assert_eq!(checks(&report, "human")["detail"], "ayse");
+    let log = checks(&report, "log demo");
+    assert_eq!(log["level"], "pass", "{report}");
+    assert!(log["detail"].as_str().unwrap().contains("entries verify"));
+    assert_eq!(checks(&report, "human demo")["level"], "pass");
+
+    // No token of any kind, no key, and no path to where they live.
+    let session = std::fs::read_to_string(r.join("humans/ayse.session")).unwrap();
+    let human_token = parse(&session)["token"].as_str().unwrap().to_string();
+    let agent_token = std::fs::read_to_string(ws.join(".lonca/session")).unwrap();
+    assert!(!stdout.contains(&human_token), "{stdout}");
+    assert!(!stdout.contains(agent_token.trim()), "{stdout}");
+    assert!(!stdout.contains("/humans"), "{stdout}");
+
+    // In text, the same facts; a frozen repository is a warning.
+    e.run(r, &["freeze", "hold on", "--repo", "demo"]);
+    let args = ["doctor", "--managed-settings", missing.to_str().unwrap()];
+    let out = e.run(r, &args);
+    assert!(out.contains("pass  log demo:"), "{out}");
+    assert!(out.contains("warn  frozen demo: hold on"), "{out}");
+    assert!(out.contains("warn  hooks:"), "{out}");
+}
+
+/// A failing check does not stop the others, and the exit code says so.
+#[test]
+fn doctor_fails_without_a_daemon_and_says_what_to_do() {
+    let e = Env::new();
+    let r = &e.root;
+    let out = e
+        .cmd(r, &["doctor", "--json"])
+        .env("LONCA_SOCKET", r.join("nope"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("check(s) failed"),
+        "{}",
+        text(&out.stderr)
+    );
+    let report = parse(&text(&out.stdout));
+    assert_eq!(report["ok"], false);
+    let socket = checks(&report, "socket");
+    assert_eq!(socket["level"], "fail");
+    assert!(socket["hint"].as_str().unwrap().contains("lonca daemon"));
+    assert_eq!(checks(&report, "daemon")["level"], "fail");
+    assert_eq!(checks(&report, "sandbox")["name"], "sandbox");
+    assert_eq!(checks(&report, "git")["name"], "git");
+
+    // Not a hardened daemon, on a client told to expect one: the settings
+    // and the socket both fail.
+    let e = Env::new();
+    agent_workspace(&e);
+    let other = (current_uid() + 1).to_string();
+    let out = e
+        .cmd(&e.root, &["doctor", "--json"])
+        .env("LONCA_TEST_DAEMON_UID", &other)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    let report = parse(&text(&out.stdout));
+    assert_eq!(report["mode"], "hardened");
+    assert_eq!(checks(&report, "socket")["level"], "fail");
+    assert_eq!(checks(&report, "hooks")["level"], "fail");
+    assert!(
+        report["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["name"] != "human")
+    );
+}
+
+/// A human who has not logged in, or who no repository knows.
+#[test]
+fn doctor_says_when_it_can_not_look_at_repositories() {
+    let e = Env::new();
+    let r = &e.root;
+    agent_workspace(&e);
+    let run = |e: &Env, human: &str| {
+        let out = e
+            .cmd(r, &["doctor", "--json"])
+            .env("LONCA_HUMAN", human)
+            .output()
+            .unwrap();
+        parse(&text(&out.stdout))
+    };
+    let stranger = run(&e, "nobody");
+    let human = checks(&stranger, "human");
+    assert_eq!(human["level"], "warn", "{stranger}");
+    assert!(human["detail"].as_str().unwrap().contains("nobody"));
+    assert!(!stranger.to_string().contains("/humans"), "{stranger}");
+
+    let no_home = e
+        .cmd(r, &["doctor", "--json"])
+        .env("LONCA_HUMANS", r.join("empty"))
+        .output()
+        .unwrap();
+    let report = parse(&text(&no_home.stdout));
+    assert_eq!(checks(&report, "human")["detail"], "no human identity");
+}
+
+/// A repository that asks for what this human's key can not give.
+#[test]
+fn doctor_warns_of_a_file_key_in_a_repository_that_requires_presence() {
+    let e = Env::new();
+    let r = &e.root;
+    agent_workspace(&e);
+    let shown = e.run(r, &["policy", "show", "--repo", "demo"]);
+    let (_, rest) = shown.split_once("==> lonca.toml <==\n").unwrap();
+    let (config, policy) = rest.split_once("==> policy.cedar <==\n").unwrap();
+    let config = config.replace("require_presence = false", "require_presence = true");
+    std::fs::write(r.join("c.toml"), config.trim_end()).unwrap();
+    std::fs::write(r.join("p.cedar"), policy.trim_end()).unwrap();
+    let args = [
+        "policy", "set", "--repo", "demo", "--config", "c.toml", "--policy", "p.cedar",
+    ];
+    assert!(e.run(r, &args).contains("allow"));
+
+    let out = e.cmd(r, &["doctor", "--json"]).output().unwrap();
+    let report = parse(&text(&out.stdout));
+    let human = checks(&report, "human demo");
+    assert_eq!(human["level"], "warn", "{report}");
+    assert!(
+        human["detail"]
+            .as_str()
+            .unwrap()
+            .contains("requires presence")
+    );
 }
 
 /// `lease interest` and `events` on the CLI and over MCP (issue #42).

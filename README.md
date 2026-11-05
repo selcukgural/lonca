@@ -145,7 +145,9 @@ session start the hook tells the agent Lonca's rules.
 The hardened installers (macOS launchd, Linux systemd) create the `_lonca`
 system user, install root-owned binaries, lock Claude Code's hooks and
 sandbox through managed settings and route sandboxed network traffic
-through Lonca's proxy. They never edit sudoers; read their advice about
+through Lonca's proxy. They name the daemon's uid in a root-owned file, and
+the hook, the MCP server and the CLI refuse to send a token to any other
+process on the socket. They never edit sudoers; read their advice about
 sudo's credential cache. `--render DIR` shows the generated files without
 installing anything.
 
@@ -155,6 +157,16 @@ the cooperative daemon, restore each store into the hardened daemon
 as an enrolled human. The same command continues a repository whose
 `daemon.key` was lost; `lonca daemon-key rotate` replaces a key that is
 still there. See [docs/decisions.md](docs/decisions.md), "Daemon keys".
+
+## Checking a setup
+
+`lonca doctor` shows what most first runs trip over: which mode is running,
+the socket and the daemon, Claude Code's managed settings, the sandbox, `git`
+and `lsof`, and for each repository whether your human can act on it and
+whether its log verifies. Each line passes, warns or fails with what to do
+about it; a failure exits 1. `--json` is for scripts. It prints no token, no
+key and no path to one, and a Secure Enclave key is never prompted for: log
+in first.
 
 ## Backup, restore and moving to another machine
 

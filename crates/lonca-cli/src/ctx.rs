@@ -1,5 +1,6 @@
 //! Where things are: the daemon socket, human keys, the current workspace.
 
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -95,7 +96,11 @@ pub fn exit_code(e: &anyhow::Error) -> u8 {
         if let Some(c) = cause.downcast_ref::<MethodError>() {
             return if c.code == "io" { 2 } else { 1 };
         }
-        if cause.downcast_ref::<Refused>().is_some() {
+        if cause.downcast_ref::<Refused>().is_some()
+            || cause
+                .downcast_ref::<crate::doctor::ChecksFailed>()
+                .is_some()
+        {
             return 1;
         }
         if cause.downcast_ref::<Unreachable>().is_some() {
@@ -137,8 +142,12 @@ pub fn details(r: &Value) -> Value {
 pub fn connect() -> Result<Client> {
     let s = socket();
     Client::connect(&s).map_err(|e| {
+        let hint = match e.kind() {
+            ErrorKind::PermissionDenied => "",
+            _ => " (is `lonca daemon` running?)",
+        };
         anyhow!(Unreachable(format!(
-            "cannot reach the Lonca daemon at {} (is `lonca daemon` running?): {e}",
+            "cannot reach the Lonca daemon at {}{hint}: {e}",
             s.display()
         )))
     })

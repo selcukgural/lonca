@@ -42,6 +42,20 @@ Errors have a stable `code` and a `message` for people. A line that is
 not a request answers `{"id": 0, "ok": false, "error": {"code":
 "invalid", …}}`.
 
+## Verifying the daemon
+
+Your client checks the daemon before it sends anything, the token above
+all. The rules are in `docs/decisions.md`, "Clients verify the daemon"; a
+runner that speaks to the socket itself must do the same:
+
+1. Read `daemon_uid` from `/Library/Lonca/daemon.toml` (macOS) or
+   `/etc/lonca/daemon.toml`. No file: expect your own uid. A file that is
+   not root-owned, or is writable by others: refuse.
+2. The socket is a socket, not a link, and belongs to that uid. With a
+   file, its directory belongs to that uid or root, and is not writable by
+   group or others.
+3. After connecting, `getpeereid` / `SO_PEERCRED` says that uid.
+
 ## Credentials
 
 Every method requires one of these (the table in `docs/decisions.md`,
@@ -691,7 +705,7 @@ Exit codes:
 | code | meaning |
 |---|---|
 | 0 | done; a proposal that waits for a human (`escalate`) is done too |
-| 1 | the daemon refused: an error code, or a logged decision with `outcome: deny`; stderr has `code: message` (`denied: claim_mismatch:edits`). A denial exits 1 on every command, with or without `--json` |
+| 1 | the daemon refused: an error code, or a logged decision with `outcome: deny`; stderr has `code: message` (`denied: claim_mismatch:edits`). A denial exits 1 on every command, with or without `--json`. `doctor`: a check failed |
 | 2 | the daemon is unreachable, or answered something that is not the protocol |
 | 3 | usage, and everything that never reached the daemon (no workspace, no local changes, no key) |
 
@@ -747,6 +761,13 @@ Exit codes:
 - `human whoami --json`: `{"human", "alg", "public"}` (local, no
   daemon).
 - `status --json`: the `status` result, pretty-printed.
+- `doctor --json`: `{"ok": boolean, "mode": "cooperative" | "hardened" |
+  null, "checks": [{"name", "level": "pass" | "warn" | "fail", "detail",
+  "hint": string | null}]}`. A failed check exits 1 after the output and a
+  warning leaves `ok` true. It writes nothing to the log and shows no
+  token, no key and no path to one. Names: `mode`, `socket`, `daemon`,
+  `hooks`, `sandbox`, `git`, `lsof`, `human`; per repository `log <repo>`,
+  `human <repo>`, `frozen <repo>`.
 
 **The human session file is an interface.** `lonca human login` keeps
 the session at `$LONCA_HUMANS/<name>.session`, else

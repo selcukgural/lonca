@@ -43,4 +43,8 @@ exclude_re = [
   # line after the cut is dropped either way, so the two can not be told
   # apart from the result.
   'replace -= with \+= in truncate_at_line',
+  # A bundle whose encoded size is exactly the page budget: whether that
+  # one byte of equality fits or not can not be arranged by a test (the
+  # bundle's bytes are git's), and either answer is right.
+  'replace > with >= in Service::trunk_bundle',
 ]

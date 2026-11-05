@@ -1101,3 +1101,172 @@ fn a_rejection_carries_its_reason_to_the_worker_and_frees_the_leases() {
     assert_eq!(pending.as_array().unwrap().len(), 1, "{pending}");
     assert_eq!(pending[0]["seq"], r["seq"]);
 }
+
+/// Trunk reaches a git checkout as a bundle through the daemon, thin
+/// against what the checkout has; redacted history is refused; the
+/// distance of an old trunk is counted from the log.
+#[test]
+fn a_checkout_fetches_trunk_as_a_bundle_and_learns_how_far_behind_it_is() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let t0 = e.trunk();
+    let r = e.ok("trunk.bundle", Some("demo"), None, json!({}));
+    assert_eq!(r["trunk"], json!(t0));
+    assert_eq!(r["thin"], false);
+    assert_eq!(r["up_to_date"], false);
+    let same = e.ok("trunk.bundle", Some("demo"), None, json!({"have": [t0]}));
+    assert_eq!(same["up_to_date"], true);
+    assert_eq!(same["bytes"], 0);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(r["bundle_b64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(bytes.len() as u64, r["bytes"].as_u64().unwrap());
+    let bundle = e.root.join("t.bundle");
+    std::fs::write(&bundle, &bytes).unwrap();
+    let co = e.root.join("co");
+    git(&e.root, &["init", "-q", co.to_str().unwrap()]);
+    git(
+        &co,
+        &[
+            "fetch",
+            "-q",
+            bundle.to_str().unwrap(),
+            "+refs/heads/main:refs/lonca/trunk",
+        ],
+    );
+    assert_eq!(git(&co, &["rev-parse", "refs/lonca/trunk"]), t0.to_string());
+    assert_eq!(
+        git(&co, &["show", "refs/lonca/trunk:src/lib.rs"]),
+        LIB.trim_end()
+    );
+
+    // Three more integrations: a thin bundle against t0 is smaller and
+    // brings the checkout up; t0 is three behind, t1 two, trunk zero.
+    for i in 1..=3 {
+        e.human_change(
+            vec![file(&format!("n{i}.md"), &format!("note {i}\n"))],
+            "more",
+        );
+        e.svc.process_all();
+    }
+    let t3 = e.trunk();
+    let full = e.ok("trunk.bundle", Some("demo"), None, json!({}))["bytes"]
+        .as_u64()
+        .unwrap();
+    let r = e.ok(
+        "trunk.bundle",
+        Some("demo"),
+        None,
+        json!({"have": [t0, GitId::parse(&"0".repeat(40)).unwrap()]}),
+    );
+    assert_eq!(r["thin"], true);
+    assert!(r["bytes"].as_u64().unwrap() < full, "{r}");
+    std::fs::write(
+        &bundle,
+        base64::engine::general_purpose::STANDARD
+            .decode(r["bundle_b64"].as_str().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    git(
+        &co,
+        &[
+            "fetch",
+            "-q",
+            bundle.to_str().unwrap(),
+            "+refs/heads/main:refs/lonca/trunk",
+        ],
+    );
+    assert_eq!(git(&co, &["rev-parse", "refs/lonca/trunk"]), t3.to_string());
+    assert!(git(&co, &["ls-tree", "--name-only", "refs/lonca/trunk"]).contains("n3.md"));
+    let d = e.ok("trunk.distance", Some("demo"), None, json!({"base": t0}));
+    assert_eq!(d["behind"], 3);
+    assert_eq!(d["trunk"], json!(t3));
+    let st = e.ok("log", Some("demo"), None, json!({}));
+    let t1 = st
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|o| {
+            (o["entry"]["op"]["op"] == "change.integrate"
+                && o["entry"]["op"]["merged"] != json!(t0)
+                && o["entry"]["decision"]["outcome"] == "allow")
+                .then(|| o["entry"]["op"]["merged"].clone())
+        })
+        .unwrap();
+    assert_eq!(
+        e.ok("trunk.distance", Some("demo"), None, json!({"base": t1}))["behind"],
+        2
+    );
+    assert_eq!(
+        e.ok("trunk.distance", Some("demo"), None, json!({"base": t3}))["behind"],
+        0
+    );
+    assert_eq!(
+        e.ok(
+            "trunk.distance",
+            Some("demo"),
+            None,
+            json!({"base": GitId::parse(&"1".repeat(40)).unwrap()})
+        )["behind"],
+        Value::Null
+    );
+
+    // A daemon with a tiny line cap refuses a bundle that does not fit
+    // one page, by size.
+    let settings = Settings {
+        line_cap: 256,
+        ..e.settings.clone()
+    };
+    let c = e.clock.clone();
+    let small = Service::open(
+        Home::new(e.root.join("home")),
+        settings,
+        Arc::new(move || c.fetch_add(1, Ordering::SeqCst)),
+    )
+    .unwrap();
+    let token = e.human_token.clone().unwrap();
+    let r = small.handle(Request {
+        id: 1,
+        method: "trunk.bundle".into(),
+        repo: Some("demo".into()),
+        token: Some(token),
+        params: json!({"have": [t0]}),
+    });
+    let err = r.error.expect("refused");
+    assert_eq!(err.code, "too_large", "{}", err.message);
+    assert!(
+        err.message.contains("more than one page"),
+        "{}",
+        err.message
+    );
+
+    // A redacted blob on trunk's history: no bundle.
+    let files = e.ok("tree", Some("demo"), None, json!({"commit": t3}));
+    let blob = files
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "n2.md")
+        .unwrap()["blob"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    e.human(Op::Redact {
+        blob: GitId::parse(&blob).unwrap(),
+        reason: "secret".into(),
+    });
+    let err = e
+        .call("trunk.bundle", Some("demo"), None, json!({}))
+        .unwrap_err();
+    assert_eq!(err.0, "redacted", "{err:?}");
+    assert!(err.1.contains("n2.md"), "{err:?}");
+    // Thin against a point past the redacted object: still refused, the
+    // object is in the history the bundle carries.
+    let err = e
+        .call("trunk.bundle", Some("demo"), None, json!({"have": [t0]}))
+        .unwrap_err();
+    assert_eq!(err.0, "redacted");
+}

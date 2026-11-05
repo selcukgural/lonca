@@ -105,6 +105,17 @@ pub fn exit_code(e: &anyhow::Error) -> u8 {
     3
 }
 
+/// What a proposal's decision means for the proposer: `queued` (allowed,
+/// the merge queue takes it), `pending` (escalated, a human decides),
+/// `denied` (logged and refused).
+pub fn proposal_status(r: &Value) -> &'static str {
+    match r["decision"]["outcome"].as_str() {
+        Some("allow") => "queued",
+        Some("escalate") => "pending",
+        _ => "denied",
+    }
+}
+
 /// Errors with a denied decision; prints nothing.
 pub fn denied(r: &Value) -> Result<()> {
     if r["decision"]["outcome"] == "deny" {
@@ -520,6 +531,15 @@ pub fn absolute(p: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_proposal_status_follows_the_decision() {
+        let r = |o: &str| json!({"decision": {"outcome": o}});
+        assert_eq!(proposal_status(&r("allow")), "queued");
+        assert_eq!(proposal_status(&r("escalate")), "pending");
+        assert_eq!(proposal_status(&r("deny")), "denied");
+        assert_eq!(proposal_status(&json!({})), "denied");
+    }
 
     #[test]
     fn the_login_prompt_names_the_human_the_repository_and_the_length() {

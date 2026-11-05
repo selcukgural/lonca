@@ -174,6 +174,20 @@ pub struct ChangeRef {
     pub change: ChangeId,
 }
 
+/// `trunk.bundle`: a Git bundle of trunk for a checkout, thin against
+/// the commits the checkout already has.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TrunkBundle {
+    #[serde(default)]
+    pub have: Vec<GitId>,
+}
+
+/// `trunk.distance`: how far a commit that once was trunk is behind.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TrunkDistance {
+    pub base: GitId,
+}
+
 /// `change.diff`: the unified diff of a change, computed by the daemon
 /// in the store, with redaction applied and a size cap.
 #[derive(Clone, Debug, Serialize, Deserialize)]

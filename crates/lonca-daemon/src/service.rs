@@ -164,6 +164,8 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("blobs", Cred::Read),
     ("change.get", Cred::Read),
     ("change.diff", Cred::Read),
+    ("trunk.bundle", Cred::Read),
+    ("trunk.distance", Cred::Read),
     ("human.prepare_change", Cred::Human),
     ("human.prepare_policy", Cred::Human),
     ("human.prepare_import", Cred::Human),
@@ -479,6 +481,8 @@ impl Service {
             "blobs" => self.blobs(&auth, params(p)?),
             "change.get" => self.change_get(&auth, params(p)?),
             "change.diff" => self.change_diff(&auth, params(p)?),
+            "trunk.bundle" => self.trunk_bundle(&auth, params(p)?),
+            "trunk.distance" => self.trunk_distance(&auth, params(p)?),
             "whoami" => self.whoami(&auth),
             "human.prepare_change" => self.prepare_change(&auth, params(p)?),
             "human.prepare_policy" => self.prepare_policy(&auth, params(p)?),
@@ -1200,6 +1204,91 @@ impl Service {
         out["integrate_seq"] = json!(last.map(|o| o.entry.seq));
         out["integrate_decision"] = json!(last.map(|o| &o.entry.decision));
         Ok(out)
+    }
+
+    /// A Git bundle of trunk (`refs/heads/main`) for a git checkout, thin
+    /// against the commits the checkout says it has (unknown ones are
+    /// ignored). Refused when a redacted blob is among the objects it
+    /// would carry: git needs whole objects, so a redacted history can be
+    /// worked on from a workspace only. One line: the bundle must fit a
+    /// page.
+    fn trunk_bundle(&self, auth: &Auth, p: TrunkBundle) -> Hr {
+        let name = auth.repo()?;
+        let mut inner = self.lock();
+        let r = Self::repo(&mut inner, &name)?;
+        let store = r.store.clone();
+        let trunk = r.chain.state.trunk.clone().expect("initialized");
+        let redacted = r.chain.state.redacted.clone();
+        let have: Vec<String> = p
+            .have
+            .iter()
+            .filter(|h| store.read_commit(h).is_ok())
+            .map(|h| format!("^{h}"))
+            .collect();
+        let mut args: Vec<&str> = vec!["rev-list", "--objects"];
+        args.extend(have.iter().map(String::as_str));
+        args.push("refs/heads/main");
+        let objects = git(&self.settings.git, store.path(), &args)?;
+        let mut hidden: Vec<&str> = Vec::new();
+        for line in objects.lines() {
+            let (id, path) = line.split_once(' ').unwrap_or((line, ""));
+            if GitId::parse(id).is_ok_and(|g| redacted.contains(&g)) {
+                hidden.push(path);
+            }
+        }
+        if !hidden.is_empty() {
+            return fail(
+                "redacted",
+                format!(
+                    "trunk history carries redacted content ({}); git needs whole objects, work from a workspace",
+                    hidden.join(", ")
+                ),
+            );
+        }
+        // Nothing past what the checkout has: no bundle, just the id.
+        if objects.trim().is_empty() {
+            return Ok(json!({
+                "trunk": trunk, "bundle_b64": "", "bytes": 0, "thin": true, "up_to_date": true,
+            }));
+        }
+        let dir = self.home.scratch();
+        std::fs::create_dir_all(&dir).map_err(|e| from_err(e.into()))?;
+        let tmp = dir.join(format!("{name}-{}.bundle", random_id("b")));
+        let tmp_s = tmp.to_string_lossy().into_owned();
+        let mut args: Vec<&str> = vec!["bundle", "create", "-q", &tmp_s];
+        args.extend(have.iter().map(String::as_str));
+        args.push("refs/heads/main");
+        let made = git(&self.settings.git, store.path(), &args);
+        let bytes = made.and_then(|_| std::fs::read(&tmp).map_err(|e| from_err(e.into())));
+        let _ = std::fs::remove_file(&tmp);
+        let bytes = bytes?;
+        let budget = page_budget(self.settings.line_cap);
+        if encoded_len(bytes.len() as u64) > budget {
+            return fail(
+                "too_large",
+                format!(
+                    "the bundle is {} bytes, more than one page holds; fetch from a closer point (have) or restore a backup",
+                    bytes.len()
+                ),
+            );
+        }
+        Ok(json!({
+            "trunk": trunk,
+            "bundle_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+            "bytes": bytes.len(),
+            "thin": !have.is_empty(),
+            "up_to_date": false,
+        }))
+    }
+
+    /// How many integrations lie between a commit that once was trunk
+    /// and trunk now: null when it never was trunk.
+    fn trunk_distance(&self, auth: &Auth, p: TrunkDistance) -> Hr {
+        let name = auth.repo()?;
+        let mut inner = self.lock();
+        let r = Self::repo(&mut inner, &name)?;
+        let s = &r.chain.state;
+        Ok(json!({"trunk": s.trunk, "base": p.base, "behind": s.behind(&p.base)}))
     }
 
     /// The unified diff of a change between its base and its commit,

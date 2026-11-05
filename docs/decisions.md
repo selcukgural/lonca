@@ -357,6 +357,8 @@ A01/A07, zero trust: every request authenticated).
 | `blobs` | read | one page of file contents of a commit |
 | `change.get` | read | one change record, with the evidence of its last integration |
 | `change.diff` | read | the unified diff of a change, redaction applied |
+| `trunk.bundle` | read | a Git bundle of trunk for a checkout, thin against what it has |
+| `trunk.distance` | read | how far a former trunk commit is behind |
 | `human.prepare_change` | human | builds a commit for a human change |
 | `human.prepare_policy` | human | writes a policy commit |
 | `human.prepare_import` | human | `git fetch` from a remote |
@@ -477,6 +479,43 @@ equal to `PROTOCOL`.
   commands keep collecting denials per repository as before. The human
   session file is documented as an interface, since a runner that talks
   to the socket directly reuses it. No token in any output.
+
+## A git checkout as the human client
+
+With Lonca underneath imece, trunk lives in the store and the person's
+git checkout, where they commit, run their IDE and push to GitHub,
+becomes a client of it (#83). Before, a checkout could follow trunk only
+by fetching from the store directly, impossible in hardened mode and
+blind to redaction, and a commit made there had no path into Lonca.
+
+- **`lonca fetch`** brings trunk into the checkout as `refs/lonca/trunk`
+  through the daemon: `trunk.bundle` makes a Git bundle of
+  `refs/heads/main`, thin against the commits the checkout says it has
+  (`refs/lonca/trunk` and `HEAD`, when they are in the store), and the
+  client runs `git fetch <bundle>`. The person merges or resets as with
+  any remote. The bundle must fit one page; after an `init --import`
+  from the same checkout the first fetch is already thin. A bundle
+  carries whole objects, so when a redacted blob is among what it would
+  carry the daemon refuses (`redacted`, with the paths) and the person
+  works from a workspace: redaction and a git checkout do not mix.
+  A git remote helper (`git-remote-lonca`) was considered and left for
+  later: the bundle needs nothing installed on the git side.
+- **`lonca propose --commit REV`** from a checkout proposes everything
+  the commit changes against its merge base with the last fetched trunk
+  as a human change (`human.prepare_change` with the files, `human.submit`
+  with the signature; the base is a commit that was trunk, so a stale
+  base merges structurally in the queue like any proposal). Several
+  commits ahead of trunk are one proposal; the intent defaults to the
+  commit's subject. Symlinks and submodules are refused.
+- **`trunk.distance`** says how many integrations lie between a commit
+  that once was trunk and trunk now (`State.trunk_line`, every trunk
+  commit in order, replayed from the log), so a client shows `↓N` without
+  walking the log; `lonca fetch` prints it for the previous
+  `refs/lonca/trunk`.
+- The checkout remembers its repository in git config (`lonca.repo`),
+  set by the first `--repo`. `docs/guide/humans.md` describes the human's
+  two modes: a Lonca workspace, or a git checkout with `fetch` and
+  `propose --commit`.
 
 ## Verification environment
 

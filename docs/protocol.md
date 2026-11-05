@@ -396,6 +396,29 @@ left out of `files` and `diff` and listed in `redacted`. `added` and
 `removed` are line counts (null for binary files). `diff` is cut at
 2 MiB on a line boundary, `truncated` says so. Not logged.
 
+### `trunk.bundle`
+
+*read.* `{"have": [id]}`. A Git bundle of trunk (`refs/heads/main`) for
+a git checkout, thin against the commits in `have` that the store knows
+(others are ignored):
+
+```json
+{"trunk": id, "bundle_b64": string, "bytes": integer, "thin": boolean, "up_to_date": boolean}
+```
+
+`git fetch <bundle> +refs/heads/main:refs/lonca/trunk` applies it. With
+`up_to_date` the checkout already has trunk and the bundle is empty:
+point the ref at `trunk`.
+Errors: `redacted` (a redacted blob is among the objects; git needs
+whole objects, work from a workspace), `too_large` (the bundle does not
+fit one page; fetch from a closer point).
+
+### `trunk.distance`
+
+*read.* `{"base": id}`. `{"trunk": id, "base": id, "behind": integer |
+null}`: how many integrations trunk has had since `base` was trunk;
+null when it never was.
+
 ### `human.prepare_change`
 
 *human.*
@@ -630,7 +653,7 @@ still needs a signature.
   `scope.scratch`, `hook.bind.scratch`, `session start --scratch`
   (#78); `tree[].size`, `blobs`, `repo.prepare_init.warnings` (#79);
   `change.diff`, `change.get.evidence` (#80); the `reject` operation
-  (#81).
+  (#81); `trunk.bundle`, `trunk.distance` (#83).
   `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,

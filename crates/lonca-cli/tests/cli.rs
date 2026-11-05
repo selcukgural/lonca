@@ -1462,3 +1462,222 @@ fn a_human_rejects_through_the_cli_and_the_reason_reaches_the_worker() {
     .unwrap();
     assert_eq!(p["status"], "pending", "{p}");
 }
+
+/// A git checkout as the human's client: `lonca fetch` brings trunk in
+/// through the daemon, `lonca propose --commit` sends a commit out, and
+/// a commit on a stale base merges (issue #83). The store is never opened.
+#[test]
+fn a_git_checkout_fetches_and_proposes_through_the_daemon() {
+    let e = Env::new();
+    let r = &e.root;
+    let co = r.join("co");
+    std::fs::create_dir_all(co.join("src")).unwrap();
+    std::fs::write(
+        co.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    std::fs::write(co.join("README.md"), "demo\n").unwrap();
+    let g = |args: &[&str]| -> String {
+        let o = Command::new("git")
+            .current_dir(&co)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", text(&o.stderr));
+        text(&o.stdout).trim().to_string()
+    };
+    g(&["init", "-q", "-b", "main"]);
+    g(&["add", "."]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "first",
+    ]);
+    let first = g(&["rev-parse", "HEAD"]);
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(
+        e.run(r, &["init", "demo", "--import", co.to_str().unwrap()])
+            .contains("allow")
+    );
+
+    // Fetch: refs/lonca/trunk is the imported commit, the store untouched.
+    let f: serde_json::Value =
+        serde_json::from_str(&e.run(&co, &["fetch", "--repo", "demo", "--json"])).unwrap();
+    assert_eq!(f["trunk"], first);
+    assert_eq!(f["bytes"], 0, "the checkout already had the commit: {f}");
+    assert_eq!(g(&["rev-parse", "refs/lonca/trunk"]), first);
+    assert_eq!(g(&["config", "--get", "lonca.repo"]), "demo");
+    let st: serde_json::Value =
+        serde_json::from_str(&e.run(r, &["status", "--repo", "demo", "--json"])).unwrap();
+    assert_eq!(st["trunk"], first);
+
+    // A commit proposed from the checkout integrates with the same tree.
+    std::fs::write(
+        co.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n",
+    )
+    .unwrap();
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-am",
+        "double charge",
+    ]);
+    let p: serde_json::Value =
+        serde_json::from_str(&e.run(&co, &["propose", "--commit", "HEAD", "-i", "", "--json"]))
+            .unwrap();
+    assert_eq!(p["status"], "queued", "{p}");
+    assert_eq!(p["base"], first);
+    e.settle();
+    let f: serde_json::Value = serde_json::from_str(&e.run(&co, &["fetch", "--json"])).unwrap();
+    assert_eq!(f["behind"], 1);
+    assert_eq!(
+        g(&["rev-parse", "refs/lonca/trunk^{tree}"]),
+        g(&["rev-parse", "HEAD^{tree}"])
+    );
+    let c: serde_json::Value = serde_json::from_str(&e.run(
+        r,
+        &["change", p["change"].as_str().unwrap(), "--repo", "demo"],
+    ))
+    .unwrap();
+    assert_eq!(
+        c["claim"]["intent"], "double charge",
+        "the commit subject is the intent"
+    );
+    assert_eq!(c["status"]["status"], "integrated");
+    g(&["reset", "-q", "--hard", "refs/lonca/trunk"]);
+
+    // Meanwhile trunk moves (a workspace change); a commit on the stale
+    // base still merges structurally.
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo"]);
+    let hws = r.join("hws");
+    std::fs::write(hws.join("README.md"), "demo, now with notes\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "notes"]).contains("allow"));
+    e.settle();
+    std::fs::write(co.join("src/lib.rs"), "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n").unwrap();
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-am",
+        "refund",
+    ]);
+    let p: serde_json::Value =
+        serde_json::from_str(&e.run(&co, &["propose", "--commit", "HEAD", "--json"])).unwrap();
+    assert_eq!(p["status"], "queued", "{p}");
+    e.settle();
+    let c: serde_json::Value = serde_json::from_str(&e.run(
+        r,
+        &["change", p["change"].as_str().unwrap(), "--repo", "demo"],
+    ))
+    .unwrap();
+    assert_eq!(c["status"]["status"], "integrated", "{c}");
+    let f: serde_json::Value = serde_json::from_str(&e.run(&co, &["fetch", "--json"])).unwrap();
+    assert_eq!(f["behind"], 2);
+    assert_eq!(
+        g(&["show", "refs/lonca/trunk:README.md"]),
+        "demo, now with notes"
+    );
+    assert!(g(&["show", "refs/lonca/trunk:src/lib.rs"]).contains("refund"));
+    // Nothing to propose: already in trunk after a reset.
+    g(&["reset", "-q", "--hard", "refs/lonca/trunk"]);
+    let out = e
+        .cmd(&co, &["propose", "--commit", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("already in trunk"),
+        "{}",
+        text(&out.stderr)
+    );
+
+    // File modes travel: an executable stays executable; symlinks and
+    // submodules are refused by name.
+    std::fs::write(co.join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    g(&["add", "run.sh"]);
+    g(&["update-index", "--chmod=+x", "run.sh"]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "script",
+    ]);
+    let p: serde_json::Value =
+        serde_json::from_str(&e.run(&co, &["propose", "--commit", "HEAD", "--json"])).unwrap();
+    assert_eq!(p["status"], "queued", "{p}");
+    e.settle();
+    e.run(&co, &["fetch"]);
+    assert!(
+        g(&["ls-tree", "refs/lonca/trunk", "run.sh"]).starts_with("100755"),
+        "mode kept"
+    );
+    g(&["reset", "-q", "--hard", "refs/lonca/trunk"]);
+    std::os::unix::fs::symlink("README.md", co.join("link")).unwrap();
+    g(&["add", "link"]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "link",
+    ]);
+    let out = e
+        .cmd(&co, &["propose", "--commit", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("link: symlinks are not proposed"),
+        "{}",
+        text(&out.stderr)
+    );
+    g(&["reset", "-q", "--hard", "refs/lonca/trunk"]);
+    // A gitlink entry without a real submodule is enough to be refused.
+    g(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{first},vendor/dep"),
+    ]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "submodule",
+    ]);
+    let out = e
+        .cmd(&co, &["propose", "--commit", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("vendor/dep: submodules are not proposed"),
+        "{}",
+        text(&out.stderr)
+    );
+}

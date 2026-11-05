@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::ops::Facts;
 use lonca_core::{FileMap, GitId, Result};
 
-use crate::engine::{ENGINE_EXACT, ENGINE_SECTIONS};
-use crate::extract::{Parsed, Sym, moved, parse};
+use crate::engine::{ENGINE_EXACT, ENGINE_PLACES, ENGINE_SECTIONS};
+use crate::extract::{Parsed, Sym, moved, parse, shifted};
 use crate::lang::Lang;
 use crate::sections::{APPEND, Format, Section, appended, sections};
 
@@ -179,7 +179,8 @@ fn compare_file(
     f: &mut Facts,
 ) {
     diff_level(engine, path, (&pb.syms, old), (&pn.syms, new), f);
-    if pb.residual_at(engine) != pn.residual_at(engine) {
+    let places = engine >= ENGINE_PLACES && shifted(pb.placed(), pn.placed());
+    if places || pb.residual_at(engine) != pn.residual_at(engine) {
         f.edits.push(sym_id(path, MODULE));
     }
     let (bl, nl) = (pb.import_texts(old), pn.import_texts(new));
@@ -236,7 +237,8 @@ fn diff_level(
                 }
                 let unit = sym_id(path, &b.changed_unit(n, engine));
                 if b.container && n.container {
-                    if b.own_at(engine) != n.own_at(engine) {
+                    let places = engine >= ENGINE_PLACES && shifted(b.placed(), n.placed());
+                    if places || b.own_at(engine) != n.own_at(engine) {
                         f.edits.push(unit.clone());
                     }
                     let (bc, nc) = (&b.children[..], &n.children[..]);
@@ -329,6 +331,33 @@ mod tests {
         let f = section_facts(3, "a.rs", "fn f(a: u8) {}\n", "fn f(a: u16) {}\n");
         assert_eq!(f.edits, ["a.rs#f"]);
         assert_eq!(f.signature_changes, ["a.rs#f"]);
+    }
+
+    /// Code that changes places among symbols is a change of that code.
+    #[test]
+    fn code_that_changed_places_is_an_edit_from_engine_4() {
+        let old = "a = 1\n\ndef f():\n    return 1\n\nprint(a)\n";
+        let new = "a = 1\n\nprint(a)\n\ndef f():\n    return 1\n";
+        assert_eq!(section_facts(4, "a.py", old, new).edits, ["a.py#<module>"]);
+        assert_eq!(
+            section_facts(3, "a.py", old, new).edits,
+            Vec::<String>::new()
+        );
+
+        let old = "class A:\n    x = g()\n\n    def m(self):\n        return 1\n";
+        let new = "class A:\n    def m(self):\n        return 1\n\n    x = g()\n";
+        assert_eq!(section_facts(4, "a.py", old, new).edits, ["a.py#A.<def>"]);
+        assert_eq!(
+            section_facts(3, "a.py", old, new).edits,
+            Vec::<String>::new()
+        );
+
+        // A new symbol between two statements moves neither.
+        let old = "x = 1\ny = 2\n";
+        let new = "x = 1\ndef f(): pass\ny = 2\n";
+        let f = section_facts(4, "a.py", old, new);
+        assert_eq!(f.edits, Vec::<String>::new());
+        assert_eq!(f.adds, ["a.py#f"]);
     }
 
     /// A move goes to the line merge, which sees the members of the block.

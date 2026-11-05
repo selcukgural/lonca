@@ -234,6 +234,21 @@ entry format, so they have their own version
     checked as it always was: a session scoped to exactly `Type` leases
     `Type`, the whole type.
 
+- **Engine 4** compares where code stands among symbols. `exact_text` leaves
+  symbols out, so code that changed places with a symbol read the same on
+  both sides, though order can matter between statements as much as between
+  symbols.
+  - `exact_text` notes where each symbol and import stood (`Spot`), and
+    `shifted` compares each piece of code with the names in front of it,
+    counting only names both sides have. So adding or removing a symbol moves
+    nothing, and two symbols side by side that swap are engine 2's rule, not
+    this one's. This needs nothing per language.
+  - Facts report such a change as an edit of `<module>`, or of `Type.<def>`
+    inside a container, so it needs the lease of that code.
+  - The merge treats it like a move: it leaves the file to the line merge,
+    where it merges or is `<file>` in `conflicts`. In a sync the file stays
+    local.
+
 ## Harness profiles
 
 Which harnesses Lonca can read is data, not code (issue #109). A profile

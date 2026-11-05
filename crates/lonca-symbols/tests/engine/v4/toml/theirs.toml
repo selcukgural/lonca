@@ -1,0 +1,6 @@
+[package]
+name = "y"
+
+[dependencies]
+serde = "1"
+clap = "4"

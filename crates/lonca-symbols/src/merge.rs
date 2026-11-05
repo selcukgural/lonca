@@ -13,8 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
-use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_SECTIONS};
-use crate::extract::{Parsed, Sym, moved, normalize, parse};
+use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_PLACES, ENGINE_SECTIONS};
+use crate::extract::{Parsed, Placed, Sym, moved, normalize, parse, shifted};
 use crate::lang::Lang;
 use crate::sections::{self, Format};
 
@@ -191,6 +191,7 @@ pub fn merge_around_conflicts(
         return None;
     }
     let mut m = Merger::new(engine, path, b, o, t);
+    m.note_shift(pb.placed(), pt.placed());
     m.imports(&pb, &po, &pt);
     m.level(&pb.syms, &po.syms, &pt.syms, None);
     if m.moved {
@@ -396,6 +397,8 @@ impl<'a> Merger<'a> {
                             continue;
                         }
                     }
+                    let same_as = if own_t == own_b { b_sym } else { o_sym };
+                    self.note_shift(same_as.placed(), ts_sym.placed());
                     self.level(
                         &b_sym.children,
                         &o_sym.children,
@@ -432,12 +435,20 @@ impl<'a> Merger<'a> {
             return false;
         }
         self.note_moves(&names(&b.children), &names(&t.children));
+        self.note_shift(b.placed(), o.placed());
         self.moved |= m.moved;
         match m.apply_within(t.start, t.end) {
             Some(text) => self.replace(o.start, o.end, text),
             None => self.moved = true,
         }
         true
+    }
+
+    /// Code that changed places can not be applied in place either.
+    fn note_shift(&mut self, a: Placed, b: Placed) {
+        if self.engine >= ENGINE_PLACES && shifted(a, b) {
+            self.moved = true;
+        }
     }
 
     fn note_moves(&mut self, base: &[&str], theirs: &[&str]) {
@@ -529,6 +540,8 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         return Sm::Conflict(vec![format!("{path}#<module>")]);
     }
     let mut m = Merger::new(engine, path, b, o, t);
+    let same_as = if rt == rb { &pb } else { &po };
+    m.note_shift(same_as.placed(), pt.placed());
     m.imports(&pb, &po, &pt);
     m.level(&pb.syms, &po.syms, &pt.syms, None);
     if !m.conflicts.is_empty() {
@@ -688,6 +701,103 @@ mod tests {
         let (o, t) = (b, "fn a() { x(); }\n\nfn n() { t(); }\n");
         let kept = merge_around_conflicts(3, "a.rs", b, o, t).unwrap();
         assert_eq!(kept, t);
+    }
+
+    const MODULE: &str = "a = 1\n\ndef f():\n    return 1\n\nprint(a)\n\ndef g():\n    return 2\n\ndef h():\n    return 3\n\ndef i():\n    return 4\n\ndef j():\n    return 5\n";
+
+    fn moved_print() -> String {
+        let t = MODULE.replace(
+            "def f():\n    return 1\n\nprint(a)\n",
+            "print(a)\n\ndef f():\n    return 1\n",
+        );
+        assert_ne!(t, MODULE);
+        t
+    }
+
+    /// A statement moved past a symbol, with an edit beside it: the move
+    /// comes through or the merge says so. It is never dropped.
+    #[test]
+    fn code_that_changed_places_is_not_dropped() {
+        let t = moved_print().replace("return 2", "return 20");
+        let o = MODULE.replace("return 5", "return 50");
+        let want = t.replace("return 5", "return 50");
+        assert_eq!(merge_text_at(4, "a.py", MODULE, &o, &t).unwrap(), want);
+        // Engine 3 keeps what it wrote.
+        let lost = MODULE
+            .replace("return 2", "return 20")
+            .replace("return 5", "return 50");
+        assert_eq!(merge_text_at(3, "a.py", MODULE, &o, &t).unwrap(), lost);
+
+        let (a, b) = (
+            "    x = g()\n\n    def m(self):\n        return y\n\n",
+            "    def m(self):\n        return y\n\n    x = g()\n\n",
+        );
+        let base = format!("class A:\n{a}    def n(self):\n        return 1\n");
+        let t = base.replace(a, b).replace("return 1", "return 5");
+        let o = base.replace("return y", "return z");
+        let want = t.replace("return y", "return z");
+        assert_eq!(merge_text_at(4, "a.py", &base, &o, &t).unwrap(), want);
+        let lost = o.replace("return 1", "return 5");
+        assert_eq!(merge_text_at(3, "a.py", &base, &o, &t).unwrap(), lost);
+    }
+
+    /// `o` moved the code and `t` took the container: it must not be lost
+    /// with the layout of `o`.
+    #[test]
+    fn code_that_changed_places_beside_a_header_is_not_dropped() {
+        let (a, b) = (
+            "    x = g()\n\n    def m(self):\n        return y\n\n",
+            "    def m(self):\n        return y\n\n    x = g()\n\n",
+        );
+        let tail = "    def n(self):\n        return 1\n\n    def p(self):\n        return 2\n\n    def q(self):\n        return 3\n";
+        let base = format!("class A:\n    w = 1\n\n    v = 2\n\n{a}{tail}");
+        let o = base.replace(a, b).replace("return 3", "return 30");
+        let t = base.replace("class A:", "class A(B):");
+        let want = o.replace("class A:", "class A(B):");
+        assert_eq!(merge_text_at(4, "a.py", &base, &o, &t).unwrap(), want);
+        assert_eq!(merge_text_at(4, "a.py", &base, &t, &o).unwrap(), want);
+    }
+
+    /// The same own text on both sides is compared with `o`, so an edit on
+    /// each side stays a merge by symbols: their lines touch.
+    #[test]
+    fn code_in_place_on_both_sides_stays_a_symbol_merge() {
+        let b = "class A:\n    def a(self): return 1\n    def b(self): return 2\n";
+        let o = b
+            .replace("class A:", "class A(B):")
+            .replace("return 1", "return 10");
+        let t = b
+            .replace("class A:", "class A(B):")
+            .replace("return 2", "return 20");
+        let want = o.replace("return 2", "return 20");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, &t).unwrap(), want);
+
+        let b = "x = 1\ndef a(): return 1\ndef b(): return 2\n";
+        let o = b.replace("x = 1", "x = 2").replace("return 1", "return 10");
+        let t = b.replace("x = 1", "x = 2").replace("return 2", "return 20");
+        let want = o.replace("return 2", "return 20");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, &t).unwrap(), want);
+    }
+
+    /// Symbols added or taken out around code move nothing.
+    #[test]
+    fn a_symbol_added_beside_code_stays_a_symbol_merge() {
+        let b = "x = 1\ndef a(): return 1\ny = 2\ndef b(): return 2\n";
+        let o = b.replace("def b(): return 2", "def n(): return 0\ndef b(): return 2");
+        let t = b.replace("return 1", "return 10");
+        let want = o.replace("return 1", "return 10");
+        assert_eq!(merge_text_at(4, "a.py", b, &o, &t).unwrap(), want);
+        let other_way = merge_text_at(4, "a.py", b, &t, &o).unwrap();
+        assert!(other_way.contains("def n(): return 0\n"), "{other_way}");
+        assert!(other_way.contains("return 10"), "{other_way}");
+    }
+
+    #[test]
+    fn a_sync_leaves_a_file_alone_when_code_changed_places() {
+        let t = moved_print().replace("return 2", "return 20");
+        let o = MODULE.replace("return 2", "return 21");
+        assert_eq!(merge_around_conflicts(4, "a.py", MODULE, &o, &t), None);
+        assert!(merge_around_conflicts(3, "a.py", MODULE, &o, &t).is_some());
     }
 
     /// An `impl` header is the type's definition, and merges like a class's.

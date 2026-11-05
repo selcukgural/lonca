@@ -42,6 +42,8 @@ pub struct Sym {
     /// The same text for containers as [`exact_text`] writes it; empty for
     /// leaves, whose text is compared as it stands.
     pub own_exact: String,
+    /// Where the members stood in `own_exact`.
+    pub spots: Vec<Spot>,
     /// Normalized declaration header for callables.
     pub signature: Option<String>,
     /// The type whose definition this symbol's own text belongs to: itself,
@@ -59,6 +61,11 @@ impl Sym {
     }
 
     /// What `engine` compares as this symbol's own text.
+    /// This symbol's code and where its members stood in it.
+    pub fn placed(&self) -> Placed<'_> {
+        (&self.own_exact, &self.spots)
+    }
+
     pub fn own_at(&self, engine: u32) -> &str {
         if engine >= ENGINE_EXACT {
             &self.own_exact
@@ -92,6 +99,14 @@ impl Sym {
     }
 }
 
+/// Where a symbol or an import stood in what [`exact_text`] wrote, which
+/// leaves them out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Spot {
+    pub at: usize,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JsTest {
     pub name: String,
@@ -108,6 +123,8 @@ pub struct Parsed {
     pub residual: String,
     /// The same code as [`exact_text`] writes it.
     pub residual_exact: String,
+    /// Where the symbols and imports stood in `residual_exact`.
+    pub spots: Vec<Spot>,
     pub js_tests: Vec<JsTest>,
 }
 
@@ -119,6 +136,11 @@ impl Parsed {
         } else {
             &self.residual
         }
+    }
+
+    /// The code outside symbols and where they stood in it.
+    pub fn placed(&self) -> Placed<'_> {
+        (&self.residual_exact, &self.spots)
     }
 
     pub fn import_texts(&self, src: &str) -> Vec<String> {
@@ -159,6 +181,7 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
             has_error: true,
             residual: normalize(src),
             residual_exact: normalize(src),
+            spots: vec![],
             js_tests: vec![],
         };
     };
@@ -180,8 +203,19 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
         .collect();
     cut.sort();
     let residual = normalize(&remove_spans(src, 0, src.len(), &cut));
+    let import_names = imports
+        .iter()
+        .map(|&(s, e)| format!("import {}", normalize(&src[s..e])));
+    let import_names: Vec<String> = import_names.collect();
+    let import_marks = imports.iter().zip(&import_names);
+    let marks: Vec<Mark> = syms
+        .iter()
+        .map(|s| (s.start, s.end, s.name.as_str()))
+        .chain(import_marks.map(|(&(s, e), n)| (s, e, n.as_str())))
+        .collect();
     let mut residual_exact = String::new();
-    exact_text(root, src, &cut, &mut residual_exact);
+    let mut spots = Vec::new();
+    exact_text(root, src, &marks, &mut residual_exact, &mut spots);
     let js_tests = if lang.is_js_family() {
         ex.js_tests(root)
     } else {
@@ -193,6 +227,7 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
         has_error: root.has_error(),
         residual,
         residual_exact,
+        spots,
         js_tests,
     }
 }
@@ -221,13 +256,23 @@ fn is_verbatim(kind: &str) -> bool {
         .any(|k| kind.contains(k))
 }
 
+/// A span [`exact_text`] leaves out, and what stands there.
+type Mark<'a> = (usize, usize, &'a str);
+
 /// Writes `n` without the parts inside `cut`: its tree, and the text of its
-/// tokens. Reformatting leaves this as it was; whatever changes the program
-/// does not, because indentation that means something is in the tree and
-/// whitespace in a string is in the token.
-fn exact_text(n: Node, src: &str, cut: &[(usize, usize)], out: &mut String) {
+/// tokens, noting in `spots` where each cut part stood. Reformatting leaves
+/// this as it was; whatever changes the program does not, because
+/// indentation that means something is in the tree and whitespace in a
+/// string is in the token.
+fn exact_text(n: Node, src: &str, cut: &[Mark], out: &mut String, spots: &mut Vec<Spot>) {
     let (start, end) = (n.start_byte(), n.end_byte());
-    if cut.iter().any(|&(s, e)| s <= start && end <= e) {
+    if let Some(&(.., name)) = cut.iter().find(|&&(s, e, _)| s <= start && end <= e) {
+        if spots.last().is_none_or(|last| last.name != name) {
+            spots.push(Spot {
+                at: out.len(),
+                name: name.to_string(),
+            });
+        }
         return;
     }
     if n.child_count() == 0 || is_verbatim(n.kind()) {
@@ -240,11 +285,43 @@ fn exact_text(n: Node, src: &str, cut: &[(usize, usize)], out: &mut String) {
         out.push('(');
     }
     for c in n.children(&mut n.walk()) {
-        exact_text(c, src, cut, out);
+        exact_text(c, src, cut, out, spots);
     }
     if n.is_named() {
         out.push(')');
     }
+}
+
+/// Code with the symbols around it left out, and the symbols around it.
+pub type Placed<'a> = (&'a str, &'a [Spot]);
+
+/// The code of `text` piece by piece, each with the `common` names in front
+/// of it. A name that only one side has does not cut a piece.
+fn pieces<'t>(
+    (text, spots): Placed<'t>,
+    common: &BTreeSet<&str>,
+) -> Vec<(BTreeSet<&'t str>, &'t str)> {
+    let mut out = Vec::new();
+    let (mut before, mut from) = (BTreeSet::new(), 0);
+    for s in spots.iter().filter(|s| common.contains(s.name.as_str())) {
+        out.push((before.clone(), &text[from..s.at]));
+        before.insert(s.name.as_str());
+        from = s.at;
+    }
+    out.push((before, &text[from..]));
+    out.retain(|(_, code)| !code.is_empty());
+    out
+}
+
+/// The same code stands elsewhere among the symbols both sides have. Adding
+/// or removing a symbol moves nothing, and neither does symbols changing
+/// places with no code between them.
+pub(crate) fn shifted(a: Placed, b: Placed) -> bool {
+    let names =
+        |p: Placed<'_>| -> BTreeSet<String> { p.1.iter().map(|s| s.name.clone()).collect() };
+    let (na, nb) = (names(a), names(b));
+    let common: BTreeSet<&str> = na.intersection(&nb).map(String::as_str).collect();
+    pieces(a, &common) != pieces(b, &common)
 }
 
 /// The names both lists hold that do not keep their place among them.
@@ -574,10 +651,13 @@ impl<'s> Extractor<'s> {
             };
             let end = child.end_byte();
             let cut: Vec<(usize, usize)> = children_syms.iter().map(|s| (s.start, s.end)).collect();
+            let marks = children_syms.iter();
+            let marks: Vec<Mark> = marks.map(|s| (s.start, s.end, s.name.as_str())).collect();
             let mut own_exact = String::new();
+            let mut spots = Vec::new();
             let own = if def.members.is_some() {
                 own_exact.push_str(&self.src[start..child.start_byte()]);
-                exact_text(child, self.src, &cut, &mut own_exact);
+                exact_text(child, self.src, &marks, &mut own_exact, &mut spots);
                 normalize(&remove_spans(self.src, start, end, &cut))
             } else {
                 normalize(&self.src[start..end])
@@ -594,6 +674,7 @@ impl<'s> Extractor<'s> {
                 def_start: def_node.start_byte(),
                 own,
                 own_exact,
+                spots,
                 signature,
                 def_of,
                 is_test,
@@ -803,6 +884,42 @@ mod tests {
         assert_eq!(dr.changed_unit(dr, 3), "R.<def>");
         assert_eq!(cr.changed_unit(dr, 3), "R");
         assert_eq!(dr.changed_unit(cr, 3), "R");
+    }
+
+    /// What counts as code changing places, and what does not.
+    #[test]
+    fn code_shifts_against_symbols_both_sides_have() {
+        let py = |src| parse(Lang::Python, src);
+        let moved = |a, b| shifted(py(a).placed(), py(b).placed());
+        let base = "x = 1\ndef a(): pass\ny = 2\ndef b(): pass\n";
+        assert!(!moved(base, base));
+        // Past a symbol, in either direction.
+        assert!(moved(base, "def a(): pass\nx = 1\ny = 2\ndef b(): pass\n"));
+        assert!(moved(base, "x = 1\ndef a(): pass\ndef b(): pass\ny = 2\n"));
+        // Symbols around the code changing places move it too.
+        assert!(moved(base, "x = 1\ndef b(): pass\ny = 2\ndef a(): pass\n"));
+        // Adding or removing a symbol moves nothing.
+        assert!(!moved(
+            base,
+            "x = 1\ndef a(): pass\ndef n(): pass\ny = 2\ndef b(): pass\n"
+        ));
+        assert!(!moved(base, "x = 1\ny = 2\ndef b(): pass\n"));
+        // Symbols side by side changing places have no code between them.
+        assert!(!moved(
+            "x = 1\ndef a(): pass\ndef b(): pass\n",
+            "x = 1\ndef b(): pass\ndef a(): pass\n"
+        ));
+        // An import is a place too.
+        assert!(moved("import o\nx = 1\n", "x = 1\nimport o\n"));
+        // A comment and its symbol are one: one spot, not two.
+        let p = py("# about\n# a\ndef a(): pass\n");
+        assert_eq!(p.spots.len(), 1);
+        // Inside a container, members are the symbols.
+        let cls = |src| parse(Lang::Python, src).syms.remove(0);
+        let a = cls("class A:\n    x = 1\n    def a(self): pass\n");
+        let b = cls("class A:\n    def a(self): pass\n    x = 1\n");
+        assert!(shifted(a.placed(), b.placed()));
+        assert!(!shifted(a.placed(), a.placed()));
     }
 
     /// A type with no plain name has no definition to share.

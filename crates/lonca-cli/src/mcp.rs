@@ -4,6 +4,8 @@
 //! workspace's session token.
 
 use std::io::{BufRead, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
@@ -42,6 +44,9 @@ fn tools() -> Value {
 }
 
 const DEFAULT_TTL_MINUTES: i64 = 10;
+/// What a worker reads after its session is over.
+const SESSION_OVER: &str = "this session has ended or expired; a human continues the \
+                            workspace with `lonca session start --continue`";
 /// How long the heartbeat waits to try again after a failed call.
 const RETRY_BEAT_MS: i64 = 30_000;
 
@@ -90,12 +95,27 @@ fn beat(c: &mut Client) -> Result<i64> {
     Ok(interval)
 }
 
-/// The heartbeat of this server, on its own connection. It stops with the
-/// process, which ends when the harness closes stdin: that is what makes
-/// a crashed agent's leases free.
-fn keep_alive(mut c: Client) {
+/// The daemon says this session is over, not that it could not answer:
+/// expired, or ended and its token gone. A worker is told by its next tool
+/// result.
+fn session_over(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<ctx::MethodError>()
+        .is_some_and(|m| matches!(m.code.as_str(), "session_inactive" | "unauthenticated"))
+}
+
+/// The heartbeat of this server, on its own connection. It stops when the
+/// session is over, or with the process, which ends when the harness
+/// closes stdin: that is what makes a crashed agent's leases free.
+fn keep_alive(mut c: Client, ended: Arc<AtomicBool>) {
     loop {
-        let wait = beat(&mut c).unwrap_or(RETRY_BEAT_MS);
+        let wait = match beat(&mut c) {
+            Ok(wait) => wait,
+            Err(e) if session_over(&e) => {
+                ended.store(true, Ordering::SeqCst);
+                return;
+            }
+            Err(_) => RETRY_BEAT_MS,
+        };
         std::thread::sleep(Duration::from_millis(wait as u64));
     }
 }
@@ -212,12 +232,17 @@ impl Server {
                 let who = ctx::call(c, "whoami", json!({}))?;
                 let st = ctx::call(c, "status", json!({}))?;
                 let me = who["actor"].as_str().unwrap_or_default().to_string();
+                // The workspace's change may be an earlier session's.
+                let submitted = self.ws.meta.submitted.as_ref();
+                let submitted = submitted.map(|(change, _)| json!(change));
                 let mine: Vec<Value> = st["changes"]
                     .as_array()
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|x| x["actor"] == me.as_str())
+                    .filter(|x| {
+                        x["actor"] == me.as_str() || Some(&x["change"]) == submitted.as_ref()
+                    })
                     .collect();
                 Ok(
                     json!({"you": who, "trunk": st["trunk"], "your_base": self.ws.meta.base, "frozen": st["frozen"], "queue": st["queue"], "leases": st["leases"], "your_changes": mine}),
@@ -334,7 +359,9 @@ pub fn run() -> Result<()> {
     client.token = Some(ws.token()?);
     let mut heart = ctx::connect()?;
     heart.token = client.token.clone();
-    std::thread::spawn(move || keep_alive(heart));
+    let ended = Arc::new(AtomicBool::new(false));
+    let beating = ended.clone();
+    std::thread::spawn(move || keep_alive(heart, beating));
     let mut server = Server { ws, client };
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -362,7 +389,16 @@ pub fn run() -> Result<()> {
             "tools/call" => {
                 let name = msg["params"]["name"].as_str().unwrap_or("");
                 let args = msg["params"].get("arguments").cloned().unwrap_or(json!({}));
-                Ok(match server.tool(name, &args) {
+                let result = if ended.load(Ordering::SeqCst) {
+                    Err(anyhow::Error::new(ctx::MethodError {
+                        method: name.to_string(),
+                        code: "session_inactive".into(),
+                        message: SESSION_OVER.into(),
+                    }))
+                } else {
+                    server.tool(name, &args)
+                };
+                Ok(match result {
                     Ok(v) => {
                         json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v)?}], "isError": false})
                     }
@@ -387,8 +423,8 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LeaseItem, LeaseKind, beat_interval_ms, due_for_renewal, error_body, remainder,
-        renewal_ttl_ms, requested_items, tools, ttl_ms,
+        LeaseItem, LeaseKind, anyhow, beat_interval_ms, ctx, due_for_renewal, error_body,
+        remainder, renewal_ttl_ms, requested_items, session_over, tools, ttl_ms,
     };
     use serde_json::json;
 
@@ -467,6 +503,21 @@ mod tests {
             error_body(&e),
             json!({"code": "forbidden", "message": "no", "details": []})
         );
+    }
+
+    #[test]
+    fn only_the_daemons_word_ends_a_session() {
+        let said = |code: &str| {
+            anyhow::Error::new(ctx::MethodError {
+                method: "session.heartbeat".into(),
+                code: code.into(),
+                message: String::new(),
+            })
+        };
+        assert!(session_over(&said("session_inactive")));
+        assert!(session_over(&said("unauthenticated")));
+        assert!(!session_over(&said("io")), "the daemon may come back");
+        assert!(!session_over(&anyhow!("no answer")));
     }
 
     #[test]

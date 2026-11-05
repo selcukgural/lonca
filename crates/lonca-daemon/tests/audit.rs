@@ -223,6 +223,7 @@ fn auditor_flag_freezes_the_repository() {
                 scratch: vec![],
             },
             expires_ms: e.now() + 60_000,
+            continues: None,
         };
         e.sign(&op)
     });

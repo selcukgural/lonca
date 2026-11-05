@@ -90,6 +90,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 8** again adds no field: a heartbeat keeps a session's leases
   alive and its absence ends them, a denied acquire registers interest,
   and a renewal has a hold limit (see "Lease liveness").
+- **Version 9** adds `continues` on `session.start` (see "Continuing a
+  session"). The field is left out of the encoding when empty, so every
+  earlier entry keeps its bytes; an entry that names a session needs
+  format 9.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -664,6 +668,67 @@ intent is free text, and it says nothing of when the lease ends;
   `isError`: the daemon's error code, or `invalid` for what the server
   itself refused. A denied decision is not a failure: it is a logged
   result, with `decision` and `details`.
+
+## Continuing a session
+
+A worker outlives `sessions.max_ttl_minutes` in ordinary use, with work
+in its workspace, and a session can not be extended (#98). Renewing would
+let one token live for ever and go against #53; a human's act at the
+boundary keeps the session bounded.
+
+- **`session.start` with `continues: {session, widen}`**, from `lonca
+  session start --continue DIR`. It is a start, with its signature and
+  every check of a start, and these on top: the old session is known
+  (`unknown_session`), a root session (`continue_child_session`, because a
+  child's scope and lifetime are its parent's), not continued before
+  (`session_continued`: a workspace never has two live sessions), and the
+  new scope is within the old one (`scope_widening:<what>`) unless the
+  human passed `--widen`, which is in the log and in the Touch ID prompt.
+  The CLI refuses a directory that is not itself a workspace, a human's
+  workspace, and a workspace of another repository, before asking for a
+  signature.
+- **The old session ends in the same entry**, alive or not, with `continued
+  by <new>`, and the daemon drops its token. The workspace's files, base,
+  manifest and `submitted` stay; only `.lonca/session` and the session id
+  in `workspace.json` change.
+- **What is known of the files goes with them:** taint, observation level,
+  `writes` and `shell_seen`. A new session on the same files must not clear
+  a taint, because the workspace may hold what the tainted session wrote.
+  `writes` has to come along for the edit to be proposable at all: under
+  a bound session a changed file nobody saw written is
+  `unobserved_write`. A later `hook.bind` sets the level as it does for
+  any session, and a file an unobserved session wrote is still not in
+  `writes`, so binding hooks does not launder it.
+- **Leases end, pins pass on.** The old session's sets end as at any
+  session end (#39: a lost lease stays lost), and `lease_needed` tells the
+  worker what to lease again. What is pinned stays with its change (#38),
+  but the set's holder becomes the new session. The issue left the pins
+  with the old session; then the worker could not propose on top of its
+  own pending change, because the diff includes that change's edits and
+  every one of them would be `lease_missing`. Same reason the pin's holder
+  "can propose on top of its own change".
+- **`continued_from`, not `parent`.** The issue says the old session is
+  recorded as `parent`, but a parent's end ends its children and
+  `session_active` walks parents, so the new session would be dead on
+  arrival. `continued_from` / `continued_by` record the link, and
+  `status.sessions` shows both.
+- **The chain is one worker's work.** The new session may withdraw what its
+  predecessors proposed. `cap.revoke` of any session in the chain walks
+  back through `continued_from` and withdraws the work of all of them,
+  pins included: a revocation is a decision about the work, and a
+  revocation of the new session must not leave the old one's change
+  queued. Walking forward is not needed, because an older session's own
+  in-flight work is what a revocation of it reaches.
+- **A heartbeat of an inactive session** is refused `session_inactive` and
+  writes nothing, so a client that does not stop can not fill the log.
+  `lonca mcp` stops beating on that answer, or on `unauthenticated` (the
+  token is gone), and every later tool result is `{code:
+  "session_inactive", message, details: []}`. A connection failure is not
+  that: the daemon may come back, and the server keeps trying.
+- **If the CLI dies** between the entry and writing the token, the
+  workspace keeps the old token and the continuation can not be repeated
+  (`session_continued`). The window is one file write; the way out is a new
+  session and a new workspace, and the log says what happened.
 
 ## Reject, and a pending proposal whose session ends
 

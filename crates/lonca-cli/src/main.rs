@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use lonca_core::keys::KeyPair;
-use lonca_core::ops::{Claim, HumanKey, LeaseItem, LeaseKind, Op, OpKind, Scope};
+use lonca_core::ops::{Claim, Continuation, HumanKey, LeaseItem, LeaseKind, Op, OpKind, Scope};
 use lonca_core::{ChangeId, GitId};
 use lonca_daemon::Client;
 use serde_json::{Value, json};
@@ -472,8 +472,16 @@ enum SessionCmd {
         #[arg(long)]
         max_lines: Option<u32>,
         /// Directory for the agent's workspace.
+        #[arg(long, required_unless_present = "continue_dir")]
+        workspace: Option<PathBuf>,
+        /// Take over this workspace: its files, base and manifest stay, its
+        /// session ends. Taint and observation level carry over; leases do
+        /// not.
+        #[arg(long = "continue", conflicts_with = "workspace")]
+        continue_dir: Option<PathBuf>,
+        /// With --continue: allow a scope wider than the old session's.
         #[arg(long)]
-        workspace: PathBuf,
+        widen: bool,
         /// A directory outside the workspace the agent may write to
         /// (notes, logs). Writes there are not facts and can not be
         /// proposed. Repeatable; recorded in the session's scope.
@@ -1071,12 +1079,22 @@ fn run(cmd: Cmd) -> Result<()> {
             max_files,
             max_lines,
             workspace,
+            continue_dir,
+            widen,
             scratch,
             human,
             json: as_json,
         }) => {
+            if widen && continue_dir.is_none() {
+                bail!("--widen goes with --continue");
+            }
             let human = human_name(human)?;
-            let dir = ctx::absolute(&workspace)?;
+            let target = continue_dir.as_ref().or(workspace.as_ref());
+            let dir = ctx::absolute(target.context("pass --workspace or --continue")?)?;
+            let continuing = match continue_dir {
+                Some(_) => Some(Workspace::to_continue(&dir, &repo)?),
+                None => None,
+            };
             let scratch = scratch_roots(&dir, &scratch)?;
             let mut c = human_client(&repo, &human)?;
             let session = lonca_core::canonical::random_id("ses");
@@ -1103,6 +1121,10 @@ fn run(cmd: Cmd) -> Result<()> {
                     scratch: scratch.clone(),
                 },
                 expires_ms,
+                continues: continuing.as_ref().map(|(_, old)| Continuation {
+                    session: old.clone(),
+                    widen,
+                }),
             };
             let r = if as_json {
                 let sig = ctx::sign(&human, &repo, &op)?;
@@ -1114,19 +1136,31 @@ fn run(cmd: Cmd) -> Result<()> {
             let Some(token) = r["token"].as_str() else {
                 bail!("session was not started: {}", r["decision"]["outcome"])
             };
-            let mut ac = connect()?;
-            ac.token = Some(token.to_string());
-            let mut ws = Workspace::create(&mut ac, &dir, &repo, Some(session.clone()), None)?;
+            let (continued, old) = continuing.unzip();
+            let mut ws = match continued {
+                Some(ws) => ws,
+                None => {
+                    let mut ac = connect()?;
+                    ac.token = Some(token.to_string());
+                    Workspace::create(&mut ac, &dir, &repo, Some(session.clone()), None)?
+                }
+            };
+            // The token first: it is what the workspace runs on.
+            ws.write_token(token)?;
+            ws.meta.session = Some(session.clone());
             ws.meta.scratch_roots = scratch.clone();
             ws.save()?;
-            ws.write_token(token)?;
             if as_json {
                 return ctx::print_json(&json!({
                     "session": session, "workspace": ws.root, "expires_ms": expires_ms,
                     "paths": paths, "scratch": scratch, "seq": r["seq"], "decision": r["decision"],
+                    "continues": old,
                 }));
             }
             println!("session {session}; workspace {}", ws.root.display());
+            if let Some(old) = old {
+                println!("continues {old}");
+            }
             for s in &scratch {
                 println!("scratch {s}");
             }

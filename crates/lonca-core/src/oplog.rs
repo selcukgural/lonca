@@ -30,8 +30,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// adds `scope.scratch` on `session.start` and `cap.attenuate`; version 6
 /// adds `reject`; version 7 changes what `change.propose` means for
 /// leases (they are pinned to the change) and prunes dead lease sets;
-/// version 8 gives heartbeats and denied acquires a meaning for leases.
-pub const FORMAT_CURRENT: u32 = 8;
+/// version 8 gives heartbeats and denied acquires a meaning for leases;
+/// version 9 lets a `session.start` continue an earlier session.
+pub const FORMAT_CURRENT: u32 = 9;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -52,6 +53,8 @@ pub const FORMAT_LEASE_PINS: u32 = 7;
 /// (and its absence ends them), a denied acquire registers interest and
 /// `leases.max_hold_minutes` limits a renewal. No new field, again.
 pub const FORMAT_LEASE_LIVENESS: u32 = 8;
+/// The first format in which a `session.start` may continue a session.
+pub const FORMAT_SESSION_CONTINUE: u32 = 9;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -112,6 +115,9 @@ impl OpEntry {
             | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
             Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
             Op::Reject { .. } => FORMAT_REJECT,
+            Op::SessionStart {
+                continues: Some(_), ..
+            } => FORMAT_SESSION_CONTINUE,
             Op::SessionStart { ref scope, .. } | Op::CapAttenuate { ref scope, .. }
                 if !scope.scratch.is_empty() =>
             {
@@ -349,7 +355,7 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::{Decision, HumanKey};
+    use crate::ops::{Continuation, Decision, HumanKey, Scope};
 
     fn genesis(key: &KeyPair, store: &Store) -> OpEntry {
         let tree = store.empty_tree().unwrap();
@@ -627,6 +633,49 @@ mod tests {
             );
         }
         assert_eq!(next(&g, 2000).min_format(), FORMAT_LEGACY);
+    }
+
+    #[test]
+    fn continuing_a_session_needs_format_9() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let start = |continues| Op::SessionStart {
+            session: "s".into(),
+            agent: "bot".into(),
+            model: None,
+            task: String::new(),
+            scope: Scope {
+                paths: vec!["**".into()],
+                symbols: None,
+                ops: vec![],
+                max_files: None,
+                max_lines: None,
+                scratch: vec![],
+            },
+            expires_ms: 9000,
+            continues,
+        };
+        let plain = OpEntry {
+            format: FORMAT_LEGACY,
+            op: start(None),
+            ..next(&g, 2000)
+        };
+        assert_eq!(plain.min_format(), FORMAT_LEGACY);
+        let at = |format| OpEntry {
+            format,
+            op: start(Some(Continuation {
+                session: "old".into(),
+                widen: false,
+            })),
+            ..next(&g, 2000)
+        };
+        assert_eq!(at(9).min_format(), FORMAT_SESSION_CONTINUE);
+        let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(format), &key)]);
+        assert!(chain(9).is_ok());
+        let err = chain(8).unwrap_err();
+        assert!(err.to_string().contains("needs log format 9"), "{err}");
     }
 
     #[test]

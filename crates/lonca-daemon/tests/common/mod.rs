@@ -15,7 +15,9 @@ pub use std::sync::atomic::{AtomicI64, Ordering};
 pub use base64::Engine;
 pub use lonca_core::keys::KeyPair;
 pub use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
-pub use lonca_core::ops::{Claim, HumanKey, LeaseItem, LeaseKind, Op, OpKind, Outcome, Scope};
+pub use lonca_core::ops::{
+    Claim, Continuation, HumanKey, LeaseItem, LeaseKind, Op, OpKind, Outcome, Scope,
+};
 pub use lonca_core::{ChangeId, GitId, Store};
 pub use lonca_daemon::protocol::{FileChange, Request};
 pub use lonca_daemon::{Home, Service, Settings};
@@ -239,7 +241,23 @@ impl Env {
     }
 
     pub fn session(&mut self, id: &str, paths: &[&str]) -> String {
-        let op = Op::SessionStart {
+        let op = self.session_op(id, paths, None);
+        let r = self.human(op);
+        r["token"].as_str().expect("token").to_string()
+    }
+
+    /// A session that takes over the workspace of `old`.
+    pub fn continue_session(&mut self, id: &str, old: &str, paths: &[&str]) -> Value {
+        let continues = Some(Continuation {
+            session: old.into(),
+            widen: false,
+        });
+        let op = self.session_op(id, paths, continues);
+        self.human(op)
+    }
+
+    fn session_op(&self, id: &str, paths: &[&str], continues: Option<Continuation>) -> Op {
+        Op::SessionStart {
             session: id.into(),
             agent: format!("bot-{id}"),
             model: None,
@@ -259,9 +277,8 @@ impl Env {
                 scratch: vec![],
             },
             expires_ms: self.now() + 3_600_000,
-        };
-        let r = self.human(op);
-        r["token"].as_str().expect("token").to_string()
+            continues,
+        }
     }
 
     /// Writes managed settings that lock hooks and sandbox, then binds.

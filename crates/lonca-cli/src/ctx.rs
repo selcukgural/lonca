@@ -263,8 +263,20 @@ pub fn describe(repo: &str, op: &Op) -> String {
             short_key(key)
         ),
         Op::PolicyUpdate { .. } => "change the repository policy".to_string(),
-        Op::SessionStart { agent, scope, .. } => {
-            format!("start agent {agent} on {}", scope.paths.join(", "))
+        Op::SessionStart {
+            agent,
+            scope,
+            continues,
+            ..
+        } => {
+            let paths = scope.paths.join(", ");
+            match continues {
+                None => format!("start agent {agent} on {paths}"),
+                Some(c) if c.widen => {
+                    format!("WIDEN session {} as agent {agent} on {paths}", c.session)
+                }
+                Some(c) => format!("continue session {} as agent {agent} on {paths}", c.session),
+            }
         }
         Op::SessionEnd { session, .. } => format!("end session {session}"),
         Op::CapRevoke { session, .. } => format!("revoke session {session}"),
@@ -537,6 +549,47 @@ pub fn absolute(p: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn start(continues: Option<lonca_core::ops::Continuation>) -> Op {
+        Op::SessionStart {
+            session: "new".into(),
+            agent: "claude".into(),
+            model: None,
+            task: String::new(),
+            scope: lonca_core::ops::Scope {
+                paths: vec!["src/**".into(), "docs/**".into()],
+                symbols: None,
+                ops: vec![],
+                max_files: None,
+                max_lines: None,
+                scratch: vec![],
+            },
+            expires_ms: 1,
+            continues,
+        }
+    }
+
+    /// What Touch ID shows is what is being signed: continuing is not
+    /// starting, and widening says so.
+    #[test]
+    fn the_prompt_tells_a_start_from_a_continuation() {
+        let continued = |widen| {
+            let session = "old".to_string();
+            start(Some(lonca_core::ops::Continuation { session, widen }))
+        };
+        assert_eq!(
+            describe("demo", &start(None)),
+            "Lonca (demo): start agent claude on src/**, docs/**"
+        );
+        assert_eq!(
+            describe("demo", &continued(false)),
+            "Lonca (demo): continue session old as agent claude on src/**, docs/**"
+        );
+        assert_eq!(
+            describe("demo", &continued(true)),
+            "Lonca (demo): WIDEN session old as agent claude on src/**, docs/**"
+        );
+    }
 
     #[test]
     fn a_proposal_status_follows_the_decision() {

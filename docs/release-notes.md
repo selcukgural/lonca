@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Symbol engine 2: code is compared exactly
+
+Changes that engine 1 did not see outside symbols, inside a class's own text
+or in the order of symbols and imports are now facts: they need a lease, a
+claim and a merge like any other edit. A runner that claimed nothing for such
+a file gets `claim_mismatch`; `facts.preview`, `lease_needed` and
+`propose --accept-facts` say what to claim. Moving a function reports the
+symbols that changed place. Old log entries are recomputed with the engine
+they recorded.
+
 ### Hardened installs: run the installer again (#52)
 
 Clients now check the daemon's uid against a root-owned `daemon.toml`. A

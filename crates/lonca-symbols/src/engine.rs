@@ -17,14 +17,19 @@ use lonca_core::{Error, Result};
 
 /// The engine this build writes. Version 0 is the engine of every entry
 /// written before versions were recorded; version 1 adds the sections of
-/// Markdown, TOML, JSON and YAML files.
-pub const ENGINE_CURRENT: u32 = 1;
+/// Markdown, TOML, JSON and YAML files; version 2 compares code exactly.
+pub const ENGINE_CURRENT: u32 = 2;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
 
+/// The first engine that compares the structure and tokens of code outside
+/// symbols instead of its text with the whitespace collapsed, and that
+/// treats a change of order as a change.
+pub const ENGINE_EXACT: u32 = 2;
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

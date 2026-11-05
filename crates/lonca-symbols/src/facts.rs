@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::ops::Facts;
 use lonca_core::{FileMap, GitId, Result};
 
-use crate::engine::ENGINE_SECTIONS;
-use crate::extract::{Parsed, Sym, parse};
+use crate::engine::{ENGINE_EXACT, ENGINE_SECTIONS};
+use crate::extract::{Parsed, Sym, moved, parse};
 use crate::lang::Lang;
 use crate::sections::{APPEND, Format, Section, appended, sections};
 
@@ -121,7 +121,7 @@ pub fn analyze(
                     f.edits.push(sym_id(path, FILE));
                     continue;
                 }
-                compare_file(path, &pb, old, &pn, newt, &mut f);
+                compare_file(engine, path, (&pb, old), (&pn, newt), &mut f);
             }
         }
     }
@@ -171,13 +171,24 @@ fn compare_sections(path: &str, format: Format, old: &str, new: &str, f: &mut Fa
     f.edits.len() + f.adds.len() + f.deletes.len() > before
 }
 
-fn compare_file(path: &str, pb: &Parsed, old: &str, pn: &Parsed, new: &str, f: &mut Facts) {
-    diff_level(path, &pb.syms, old, &pn.syms, new, f);
-    if pb.residual != pn.residual {
+fn compare_file(
+    engine: u32,
+    path: &str,
+    (pb, old): (&Parsed, &str),
+    (pn, new): (&Parsed, &str),
+    f: &mut Facts,
+) {
+    diff_level(engine, path, (&pb.syms, old), (&pn.syms, new), f);
+    if pb.residual_at(engine) != pn.residual_at(engine) {
         f.edits.push(sym_id(path, MODULE));
     }
-    let bi: BTreeSet<String> = pb.import_texts(old).into_iter().collect();
-    let ni: BTreeSet<String> = pn.import_texts(new).into_iter().collect();
+    let (bl, nl) = (pb.import_texts(old), pn.import_texts(new));
+    let lists: [Vec<&str>; 2] = [&bl, &nl].map(|l| l.iter().map(String::as_str).collect());
+    if engine >= ENGINE_EXACT && !moved(&lists[0], &lists[1]).is_empty() {
+        f.edits.push(sym_id(path, IMPORTS));
+    }
+    let bi: BTreeSet<String> = bl.into_iter().collect();
+    let ni: BTreeSet<String> = nl.into_iter().collect();
     if bi != ni {
         if bi.is_subset(&ni) {
             f.import_only_files.push(path.to_string());
@@ -207,7 +218,13 @@ fn by_name(syms: &[Sym]) -> BTreeMap<&str, &Sym> {
     syms.iter().map(|s| (s.name.as_str(), s)).collect()
 }
 
-fn diff_level(path: &str, bs: &[Sym], old: &str, ns: &[Sym], new: &str, f: &mut Facts) {
+fn diff_level(
+    engine: u32,
+    path: &str,
+    (bs, old): (&[Sym], &str),
+    (ns, new): (&[Sym], &str),
+    f: &mut Facts,
+) {
     let bm = by_name(bs);
     let nm = by_name(ns);
     for n in ns {
@@ -218,10 +235,11 @@ fn diff_level(path: &str, bs: &[Sym], old: &str, ns: &[Sym], new: &str, f: &mut 
                     continue;
                 }
                 if b.container && n.container {
-                    if b.own != n.own {
+                    if b.own_at(engine) != n.own_at(engine) {
                         f.edits.push(sym_id(path, &n.name));
                     }
-                    diff_level(path, &b.children, old, &n.children, new, f);
+                    let (bc, nc) = (&b.children[..], &n.children[..]);
+                    diff_level(engine, path, (bc, old), (nc, new), f);
                 } else {
                     f.edits.push(sym_id(path, &n.name));
                 }
@@ -236,6 +254,12 @@ fn diff_level(path: &str, bs: &[Sym], old: &str, ns: &[Sym], new: &str, f: &mut 
     for b in bs {
         if !nm.contains_key(b.name.as_str()) {
             f.deletes.push(sym_id(path, &b.name));
+        }
+    }
+    if engine >= ENGINE_EXACT {
+        let [a, b]: [Vec<&str>; 2] = [bs, ns].map(|l| l.iter().map(|s| s.name.as_str()).collect());
+        for name in moved(&a, &b) {
+            f.edits.push(sym_id(path, &name));
         }
     }
 }
@@ -410,6 +434,65 @@ mod tests {
         assert_eq!(a.facts.added_files, vec!["new.rs"]);
         assert_eq!(a.facts.deleted_files, vec!["old.rs"]);
         assert_eq!(a.syntax_errors, vec!["new.rs"]);
+    }
+
+    fn facts_at(engine: u32, old: &str, new: &str, path: &str) -> Facts {
+        let mut mem = Mem(HashMap::new());
+        let b = tree(&mut mem, &[(path, old)]);
+        let n = tree(&mut mem, &[(path, new)]);
+        analyze(engine, &b, &n, &|id| Ok(mem.0[&id.0].clone()))
+            .unwrap()
+            .facts
+    }
+
+    #[test]
+    fn from_engine_2_a_block_or_string_change_outside_symbols_is_an_edit() {
+        let old = "X = \"a  b\"\nif X:\n    a = 1\n    b = 2\n";
+        for new in [
+            old.replace("a  b", "a b"),
+            old.replace("    b = 2", "b = 2"),
+        ] {
+            assert_eq!(
+                facts_at(2, old, &new, "m.py").edits,
+                ["m.py#<module>"],
+                "{new}"
+            );
+            assert!(facts_at(1, old, &new, "m.py").edits.is_empty(), "{new}");
+        }
+        let spaced = old.replace("a = 1", "a  =  1");
+        assert!(
+            facts_at(2, old, &spaced, "m.py").edits.is_empty(),
+            "layout is no edit"
+        );
+    }
+
+    #[test]
+    fn from_engine_2_a_block_change_in_a_class_is_an_edit_of_the_class() {
+        let old = "class C:\n    x = \"a  b\"\n\n    def m(self):\n        pass\n";
+        let new = old.replace("a  b", "a b");
+        assert_eq!(facts_at(2, old, &new, "m.py").edits, ["m.py#C"]);
+        assert!(facts_at(1, old, &new, "m.py").edits.is_empty());
+    }
+
+    #[test]
+    fn from_engine_2_moved_symbols_and_imports_are_edits() {
+        let old = "import a\nimport b\n\ndef f():\n    pass\n\ndef g():\n    pass\n";
+        let new = "import a\nimport b\n\ndef g():\n    pass\n\ndef f():\n    pass\n";
+        assert_eq!(facts_at(2, old, new, "m.py").edits, ["m.py#f", "m.py#g"]);
+        assert!(facts_at(1, old, new, "m.py").edits.is_empty());
+        let new = old.replace("import a\nimport b", "import b\nimport a");
+        assert_eq!(facts_at(2, old, &new, "m.py").edits, ["m.py#<imports>"]);
+        assert!(facts_at(1, old, &new, "m.py").edits.is_empty());
+    }
+
+    #[test]
+    fn a_method_moved_inside_its_class_is_an_edit_of_the_method() {
+        let old = "class C:\n    def f(self):\n        pass\n\n    def g(self):\n        pass\n";
+        let new = "class C:\n    def g(self):\n        pass\n\n    def f(self):\n        pass\n";
+        assert_eq!(
+            facts_at(2, old, new, "m.py").edits,
+            ["m.py#C.f", "m.py#C.g"]
+        );
     }
 
     #[test]

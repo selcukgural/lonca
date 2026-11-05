@@ -37,26 +37,26 @@ fn sorted(v: Value) -> Value {
     }
 }
 
-fn sym_json(s: &Sym) -> Value {
+fn sym_json(engine: u32, s: &Sym) -> Value {
     json!({
         "name": s.name,
         "span": [s.start, s.def_start, s.end],
-        "own": s.own,
+        "own": s.own_at(engine),
         "signature": s.signature,
         "is_test": s.is_test,
         "skipped": s.skipped,
         "container": s.container,
-        "children": s.children.iter().map(sym_json).collect::<Vec<_>>(),
+        "children": s.children.iter().map(|c| sym_json(engine, c)).collect::<Vec<_>>(),
     })
 }
 
-fn parsed_json(lang: Lang, src: &str) -> Value {
+fn parsed_json(engine: u32, lang: Lang, src: &str) -> Value {
     let p = parse(lang, src);
     json!({
-        "syms": p.syms.iter().map(sym_json).collect::<Vec<_>>(),
+        "syms": p.syms.iter().map(|s| sym_json(engine, s)).collect::<Vec<_>>(),
         "imports": p.imports,
         "has_error": p.has_error,
-        "residual": p.residual,
+        "residual": p.residual_at(engine),
         "js_tests": p.js_tests.iter().map(|t| json!({"name": t.name, "text": t.text, "skipped": t.skipped})).collect::<Vec<_>>(),
     })
 }
@@ -87,7 +87,7 @@ fn run_case(engine: u32, dir: &Path) -> Value {
     let format = Format::detect(&path);
     assert!(lang.is_some() || format.is_some(), "nothing reads {path}");
     let symbols = |text: &str| match lang {
-        Some(lang) => parsed_json(lang, text),
+        Some(lang) => parsed_json(engine, lang, text),
         None => sections_json(format.unwrap(), text),
     };
 

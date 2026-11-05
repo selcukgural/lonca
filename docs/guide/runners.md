@@ -245,6 +245,8 @@ fields = { event = "hook_event_name", tool = "tool_name", input = "tool_input", 
 # What it wants back. {reason} and {context} are filled in.
 deny = { allowed = false, why = "{reason}" }
 context = { say = "{context}" }
+# Optional: the answer to a finished tool call that adds to the context.
+tool_context = { say = "{context}" }
 # How it names MCP tools; these are the defaults (mcp__server__tool).
 mcp_prefix = "mcp__"
 mcp_separator = "__"
@@ -276,7 +278,9 @@ content = { server = { command = "lonca", args = ["mcp"], cwd = "{workspace}" } 
 `kind` is `read`, `write`, `shell`, `fetch`, `search` or `inert`. `fields`
 are tried in order. `headers` are for a tool whose paths are inside a text.
 `events.stop` and `stop_deny`, the answer that sends the agent back with
-`{reason}` filled in, are optional and go together.
+`{reason}` filled in, are optional and go together. `tool_context` is how news
+from other agents reaches one that is busy editing; without it the news waits
+for its next tool of `lonca mcp`.
 A tool not in the table is observed and taints (`[taint] unknown_tools`).
 The same table replaces a built-in profile, as a whole, for a harness that has
 moved on faster than Lonca: no new release is needed. `lonca harness show

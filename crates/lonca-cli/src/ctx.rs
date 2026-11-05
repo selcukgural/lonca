@@ -128,6 +128,9 @@ pub fn denied(r: &Value) -> Result<()> {
             .as_array()
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
+        if let Some(advice) = r["advice"].as_str() {
+            eprintln!("{advice}");
+        }
         bail!(Refused(reasons.join(", ")));
     }
     Ok(())

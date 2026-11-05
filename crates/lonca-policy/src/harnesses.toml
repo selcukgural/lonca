@@ -6,6 +6,7 @@
 events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse", stop = "Stop" }
 deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+tool_context = { hookSpecificOutput = { hookEventName = "PostToolUse", additionalContext = "{context}" } }
 stop_deny = { decision = "block", reason = "{reason}" }
 
 [claude-code.setup]
@@ -65,6 +66,7 @@ ToolSearch = { kind = "inert" }
 events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse", stop = "Stop" }
 deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+tool_context = { hookSpecificOutput = { hookEventName = "PostToolUse", additionalContext = "{context}" } }
 stop_deny = { decision = "block", reason = "{reason}" }
 
 # Codex skips a project's .codex/ until a person trusts the directory, so a
@@ -101,6 +103,7 @@ update_plan = { kind = "inert" }
 events = { session_start = "SessionStart", before_tool = "BeforeTool", after_tool = "AfterTool", stop = "AfterAgent" }
 deny = { decision = "deny", reason = "{reason}" }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
+tool_context = { hookSpecificOutput = { hookEventName = "AfterTool", additionalContext = "{context}" } }
 stop_deny = { decision = "deny", reason = "{reason}" }
 mcp_prefix = "mcp_"
 mcp_separator = "_"

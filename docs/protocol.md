@@ -519,7 +519,10 @@ string, "ttl_ms": integer}`. Logged, plus `"set"`: the lease set's id
 item, a pinned one included. The intent is free text and comes last, so
 read `"details"` instead of splitting the reason: [detail], one per held
 item however many requested items run into it, empty when nothing is
-in the way.
+in the way. `"advice"` says the same in a sentence for a model: who is on
+it, and to settle it with `negotiate` or wait with `lease.interest`; `null`
+when nothing is in the way. Answers with `details` of holders carry it too:
+`change.propose`, `facts.preview`.
 
 ### `lease.release`
 
@@ -561,10 +564,23 @@ Pass `next` as the next `from`. An event has a `kind`:
 `integrated` (`seq`, `change`), `conflicted` (`seq`, `change`,
 `conflicts`), `failed` (`seq`, `change`, `reasons`: verification refused
 it), `approved` (`seq`, `target_seq`), `rejected` (`seq`,
-`target_seq`, `reason`), `message` (`seq`, `thread`, `from`),
+`target_seq`, `reason`), `message` (`seq`, `thread`, `from`, `message`: what
+it says, as sent to `negotiate`; `from` is the `to_session` of an answer),
 `lease_received` (`seq`, `set`, `from`), and `reserved` (`items`,
 `until_ms`), which is the state now and is reported on every call while
 it lasts.
+
+### `inbox`
+
+*agent.* `params: {}`. What other sessions want of the caller and it has
+not been told: `{"events": [event], "text": string | null}`, of the kinds
+`message`, `lease_received` and `reserved`, once each. `text` is that for a
+model, with a message cut at 600 characters and marked as another agent's
+words. `lonca mcp` calls this after every tool and adds `text` to the answer
+as a second content item; a hook gets it through `hook.input`. An agent is not
+told what it read with `events`. What was told is kept in the daemon's memory,
+so after a restart it may be told again. Nothing is logged. For the rest of
+what happened, `events`.
 
 ### `change.propose`
 
@@ -652,7 +668,9 @@ profile, or an event it does not have, is `invalid`. A session start gives
 "tool_prefix": string}`: call `hook.bind`, then fill `{context}`, naming the
 tools with `tool_prefix`. A stop gives `{"phase": "stop"}`: call `hook.stop`.
 A tool call gives what `hook.event` gives, plus `"output"` on a denial: the
-answer in the harness's shape.
+answer in the harness's shape. After a tool call on a harness with
+`tool_context`, `"output"` is what `inbox` has for the session, as that
+answer, and it is then told. No news, no `"output"`.
 
 ### `hook.bind`
 
@@ -870,7 +888,9 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `continued_by`, `session.heartbeat` refused when the session is over,
   and `session_inactive` from every `lonca mcp` tool after that (#98);
   `hook.stop`, `phase: "stop"` in `hook.input`, `files` on `session.end` and
-  `status.sessions[].unproposed` (#121).
+  `status.sessions[].unproposed` (#121); `inbox`, `message` on a `message`
+  event, `advice` on `lease.acquire`, `change.propose` and `facts.preview`,
+  `"output"` after a tool call in `hook.input`.
   `ping.protocol`; `status.pending`
   entries carry `change`, `base`, `intent`, `agent`, `task`,
   `created_ms` and `paths`; `status.changes` entries carry `base`,

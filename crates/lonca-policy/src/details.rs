@@ -5,7 +5,7 @@
 //! never logged and never an input of `decide()`. Free text (the intent) is
 //! a field of its own, so nobody has to split a string to find it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::ChangeId;
 use lonca_core::ops::{Facts, LeaseItem, LeaseKind};
@@ -156,6 +156,43 @@ pub fn lease_missing(state: &State, session: &str, facts: &Facts, now_ms: i64) -
         .collect()
 }
 
+/// One holder in plain words.
+fn holder_sentence(session: &str, of: &[&Detail]) -> String {
+    let symbols: Vec<&str> = of.iter().map(|d| d.symbol.as_str()).collect();
+    let symbols = symbols.join(", ");
+    let agent = of[0].holder_agent.as_deref().unwrap_or("Another agent");
+    let intent = of.iter().find_map(|d| d.intent.as_deref());
+    let mut out = match intent {
+        Some(intent) => format!("{agent} (session {session}) is on {symbols}: {intent:?}."),
+        None => format!("{symbols} is reserved for {agent} (session {session})."),
+    };
+    if of.iter().any(|d| d.pinned_to.is_some()) {
+        out.push_str(" Part of it belongs to a change in the merge queue and frees when that change leaves the queue.");
+    }
+    out
+}
+
+/// A denial in plain words: who is on it, and to settle it between you. Free
+/// text from `details`, so it is derived and never logged, like them. `None`
+/// when nobody stands in the way.
+pub fn advice(details: &[Detail]) -> Option<String> {
+    let mut holders: BTreeMap<&str, Vec<&Detail>> = BTreeMap::new();
+    for d in details {
+        if let Some(session) = &d.holder_session {
+            holders.entry(session).or_default().push(d);
+        }
+    }
+    if holders.is_empty() {
+        return None;
+    }
+    let mut out: Vec<String> = holders
+        .iter()
+        .map(|(session, of)| holder_sentence(session, of))
+        .collect();
+    out.push("Do not edit these. Settle it between you: tell that agent what you need and why with negotiate, to_session as above. Or lease_interest puts you next. Go on with other work meanwhile.".into());
+    Some(out.join(" "))
+}
+
 /// What to pass to `lease.acquire` for what a report says is free.
 pub fn to_acquire(report: &[Detail]) -> Vec<LeaseItem> {
     let free = report.iter().filter(|d| d.code == FREE);
@@ -164,4 +201,62 @@ pub fn to_acquire(report: &[Detail]) -> Vec<LeaseItem> {
         kind: d.needed_kind,
     });
     items.collect::<BTreeSet<_>>().into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn held(symbol: &str, session: &str) -> Detail {
+        Detail {
+            holder_session: Some(session.into()),
+            holder_agent: Some("bot".into()),
+            intent: Some("fix".into()),
+            ..Detail::free(LEASE_HELD, symbol, LeaseKind::Edit)
+        }
+    }
+
+    #[test]
+    fn nobody_in_the_way_is_no_advice() {
+        assert_eq!(advice(&[]), None);
+        let free = Detail::free(FREE, "a.rs#f", LeaseKind::Edit);
+        assert_eq!(advice(&[free]), None);
+    }
+
+    #[test]
+    fn each_holder_is_named_once_with_what_it_holds() {
+        let text = advice(&[
+            held("a.rs#f", "s1"),
+            held("a.rs#g", "s1"),
+            held("a.rs#h", "s2"),
+        ]);
+        let text = text.unwrap();
+        assert!(
+            text.contains("bot (session s1) is on a.rs#f, a.rs#g: \"fix\"."),
+            "{text}"
+        );
+        assert!(text.contains("bot (session s2) is on a.rs#h"), "{text}");
+        assert_eq!(text.matches("Settle it between you").count(), 1, "{text}");
+        assert!(!text.contains("merge queue"), "{text}");
+    }
+
+    #[test]
+    fn a_reservation_and_a_pin_are_said_for_what_they_are() {
+        let reserved = Detail {
+            holder_session: Some("s1".into()),
+            ..Detail::free(LEASE_RESERVED, "a.rs#f", LeaseKind::Edit)
+        };
+        let text = advice(&[reserved]).unwrap();
+        assert!(
+            text.contains("a.rs#f is reserved for Another agent (session s1)."),
+            "{text}"
+        );
+
+        let pinned = Detail {
+            pinned_to: Some(ChangeId::random()),
+            ..held("a.rs#g", "s1")
+        };
+        let text = advice(&[held("a.rs#f", "s1"), pinned]).unwrap();
+        assert!(text.contains("merge queue"), "{text}");
+    }
 }

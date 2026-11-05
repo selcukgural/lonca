@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Agents can reach each other
+
+A message sent with `negotiate` now reaches the agent it is for. It arrives with
+the answer of any `lonca mcp` tool, and on Claude Code, Codex and Gemini CLI after
+any tool call, while that agent is editing. `events` carries what the message
+says, which it did not before. A lease denial says in a sentence who is on it and
+to settle it between you (`advice`). `events` from `next` now finds the approval of
+a request older than `from`. A runner of its own can take the same news from the
+new `inbox` method. A profile of your own in `[harnesses.<name>]` needs
+`tool_context` to get the after-tool way in.
+
 ### Code that changes places among symbols is a change (symbol engine 4)
 
 A statement moved past a function or a method now shows in the facts, as an

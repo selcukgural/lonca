@@ -1,5 +1,6 @@
 //! One repository: its store, its sequencer and its policy.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use lonca_policy::chain::{Chain, Submission, replay_checked};
 use lonca_policy::config::{
     CONFIG_FILE, DEFAULT_CONFIG, DEFAULT_POLICY, POLICY_FILE, PolicyBundle,
 };
+use lonca_policy::events::Told;
 use lonca_policy::state::State;
 
 use crate::protocol::FileChange;
@@ -31,6 +33,8 @@ pub struct RepoHandle {
     pub chain: Chain,
     pub head: Option<GitId>,
     policy: Option<(GitId, Arc<PolicyBundle>)>,
+    /// How far each session has been told what others want of it.
+    pub told: BTreeMap<String, Told>,
 }
 
 impl RepoHandle {
@@ -42,6 +46,7 @@ impl RepoHandle {
             chain: Chain::new(key),
             head: None,
             policy: None,
+            told: BTreeMap::new(),
         })
     }
 
@@ -82,6 +87,7 @@ impl RepoHandle {
             chain: Chain::from_state((*key).clone(), state),
             head,
             policy: None,
+            told: BTreeMap::new(),
         })
     }
 

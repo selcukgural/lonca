@@ -4055,7 +4055,7 @@ fn an_integration_is_news_for_the_workspace_that_proposed_it() {
     assert!(integrate(&mut h, c, Some(gid('e')), &[]).is_allow());
     let integrated = h.log.last().unwrap().entry.seq;
 
-    let events = |h: &H, s: &str| for_session(&h.chain.state, s, &h.log, h.now);
+    let events = |h: &H, s: &str| for_session(&h.chain.state, s, &h.log, 0, h.now);
     let want = vec![
         Event::Approved {
             seq: integrated - 1,
@@ -4116,7 +4116,7 @@ fn a_lease_handed_over_is_in_the_inbox() {
     assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
     assert!(h.agent("a", msg_to("b", "t1", "l1", Some("b"))).is_allow());
     let seq = h.log.last().unwrap().entry.seq;
-    let got = for_session(&h.chain.state, "b", &h.log, h.now);
+    let got = for_session(&h.chain.state, "b", &h.log, 0, h.now);
     assert_eq!(
         got,
         [
@@ -4129,6 +4129,10 @@ fn a_lease_handed_over_is_in_the_inbox() {
                 seq,
                 thread: "t1".into(),
                 from: Some("a".into()),
+                message: NegotiationMsg::Yield {
+                    set: "l1".into(),
+                    to: Some("b".into()),
+                },
             },
         ]
     );
@@ -4136,7 +4140,7 @@ fn a_lease_handed_over_is_in_the_inbox() {
     assert!(h.agent("b", op).is_allow());
     let seq = h.log.last().unwrap().entry.seq;
     assert_eq!(
-        for_session(&h.chain.state, "kid", &h.log, h.now),
+        for_session(&h.chain.state, "kid", &h.log, 0, h.now),
         [Event::LeaseReceived {
             seq,
             set: "l1".into(),
@@ -4144,8 +4148,7 @@ fn a_lease_handed_over_is_in_the_inbox() {
         }]
     );
     // From the middle of the log, the sequence numbers stay right.
-    let tail = &h.log[seq as usize..];
-    assert_eq!(for_session(&h.chain.state, "b", tail, h.now), []);
+    assert_eq!(for_session(&h.chain.state, "b", &h.log, seq, h.now), []);
     h.assert_replay();
 }
 

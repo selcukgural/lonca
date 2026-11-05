@@ -20,6 +20,7 @@ use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::decide::{level_for, valid_token};
 use lonca_policy::details;
+use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
 use lonca_policy::state::ChangeStatus;
@@ -284,6 +285,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("cap.attenuate", Cred::Agent),
     ("lease.interest", Cred::Agent),
     ("events", Cred::Agent),
+    ("inbox", Cred::Agent),
     ("session.end", Cred::Agent),
     ("hook.event", Cred::Agent),
     ("hook.input", Cred::Agent),
@@ -631,6 +633,7 @@ impl Service {
             "cap.attenuate" => self.attenuate(req, params(p)?),
             "lease.interest" => self.lease_interest(req, params(p)?),
             "events" => self.events(req, params(p)?),
+            "inbox" => self.inbox(req),
             "session.end" => self.agent_end(req, params(p)?),
             "session.heartbeat" => self.heartbeat(req),
             "hook.event" => self.hook_event(req, params(p)?),
@@ -2049,7 +2052,9 @@ impl Service {
         let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
         let mut out = logged(&signed);
         out["set"] = json!(set);
-        out["details"] = json!(Self::lease_details(r, &session, &p.items, now));
+        let details = Self::lease_details(r, &session, &p.items, now);
+        out["advice"] = json!(details::advice(&details));
+        out["details"] = json!(details);
         Ok(out)
     }
 
@@ -2089,10 +2094,57 @@ impl Service {
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
-        let mut ops = OpLog::new(&r.store).read_all().or_fail()?;
-        ops.drain(..ops.len().min(p.from as usize));
-        let events = lonca_policy::events::for_session(&r.chain.state, &session, &ops, now);
-        Ok(json!({"events": events, "next": r.chain.state.next_seq}))
+        let ops = OpLog::new(&r.store).read_all().or_fail()?;
+        let state = &r.chain.state;
+        let events = for_session(state, &session, &ops, p.from, now);
+        let next = state.next_seq;
+        r.told
+            .entry(session)
+            .or_default()
+            .saw(p.from, &events, next);
+        Ok(json!({"events": events, "next": next}))
+    }
+
+    /// What `session` has not been told yet, and it has been told now.
+    fn unread(
+        r: &mut RepoHandle,
+        session: &str,
+        now: i64,
+    ) -> std::result::Result<Vec<SessionEvent>, (String, String)> {
+        let told = r.told.entry(session.to_string()).or_default();
+        let from = told.from();
+        let ops = OpLog::new(&r.store).read_from(from).or_fail()?;
+        let events = for_session(&r.chain.state, session, &ops, from, now);
+        Ok(told.unread(events, r.chain.state.next_seq))
+    }
+
+    /// News for the caller since it was last told. `lonca mcp` adds this to
+    /// the answer of each tool, so it reaches an agent on any harness.
+    fn inbox(&self, req: &Request) -> Hr {
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        let events = Self::unread(r, &session, now)?;
+        let text = tell(&events, now, "");
+        Ok(json!({"events": events, "text": text}))
+    }
+
+    /// The same for a hook after a tool call: an agent that is editing calls
+    /// no tool of Lonca's for minutes, and the sender is waiting.
+    fn news_for_hook(
+        &self,
+        req: &Request,
+        tool_prefix: &str,
+    ) -> std::result::Result<Option<String>, (String, String)> {
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        let events = Self::unread(r, &session, now)?;
+        Ok(tell(&events, now, tool_prefix))
     }
 
     fn propose(&self, req: &Request, p: ProposeChange) -> Hr {
@@ -2161,12 +2213,9 @@ impl Service {
         out["commit"] = json!(commit);
         out["facts"] = json!(analysis.facts);
         out["syntax_errors"] = json!(analysis.syntax_errors);
-        out["details"] = json!(details::lease_missing(
-            &r.chain.state,
-            &session,
-            &analysis.facts,
-            now
-        ));
+        let missing = details::lease_missing(&r.chain.state, &session, &analysis.facts, now);
+        out["advice"] = json!(details::advice(&missing));
+        out["details"] = json!(missing);
         Ok(out)
     }
 
@@ -2195,7 +2244,8 @@ impl Service {
         let leases = details::lease_report(&r.chain.state, session, &a.facts, now);
         Ok(json!({
             "facts": a.facts, "syntax_errors": a.syntax_errors,
-            "acquire": details::to_acquire(&leases), "leases": leases,
+            "acquire": details::to_acquire(&leases), "advice": details::advice(&leases),
+            "leases": leases,
         }))
     }
 
@@ -2373,6 +2423,12 @@ impl Service {
         if out["decision"] == "deny" {
             let reason = out["reason"].as_str().unwrap_or("").to_string();
             out["output"] = render(&profile.deny, "reason", &reason);
+        } else if let Some(answer) = (phase == "PostToolUse")
+            .then_some(profile.tool_context.as_ref())
+            .flatten()
+            && let Some(news) = self.news_for_hook(req, &profile.tool_prefix())?
+        {
+            out["output"] = render(answer, "context", &news);
         }
         Ok(out)
     }

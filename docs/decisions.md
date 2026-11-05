@@ -548,6 +548,7 @@ A01/A07, zero trust: every request authenticated).
 | `lease.renew` | agent | |
 | `lease.interest` | agent | |
 | `events` | agent | |
+| `inbox` | agent | |
 | `change.propose` | agent | |
 | `change.withdraw` | agent | |
 | `facts.preview` | agent | |
@@ -1327,6 +1328,51 @@ file access goes through `wsfs`.
 - **Names that are not UTF-8 are refused**, not sent under a lossy name.
 - **`.lonca` is matched with ASCII case folded** everywhere (`is_workspace_metadata`):
   on macOS `.LONCA/session` is `.lonca/session`.
+
+## A negotiation reaches the other side
+
+Negotiation was in the log and nowhere else. The rules named `negotiate`, but
+nothing told the receiver: it had to call `events`, the rules never said so,
+and the event held only a thread and a sender, not what was said. So a claim
+reached nobody, even an agent that asked.
+
+- **The event carries the message.** The text was logged all along.
+- **News finds the agent.** Two ways in, no vendor needed for the first:
+  `lonca mcp` adds it to the answer of every tool, and a hook adds it after any
+  tool call on a harness with `tool_context` in its profile. The hook is
+  for the case that matters: the holder is editing and calls no tool of Lonca's
+  for minutes. Claude Code and Codex document `additionalContext` for this event,
+  Gemini CLI for `AfterTool`. OpenCode's plugin has no such way in, so it hears
+  at its next Lonca tool.
+- **Only what another session wants of you is pushed**: messages, leases handed
+  over, reservations. An integration is not worth an interruption, and pushing
+  it would teach agents to skim the news.
+- **The cursor is in the daemon's memory, not the log.** It decides nothing, an
+  entry per delivery would grow the log with every tool call, and a restart
+  costs one repeated line. It is shared, so a hook and the MCP server do not
+  both tell. A reservation is matched by its items: until an entry fixes it,
+  its `until_ms` moves with the clock.
+- **A message is another agent's words.** It reaches a model's context, so it
+  goes out as the JSON it came in, cut, and under a line saying it is no
+  instruction from the user or the repository. Taint already spreads at send.
+- **A denial speaks.** `advice` is derived from `details` and never logged. It
+  uses the neutral tool names: the daemon does not know which harness asks.
+- **`events` from `next` found no approval of an older request**: the requester
+  was looked up in the entries from `from` on. The whole log is read now, and
+  `inbox` reads only its tail, since its kinds need no lookup.
+- **Seen working (2026-11-06).** A session claimed a lease while a model held it
+  and worked: Claude Code on haiku through the hook, Codex 0.165 on a local qwen
+  through the hook (the rollout shows the news as a developer message), OpenCode
+  2.2 on the same model through `lonca mcp`. All three answered in the thread.
+  Gemini CLI has had no run: its shape comes from its reference, not from a model.
+- **Limits.** An agent whose turn has ended hears nothing until something runs
+  it; this reaches a working agent. A model chooses when to answer: the local
+  one finished its own edits first.
+
+The rounds of a thread are a limit with nothing behind it: step 3 of the ladder
+in the design (a policy) does not exist, and `negotiation_exhausted` is only a
+denial. The rules send the agent to what is free and to say what is left in its
+final answer, for a person.
 
 ## Open questions (carried from the design)
 

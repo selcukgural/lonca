@@ -8,6 +8,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::protocol::{ErrorBody, MAX_LINE, Request, Response, read_line_limited, write_line};
+use crate::trust::Trust;
 
 pub struct Client {
     reader: BufReader<UnixStream>,
@@ -29,8 +30,16 @@ impl std::fmt::Display for CallError {
 impl std::error::Error for CallError {}
 
 impl Client {
+    /// Connects to the daemon this machine trusts. There is no way to get
+    /// a client without the check: a token goes nowhere unverified.
     pub fn connect(path: &Path) -> std::io::Result<Self> {
+        Self::connect_to(path, &Trust::load()?)
+    }
+
+    pub fn connect_to(path: &Path, trust: &Trust) -> std::io::Result<Self> {
+        trust.check_socket(path)?;
         let s = UnixStream::connect(path)?;
+        trust.check_peer(&s)?;
         Ok(Self {
             reader: BufReader::new(s.try_clone()?),
             writer: s,

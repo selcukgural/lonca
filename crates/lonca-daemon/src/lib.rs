@@ -8,6 +8,7 @@ pub mod proxy;
 pub mod repo;
 pub mod server;
 pub mod service;
+pub mod trust;
 
 pub use client::Client;
 pub use home::Home;

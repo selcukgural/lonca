@@ -10,6 +10,7 @@ fn render(script: &str) -> PathBuf {
     let status = Command::new("/bin/sh")
         .arg(root.join(script))
         .args(["--render", out.to_str().unwrap(), "--dev-uid", "501"])
+        .args(["--daemon-uid", "77"])
         .status()
         .unwrap();
     assert!(status.success());
@@ -32,6 +33,12 @@ fn installer_settings_pass_inspection() {
         assert!(
             text.contains("\"httpProxyPort\": 8471"),
             "proxy port matches the daemon default"
+        );
+        let config = std::fs::read_to_string(dir.join("daemon.toml")).unwrap();
+        assert_eq!(
+            lonca_daemon::trust::parse_config(&config),
+            Some(77),
+            "{script}: clients read what the installer writes"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

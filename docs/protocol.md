@@ -42,6 +42,20 @@ Errors have a stable `code` and a `message` for people. A line that is
 not a request answers `{"id": 0, "ok": false, "error": {"code":
 "invalid", …}}`.
 
+## Verifying the daemon
+
+Your client checks the daemon before it sends anything, the token above
+all. The rules are in `docs/decisions.md`, "Clients verify the daemon"; a
+runner that speaks to the socket itself must do the same:
+
+1. Read `daemon_uid` from `/Library/Lonca/daemon.toml` (macOS) or
+   `/etc/lonca/daemon.toml`. No file: expect your own uid. A file that is
+   not root-owned, or is writable by others: refuse.
+2. The socket is a socket, not a link, and belongs to that uid. With a
+   file, its directory belongs to that uid or root, and is not writable by
+   group or others.
+3. After connecting, `getpeereid` / `SO_PEERCRED` says that uid.
+
 ## Credentials
 
 Every method requires one of these (the table in `docs/decisions.md`,

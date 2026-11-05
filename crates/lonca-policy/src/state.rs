@@ -8,12 +8,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::ChangeId;
 use lonca_core::GitId;
-use lonca_core::oplog::{GENESIS_PREV, SignedOp};
+use lonca_core::oplog::{FORMAT_LEASE_PINS, GENESIS_PREV, SignedOp};
 use lonca_core::ops::{
     Actor, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind, ObservationLevel, Op,
     Outcome, Scope,
 };
 use serde::Serialize;
+
+use crate::symbols;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Session {
@@ -40,6 +42,24 @@ pub struct LeaseSet {
     pub items: Vec<LeaseItem>,
     pub intent: String,
     pub expires_ms: i64,
+    /// Items pinned to a change in flight: they do not expire, their holder
+    /// can not release them, and they conflict for every other session
+    /// until the change leaves the queue. Always a subset of `items`.
+    pub pins: BTreeMap<ChangeId, Vec<LeaseItem>>,
+}
+
+impl LeaseSet {
+    pub fn pinned(&self, item: &LeaseItem) -> bool {
+        self.pins.values().any(|items| items.contains(item))
+    }
+}
+
+/// What of a lease set is held at a moment: everything while the set is
+/// alive, afterwards only what is pinned.
+#[derive(Clone, Debug)]
+pub struct ActiveLease<'a> {
+    pub lease: &'a LeaseSet,
+    pub items: Vec<&'a LeaseItem>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -158,6 +178,9 @@ pub fn approvals_from(reasons: &[String]) -> u32 {
 }
 
 pub const RELEASED: &str = "released";
+/// On an integration's decision: `leases.release_on_integrate` is off, the
+/// items pinned to the change go back to the TTL of their set.
+pub const LEASES_KEPT: &str = "leases_kept";
 
 impl State {
     pub fn new() -> Self {
@@ -202,10 +225,16 @@ impl State {
         false
     }
 
-    pub fn active_leases(&self, now_ms: i64) -> impl Iterator<Item = &LeaseSet> {
-        self.leases
-            .values()
-            .filter(move |l| l.expires_ms > now_ms && self.session_active(&l.session, now_ms))
+    fn lease_alive(&self, l: &LeaseSet, now_ms: i64) -> bool {
+        l.expires_ms > now_ms && self.session_active(&l.session, now_ms)
+    }
+
+    pub fn active_leases(&self, now_ms: i64) -> impl Iterator<Item = ActiveLease<'_>> {
+        self.leases.values().filter_map(move |l| {
+            let alive = self.lease_alive(l, now_ms);
+            let items: Vec<&LeaseItem> = l.items.iter().filter(|i| alive || l.pinned(i)).collect();
+            (!items.is_empty()).then_some(ActiveLease { lease: l, items })
+        })
     }
 
     fn descendants(&self, root: &str) -> Vec<String> {
@@ -223,6 +252,19 @@ impl State {
         self.last_time_ms = e.time_ms;
         if let Some(h) = &e.human {
             self.nonces.insert(h.nonce.clone());
+        }
+        let pins = e.format >= FORMAT_LEASE_PINS;
+        if pins {
+            self.prune_leases(e.time_ms);
+        }
+        // What the proposal is decided on: its session's leases at this
+        // moment. A release by approval changes nothing, the pins are there.
+        if pins
+            && e.decision.outcome != Outcome::Deny
+            && let Op::ChangePropose { change, .. } = &e.op
+            && let Some(session) = e.actor.session()
+        {
+            self.pin(session, *change, e.facts.as_ref(), e.time_ms);
         }
         match e.decision.outcome {
             Outcome::Allow => self.effects(
@@ -290,8 +332,74 @@ impl State {
                         };
                     }
                     self.queue.retain(|q| q != change);
+                    self.unpin(*change, false);
                 }
             }
+        }
+    }
+
+    /// Pins the items of the session that the facts need to the change.
+    fn pin(&mut self, session: &str, change: ChangeId, facts: Option<&Facts>, now_ms: i64) {
+        let needs = facts.map(symbols::lease_needs).unwrap_or_default();
+        let pinned: Vec<(String, Vec<LeaseItem>)> = self
+            .active_leases(now_ms)
+            .filter(|l| l.lease.session == session)
+            .map(|l| {
+                let items = l.items.iter().copied();
+                let items = items.filter(|i| needs.iter().any(|n| n.covered_by(i)));
+                (l.lease.set.clone(), items.cloned().collect())
+            })
+            .collect();
+        for (set, items) in pinned {
+            if !items.is_empty()
+                && let Some(l) = self.leases.get_mut(&set)
+            {
+                l.pins.insert(change, items);
+            }
+        }
+    }
+
+    /// The change left the queue. Its items are released, or go back to
+    /// the TTL of their set; an item another change still needs stays.
+    fn unpin(&mut self, change: ChangeId, release: bool) {
+        for l in self.leases.values_mut() {
+            let Some(items) = l.pins.remove(&change) else {
+                continue;
+            };
+            if release {
+                let released = |i: &LeaseItem| items.contains(i) && !l.pinned(i);
+                let kept = l.items.iter().filter(|i| !released(i));
+                l.items = kept.cloned().collect();
+            }
+        }
+        self.leases.retain(|_, l| !l.items.is_empty());
+    }
+
+    /// Ends a lease set as far as anyone can: pinned items stay until
+    /// their change leaves the queue, and then nothing is left of the set.
+    fn release_set(&mut self, set: &str, now_ms: i64) {
+        let Some(l) = self.leases.get_mut(set) else {
+            return;
+        };
+        if l.pins.is_empty() {
+            self.leases.remove(set);
+            return;
+        }
+        let kept = l.items.iter().filter(|i| l.pinned(i)).cloned().collect();
+        l.items = kept;
+        l.expires_ms = l.expires_ms.min(now_ms);
+    }
+
+    /// Removes what is dead at `now_ms`, so that the active leases stay few.
+    fn prune_leases(&mut self, now_ms: i64) {
+        let dead: Vec<String> = self
+            .leases
+            .values()
+            .filter(|l| !self.lease_alive(l, now_ms))
+            .map(|l| l.set.clone())
+            .collect();
+        for set in dead {
+            self.release_set(&set, now_ms);
         }
     }
 
@@ -342,14 +450,25 @@ impl State {
         );
     }
 
-    fn end_sessions(&mut self, root: &str, reason: &str, withdraw: bool) {
+    /// `withdraw` is a decision about the work: what the sessions proposed
+    /// leaves the queue and every lease goes, pins included. Without it the
+    /// work stands, so what it pinned stays until the change leaves.
+    fn end_sessions(&mut self, root: &str, reason: &str, withdraw: bool, now_ms: i64) {
         for id in self.descendants(root) {
             if let Some(s) = self.sessions.get_mut(&id)
                 && s.ended.is_none()
             {
                 s.ended = Some(reason.to_string());
             }
-            self.leases.retain(|_, l| l.session != id);
+            if withdraw {
+                self.leases.retain(|_, l| l.session != id);
+            } else {
+                let sets = self.leases.values().filter(|l| l.session == id);
+                let sets: Vec<String> = sets.map(|l| l.set.clone()).collect();
+                for set in sets {
+                    self.release_set(&set, now_ms);
+                }
+            }
             if withdraw {
                 let owned: Vec<ChangeId> = self
                     .changes
@@ -381,7 +500,7 @@ impl State {
     /// their own changes in flight, the operations they requested that wait
     /// for approval, and the approvals they gave to others. Entries they
     /// signed earlier stay valid history.
-    fn end_human(&mut self, human: &str, reason: &str) {
+    fn end_human(&mut self, human: &str, reason: &str, now_ms: i64) {
         let roots: Vec<String> = self
             .sessions
             .values()
@@ -389,7 +508,7 @@ impl State {
             .map(|s| s.id.clone())
             .collect();
         for id in roots {
-            self.end_sessions(&id, reason, true);
+            self.end_sessions(&id, reason, true, now_ms);
         }
         let is_human = |a: &Actor| matches!(a, Actor::Human { name } if name == human);
         let owned: Vec<ChangeId> = self
@@ -464,12 +583,20 @@ impl State {
                 self.humans.insert(human.clone(), key.clone());
             }
             Op::HumanRotate { human, key } => {
-                self.end_human(human, &format!("revoked: key of human:{human} rotated"));
+                self.end_human(
+                    human,
+                    &format!("revoked: key of human:{human} rotated"),
+                    time_ms,
+                );
                 let old = self.humans.insert(human.clone(), key.clone());
                 self.retire(old);
             }
             Op::HumanRevoke { human, reason } => {
-                self.end_human(human, &format!("revoked: human:{human} revoked: {reason}"));
+                self.end_human(
+                    human,
+                    &format!("revoked: human:{human} revoked: {reason}"),
+                    time_ms,
+                );
                 let old = self.humans.remove(human);
                 self.retire(old);
                 let old = self.recovery.remove(human);
@@ -480,7 +607,7 @@ impl State {
                 self.retire(old);
             }
             Op::HumanRecover { human, key } => {
-                self.end_human(human, &format!("revoked: human:{human} recovered"));
+                self.end_human(human, &format!("revoked: human:{human} recovered"), time_ms);
                 let old = self.humans.insert(human.clone(), key.clone());
                 self.retire(old);
                 let old = self.recovery.remove(human);
@@ -501,7 +628,7 @@ impl State {
                     .map(|s| s.id.clone())
                     .collect();
                 for id in roots {
-                    self.end_sessions(&id, "revoked: daemon key recovered", false);
+                    self.end_sessions(&id, "revoked: daemon key recovered", false, time_ms);
                 }
                 let old = std::mem::replace(&mut self.daemon_key, key.clone());
                 self.retired_daemon_keys.insert(old);
@@ -545,7 +672,7 @@ impl State {
                 }
             }
             Op::SessionEnd { session, reason } => {
-                self.end_sessions(session, &format!("ended: {reason}"), false)
+                self.end_sessions(session, &format!("ended: {reason}"), false, time_ms)
             }
             Op::CapAttenuate {
                 parent,
@@ -577,7 +704,7 @@ impl State {
                 }
             }
             Op::CapRevoke { session, reason } => {
-                self.end_sessions(session, &format!("revoked: {reason}"), true)
+                self.end_sessions(session, &format!("revoked: {reason}"), true, time_ms)
             }
             Op::LeaseAcquire {
                 set,
@@ -594,13 +721,12 @@ impl State {
                             items: items.clone(),
                             intent: intent.clone(),
                             expires_ms: time_ms + ttl_ms,
+                            pins: BTreeMap::new(),
                         },
                     );
                 }
             }
-            Op::LeaseRelease { set } => {
-                self.leases.remove(set);
-            }
+            Op::LeaseRelease { set } => self.release_set(set, time_ms),
             Op::LeaseRenew { set, ttl_ms } => {
                 if let Some(l) = self.leases.get_mut(set) {
                     l.expires_ms = time_ms + ttl_ms;
@@ -635,6 +761,7 @@ impl State {
                     c.status = ChangeStatus::Withdrawn;
                 }
                 self.queue.retain(|q| q != change);
+                self.unpin(*change, false);
             }
             Op::ChangeIntegrate { change, merged, .. } => {
                 let Some(merged) = merged else { return };
@@ -653,6 +780,7 @@ impl State {
                     }
                 }
                 self.queue.retain(|q| q != change);
+                self.unpin(*change, !reasons.iter().any(|r| r == LEASES_KEPT));
             }
             Op::Approve { target_seq, .. } => {
                 let Actor::Human { name } = actor else { return };
@@ -694,13 +822,19 @@ impl State {
                         };
                     }
                     self.queue.retain(|q| q != change);
+                    self.unpin(*change, false);
                     if let Some(session) = p.actor.session() {
-                        self.leases.retain(|_, l| {
-                            l.session != session
-                                || !l.items.iter().any(|i| {
-                                    symbols.iter().any(|s| crate::symbols::covers(&i.symbol, s))
-                                })
-                        });
+                        let covers = |l: &LeaseSet| {
+                            l.items
+                                .iter()
+                                .any(|i| symbols.iter().any(|s| symbols::covers(&i.symbol, s)))
+                        };
+                        let sets = self.leases.values();
+                        let sets = sets.filter(|l| l.session == session && covers(l));
+                        let sets: Vec<String> = sets.map(|l| l.set.clone()).collect();
+                        for set in sets {
+                            self.release_set(&set, time_ms);
+                        }
                     }
                 }
             }
@@ -769,7 +903,7 @@ impl State {
                     t.closed = true;
                 }
                 if let NegotiationMsg::Yield { set } = message {
-                    self.leases.remove(set);
+                    self.release_set(set, time_ms);
                 }
                 let sender_taint = self.sessions.get(&from).and_then(|s| s.taint.clone());
                 if let (Some(t), Some(r)) = (sender_taint, self.sessions.get_mut(to_session))

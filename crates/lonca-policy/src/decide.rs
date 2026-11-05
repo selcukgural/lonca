@@ -24,7 +24,7 @@ use lonca_core::paths::{
 };
 
 use crate::config::{CVal, CedarOutcome, PolicyBundle};
-use crate::state::{ChangeStatus, RELEASED, State};
+use crate::state::{ActiveLease, ChangeStatus, LEASES_KEPT, RELEASED, State};
 use crate::symbols;
 
 pub struct Ctx<'a> {
@@ -644,13 +644,16 @@ pub fn decide(
                     }
                 }
             }
-            for held in state.active_leases(t).filter(|l| l.session != own) {
+            for held in state.active_leases(t) {
+                if held.lease.session == own {
+                    continue;
+                }
                 for a in items {
                     for b in &held.items {
                         if leases_conflict(a, b) {
                             v.deny(format!(
                                 "lease_held:{}:{}:{}",
-                                b.symbol, held.session, held.intent
+                                b.symbol, held.lease.session, held.lease.intent
                             ));
                         }
                     }
@@ -735,6 +738,11 @@ pub fn decide(
                         v.deny("conflicts_with_merge");
                     }
                     verify_evidence(ctx, &mut v);
+                    // `State::apply` has no policy: the switch travels in
+                    // the decision.
+                    if !cfg.leases.release_on_integrate {
+                        v.info.push(LEASES_KEPT.into());
+                    }
                 }
             }
         }
@@ -1017,36 +1025,14 @@ fn propose(
                 }
             }
 
-            let mine: Vec<&LeaseItem> = state
+            let held: Vec<ActiveLease> = state
                 .active_leases(t)
-                .filter(|l| l.session == *session)
-                .flat_map(|l| l.items.iter())
+                .filter(|l| l.lease.session == *session)
                 .collect();
-            let held = |kinds: &[LeaseKind], sym: &str| {
-                mine.iter()
-                    .any(|l| kinds.contains(&l.kind) && symbols::covers(&l.symbol, sym))
-            };
-            for sym in f.edits.iter().chain(&f.signature_changes) {
-                if !held(&[LeaseKind::Edit, LeaseKind::Rename], sym) {
-                    v.deny(format!("lease_missing:{sym}"));
-                }
-            }
-            for sym in &f.deletes {
-                if !held(&[LeaseKind::Rename], sym) {
-                    v.deny(format!("lease_missing:{sym}"));
-                }
-            }
-            for sym in &f.adds {
-                let Some(c) = symbols::container(sym) else {
-                    continue;
-                };
-                if !held(&[LeaseKind::Insert, LeaseKind::Edit, LeaseKind::Rename], &c) {
-                    v.deny(format!("lease_missing:{c}"));
-                }
-            }
-            for p in &f.deleted_files {
-                if !held(&[LeaseKind::Rename], &symbols::file_symbol(p)) {
-                    v.deny(format!("lease_missing:{}", symbols::file_symbol(p)));
+            let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
+            for need in symbols::lease_needs(f) {
+                if !mine.iter().any(|l| need.covered_by(l)) {
+                    v.deny(format!("lease_missing:{}", need.symbol));
                 }
             }
 

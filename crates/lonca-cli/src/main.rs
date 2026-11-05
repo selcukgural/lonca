@@ -1844,12 +1844,13 @@ fn print_status(s: &Value) {
             .collect();
         let left = (l["expires_ms"].as_i64().unwrap_or(0) - now) / 1000;
         println!(
-            "  {} {} {}s \"{}\" {}",
+            "  {} {} {}s \"{}\" {}{}",
             l["set"].as_str().unwrap_or(""),
             l["session"].as_str().unwrap_or(""),
             left,
             l["intent"].as_str().unwrap_or(""),
-            items.join(" ")
+            items.join(" "),
+            pin_note(&l)
         );
     }
     let pending = s["pending"].as_array().map(|a| a.len()).unwrap_or(0);
@@ -1858,9 +1859,28 @@ fn print_status(s: &Value) {
     }
 }
 
+/// What `lonca status` adds to a lease set with pins.
+fn pin_note(lease: &Value) -> String {
+    match lease["pinned"].as_array().map_or(0, Vec::len) {
+        0 => String::new(),
+        n => format!(" [pinned to {n} change(s)]"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::source;
+    use super::{pin_note, source};
+
+    #[test]
+    fn status_marks_a_lease_set_with_pins() {
+        let lease = |pinned| serde_json::json!({ "pinned": pinned });
+        assert_eq!(pin_note(&lease(serde_json::json!([]))), "");
+        assert_eq!(pin_note(&serde_json::json!({})), "");
+        assert_eq!(
+            pin_note(&lease(serde_json::json!([{"change": "c"}]))),
+            " [pinned to 1 change(s)]"
+        );
+    }
 
     #[test]
     fn a_restore_source_is_a_url_or_an_absolute_path() {

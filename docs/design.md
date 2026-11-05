@@ -284,6 +284,7 @@ Agent'lar dosya değil **sembol** (fonksiyon, sınıf, metod) düzeyinde kiralam
 
 - **Edinme beklemesiz ve hepsi-ya-hiçtir.** Talep edilen kümenin bir parçası bile başkasında tutuluyorsa hiçbiri verilmez. Yanıtta sahip, niyeti ve bitiş zamanı döner. Bekleyerek kilit tutma olmadığı için deadlock oluşmaz. Agent bekleyebilir, müzakere açabilir veya başka işe geçebilir.
 - **Süre:** Kiralama süreli ve yenilenebilirdir. Sahibi düşerse (heartbeat kesilirse) serbest kalır.
+- **Değişikliğe bağlama (pin):** Bir öneri izin aldığında veya insana yükseltildiğinde, gerçeklerinin ihtiyaç duyduğu kalemler `change-id`'ye bağlanır. Bağlı kalem süresi dolsa da serbest kalmaz, sahibi de bırakamaz ve herkes için çakışır. Değişiklik kuyruktan çıkınca (entegre, çakışma, red, geri çekme, iptal) bağ kalkar; entegrasyonda kalemler varsayılan olarak bırakılır (`leases.release_on_integrate`). Kümenin geri kalanı kendi süresiyle devam eder.
 - **Görünürlük:** Herkes tüm kiralamaları ve niyetleri görebilir ("agent:Y bu hatayı çözüyor").
 - **İmza değişikliği:** Bir sembolün dışa açık imzası değişirse (parametreler, dönüş tipi, görünürlük; tree-sitter ile tespit edilir) değişiklik genişletilmiş doğrulamaya düşer. Bilinen çağıranların lease sahiplerine bildirim gider ve merge queue'da tam test koşulur. Kesin çağıran analizi (LSP veya derleyici) sonraki fazdadır.
 

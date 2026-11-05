@@ -33,6 +33,9 @@ page is the harness side.
    and `lonca pending --json`). The person approves (`lonca approve
    <seq> --json`) or, for now, lets it be; the merge queue integrates
    it and verifies. The worker syncs (`lonca sync`) after integration.
+   The leases the change needed stay pinned to it until then, past
+   their TTL, and integration releases them: to edit the same symbols
+   again the worker leases them again.
 5. **The worker ends.** In the workspace, `lonca session end --json`
    ends the session and its token. A session a runner forgets expires
    at its TTL; `lonca session revoke <id>` ends one from outside.

@@ -1407,6 +1407,11 @@ fn a_human_rejects_through_the_cli_and_the_reason_reaches_the_worker() {
     ))
     .unwrap();
     assert_eq!(p["status"], "pending");
+    let status = e.run(r, &["status", "--repo", "demo"]);
+    assert!(
+        status.contains("src/lib.rs#charge(edit) [pinned to 1 change(s)]"),
+        "{status}"
+    );
     let seq = p["seq"].as_u64().unwrap().to_string();
     let out = e
         .cmd(r, &["reject", &seq, "--repo", "demo", "--reason", ""])

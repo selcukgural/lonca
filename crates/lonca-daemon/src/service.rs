@@ -953,7 +953,15 @@ impl Service {
             .collect();
         let leases: Vec<Value> = s
             .active_leases(now)
-            .map(|l| json!({"set": l.set, "session": l.session, "items": l.items, "intent": l.intent, "expires_ms": l.expires_ms}))
+            .map(|a| {
+                let l = a.lease;
+                let pinned: Vec<Value> = l
+                    .pins
+                    .iter()
+                    .map(|(change, items)| json!({"change": change, "items": items}))
+                    .collect();
+                json!({"set": l.set, "session": l.session, "items": a.items, "intent": l.intent, "expires_ms": l.expires_ms, "pinned": pinned})
+            })
             .collect();
         let changes: Vec<Value> = s
             .changes

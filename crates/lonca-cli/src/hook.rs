@@ -130,7 +130,7 @@ fn handle(v: &Value, ws: &Workspace, cwd: &str) -> Result<Option<Value>> {
                  - Before editing a function, method or type, lease it: mcp__lonca__lease_acquire with symbols like \"src/file.rs#Type.method\" (mcp__lonca__symbols lists them).\n\
                  {where_to_write}\n\
                  - Check your changes with mcp__lonca__preview, then submit with mcp__lonca__propose, declaring exactly the symbols you changed.\n\
-                 - After your change integrates, run mcp__lonca__sync before continuing.\n\
+                 - After your change integrates, run mcp__lonca__sync before continuing. Integration releases the leases the change needed: lease a symbol again before editing it again.\n\
                  - If a symbol is leased by another agent, ask it with mcp__lonca__negotiate or wait.\n\
                  - Reading untrusted paths or files outside this workspace taints the session; whether web fetches, network commands and other MCP servers do is the repository's policy ([taint] in lonca.toml). Tainted changes need human review.",
                 repo = ws.meta.repo

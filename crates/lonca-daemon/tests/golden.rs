@@ -73,7 +73,40 @@ fn golden_repo() -> Env {
     daemon_keys(&mut e);
     scratch_roots(&mut e);
     rejection(&mut e);
+    pins(&mut e);
     e
+}
+
+/// From format 7: a proposal pins its lease past the TTL, the human
+/// approves, integration releases it; a lease set nobody renewed is pruned.
+fn pins(e: &mut Env) {
+    let base = e.trunk();
+    let a = e.session("s10", &["notes.md", "pins.md"]);
+    let b = e.session("s11", &["notes.md"]);
+    e.lease(&a, "notes.md#<file>");
+    e.lease(&a, "pins.md#<file>");
+    let r = e.propose(
+        &a,
+        &base,
+        vec![file("notes.md", "pinned\n")],
+        &["notes.md#<file>"],
+    );
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    e.advance(601_000);
+    assert_eq!(
+        e.lease(&b, "notes.md#<file>")["decision"]["outcome"],
+        "deny"
+    );
+    let d = e.human(Op::Approve {
+        target_seq: r["seq"].as_u64().expect("seq"),
+        note: "golden".into(),
+    });
+    assert_eq!(d["decision"]["outcome"], "allow", "{d}");
+    e.svc.process_all();
+    assert_eq!(
+        e.lease(&b, "notes.md#<file>")["decision"]["outcome"],
+        "allow"
+    );
 }
 
 /// From format 6: an unobserved session proposes, a human rejects it with
@@ -466,7 +499,7 @@ fn a_reject_in_an_old_format_entry_is_refused() {
         reason: "no".into(),
     });
     assert_eq!(d["decision"]["outcome"], "allow", "{d}");
-    assert_eq!(*formats(&e).last().unwrap(), 6);
+    assert!(*formats(&e).last().unwrap() >= 6);
     rewrite_log(&e, |entries| {
         for x in entries.iter_mut() {
             x.format = 5;
@@ -503,6 +536,24 @@ fn golden_v6_log_still_verifies_replays_and_audits() {
         .count();
     assert_eq!(rejected, 1);
     assert!(state.pending.is_empty());
+}
+
+#[test]
+fn golden_v7_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v7.bundle",
+        "a12aac062cca0b4ea0bc8bd18b94a36be15c1822b3ce65f53d2a3749cf572282",
+        7,
+    );
+    let (_dir, store) = load("oplog-v7.bundle");
+    let s = lonca_policy::state::State::replay(&OpLog::new(&store).read_all().unwrap());
+    // The set that outlived its TTL is pruned, the pin left with the change.
+    assert_eq!(s.leases.len(), 1, "{:?}", s.leases);
+    let (set, lease) = s.leases.iter().next().unwrap();
+    assert_eq!(lease.session, "s11", "{set}");
+    assert!(lease.pins.is_empty());
+    assert!(s.queue.is_empty());
+    assert!(ops.iter().any(|o| o.entry.format == 7));
 }
 
 #[test]

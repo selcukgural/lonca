@@ -23,6 +23,10 @@ max_ttl_minutes = 480
 [leases]
 max_ttl_minutes = 30
 max_items = 64
+# A proposal pins the lease items it needs until the change leaves the
+# queue. On integration the pinned items are released (true) or go back to
+# the TTL of their set (false).
+release_on_integrate = true
 
 [changes]
 max_files = 200
@@ -161,6 +165,9 @@ pub struct Sessions {
 pub struct Leases {
     pub max_ttl_minutes: i64,
     pub max_items: usize,
+    /// Integration releases the items pinned to the change; otherwise they
+    /// go back to the TTL of their set.
+    pub release_on_integrate: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -323,6 +330,7 @@ impl Default for Leases {
         Self {
             max_ttl_minutes: 30,
             max_items: 64,
+            release_on_integrate: true,
         }
     }
 }

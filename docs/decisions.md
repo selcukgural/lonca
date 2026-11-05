@@ -729,6 +729,43 @@ boundary keeps the session bounded.
   workspace keeps the old token and the continuation can not be repeated
   (`session_continued`). The window is one file write; the way out is a new
   session and a new workspace, and the log says what happened.
+## Critical paths: what instructs an agent
+
+`paths.critical` covered what runs code or defines CI. An agent-native
+repository has a second kind of path: once `CLAUDE.md` or `.mcp.json` reaches
+trunk, every agent reads it after its next `sync`, which is a persistent
+prompt injection or a new tool server (#55). Tooling that runs on checkout,
+on build or in an editor (`.cargo/config.toml`, `.envrc`, `.vscode/**`,
+`.devcontainer/**`) belongs with them, and so do the runner's scripts in
+`.imece/**`, which run in a worker's workspace. All of it now needs a human
+approval, and a tainted session may not touch it.
+
+- **Policy data, for new repositories.** The list is part of the default
+  `lonca.toml`. An existing repository's `lonca.toml` changes only through
+  a signed `policy.update`: see `docs/release-notes.md`.
+- **Names, not globs.** The pattern language has `**/name`, `**/*.ext`,
+  `dir/**` and exact paths, and nothing else: `**/Gemfile*` would be a
+  literal that never matches, which is a critical path nobody is told is
+  open. Variants are spelled out (`**/docker-compose.yml`,
+  `**/docker-compose.yaml`, `**/compose.yml`, `**/compose.yaml`). Extending
+  the language changes what recorded policies mean, so it would need a log
+  format; `Dockerfile.prod` and `docker-compose.override.yml` stay out
+  until something needs that.
+- **Only a bare file name is matched at any depth** (`**/CLAUDE.md`). A
+  pattern with a directory in it is from the root: `.claude/**` does not
+  match `sub/.claude/x`, and `.cargo/config.toml` does not match
+  `sub/.cargo/config.toml`, though Cargo reads that one. `**/.cargo/config.toml`
+  would not help: it is a literal that never matches.
+- **A `lonca.toml` without `critical` keeps the old list.** `Paths::default()`
+  is frozen, the one default that differs from the shipped file, because a
+  log is replayed under its policy: a key that silently grew would turn a
+  recorded `allow` into an integrity failure when the daemon opens the
+  repository. Such a repository updates its policy like any other.
+- **`the_default_critical_list_does_not_shrink`** names a path for every
+  family, so a pattern that is removed, or that can not match, fails.
+- **`paths.untrusted` is unchanged.** Design §5.10 names imported issue text
+  as an example, but nothing imports issue text yet, so there is no path
+  to list. The hardened profile (#54) starts from this list.
 
 ## Reject, and a pending proposal whose session ends
 

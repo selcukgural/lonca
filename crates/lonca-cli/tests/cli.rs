@@ -4277,7 +4277,7 @@ fn a_second_sync_keeps_an_open_conflict() {
     assert!(refused.contains("conflict not settled"), "{refused}");
 }
 
-/// One conflict in `src/Main.java`, left open in the second workspace, and
+/// One conflict in `src/Main.zig`, left open in the second workspace, and
 /// the text there.
 fn an_open_conflict(e: &Env) -> (PathBuf, String) {
     let [a, b, _] = three_agents(e);
@@ -4299,10 +4299,10 @@ fn a_new_name_does_not_settle_a_conflict() {
     let e = Env::new();
     let (b, local) = an_open_conflict(&e);
     std::fs::remove_file(b.join(MAIN)).unwrap();
-    std::fs::write(b.join("src/Renamed.java"), &local).unwrap();
+    std::fs::write(b.join("src/Renamed.zig"), &local).unwrap();
     let refused = fails(&e, &b, &TOO_SOON);
     assert!(
-        refused.contains("conflict not settled in src/Renamed.java"),
+        refused.contains("conflict not settled in src/Renamed.zig"),
         "{refused}"
     );
 }

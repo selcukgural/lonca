@@ -397,6 +397,44 @@ mod tests {
         }
     }
 
+    fn symbols_changed(symbols: &[&str]) -> Event {
+        Event::SymbolsChanged {
+            seq: 1,
+            change: ChangeId::random(),
+            from: "agent:a/s1".into(),
+            sets: vec!["l1".into()],
+            symbols: symbols.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// A name is another agent's text, so it goes out quoted, and nothing
+    /// asks for an answer that nobody waits for.
+    #[test]
+    fn a_holder_is_told_what_changed_and_by_whom() {
+        let told = tell(&[symbols_changed(&["a.rs#f"])], 0, "x_").unwrap();
+        assert!(told.contains("agent:a/s1"), "{told}");
+        assert!(told.contains("\"a.rs#f\""), "{told}");
+        assert!(told.contains("lease set l1"), "{told}");
+        assert!(told.contains("another agent's own words"), "{told}");
+        assert!(!told.contains("x_negotiate"), "{told}");
+        assert!(!told.contains(" more"), "{told}");
+        let asked = tell(&[symbols_changed(&["a.rs#f"]), message(2, "hi")], 0, "x_");
+        assert!(asked.unwrap().contains("x_negotiate"));
+    }
+
+    #[test]
+    fn a_long_list_of_names_is_counted() {
+        let names = ["a", "b", "c", "d", "e", "f", "g"];
+        let names = names.map(|n| format!("a.rs#{n}"));
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let exactly = tell(&[symbols_changed(&names[..TOLD_SYMBOLS])], 0, "").unwrap();
+        assert!(!exactly.contains(" more"), "{exactly}");
+        assert!(exactly.contains("a.rs#e"), "{exactly}");
+        let over = tell(&[symbols_changed(&names)], 0, "").unwrap();
+        assert!(over.contains(" and 2 more"), "{over}");
+        assert!(!over.contains("a.rs#f"), "{over}");
+    }
+
     #[test]
     fn nothing_to_say_is_silence() {
         assert_eq!(tell(&[], 0, ""), None);

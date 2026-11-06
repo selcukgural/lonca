@@ -792,6 +792,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_change_reaches_others_by_any_one_of_three() {
+        assert!(!Facts::default().reaches_others());
+        let signature = Facts {
+            signature_changes: vec!["a.rs#f".into()],
+            ..Facts::default()
+        };
+        let mentioned = Facts {
+            affected: vec!["a.rs#g".into()],
+            ..Facts::default()
+        };
+        let cut_off = Facts {
+            affected_more: 1,
+            ..Facts::default()
+        };
+        assert!(signature.reaches_others());
+        assert!(mentioned.reaches_others());
+        assert!(cut_off.reaches_others());
+    }
+
+    /// Left out when empty, so older entries keep their bytes; kept when not.
+    #[test]
+    fn what_was_cut_from_affected_is_written_out() {
+        let none = serde_json::to_string(&Facts::default()).unwrap();
+        assert!(!none.contains("affected"), "{none}");
+        let cut_off = Facts {
+            affected_more: 3,
+            ..Facts::default()
+        };
+        let text = serde_json::to_string(&cut_off).unwrap();
+        assert!(text.contains("\"affected_more\":3"), "{text}");
+    }
+
+    #[test]
     fn unknown_op_kind_is_rejected() {
         assert!(serde_json::from_str::<OpKind>("\"change.propose\"").is_ok());
         assert!(serde_json::from_str::<OpKind>("\"admin.everything\"").is_err());

@@ -301,6 +301,20 @@ mod tests {
         }
     }
 
+    /// An import or a symbol ends where it ends: code right behind it is not
+    /// in it, and code anywhere else is not either.
+    #[test]
+    fn where_an_import_or_a_symbol_ends_is_exact() {
+        assert_eq!(
+            found("a.ts", "function g() {}f();\n", NAMES),
+            ["a.ts#<module>"]
+        );
+        let src = "import a from \"b\";f();\n";
+        assert_eq!(found("a.ts", src, NAMES), ["a.ts#<module>"]);
+        let src = "use m::a;\n\nfn g() { f(); }\n";
+        assert_eq!(found("a.rs", src, NAMES), ["a.rs#g"]);
+    }
+
     #[test]
     fn a_method_and_a_field_are_mentions_too() {
         let src = "fn g(c: C) { c.f(); c.h.x(); }\n";

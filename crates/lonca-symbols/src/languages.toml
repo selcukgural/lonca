@@ -437,6 +437,7 @@ how = { inner = { child = ["identifier"] } }
 attached = [{ kinds = ["comment"] }]
 imports = ["preproc_include", "using_declaration"]
 wrappers = [
+    { kind = "linkage_specification", field = "body" },
     { kind = "template_declaration", children = [
         "class_specifier",
         "struct_specifier",
@@ -457,8 +458,12 @@ skips = ["DISABLED_"]
 skips_in = "header"
 
 [[rules.c_family.groups]]
-kinds = ["namespace_definition", "linkage_specification"]
+kinds = ["namespace_definition"]
 how = { field = "body" }
+
+[[rules.c_family.groups]]
+kinds = ["linkage_specification"]
+how = { child = "declaration_list" }
 
 [[rules.c_family.groups]]
 kinds = ["preproc_ifdef", "preproc_if", "preproc_else", "preproc_elif"]
@@ -466,7 +471,7 @@ how = "own"
 
 [[rules.c_family.defs]]
 kinds = ["class_specifier", "struct_specifier", "union_specifier"]
-how = { members_if_any = { name = "name", members = "body" } }
+how = { members_only = { name = "name", members = "body" } }
 
 [[rules.c_family.defs]]
 kinds = ["enum_specifier", "preproc_def", "preproc_function_def", "alias_declaration"]
@@ -480,7 +485,7 @@ how = { declared = { field = "declarator", wrapped = ["parenthesized_declarator"
 
 [rules.ruby]
 attached = [{ kinds = ["comment"] }]
-import_calls = { kind = "call", field = "method", names = ["require", "require_relative", "load"] }
+import_calls = { kind = "call", field = "method", names = ["require", "require_relative", "load"], receiver = "receiver" }
 call_tests = { call = "call", callee = "method", arguments = "arguments", name = "identifier", strings = ["string"] }
 
 [[rules.ruby.tests]]

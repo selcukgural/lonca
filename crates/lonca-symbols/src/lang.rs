@@ -124,6 +124,8 @@ pub(crate) struct ImportCalls {
     pub kind: String,
     pub field: String,
     pub names: Vec<String>,
+    /// A call on something, with this field, is no import.
+    pub receiver: String,
 }
 
 /// Where a declaration's parameters stand.
@@ -255,6 +257,11 @@ pub(crate) enum DefHow {
     },
     /// [`DefHow::Members`] when the field is there, else a leaf.
     MembersIfAny {
+        name: String,
+        members: String,
+    },
+    /// [`DefHow::Members`] when the field is there, else no definition.
+    MembersOnly {
         name: String,
         members: String,
     },
@@ -497,7 +504,9 @@ mod tests {
     fn fields_of(r: &Rules) -> BTreeSet<&str> {
         let wrappers = r.wrappers.iter().flat_map(|w| &w.field);
         let mut out: BTreeSet<&str> = wrappers.map(String::as_str).collect();
-        out.extend(r.import_calls.iter().map(|i| i.field.as_str()));
+        if let Some(i) = &r.import_calls {
+            out.extend([i.field.as_str(), i.receiver.as_str()]);
+        }
         if let Some(t) = &r.call_tests {
             out.extend([t.callee.as_str(), t.arguments.as_str()]);
         }
@@ -513,7 +522,9 @@ mod tests {
                 | DefHow::MembersIn { name, .. }
                 | DefHow::Only { field: name, .. }
                 | DefHow::Declared { field: name, .. } => vec![name.as_str()],
-                DefHow::Members { name, members } | DefHow::MembersIfAny { name, members } => {
+                DefHow::Members { name, members }
+                | DefHow::MembersIfAny { name, members }
+                | DefHow::MembersOnly { name, members } => {
                     vec![name.as_str(), members.as_str()]
                 }
                 DefHow::Prefixed { field, .. } | DefHow::MacroCall { field, .. } => {

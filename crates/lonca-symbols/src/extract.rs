@@ -799,6 +799,25 @@ fn blocks<'t>(n: Node<'t>, block: &str, out: &mut Vec<Node<'t>>) {
     }
 }
 
+/// `text`, a name with scopes, without the type arguments of its scopes: a
+/// method of `Box<T>` belongs to `Box`.
+fn unscoped_args(text: &str, scope: &str) -> String {
+    let Some((scopes, last)) = text.rsplit_once(scope) else {
+        return text.to_string();
+    };
+    let mut plain = String::new();
+    let mut depth = 0u32;
+    for c in scopes.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => plain.push(c),
+            _ => {}
+        }
+    }
+    format!("{plain}{scope}{last}")
+}
+
 /// `kind` is one of `kinds`.
 fn is_one_of(kinds: &[String], kind: &str) -> bool {
     kinds.iter().any(|k| k == kind)
@@ -893,7 +912,9 @@ impl<'s> Extractor<'s> {
     fn is_import(&self, n: Node) -> bool {
         let calls = |c: &ImportCalls| {
             let called = self.field_text(n, &c.field);
-            n.kind() == c.kind && called.is_some_and(|name| is_one_of(&c.names, &name))
+            n.kind() == c.kind
+                && n.child_by_field_name(&c.receiver).is_none()
+                && called.is_some_and(|name| is_one_of(&c.names, &name))
         };
         is_one_of(&self.rules.imports, n.kind())
             || self.rules.import_calls.as_ref().is_some_and(calls)
@@ -1162,6 +1183,10 @@ impl<'s> Extractor<'s> {
                     leaf(name(id))
                 }
             }
+            DefHow::MembersOnly { name: id, members } => {
+                n.child_by_field_name(members)?;
+                container(name(id), members)
+            }
             DefHow::MembersIn { name: id, kinds } => {
                 let mut parts = named(n).into_iter();
                 let members = parts.find(|c| is_one_of(kinds, c.kind()));
@@ -1188,7 +1213,7 @@ impl<'s> Extractor<'s> {
                         None => break,
                     }
                 }
-                let name = self.text(at).replace(scope, ".");
+                let name = unscoped_args(self.text(at), scope).replace(scope, ".");
                 (at != n).then(|| leaf(Some(name))).flatten()
             }
             DefHow::Fixed(fixed) => leaf(Some(fixed.clone())),

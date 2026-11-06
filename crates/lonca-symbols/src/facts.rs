@@ -153,7 +153,12 @@ pub fn analyze(
                 }
                 if pb.has_error || pn.has_error {
                     f.edits.push(sym_id(path, FILE));
-                    if !lang.is_strict() {
+                    // A file that read until now is no file with no grammar:
+                    // what still reads counts, and what no longer does is gone.
+                    if !lang.is_strict() && !pb.has_error {
+                        compare_file(engine, path, (&pb, old), (&pn, newt), &mut f);
+                    }
+                    if !lang.is_strict() && pb.has_error && edits_lines(b, n, old, newt, r) {
                         f.unparsed_files.push(path.clone());
                     }
                     continue;

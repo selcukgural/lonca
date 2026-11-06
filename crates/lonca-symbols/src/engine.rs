@@ -65,6 +65,10 @@ pub const ENGINE_LINE_EDITS: u32 = 9;
 /// among equal lines meets all of them.
 pub const ENGINE_LINE_MERGE: u32 = 9;
 
+/// The first engine that reads the languages with `since = 10`, and that
+/// holds a merge to the symbols and imports all three sides have.
+pub const ENGINE_LANGUAGES: u32 = 10;
+
 /// Every engine version this build can recompute.
 pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 

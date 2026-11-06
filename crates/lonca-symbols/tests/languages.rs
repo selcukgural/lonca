@@ -219,6 +219,143 @@ fn a_file_that_reads_is_held_to_what_it_says() {
     assert_eq!(merged, Err(vec!["a.rb#<file>".to_string()]));
 }
 
+/// A preprocessor line ends with its own line end. Taking or adding around
+/// it must leave each line on its own: a joined line can still parse, as the
+/// rest of a `#define`.
+#[test]
+fn preprocessor_lines_stay_lines() {
+    let at = |path: &str, b: &str, o: &str, t: &str, want: &str| {
+        let merged = merge_text_at(ENGINE_CURRENT, path, b, o, t).unwrap();
+        assert_eq!(merged, want, "{path}");
+    };
+    let f = "int f(void) {\n    return 1;\n}\n";
+    let g = f.replace("return 1", "return 2");
+
+    // Each with trunk's edit of `f` below it.
+    let defines = "#define A 1\n#define B 2\n#define C 3\n\n";
+    let gone = "#define A 1\n#define C 3\n\n";
+    let (b, o, t, want) = (
+        format!("{defines}{f}"),
+        format!("{defines}{g}"),
+        format!("{gone}{f}"),
+        format!("{gone}{g}"),
+    );
+    at("a.c", &b, &o, &t, &want);
+
+    let macros = "#define A(x) (x)\n#define B(x) (x)\n#define C(x) (x)\n\n";
+    let gone = "#define A(x) (x)\n#define C(x) (x)\n\n";
+    let (b, o, t, want) = (
+        format!("{macros}{f}"),
+        format!("{macros}{g}"),
+        format!("{gone}{f}"),
+        format!("{gone}{g}"),
+    );
+    at("a.c", &b, &o, &t, &want);
+
+    let guard = "#ifndef A_H\n#define A_H\n#include <a.h>\n#include <b.h>\n\n";
+    let gone = "#ifndef A_H\n#define A_H\n#include <b.h>\n\n";
+    let (b, o, t, want) = (
+        format!("{guard}{f}#endif\n"),
+        format!("{guard}{g}#endif\n"),
+        format!("{gone}{f}#endif\n"),
+        format!("{gone}{g}#endif\n"),
+    );
+    at("a.h", &b, &o, &t, &want);
+
+    let behind = "int x; // note\n#define N 1\nint y;\n\n";
+    let gone = "int x; // note\nint y;\n\n";
+    let (b, o, t, want) = (
+        format!("{behind}{f}"),
+        format!("{behind}{g}"),
+        format!("{gone}{f}"),
+        format!("{gone}{g}"),
+    );
+    at("a.c", &b, &o, &t, &want);
+
+    // Something added between two of them.
+    let two = "#define A 1\n#define B 2\n\n";
+    let added = "#define A 1\n\nint h(void) {\n    return 3;\n}\n#define B 2\n\n";
+    let (b, o, t) = (
+        format!("{two}{f}"),
+        format!("{two}{g}"),
+        format!("{added}{f}"),
+    );
+    let merged = merge_text_at(ENGINE_CURRENT, "a.c", &b, &o, &t).unwrap();
+    assert!(merged.contains("}\n#define B 2\n"), "{merged}");
+    assert!(
+        merged.contains("return 2") && merged.contains("return 3"),
+        "{merged}"
+    );
+
+    // An include added behind another, in front of a line that is none.
+    let (b, o) = ("#include <a.h>\nint x;\n", "#include <a.h>\nint y;\n");
+    let t = "#include <a.h>\n#include <b.h>\nint x;\n";
+    at("a.c", b, o, t, "#include <a.h>\n#include <b.h>\nint y;\n");
+}
+
+/// What only a mistake of the merge would lose: all three sides have it.
+#[test]
+fn what_all_three_sides_have_stays() {
+    let b =
+        "#include <a.h>\n\nint f(void) {\n    return 1;\n}\n\nint g(void) {\n    return 2;\n}\n";
+    let o = b.replace("return 1", "return 10");
+    let t = b.replace("return 2", "return 20");
+    let merged = merge_text_at(ENGINE_CURRENT, "a.c", b, &o, &t).unwrap();
+    assert!(
+        merged.contains("<a.h>") && merged.contains("return 10"),
+        "{merged}"
+    );
+    assert!(merged.contains("return 20"), "{merged}");
+}
+
+/// Breaking a file that read is no way out of what it would take otherwise.
+#[test]
+fn a_file_that_read_is_held_to_it_when_a_side_breaks_it() {
+    let path = "a.java";
+    let b = "class C {\n    void a() {\n    }\n\n    @Test\n    void t() {\n    }\n}\n";
+    assert!(!parse(Lang::detect(path).unwrap(), b).has_error);
+    let no_test = "class C {\n    void a() {\n    }\n}\n@@@\n";
+    assert!(parse(Lang::detect(path).unwrap(), no_test).has_error);
+    let f = facts(ENGINE_CURRENT, path, b, no_test);
+    assert!(f.unparsed_files.is_empty(), "{f:?}");
+    assert_eq!(f.tests.deleted, 1, "{f:?}");
+    assert!(f.deletes.contains(&"a.java#C.t".to_string()), "{f:?}");
+    assert!(f.edits.contains(&"a.java#<file>".to_string()), "{f:?}");
+}
+
+/// An unread file is listed for what a file with no grammar is, and no more.
+#[test]
+fn an_unread_file_keeps_its_lease_for_what_is_no_edit_of_lines() {
+    let path = "a.kt";
+    let unread = "class C { fun f() = 1 }\n\nval a = 1\n\nval b = 2\n";
+    assert_eq!(
+        facts(ENGINE_CURRENT, path, unread, "").unparsed_files,
+        [""; 0]
+    );
+    let cut = "class C { fun f() = 1 }\n";
+    assert_eq!(
+        facts(ENGINE_CURRENT, path, unread, cut).unparsed_files,
+        [""; 0]
+    );
+}
+
+/// Valid code a grammar can not read lands when nobody else is on the file.
+#[test]
+fn an_unreadable_side_lands_alone_and_conflicts_with_company() {
+    let path = "a.kt";
+    let b = "class C {\n    fun f() = 1\n}\n\nval a = 1\n";
+    let t = format!("{b}\nclass D {{ fun g() = 1 }}\n");
+    assert_eq!(
+        merge_text_at(ENGINE_CURRENT, path, b, b, &t).as_deref(),
+        Ok(t.as_str())
+    );
+    let o = b.replace("a = 1", "a = 2");
+    assert_eq!(
+        merge_text_at(ENGINE_CURRENT, path, b, &o, &t),
+        Err(vec!["a.kt#<file>".to_string()])
+    );
+}
+
 /// A strict language still takes a parse error for a mistake.
 #[test]
 fn a_strict_language_is_not_read_that_way() {
@@ -339,7 +476,18 @@ fn what_each_language_has_of_its_own() {
     }
     has(&s, "C.operator bool() const", false, false);
     has(&s, "TEST(S,N)", true, false);
+
     has(&s, "TEST(S,DISABLED_M)", true, true);
+
+    // A method of a template is a method of the name, and a declaration in
+    // front of a type is no symbol of it.
+    let (s, _, _) = names(
+        "b.cpp",
+        "class B;\ntemplate <typename T> class B {\n  void m();\n};\ntemplate <typename T> void B<T>::n() {}\nextern \"C\" int one(int);\n",
+    );
+    for name in ["B", "B.m", "B.n", "one"] {
+        has(&s, name, false, false);
+    }
 
     let (s, imports, calls) = names(
         "a.rb",
@@ -350,6 +498,10 @@ fn what_each_language_has_of_its_own() {
         has(&s, name, false, false);
     }
     has(&s, "C.test_t", true, true);
+
+    // `load` on something is a call like any other, and goes with the code.
+    let (_, imports, _) = names("c.rb", "load \"a.rb\"\nConfig.load(\"b.yml\")\n");
+    assert_eq!(imports, 1);
     let calls: Vec<(&str, bool)> = calls.iter().map(|t| (t.name.as_str(), t.skipped)).collect();
     assert_eq!(calls, [("d > i", false), ("d > x", true)]);
 

@@ -603,8 +603,11 @@ a table entry, not an enum.
   member and `}` on one line, or a C macro. Such a file counts as one no parser
   reads: the syntax check passes it, the merge goes by lines and facts list it, so
   it does no worse than with no grammar at all. `syntax_errors` still reports it.
-  A language can earn `true` by a table change once its grammar has shown it reads
-  real code; that needs no engine, because verification is evidence and not a fact.
+  Only a file the grammar could not read before counts: one that read until now
+  and does not any more keeps its leases, and its facts say what can still be seen,
+  with what can not as deleted, so breaking a file on purpose hides nothing. A file
+  that one proposal leaves unreadable lands with the `<file>` lease that takes.
+  `strict` decides facts and merges, so changing it for a language is a new engine.
 - **`.h` goes to the C++ grammar,** which reads nearly all of C, and a file it can
   not read falls back as above.
 - **Limits of the first entries:** declarations of several names go by the first
@@ -612,8 +615,13 @@ a table entry, not an enum.
   is part of the class's text and `class A::B` keeps its `::`. A PHP function's
   signature leaves out `function`. Reopened Ruby classes and Swift extensions of
   one type are numbered, and a C++ method defined outside its class is `C.m`, the
-  same name as its declaration in the class, so in one file they are `~2`. Tests
-  are found by markers in the table: C has none.
+  same name as its declaration in the class, so in one file they are `~2`, and in
+  a namespace it keeps the namespace in its name where the class does not. A
+  forward declaration is no symbol. Tests are found by markers in the table: C and
+  C++ share the rule for `TEST(..)`.
+- **Engine 10 also holds a merge to what all three sides have:** a symbol or an
+  import in base, ours and theirs must be in the result, which is what catches a
+  merge that loses text in a way that still parses.
 - **Heuristics that hold across grammars stay in the code:** `TYPE_KINDS`,
   `is_verbatim`, and the names `parameters` and `type_parameters` in a key.
 - **A word the table gets wrong would read as a kind that never comes,** so a

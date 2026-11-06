@@ -138,3 +138,63 @@ fn twenty_agents_in_each_language() {
         assert!(report.ok(), "{}: {:#?}", row.path, report.findings);
     }
 }
+
+fn optimistic(e: &mut Env) {
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
+        "unparsed_files = \"file\"",
+        "unparsed_files = \"optimistic\"",
+    );
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op = serde_json::from_value(prep["op"].clone()).unwrap();
+    let r = e.human(op);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+}
+
+/// Under `optimistic` a lease on a method holds, however its neighbour
+/// writes the file.
+#[test]
+fn breaking_a_file_does_not_get_past_a_lease_on_it() {
+    const PATH: &str = "src/C.java";
+    let seed = "class C {\n    int charge() {\n        return 1;\n    }\n\n    int other() {\n        return 2;\n    }\n}\n";
+    let mut e = Env::new();
+    e.init(None);
+    optimistic(&mut e);
+    let r = e.human_change(vec![file(PATH, seed)], "seed");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let base = e.trunk();
+
+    let holder = e.session("a", &["src/**"]);
+    e.bind(&holder);
+    let items = json!([{"symbol": format!("{PATH}#C.charge"), "kind": "edit"}]);
+    let args = json!({"items": items, "intent": "mine", "ttl_ms": 600_000});
+    let r = e.ok("lease.acquire", None, Some(&holder), args);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+
+    let other = e.session("b", &["src/**"]);
+    e.bind(&other);
+    e.wrote(&other, PATH);
+    let edit = seed.replace("return 1", "return 10");
+    for text in [edit.clone(), format!("{edit}@@@\n")] {
+        let claim = Claim {
+            intent: "around the lease".into(),
+            edits: vec![format!("{PATH}#C.charge")],
+            ..Default::default()
+        };
+        let args = json!({"base": base, "files": [file(PATH, &text)], "claim": claim});
+        let r = e.ok("change.propose", None, Some(&other), args);
+        assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    }
+    let no_more = e.ok(
+        "facts.preview",
+        None,
+        Some(&other),
+        json!({"base": base, "files": [file(PATH, &format!("{edit}@@@\n"))]}),
+    );
+    assert_eq!(no_more["no_lease"], json!([]), "{no_more}");
+}

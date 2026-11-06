@@ -430,7 +430,7 @@ mod tests {
             out.extend(p.kinds.iter().map(String::as_str));
             out.extend(p.list.iter().chain(&p.item).map(String::as_str));
         }
-        for t in &r.call_tests {
+        if let Some(t) = &r.call_tests {
             out.extend([t.call.as_str(), t.name.as_str()]);
             out.extend(t.strings.iter().chain(&t.member).map(String::as_str));
         }
@@ -498,7 +498,7 @@ mod tests {
         let wrappers = r.wrappers.iter().flat_map(|w| &w.field);
         let mut out: BTreeSet<&str> = wrappers.map(String::as_str).collect();
         out.extend(r.import_calls.iter().map(|i| i.field.as_str()));
-        for t in &r.call_tests {
+        if let Some(t) = &r.call_tests {
             out.extend([t.callee.as_str(), t.arguments.as_str()]);
         }
         for g in &r.groups {

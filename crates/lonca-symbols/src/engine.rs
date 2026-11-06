@@ -22,9 +22,10 @@ use lonca_core::{Error, Result};
 /// where code stands among symbols; version 5 reads the members of grouped
 /// declarations and blocks; version 6 tells symbols of one name apart by
 /// what they take instead of by their order; version 7 reports renames;
-/// version 8 reports the files no parser reads; version 9 reads Java, Kotlin,
-/// C, C++, Ruby, PHP and Swift.
-pub const ENGINE_CURRENT: u32 = 9;
+/// version 8 reports the files no parser reads; version 9 lists among them
+/// only a change that is an edit of lines, and merges lines by their own
+/// rules; version 10 reads Java, Kotlin, C, C++, Ruby, PHP and Swift.
+pub const ENGINE_CURRENT: u32 = 10;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -56,8 +57,16 @@ pub const ENGINE_RENAMES: u32 = 7;
 /// The first engine whose facts list the text files no parser reads.
 pub const ENGINE_UNPARSED: u32 = 8;
 
+/// The first engine that does not list a change of what a file is, or one
+/// that leaves nothing of it, among the files no parser reads.
+pub const ENGINE_LINE_EDITS: u32 = 9;
+
+/// The first engine that merges lines with [`crate::lines`], where a change
+/// among equal lines meets all of them.
+pub const ENGINE_LINE_MERGE: u32 = 9;
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

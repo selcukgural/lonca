@@ -1,0 +1,243 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.rs#impl:Id.From(u8)"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 6,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#Id.From.from"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "pub struct Id(u64);\n\nimpl From<u8> for Id {\n    fn from(v: u8) -> Id {\n        Id(v as u64)\n    }\n}\n\nimpl From<u32> for Id {\n    fn from(v: u32) -> Id {\n        Id(u64::from(v))\n    }\n}\n"
+  },
+  "path": "src/sample.rs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Id",
+          "own": "",
+          "signature": "pub struct Id",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            19
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Id.From.from",
+              "own": "",
+              "signature": "fn from(v: u32) -> Id",
+              "skipped": false,
+              "span": [
+                49,
+                49,
+                99
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Id.From",
+          "own": "impl_item(impl\u001fgeneric_type(From\u001ftype_arguments(<\u001fu32\u001f>\u001f))for\u001fId\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            21,
+            21,
+            101
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Id",
+          "own": "",
+          "signature": "pub struct Id",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            19
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Id.From(u8).from",
+              "own": "",
+              "signature": "fn from(v: u8) -> Id",
+              "skipped": false,
+              "span": [
+                48,
+                48,
+                97
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Id.From(u8)",
+          "own": "impl_item(impl\u001fgeneric_type(From\u001ftype_arguments(<\u001fu8\u001f>\u001f))for\u001fId\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            21,
+            21,
+            99
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Id.From(u32).from",
+              "own": "",
+              "signature": "fn from(v: u32) -> Id",
+              "skipped": false,
+              "span": [
+                129,
+                129,
+                179
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Id.From(u32)",
+          "own": "impl_item(impl\u001fgeneric_type(From\u001ftype_arguments(<\u001fu32\u001f>\u001f))for\u001fId\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            101,
+            101,
+            181
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Id",
+          "own": "",
+          "signature": "pub struct Id",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            19
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Id.From.from",
+              "own": "",
+              "signature": "fn from(v: u32) -> Id",
+              "skipped": false,
+              "span": [
+                49,
+                49,
+                103
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Id.From",
+          "own": "impl_item(impl\u001fgeneric_type(From\u001ftype_arguments(<\u001fu32\u001f>\u001f))for\u001fId\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            21,
+            21,
+            105
+          ]
+        }
+      ]
+    }
+  }
+}

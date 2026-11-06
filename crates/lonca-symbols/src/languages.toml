@@ -57,7 +57,7 @@ name = "java"
 grammar = "java"
 extensions = ["java"]
 rules = "java"
-since = 9
+since = 10
 strict = false
 
 [[language]]
@@ -65,7 +65,7 @@ name = "kotlin"
 grammar = "kotlin"
 extensions = ["kt", "kts"]
 rules = "kotlin"
-since = 9
+since = 10
 strict = false
 
 [[language]]
@@ -73,7 +73,7 @@ name = "c"
 grammar = "c"
 extensions = ["c"]
 rules = "c_family"
-since = 9
+since = 10
 strict = false
 
 [[language]]
@@ -81,7 +81,7 @@ name = "cpp"
 grammar = "cpp"
 extensions = ["cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx"]
 rules = "c_family"
-since = 9
+since = 10
 strict = false
 
 [[language]]
@@ -89,7 +89,7 @@ name = "ruby"
 grammar = "ruby"
 extensions = ["rb", "rake"]
 rules = "ruby"
-since = 9
+since = 10
 strict = false
 
 [[language]]
@@ -97,7 +97,7 @@ name = "php"
 grammar = "php"
 extensions = ["php"]
 rules = "php"
-since = 9
+since = 10
 strict = false
 
 [[language]]
@@ -105,7 +105,7 @@ name = "swift"
 grammar = "swift"
 extensions = ["swift"]
 rules = "swift"
-since = 9
+since = 10
 strict = false
 
 # Rust

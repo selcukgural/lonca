@@ -18,6 +18,7 @@ use lonca_core::{FileEntry, FileMode, GitId};
 use lonca_daemon::Client;
 use lonca_daemon::protocol::{FileChange, LocalFile, TreeFile};
 use lonca_symbols::engine::ENGINE_CURRENT;
+use lonca_symbols::lines;
 use lonca_symbols::merge::{merge_around_conflicts, merge_text_at};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -46,6 +47,10 @@ pub struct Meta {
     /// never a local change, and gone at the next sync.
     #[serde(default)]
     pub trunk_copies: Vec<String>,
+    /// Files a sync wrote conflict markers into. They hold until the markers
+    /// are gone: a proposal before that would land them.
+    #[serde(default)]
+    pub conflicts: Vec<String>,
     /// Files `lonca harness setup` wrote: never a local change, and only
     /// ever paths the repository does not have.
     #[serde(default)]
@@ -176,6 +181,7 @@ impl Workspace {
                 submitted: None,
                 scratch_roots: vec![],
                 trunk_copies: vec![],
+                conflicts: vec![],
                 generated: vec![],
                 git,
             },
@@ -287,12 +293,41 @@ impl Workspace {
         self.changes()?.into_iter().map(local).collect()
     }
 
+    /// The files that still hold the markers of a sync.
+    fn open_conflicts(&self) -> Result<Vec<String>> {
+        let mut open = Vec::new();
+        for path in &self.meta.conflicts {
+            let local = wsfs::read(&self.root, path)?;
+            let text = local.map(|l| String::from_utf8_lossy(&l.bytes).into_owned());
+            if text.is_some_and(|t| lines::has_markers(&t)) {
+                open.push(path.clone());
+            }
+        }
+        Ok(open)
+    }
+
+    /// Refuses a proposal while a conflict is open: what stands between the
+    /// markers is not all the agent's to send.
+    pub fn check_settled(&self) -> Result<()> {
+        let open = self.open_conflicts()?;
+        if open.is_empty() {
+            return Ok(());
+        }
+        bail!(
+            "conflict not settled in {}: edit what stands between the markers, \
+             `{}` to `>>>>>>> trunk`, keeping what both sides need",
+            open.join(", "),
+            lines::OURS
+        )
+    }
+
     /// Brings trunk into the workspace, keeping local edits. Files edited
     /// locally and on trunk are merged with Lonca's structural merge; on a
     /// conflict everything else of trunk still comes in, the conflicting
     /// symbols keep the local text and trunk's version is written next to
-    /// the file as `<file>.trunk`. A file with no symbol merge stays local
-    /// as a whole.
+    /// the file as `<file>.trunk`. A file with no symbol merge gets the rest
+    /// of trunk too, and both sides of what meets between conflict markers.
+    /// Only a file that is no text stays local as a whole.
     pub fn sync(&mut self, client: &mut Client) -> Result<SyncReport> {
         let status = call(client, "status", json!({}))?;
         let trunk: GitId = serde_json::from_value(status["trunk"].clone())?;
@@ -424,8 +459,15 @@ impl Workspace {
                     if let Some(Err(symbols)) = merged {
                         report.symbols.extend(symbols);
                     }
-                    let kept = texts.and_then(|(b, o, t)| {
-                        merge_around_conflicts(ENGINE_CURRENT, &path, b, o, t)
+                    let kept = texts.map(|(b, o, t)| {
+                        merge_around_conflicts(ENGINE_CURRENT, &path, b, o, t).unwrap_or_else(
+                            || {
+                                if !self.meta.conflicts.contains(&path) {
+                                    self.meta.conflicts.push(path.clone());
+                                }
+                                lines::with_markers(b, o, t)
+                            },
+                        )
                     });
                     if let Some(text) = kept {
                         wsfs::write(&self.root, &path, text.as_bytes(), unix_mode(m.mode))?;
@@ -451,6 +493,21 @@ impl Workspace {
             .values()
             .filter(|f| !held.contains(&f.blob))
             .collect();
+        self.meta.conflicts = self.open_conflicts()?;
+        for path in self.meta.conflicts.clone() {
+            if report.conflicts.contains(&path) {
+                continue;
+            }
+            if let Some(f) = new_files.get(&path) {
+                let side = TreeFile {
+                    path: format!("{path}.trunk"),
+                    ..f.clone()
+                };
+                write_file(&self.root, &side)?;
+                self.meta.trunk_copies.push(side.path);
+            }
+            report.conflicts.push(path);
+        }
         // The sync is done once this is saved: a `.git` that has been
         // tampered with costs `git diff` its meaning, and nothing else.
         self.meta.base = trunk;
@@ -702,6 +759,7 @@ mod tests {
             submitted: None,
             scratch_roots: vec![],
             trunk_copies: vec![],
+            conflicts: vec![],
             generated: vec![],
             git: false,
         };

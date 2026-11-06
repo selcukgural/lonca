@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
 use crate::engine::{
-    ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_PLACES, ENGINE_SECTIONS,
+    ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LINE_MERGE, ENGINE_PLACES,
+    ENGINE_SECTIONS,
 };
 use crate::extract::{
     Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_keyed,
@@ -38,6 +39,7 @@ fn differs(engine: u32, a: Code, b: Code) -> bool {
 }
 use crate::facts::renames_between;
 use crate::lang::Lang;
+use crate::lines;
 use crate::sections::{self, Format};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -183,7 +185,11 @@ pub fn merge_text_at(
             Sm::Fallback => {}
         }
     }
-    let merged = diffy::merge(b, o, t).map_err(|_| file_conflict())?;
+    let merged = if engine >= ENGINE_LINE_MERGE {
+        lines::merge(b, o, t).ok_or_else(file_conflict)?
+    } else {
+        diffy::merge(b, o, t).map_err(|_| file_conflict())?
+    };
     if let Some(lang) = lang {
         let (naming, sides) = three_sides(engine, lang, [b, o, t]);
         let [pb, po, pt] = &sides;
@@ -2651,6 +2657,23 @@ mod tests {
         let t = "class C {\n    short a;\n    int b;\n}\n";
         let kept = merge_around_conflicts(2, "x.cs", b, o, t).unwrap();
         assert!(kept.contains("long a") && kept.contains("int b"), "{kept}");
+    }
+
+    /// Among equal lines a change could be at any of them. From engine 9 on
+    /// that is a conflict; older entries keep the merge they recorded.
+    #[test]
+    fn engines_merge_equal_lines_as_they_did() {
+        let (b, o, t) = (
+            "retry\nretry\nretry\n",
+            "abort\nretry\nretry\n",
+            "retry\nretry\n",
+        );
+        let at = |engine| merge_text_at(engine, "a.zig", b, o, t);
+        assert_eq!(at(ENGINE_LINE_MERGE), Err(vec!["a.zig#<file>".to_string()]));
+        assert_eq!(at(ENGINE_LINE_MERGE - 1).as_deref(), Ok(o));
+        let (from, one, two) = ("a\nb\nc\nd\n", "A\nb\nc\nd\n", "a\nb\nc\nD\n");
+        let merged = merge_text_at(ENGINE_LINE_MERGE, "a.zig", from, one, two);
+        assert_eq!(merged.as_deref(), Ok("A\nb\nc\nD\n"));
     }
 
     #[test]

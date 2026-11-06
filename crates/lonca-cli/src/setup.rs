@@ -189,6 +189,7 @@ mod tests {
                 submitted: None,
                 scratch_roots: vec![],
                 trunk_copies: vec![],
+                conflicts: vec![],
                 generated: vec![],
                 git: false,
             },

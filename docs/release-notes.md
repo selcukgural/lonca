@@ -8,6 +8,8 @@ Java, Kotlin, C, C++, Ruby, PHP and Swift have symbols: leases, merges and facts
 field where the language has them. What a language means is now a table,
 `crates/lonca-symbols/src/languages.toml`. A file one of these grammars can not read gets what a
 file with no grammar gets: a line merge, listed under `unparsed_files`, and no syntax failure.
+A proposal that leaves a file unreadable that read before escalates (`unread_files`, log format
+16): facts can not see into it after that.
 
 ### Files no parser reads can be shared (symbol engine 8, log format 15)
 

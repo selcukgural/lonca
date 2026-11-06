@@ -799,23 +799,28 @@ fn blocks<'t>(n: Node<'t>, block: &str, out: &mut Vec<Node<'t>>) {
     }
 }
 
-/// `text`, a name with scopes, without the type arguments of its scopes: a
-/// method of `Box<T>` belongs to `Box`.
-fn unscoped_args(text: &str, scope: &str) -> String {
-    let Some((scopes, last)) = text.rsplit_once(scope) else {
-        return text.to_string();
-    };
-    let mut plain = String::new();
+/// `text`, a name with scopes, as a name of ours: a `.` for each scope, and
+/// without a scope's type arguments, since a method of `Box<T>` belongs to
+/// `Box`. A `::` inside type arguments is no scope of the name.
+fn dotted_scopes(text: &str, scope: &str) -> String {
+    let mut name = String::new();
     let mut depth = 0u32;
-    for c in scopes.chars() {
+    let mut part = 0;
+    for (at, c) in text.char_indices() {
         match c {
             '<' => depth += 1,
             '>' => depth = depth.saturating_sub(1),
-            _ if depth == 0 => plain.push(c),
+            _ if depth == 0 && text[at..].starts_with(scope) => {
+                let whole = &text[part..at];
+                name.push_str(whole.split('<').next().unwrap_or(whole));
+                name.push('.');
+                part = at + scope.len();
+            }
             _ => {}
         }
     }
-    format!("{plain}{scope}{last}")
+    name.push_str(&text[part..]);
+    name
 }
 
 /// `kind` is one of `kinds`.
@@ -1213,7 +1218,7 @@ impl<'s> Extractor<'s> {
                         None => break,
                     }
                 }
-                let name = unscoped_args(self.text(at), scope).replace(scope, ".");
+                let name = dotted_scopes(self.text(at), scope);
                 (at != n).then(|| leaf(Some(name))).flatten()
             }
             DefHow::Fixed(fixed) => leaf(Some(fixed.clone())),

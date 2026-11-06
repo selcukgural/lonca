@@ -155,10 +155,10 @@ fn optimistic(e: &mut Env) {
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
 }
 
-/// Under `optimistic` a lease on a method holds, however its neighbour
-/// writes the file.
+/// A lease on a method holds however its neighbour writes the file, and a
+/// file that stops reading takes a person's word: after it nothing sees in.
 #[test]
-fn breaking_a_file_does_not_get_past_a_lease_on_it() {
+fn breaking_a_file_gets_past_no_lease_and_no_person() {
     const PATH: &str = "src/C.java";
     let seed = "class C {\n    int charge() {\n        return 1;\n    }\n\n    int other() {\n        return 2;\n    }\n}\n";
     let mut e = Env::new();
@@ -168,6 +168,16 @@ fn breaking_a_file_does_not_get_past_a_lease_on_it() {
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     assert_eq!(e.svc.process_all(), 1);
     let base = e.trunk();
+    let broken = format!("{}@@@\n", seed.replace("return 1", "return 10"));
+    let propose = |e: &mut Env, token: &str, text: &str| {
+        let claim = Claim {
+            intent: "a change".into(),
+            edits: vec![format!("{PATH}#<file>")],
+            ..Default::default()
+        };
+        let args = json!({"base": base, "files": [file(PATH, text)], "claim": claim});
+        e.ok("change.propose", None, Some(token), args)
+    };
 
     let holder = e.session("a", &["src/**"]);
     e.bind(&holder);
@@ -175,26 +185,27 @@ fn breaking_a_file_does_not_get_past_a_lease_on_it() {
     let args = json!({"items": items, "intent": "mine", "ttl_ms": 600_000});
     let r = e.ok("lease.acquire", None, Some(&holder), args);
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let set = r["set"].clone();
 
     let other = e.session("b", &["src/**"]);
     e.bind(&other);
     e.wrote(&other, PATH);
-    let edit = seed.replace("return 1", "return 10");
-    for text in [edit.clone(), format!("{edit}@@@\n")] {
-        let claim = Claim {
-            intent: "around the lease".into(),
-            edits: vec![format!("{PATH}#C.charge")],
-            ..Default::default()
-        };
-        let args = json!({"base": base, "files": [file(PATH, &text)], "claim": claim});
-        let r = e.ok("change.propose", None, Some(&other), args);
-        assert_eq!(r["decision"]["outcome"], "deny", "{r}");
-    }
-    let no_more = e.ok(
+    let r = propose(&mut e, &other, &broken);
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    let preview = e.ok(
         "facts.preview",
         None,
         Some(&other),
-        json!({"base": base, "files": [file(PATH, &format!("{edit}@@@\n"))]}),
+        json!({"base": base, "files": [file(PATH, &broken)]}),
     );
-    assert_eq!(no_more["no_lease"], json!([]), "{no_more}");
+    assert_eq!(preview["no_lease"], json!([]), "{preview}");
+
+    // Nobody on it, and with the lease of the file: a person decides.
+    e.ok("lease.release", None, Some(&holder), json!({ "set": set }));
+    let r = e.lease(&other, &format!("{PATH}#<file>"));
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let r = propose(&mut e, &other, &broken);
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let reasons = r["decision"]["reasons"].to_string();
+    assert!(reasons.contains(&format!("unread_file:{PATH}")), "{r}");
 }

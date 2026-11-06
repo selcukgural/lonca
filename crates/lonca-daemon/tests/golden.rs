@@ -93,10 +93,22 @@ fn golden_repo() -> Env {
 
 /// From format 15: facts list the text files no parser reads.
 fn unparsed(e: &mut Env) {
+    let text = "const a = 1;\n";
+    e.human_change(vec![file("src/a.zig", text)], "seed");
+    e.svc.process_all();
+    let r = e.human_change(vec![file("src/a.zig", &text.replace("1", "2"))], "edit");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    e.svc.process_all();
+    unread(e);
+}
+
+/// From format 16: facts list a file a grammar stopped reading.
+fn unread(e: &mut Env) {
     let java = "class A {\n}\n";
     e.human_change(vec![file("src/A.java", java)], "seed");
     e.svc.process_all();
-    let r = e.human_change(vec![file("src/A.java", &java.replace("A", "B"))], "edit");
+    let broken = format!("{java}@@@\n");
+    let r = e.human_change(vec![file("src/A.java", &broken)], "edit");
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     e.svc.process_all();
 }
@@ -854,6 +866,20 @@ fn golden_v14_log_still_verifies_replays_and_audits() {
         reasons.into_iter().any(|r| r.starts_with(held)),
         "the old name met the new one"
     );
+}
+
+#[test]
+fn golden_v16_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v16.bundle",
+        "56362eb64a10396314acb63ff20650bfc4b916ba7c7e7b8a2e36ae8e3bc012dc",
+        16,
+    );
+    let listed = ops.iter().filter_map(|o| o.entry.facts.as_ref());
+    let listed = listed
+        .flat_map(|f| f.unread_files.iter())
+        .collect::<Vec<_>>();
+    assert_eq!(listed, ["src/A.java"]);
 }
 
 #[test]

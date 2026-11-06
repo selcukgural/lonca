@@ -153,10 +153,10 @@ pub fn analyze(
                 }
                 if pb.has_error || pn.has_error {
                     f.edits.push(sym_id(path, FILE));
-                    // A file that read until now is no file with no grammar:
-                    // what still reads counts, and what no longer does is gone.
+                    // A file that read until now takes a person's word: what
+                    // comes after it here can be seen by nothing but lines.
                     if !lang.is_strict() && !pb.has_error {
-                        compare_file(engine, path, (&pb, old), (&pn, newt), &mut f);
+                        f.unread_files.push(path.clone());
                     }
                     if !lang.is_strict() && pb.has_error && edits_lines(b, n, old, newt, r) {
                         f.unparsed_files.push(path.clone());
@@ -177,6 +177,7 @@ pub fn analyze(
         &mut f.signature_changes,
         &mut f.import_only_files,
         &mut f.unparsed_files,
+        &mut f.unread_files,
     ] {
         v.sort();
         v.dedup();

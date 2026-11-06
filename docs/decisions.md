@@ -111,6 +111,9 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   (see "Symbol engine versions", engine 7).
 - **Version 15** adds `unparsed_files` to facts, left out of the encoding when
   empty (see "Symbol engine versions", engine 8).
+- **Version 16** adds `unread_files` to facts, which escalates a proposal (see
+  "Symbol engine versions", engine 10 and "The language table"). Older entries have
+  none, so nothing is gated on the format.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -603,10 +606,12 @@ a table entry, not an enum.
   member and `}` on one line, or a C macro. Such a file counts as one no parser
   reads: the syntax check passes it, the merge goes by lines and facts list it, so
   it does no worse than with no grammar at all. `syntax_errors` still reports it.
-  Only a file the grammar could not read before counts: one that read until now
-  and does not any more keeps its leases, and its facts say what can still be seen,
-  with what can not as deleted, so breaking a file on purpose hides nothing. A file
-  that one proposal leaves unreadable lands with the `<file>` lease that takes.
+  Only a file the grammar could not read before counts. A proposal that leaves a
+  file unreadable that read until then is listed in `unread_files` (log format 16)
+  and escalates, as `tests_weakened` does: from then on facts can not see into the
+  file, its symbols need no lease under `optimistic`, and a deleted test does not
+  show, so a person has to agree. It takes the `<file>` lease as well. Valid code the
+  grammar can not read goes through the same door, which is the price of the rule.
   `strict` decides facts and merges, so changing it for a language is a new engine.
 - **`.h` goes to the C++ grammar,** which reads nearly all of C, and a file it can
   not read falls back as above.
@@ -621,7 +626,8 @@ a table entry, not an enum.
   C++ share the rule for `TEST(..)`.
 - **Engine 10 also holds a merge to what all three sides have:** a symbol or an
   import in base, ours and theirs must be in the result, which is what catches a
-  merge that loses text in a way that still parses.
+  merge that loses text in a way that still parses. A name with a number, or one
+  that has a numbered sibling, is left out: the number moves with its siblings.
 - **Heuristics that hold across grammars stay in the code:** `TYPE_KINDS`,
   `is_verbatim`, and the names `parameters` and `type_parameters` in a key.
 - **A word the table gets wrong would read as a kind that never comes,** so a

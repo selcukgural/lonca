@@ -123,6 +123,9 @@ unknown method: `unknown_method`, whatever the token.
   `unparsed_files`.
   From engine 9 only edits of lines are listed: the mode stays and is that of a
   plain file, no NUL, and at least half of the old text's lines stay.
+- **`unread_files`** in facts, from log format 16: files a grammar read until
+  this change and can not read after it, in languages that are not strict. Such a
+  proposal escalates with the reason `unread_file:<path>`.
 - **`renames`** in facts, from symbol engine 7: `[[old, new]]`, symbols that
   go on under another name. A renamed one is also in `deletes` and `adds`, so
   a claim is what it was, and one with new parameters in `edits`. A `rename`

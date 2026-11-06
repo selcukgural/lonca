@@ -308,19 +308,109 @@ fn what_all_three_sides_have_stays() {
     assert!(merged.contains("return 20"), "{merged}");
 }
 
-/// Breaking a file that read is no way out of what it would take otherwise.
+/// A file that read stops being one nobody can see into only by a person's
+/// word: the change is listed, and a file with no grammar it does not become.
 #[test]
-fn a_file_that_read_is_held_to_it_when_a_side_breaks_it() {
+fn a_side_that_breaks_a_file_that_read_is_listed() {
     let path = "a.java";
     let b = "class C {\n    void a() {\n    }\n\n    @Test\n    void t() {\n    }\n}\n";
     assert!(!parse(Lang::detect(path).unwrap(), b).has_error);
     let no_test = "class C {\n    void a() {\n    }\n}\n@@@\n";
     assert!(parse(Lang::detect(path).unwrap(), no_test).has_error);
     let f = facts(ENGINE_CURRENT, path, b, no_test);
+    assert_eq!(f.unread_files, [path], "{f:?}");
     assert!(f.unparsed_files.is_empty(), "{f:?}");
-    assert_eq!(f.tests.deleted, 1, "{f:?}");
-    assert!(f.deletes.contains(&"a.java#C.t".to_string()), "{f:?}");
-    assert!(f.edits.contains(&"a.java#<file>".to_string()), "{f:?}");
+    assert_eq!(f.edits, ["a.java#<file>"], "{f:?}");
+
+    // Staying unread, and being repaired, is no such change.
+    let next = no_test.replace("@@@", "@@@ @@@");
+    assert!(
+        facts(ENGINE_CURRENT, path, no_test, &next)
+            .unread_files
+            .is_empty()
+    );
+    assert!(
+        facts(ENGINE_CURRENT, path, no_test, b)
+            .unread_files
+            .is_empty()
+    );
+    // A strict language has the syntax check for it.
+    let rust = facts(ENGINE_CURRENT, "a.rs", "fn a() {}\n", "fn a( {\n");
+    assert!(rust.unread_files.is_empty(), "{rust:?}");
+}
+
+/// A number follows the order of a name, so numbered siblings can change
+/// places with no symbol lost: the merge of lines stands.
+#[test]
+fn numbered_names_do_not_hold_a_merge_back() {
+    let b = "if X:\n    def f():\n        return 1\nelse:\n    def f():\n        return 2\n\n\ndef g():\n    return 3\n";
+    let o = b.replacen(
+        "def f():\n        return 1",
+        "def h():\n        return 1",
+        1,
+    );
+    let t = b.replacen(
+        "def f():\n        return 2",
+        "def i():\n        return 2",
+        1,
+    );
+    let want = o.replacen(
+        "def f():\n        return 2",
+        "def i():\n        return 2",
+        1,
+    );
+    assert_eq!(
+        merge_text_at(ENGINE_CURRENT, "a.py", b, &o, &t).as_deref(),
+        Ok(want.as_str())
+    );
+
+    let b = "#ifdef X\nint f(void) {\n    return 1;\n}\n#else\nint f(void) {\n    return 2;\n}\n#endif\n\nint g(void) {\n    return 3;\n}\n";
+    let o = b.replacen(
+        "int f(void) {\n    return 1",
+        "int h(void) {\n    return 1",
+        1,
+    );
+    let t = b.replacen(
+        "int f(void) {\n    return 2",
+        "int i(void) {\n    return 2",
+        1,
+    );
+    let want = o.replacen(
+        "int f(void) {\n    return 2",
+        "int i(void) {\n    return 2",
+        1,
+    );
+    assert_eq!(
+        merge_text_at(ENGINE_CURRENT, "a.c", b, &o, &t).as_deref(),
+        Ok(want.as_str())
+    );
+}
+
+/// The same with blocks or definitions of one name that a side takes away.
+#[test]
+fn siblings_of_one_name_can_go_on_either_side() {
+    let both = |path: &str, b: &str, o: &str, t: &str, want: &str| {
+        for (x, y) in [(o, t), (t, o)] {
+            let merged = merge_text_at(ENGINE_CURRENT, path, b, x, y);
+            assert_eq!(merged.as_deref(), Ok(want), "{path}");
+        }
+    };
+    let e = |n: u32| format!("extension C {{\n    func m{n}() {{\n        x{n}()\n    }}\n}}\n\n");
+    let keep = "func k() {\n    w()\n}\n\n";
+    let b = format!("{}{keep}{}{keep}{}func z() {{\n}}\n", e(1), e(2), e(3));
+    let (o, t) = (b.replace(&e(3), ""), b.replace(&e(2), ""));
+    both("a.swift", &b, &o, &t, &o.replace(&e(2), ""));
+
+    let b = "class C {\n    void m();\n    void m() const;\n\n    void n();\n};\n\nvoid C::m() {\n    a();\n}\n\nvoid k() {\n    z();\n}\n\nvoid C::m() const {\n    b();\n}\n";
+    let o = b.replace("    void m() const;\n", "");
+    let t = b.replace("void C::m() const {\n    b();\n}\n", "");
+    both(
+        "a.cpp",
+        b,
+        &o,
+        &t,
+        &o.replace("void C::m() const {\n    b();\n}\n", ""),
+    );
 }
 
 /// An unread file is listed for what a file with no grammar is, and no more.
@@ -486,6 +576,15 @@ fn what_each_language_has_of_its_own() {
         "class B;\ntemplate <typename T> class B {\n  void m();\n};\ntemplate <typename T> void B<T>::n() {}\nextern \"C\" int one(int);\n",
     );
     for name in ["B", "B.m", "B.n", "one"] {
+        has(&s, name, false, false);
+    }
+
+    // A scope inside type arguments is no scope of the name.
+    let (s, _, _) = names(
+        "c.cpp",
+        "template <> void f<a::b>(int x) {}\nvoid Box<c::d>::g() {}\nvoid operator<(int a, int b) {}\n",
+    );
+    for name in ["f<a::b>", "Box.g", "operator<"] {
         has(&s, name, false, false);
     }
 

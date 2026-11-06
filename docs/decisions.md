@@ -316,10 +316,12 @@ entry format, so they have their own version
     `<file>` in `conflicts`. So a text operation in the wrong place can not
     drop or copy code that nobody touched. Two parts of a partial type each
     getting a member `x` are caught this way.
-  - **Numbers in blocks.** `f~2` counts from the top of the file, so one more
-    or one less of a name in a block can make the same number another
-    definition. Such a file goes to the line merge, after the checks that make
-    code changed on both sides a conflict.
+  - **Numbers in blocks.** `f~2` counts from the top of the file, so a name
+    that came to stand in another block can make the same number another
+    definition, also with as many of the name as before. So when any side
+    changes which group and block each numbered name stands in
+    (`Holder.block`), the file goes to the line merge, after the checks that
+    make code changed on both sides a conflict.
   - **A holder stays in the compared code.** A block with one member has that
     member's span, and `exact_text` used to cut it with the member, so a second
     member changed the code around it. So adding a method to a Python class

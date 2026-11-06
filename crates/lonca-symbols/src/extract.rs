@@ -5,7 +5,7 @@
 //! function it belongs to. From [`ENGINE_GROUPS`] on, a blank line ends that:
 //! a comment that stands apart belongs to the code around it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
@@ -136,6 +136,8 @@ pub struct Holder {
     /// Members are separated by more than whitespace, so a member added or
     /// removed takes the separator with it.
     pub joined: bool,
+    /// Which group of the file this is, and which block of that group.
+    pub block: (u32, u32),
 }
 
 /// Where a symbol or an import stood in what [`exact_text`] wrote, which
@@ -195,7 +197,8 @@ impl Parsed {
         fn walk(syms: &[Sym], src: &str, out: &mut BTreeMap<String, (String, bool)>) {
             for s in syms {
                 if s.is_test {
-                    out.insert(s.name.clone(), (s.text(src).to_string(), s.skipped));
+                    let (code, comment) = s.compared(src);
+                    out.insert(s.name.clone(), (format!("{code}{comment}"), s.skipped));
                 }
                 walk(&s.children, src, out);
             }
@@ -236,6 +239,7 @@ pub fn parse_at(engine: u32, lang: Lang, src: &str) -> Parsed {
         lang,
         src,
         scopes: RefCell::default(),
+        groups_seen: Cell::new(0),
     };
     let mut imports = Vec::new();
     let mut syms = Vec::new();
@@ -443,12 +447,13 @@ impl<'t> Group<'t> {
     }
 }
 
-fn holder_of(n: Node, joined: bool) -> Holder {
+fn holder_of(n: Node, joined: bool, block: (u32, u32)) -> Holder {
     Holder {
         kind: n.kind_id(),
         start: n.start_byte(),
         end: n.end_byte(),
         joined,
+        block,
     }
 }
 
@@ -473,6 +478,7 @@ struct Extractor<'s> {
     src: &'s str,
     /// Where each C# type name was first seen: its namespaces.
     scopes: RefCell<BTreeMap<String, String>>,
+    groups_seen: Cell<u32>,
 }
 
 impl<'s> Extractor<'s> {
@@ -498,16 +504,20 @@ impl<'s> Extractor<'s> {
         }
     }
 
-    /// A comment behind other code on its line. A comment node can hold its
-    /// own line end, and so can a preprocessor line.
+    /// A comment behind other code on its line, maybe behind another such
+    /// comment. A comment node can hold its own line end, and so can a
+    /// preprocessor line.
     fn trails(&self, n: Node) -> bool {
+        let is_comment = |c: Node| c.kind().contains("comment");
         let behind = n.prev_sibling().is_some_and(|p| {
             let (end, start) = (p.end_byte(), n.start_byte());
             let line_ended = self.src[..end].ends_with('\n');
             let gap = self.src.get(end..start);
-            !line_ended && !p.kind().contains("comment") && gap.is_some_and(|g| !g.contains('\n'))
+            !line_ended
+                && gap.is_some_and(|g| !g.contains('\n'))
+                && (!is_comment(p) || self.trails(p))
         });
-        self.groups() && n.kind().contains("comment") && behind
+        self.groups() && is_comment(n) && behind
     }
 
     /// Only spaces stand between `sym` and the comment behind it.
@@ -897,8 +907,11 @@ impl<'s> Extractor<'s> {
                 continue;
             }
             if let Some(group) = self.group(child, prefix.is_empty()) {
-                for members in group.members {
-                    let held = self.groups().then(|| holder_of(members, group.joined));
+                let nth = self.groups_seen.replace(self.groups_seen.get() + 1);
+                for (i, members) in (0u32..).zip(group.members) {
+                    let held = self
+                        .groups()
+                        .then(|| holder_of(members, group.joined, (nth, i)));
                     self.level(members, prefix, out, imports.as_deref_mut(), seen, held);
                 }
                 continue;
@@ -963,7 +976,7 @@ impl<'s> Extractor<'s> {
                 own_exact.push_str(&self.src[start..child.start_byte()]);
                 let mut holders = holders_of(&children_syms);
                 let body = def.members.filter(|_| self.groups());
-                holders.extend(body.map(|m| holder_of(m, false)));
+                holders.extend(body.map(|m| holder_of(m, false, (0, 0))));
                 exact_text(
                     child,
                     self.src,
@@ -1753,6 +1766,38 @@ mod tests {
         let src = "namespace N;\npartial class C { int x; }\npartial class C { int y; }\n";
         let p = parse_at(5, Lang::CSharp, src);
         assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn every_comment_behind_code_stays_behind_it() {
+        let src = "fn f() {} /* a */ /* b */\nfn g() {}\n";
+        let p = parse_at(5, Lang::Rust, src);
+        assert_eq!(p.syms[0].text(src), "fn f() {} /* a */ /* b */");
+        assert_eq!(p.syms[1].text(src), "fn g() {}");
+    }
+
+    /// Where a test's comment starts is layout here too.
+    #[test]
+    fn a_test_keeps_its_text_when_its_comment_is_realigned() {
+        let a = "#[test]\nfn t() {} // c\n";
+        let b = "#[test]\nfn t() {}   // c\n";
+        let text = |src| parse_at(5, Lang::Rust, src).tests(src)["t"].0.clone();
+        assert_eq!(text(a), text(b));
+        assert_ne!(text(a), text(&a.replace("// c", "// d")));
+    }
+
+    /// Which block a symbol stands in, counted as the file goes.
+    #[test]
+    fn a_holder_knows_its_group_and_its_block() {
+        let src = "if A:\n    def a(): pass\nelse:\n    def b(): pass\nif B:\n    def c(): pass\n";
+        let p = parse_at(5, Lang::Python, src);
+        let at: Vec<_> = p.syms.iter().map(|s| s.holder.map(|h| h.block)).collect();
+        assert_eq!(at, [Some((0, 0)), Some((0, 1)), Some((1, 0))]);
+        let src = "package p\nconst (\n)\nvar (\n\tv = 1\n)\n";
+        assert_eq!(
+            parse_at(5, Lang::Go, src).syms[0].holder.unwrap().block,
+            (1, 0)
+        );
     }
 
     /// One id per member, however many parts a type has in a file.

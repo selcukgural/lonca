@@ -331,20 +331,29 @@ fn own_from_a_side(engine: u32, [os, ts]: [&[Sym]; 2], merged: &[Sym]) -> bool {
     })
 }
 
-/// A number in a name counts from the top of the file: one more or one less
-/// of a name changes which definition a numbered name in a block is.
-fn numbers_hold(engine: u32, [pb, po, pt]: [&Parsed; 3]) -> bool {
-    let count = |p: &Parsed| {
-        let mut held: BTreeMap<String, usize> = BTreeMap::new();
-        for s in p.syms.iter().filter(|s| s.holder.is_some()) {
+/// Which block each name with a number stands in, at any depth.
+fn numbered_places(syms: &[Sym], out: &mut BTreeMap<String, Vec<(u32, u32)>>) {
+    for s in syms {
+        if let Some(h) = s.holder {
             let name = s.name.split('~').next().unwrap_or(&s.name);
-            *held.entry(name.to_string()).or_insert(0) += 1;
+            out.entry(name.to_string()).or_default().push(h.block);
         }
-        held.retain(|_, n| *n > 1);
-        held
+        numbered_places(&s.children, out);
+    }
+}
+
+/// A number in a name counts from the top of the file: the same number can
+/// be another definition when a name came to stand in another block, even
+/// with as many of the name as before.
+fn numbers_hold(engine: u32, [pb, po, pt]: [&Parsed; 3]) -> bool {
+    let places = |p: &Parsed| {
+        let mut out = BTreeMap::new();
+        numbered_places(&p.syms, &mut out);
+        out.retain(|_, list: &mut Vec<_>| list.len() > 1);
+        out
     };
-    let base = count(pb);
-    engine < ENGINE_GROUPS || (count(po) == base && count(pt) == base)
+    let base = places(pb);
+    engine < ENGINE_GROUPS || (places(po) == base && places(pt) == base)
 }
 
 enum Sm {
@@ -1252,6 +1261,54 @@ mod tests {
         // The other way round the code is `t`'s, and adjacent lines refuse.
         let c = Err(vec!["a.py#<file>".to_string()]);
         assert_eq!(merge_text_at(5, "a.py", b, &t, &o), c);
+    }
+
+    /// A number can change meaning with as many of the name as before: what
+    /// counts is which block each one stands in.
+    #[test]
+    fn a_number_is_held_to_its_block() {
+        // To lines `o` only wrote a branch in front of the one `t` edited, so
+        // that is how it reads: the choice is the line merge's, not a number's.
+        let b = "if A:\n    def f():\n        return 1\nelse:\n    def f():\n        return 1\n";
+        let o = "if A:\n    pass\nelif B:\n    def f():\n        return 1\nelse:\n    def f():\n        return 1\n";
+        let t = b.replacen("return 1", "return 10", 1);
+        let want = o.replacen("return 1", "return 10", 1);
+        assert_eq!(merge_text_at(5, "a.py", b, o, &t).unwrap(), want);
+        assert_eq!(merge_around_conflicts(5, "a.py", b, o, &t), None);
+        // One moved to the other block: a new symbol beside it does not follow.
+        let b = "if A:\n    def f():\n        return 1\nelse:\n    def f():\n        return 2\n";
+        let o = "if A:\n    pass\nelse:\n    def f():\n        return 2\n\n    def f():\n        return 3\n";
+        let t = b.replacen(
+            "return 1\n",
+            "return 1\n\n    def h():\n        return 9\n",
+            1,
+        );
+        let m = merge_text_at(5, "a.py", b, o, &t);
+        assert!(
+            m.is_err() || m.unwrap().contains("if A:\n    pass\n\n    def h"),
+            "{t}"
+        );
+        // Deeper than the top level, and a block that went with no count to see.
+        let b = "mod q {\n    extern \"C\" {\n        fn f();\n    }\n\n    extern \"system\" {\n        fn f();\n    }\n}\n";
+        let o = b.replace(
+            "    extern \"system\"",
+            "    extern \"cdecl\" {\n        fn f();\n    }\n\n    extern \"system\"",
+        );
+        let t = b.replace(
+            "\"system\" {\n        fn f();",
+            "\"system\" {\n        fn f(x: u8);",
+        );
+        let want = o.replace(
+            "\"system\" {\n        fn f();",
+            "\"system\" {\n        fn f(x: u8);",
+        );
+        assert_eq!(merge_text_at(5, "a.rs", b, &o, &t).unwrap(), want);
+        assert_eq!(merge_around_conflicts(5, "a.rs", b, &o, &t), None);
+        let b = "extern \"C\" {\n    fn f();\n}\n\nextern \"D\" {\n    fn f();\n}\n";
+        let o = "extern \"Z\" {\n}\n\nextern \"C\" {\n    fn f();\n}\n\nextern \"D\" {\n    fn f();\n}\n";
+        let t = b.replace("\"D\" {\n    fn f();", "\"D\" {\n    fn f(x: u8);");
+        let m = merge_text_at(5, "a.rs", b, o, &t).unwrap();
+        assert!(m.contains("\"D\" {\n    fn f(x: u8);"), "{m}");
     }
 
     /// With no neighbour to go by, two empty blocks are not one.

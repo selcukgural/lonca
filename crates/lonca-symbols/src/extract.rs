@@ -56,6 +56,9 @@ pub struct Sym {
     /// The declaration or block this symbol stands in, when that is not
     /// simply the level of its siblings.
     pub holder: Option<Holder>,
+    /// In a list with separators: where the element before it ends and the
+    /// one after it starts, symbol or not.
+    pub around: (Option<usize>, Option<usize>),
     pub is_test: bool,
     pub skipped: bool,
     pub container: bool,
@@ -472,6 +475,21 @@ impl<'s> Extractor<'s> {
         }
     }
 
+    /// A comment behind other code on its line.
+    fn trails(&self, n: Node) -> bool {
+        let row = n.start_position().row;
+        let behind = n
+            .prev_sibling()
+            .is_some_and(|p| p.end_position().row == row);
+        self.groups() && n.kind().contains("comment") && behind
+    }
+
+    /// Only spaces stand between `sym` and the comment behind it.
+    fn ends_at(&self, sym: &Sym, comment: Node) -> bool {
+        let gap = self.src.get(sym.end..comment.start_byte());
+        gap.is_some_and(|g| g.trim_matches([' ', '\t']).is_empty())
+    }
+
     fn groups(&self) -> bool {
         self.engine >= ENGINE_GROUPS
     }
@@ -794,28 +812,42 @@ impl<'s> Extractor<'s> {
         holder: Option<Holder>,
     ) {
         let mut pending: Option<usize> = None;
+        // The first of `pending` that a blank line does not part from it.
+        let mut firm: Option<usize> = None;
         let mut before: Option<Node> = None;
         let children: Vec<Node> = parent.named_children(&mut parent.walk()).collect();
-        for child in children {
+        for &child in &children {
             if before.is_some_and(|b| self.stands_apart(b, child)) {
-                pending = None;
+                pending = firm;
             }
             before = Some(child).filter(|c| self.is_attachable(*c));
-            if self.is_attachable(child) {
-                pending.get_or_insert(child.start_byte());
+            if self.trails(child) {
+                before = None;
+                let joined = holder.is_some_and(|h| h.joined);
+                match out.last_mut() {
+                    Some(last) if !joined && !last.container && self.ends_at(last, child) => {
+                        last.end = child.end_byte();
+                    }
+                    _ => {}
+                }
                 continue;
             }
+            if self.is_attachable(child) {
+                pending.get_or_insert(child.start_byte());
+                if !child.kind().contains("comment") {
+                    firm.get_or_insert(child.start_byte());
+                }
+                continue;
+            }
+            let attached = pending.take();
+            firm = None;
             if let Some(imports) = imports.as_deref_mut()
                 && self.is_import(child)
             {
-                imports.push((
-                    pending.take().unwrap_or(child.start_byte()),
-                    child.end_byte(),
-                ));
+                imports.push((attached.unwrap_or(child.start_byte()), child.end_byte()));
                 continue;
             }
             if let Some(group) = self.group(child, prefix.is_empty()) {
-                pending = None;
                 for members in group.members {
                     let held = self.groups().then(|| holder_of(members, group.joined));
                     self.level(members, prefix, out, imports.as_deref_mut(), seen, held);
@@ -824,10 +856,9 @@ impl<'s> Extractor<'s> {
             }
             let def_node = self.unwrap_def(child);
             let Some(def) = self.def(def_node) else {
-                pending = None;
                 continue;
             };
-            let start = pending.take().unwrap_or(child.start_byte());
+            let start = attached.unwrap_or(child.start_byte());
             let base = if prefix.is_empty() {
                 def.name.clone()
             } else {
@@ -835,7 +866,9 @@ impl<'s> Extractor<'s> {
             };
             let count = seen.entry(base.clone()).or_insert(0);
             *count += 1;
-            let part_of = (*count > 1 && self.is_partial(def_node)).then(|| base.clone());
+            let earlier = out.iter().find(|s| s.name == base);
+            let same_place = earlier.is_some_and(|s| s.holder == holder);
+            let part_of = (same_place && self.is_partial(def_node)).then(|| base.clone());
             let qualified = if *count == 1 {
                 base
             } else {
@@ -861,6 +894,17 @@ impl<'s> Extractor<'s> {
                 (None, None) => is_type.then(|| qualified.clone()),
             };
             let end = child.end_byte();
+            let around = match holder {
+                Some(h) if h.joined => (
+                    children
+                        .iter()
+                        .rev()
+                        .map(|c| c.end_byte())
+                        .find(|e| *e <= start),
+                    children.iter().map(|c| c.start_byte()).find(|s| *s >= end),
+                ),
+                _ => (None, None),
+            };
             let cut: Vec<(usize, usize)> = children_syms.iter().map(|s| (s.start, s.end)).collect();
             let marks = children_syms.iter();
             let marks: Vec<Mark> = marks.map(|s| (s.start, s.end, s.name.as_str())).collect();
@@ -899,6 +943,7 @@ impl<'s> Extractor<'s> {
                 signature,
                 def_of,
                 holder,
+                around,
                 is_test,
                 skipped,
                 container: def.members.is_some(),
@@ -1590,6 +1635,57 @@ mod tests {
         let rs = "#[derive(Debug)]\n\nstruct S;\n";
         let p = parse_at(5, Lang::Rust, rs);
         assert_eq!(p.syms[0].start, 0);
+    }
+
+    #[test]
+    fn a_comment_behind_code_is_not_about_what_follows() {
+        let src = "package p\n\nconst (\n\tA = 1 // first\n\tB = 2\n)\n\nfunc F() {} // done\nfunc G() {}\n";
+        let p = parse_at(5, Lang::Go, src);
+        assert_eq!(p.syms[0].text(src), "A = 1 // first");
+        assert_eq!(p.syms[1].text(src), "B = 2");
+        assert_eq!(p.syms[2].text(src), "func F() {} // done");
+        assert_eq!(p.syms[3].text(src), "func G() {}");
+        // A container's own text ends at the node: the comment is code.
+        let src = "class C { } // done\nclass D { }\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        assert_eq!(p.syms[1].text(src), "class D { }");
+        assert_eq!(p.syms[0].text(src), "class C { }");
+        assert!(p.residual_exact.contains("done"), "{}", p.residual_exact);
+        // Behind an opening brace or a comma it belongs to nobody.
+        let src = "class C { // about\n    int a;\n}\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        assert_eq!(p.syms[0].children[0].text(src), "int a;");
+        let src = "module.exports = {\n  a() {}, // first\n  b() {},\n};\n";
+        let p = parse_at(5, Lang::JavaScript, src);
+        assert_eq!(p.syms[0].text(src), "a() {}");
+        assert_eq!(p.syms[1].text(src), "b() {}");
+        // Engine 4 attaches it to what follows.
+        let src = "fn f() {} // done\nfn g() {}\n";
+        assert_eq!(
+            parse_at(4, Lang::Rust, src).syms[1].text(src),
+            "// done\nfn g() {}"
+        );
+    }
+
+    /// A blank line parts a comment, not an attribute in front of it.
+    #[test]
+    fn an_attribute_outlives_a_comment_that_stands_apart() {
+        let src = "#[test]\n// note\n\nfn t() {}\n";
+        let p = parse_at(5, Lang::Rust, src);
+        assert_eq!(p.syms[0].start, 0);
+        assert!(p.tests(src)["t"].0.starts_with("#[test]"));
+        let src = "class C {\n  @A()\n  // note\n\n  m() {}\n}\n";
+        let p = parse_at(5, Lang::TypeScript, src);
+        assert!(p.syms[0].children[0].text(src).starts_with("@A()"));
+    }
+
+    /// Two namespaces, two types: only parts in one place are one type.
+    #[test]
+    fn partial_types_in_two_namespaces_are_two_types() {
+        let src = "namespace A { partial class C { int a; } }\nnamespace B { partial class C { int b; } }\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C~2"));
+        assert!(names(&p).contains(&"C~2.b".to_string()));
     }
 
     /// One id per member, however many parts a type has in a file.

@@ -291,17 +291,32 @@ entry format, so they have their own version
     with statements can not be told apart from what they do. The same name in
     two branches is `f` and `f~2`.
   - **A symbol knows what holds it** (`Sym.holder`). The merge places a new
-    symbol only beside one of its own holder, on a side where that one has a
-    holder too. Nothing to stand beside goes to the line merge. Without this a
+    symbol only beside one of its own holder, on a side where that one stands
+    in the same kind of holder, and a holder's edge counts as code between
+    neighbours. Nothing to stand beside goes to the line merge. Without this a
     new function behind a Go group could land inside it, and one for `else:`
     in the `if` branch. It also fixes C# namespaces, where a new class could
-    land in the namespace before it.
+    land in the namespace before it. The same definition added to two blocks
+    is a conflict, not one addition.
   - **Separators go with the member.** A list with commas (`Holder.joined`) has
     its commas left out of `exact_text`, so a member added or removed is no
-    change of `Type.<def>` or `<module>`. The merge adds the separator the
-    new member has in `t` and removes one with a deleted member. A member that
-    stops being in a list, as in `int a, b;` to `int a;`, is a change of shape
-    and of the code around it.
+    change of `Type.<def>` or `<module>`. So a change of only a trailing comma
+    has no facts, like any layout. The merge adds the separator the new member
+    has in `t` and removes one with a deleted member. Both are measured to the
+    next element of the list in the tree (`Sym.around`), not the next symbol:
+    `VERSION: 1` between two methods is no separator. A member that stops being
+    in a list, as in `int a, b;` to `int a;`, is a change of shape and of the
+    code around it.
+  - **A symbol merge writes code of one side or the other** (`holds_up`). The
+    code outside symbols and every container's own text must equal `o`'s or
+    `t`'s, and no merge, by lines either, may bring a name neither side has.
+    Failing it, a symbol merge goes to the line merge, and a line merge is
+    `<file>` in `conflicts`. So a text operation in the wrong place can not
+    drop or copy code that nobody touched. Two parts of a partial type each
+    getting a member `x` are caught this way.
+  - **Numbers in blocks.** `f~2` counts from the top of the file, so when code
+    moved in a file with a numbered name in a block, the name may mean another
+    definition. Such a file goes to the line merge.
   - **A holder stays in the compared code.** A block with one member has that
     member's span, and `exact_text` used to cut it with the member, so a second
     member changed the code around it. So adding a method to a Python class
@@ -309,17 +324,25 @@ entry format, so they have their own version
   - **Comments.** A comment attaches only when no blank line stands under it.
     Otherwise it is code: `<module>`, or `Type.<def>` in a type. A licence or
     section header is no longer the next symbol's. An attribute or a decorator
-    attaches across a blank line, because it is part of what follows.
+    attaches across a blank line, because it is part of what follows, also
+    with a comment that stands apart behind it. A comment behind code on its
+    line is never about what follows: it belongs to a leaf symbol that ends
+    there, and otherwise it is code. In a list with separators the comma stands
+    between, so it is code there too.
   - **TS method decorators** attach to the method, as a field's already did.
   - **C# partial types.** A later `partial` part of a type in the same file
     keeps its own name (`C~2`) but works like a Rust `impl`: its members are
     `C.N`, overloads across parts get one id each, and its header is
     `C.<def>`. Parts in other files stay unrelated, because a symbol id is per
-    file.
+    file, and so do parts in two namespaces, which are two types. A new part
+    is an add of `C~2`, as a new `impl` is an add of `impl:C`.
   - **What this does not see.** A const in a Go `iota` group means what its
     place says, so a spec added in the middle changes the ones after it with
     no fact about them; verification catches that, as for any change between
     symbols (design §5.8). Names by order (`f~2`, `m!~2`) wait for #44.
+    Deleting the last two members of a list, or a member between what `o`
+    changed on one line, is refused by the line merge though the leases allow
+    it: nothing is lost, and such a change goes back to the agent.
 
 ## Harness profiles
 

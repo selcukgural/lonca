@@ -232,7 +232,7 @@ fn diff_level(
         match bm.get(n.name.as_str()) {
             None => f.adds.push(sym_id(path, &n.name)),
             Some(b) => {
-                if b.text(old) == n.text(new) {
+                if b.same(old, n, new) {
                     continue;
                 }
                 let unit = sym_id(path, &b.changed_unit(n, engine));
@@ -512,6 +512,83 @@ mod tests {
         let f = section_facts(5, "a.cs", old, "class C { int a; }\n");
         assert_eq!(f.deletes, ["a.cs#C.b"]);
         assert!(f.edits.contains(&"a.cs#C.<def>".to_string()), "{f:?}");
+    }
+
+    #[test]
+    fn a_trailing_comment_is_part_of_its_symbol_but_its_spacing_is_not() {
+        let old = "package p\n\nconst (\n\tA = 1  // a\n\tB = 20 // b\n)\n";
+        let new = "package p\n\nconst (\n\tA = 1   // a\n\tB = 20  // b\n\tC = 300 // c\n)\n";
+        let f = section_facts(5, "a.go", old, new);
+        assert_eq!((f.adds, f.edits), (vec!["a.go#C".to_string()], vec![]));
+        let f = section_facts(5, "a.go", old, &old.replace("// a", "// first"));
+        assert_eq!(f.edits, ["a.go#A"]);
+    }
+
+    /// A header of several lines ends at the blank line under it.
+    #[test]
+    fn a_comment_of_several_lines_stands_apart_as_one() {
+        let rows = [
+            (
+                "a.rs",
+                "//! one\n//! two\n\nfn f() {}\n",
+                "two",
+                "2",
+                "a.rs#<module>",
+            ),
+            (
+                "a.rs",
+                "//! one\n//! two\n\nuse a::b;\n",
+                "two",
+                "2",
+                "a.rs#<module>",
+            ),
+            (
+                "a.rs",
+                "/// one\n/// two\n\nfn f() {}\n",
+                "two",
+                "2",
+                "a.rs#<module>",
+            ),
+            (
+                "a.rs",
+                "/// one\n// two\n\nfn f() {}\n",
+                "two",
+                "2",
+                "a.rs#<module>",
+            ),
+            (
+                "a.rs",
+                "/* a */ /* b */\n\nfn f() {}\n",
+                "b",
+                "c",
+                "a.rs#<module>",
+            ),
+            (
+                "a.rs",
+                "/// one\n/// two\nfn f() {}\n",
+                "two",
+                "2",
+                "a.rs#f",
+            ),
+            (
+                "a.cs",
+                "class C\n{\n    #region R\n    /// one\n    /// two\n    void M() { }\n    #endregion\n}\n",
+                "two",
+                "2",
+                "a.cs#C.M",
+            ),
+            (
+                "a.cs",
+                "class C\n{\n    #region R\n    // about\n    int a;\n    #endregion\n}\n",
+                "about",
+                "on",
+                "a.cs#C.a",
+            ),
+        ];
+        for (path, old, from, to, want) in rows {
+            let f = section_facts(5, path, old, &old.replace(from, to));
+            assert_eq!(f.edits, [want], "{old}");
+        }
     }
 
     /// A part of a partial type stands in for the type, as an `impl` does.

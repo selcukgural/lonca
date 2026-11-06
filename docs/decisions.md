@@ -304,7 +304,9 @@ entry format, so they have their own version
     has no facts, like any layout. The merge adds the separator the new member
     has in `t` and removes one with a deleted member. Both are measured to the
     next element of the list in the tree (`Sym.around`), not the next symbol:
-    `VERSION: 1` between two methods is no separator. A member that stops being
+    `VERSION: 1` between two methods is no separator. A new member is placed
+    only beside a symbol right next to it, since order against `...base` can
+    decide what a key means; otherwise lines place it. A member that stops being
     in a list, as in `int a, b;` to `int a;`, is a change of shape and of the
     code around it.
   - **A symbol merge writes code of one side or the other** (`holds_up`). The
@@ -314,9 +316,10 @@ entry format, so they have their own version
     `<file>` in `conflicts`. So a text operation in the wrong place can not
     drop or copy code that nobody touched. Two parts of a partial type each
     getting a member `x` are caught this way.
-  - **Numbers in blocks.** `f~2` counts from the top of the file, so when code
-    moved in a file with a numbered name in a block, the name may mean another
-    definition. Such a file goes to the line merge.
+  - **Numbers in blocks.** `f~2` counts from the top of the file, so one more
+    or one less of a name in a block can make the same number another
+    definition. Such a file goes to the line merge, after the checks that make
+    code changed on both sides a conflict.
   - **A holder stays in the compared code.** A block with one member has that
     member's span, and `exact_text` used to cut it with the member, so a second
     member changed the code around it. So adding a method to a Python class
@@ -328,21 +331,25 @@ entry format, so they have their own version
     with a comment that stands apart behind it. A comment behind code on its
     line is never about what follows: it belongs to a leaf symbol that ends
     there, and otherwise it is code. In a list with separators the comma stands
-    between, so it is code there too.
+    between, so it is code there too. Where such a comment starts is layout
+    (`Sym.tail`), because `gofmt` realigns it when a longer line comes.
   - **TS method decorators** attach to the method, as a field's already did.
   - **C# partial types.** A later `partial` part of a type in the same file
     keeps its own name (`C~2`) but works like a Rust `impl`: its members are
     `C.N`, overloads across parts get one id each, and its header is
     `C.<def>`. Parts in other files stay unrelated, because a symbol id is per
-    file, and so do parts in two namespaces, which are two types. A new part
-    is an add of `C~2`, as a new `impl` is an add of `impl:C`.
+    file, and so do parts in two different namespaces, which are two types. A
+    namespace written twice is one namespace. A new part is an add of `C~2`, as
+    a new `impl` is an add of `impl:C`.
   - **What this does not see.** A const in a Go `iota` group means what its
     place says, so a spec added in the middle changes the ones after it with
     no fact about them; verification catches that, as for any change between
     symbols (design §5.8). Names by order (`f~2`, `m!~2`) wait for #44.
-    Deleting the last two members of a list, or a member between what `o`
-    changed on one line, is refused by the line merge though the leases allow
-    it: nothing is lost, and such a change goes back to the agent.
+    Deleting the last two members of a list, or the last symbols of one, and a
+    deletion that takes the blank line under a comment, are refused by the line
+    merge though the leases allow it: nothing is lost, and such a change goes
+    back to the agent. A new symbol beside one that `o` moved to another block
+    of the same kind follows it.
 
 ## Harness profiles
 

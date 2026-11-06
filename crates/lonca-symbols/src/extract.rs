@@ -5,6 +5,7 @@
 //! function it belongs to. From [`ENGINE_GROUPS`] on, a blank line ends that:
 //! a comment that stands apart belongs to the code around it.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::Node;
@@ -59,6 +60,9 @@ pub struct Sym {
     /// In a list with separators: where the element before it ends and the
     /// one after it starts, symbol or not.
     pub around: (Option<usize>, Option<usize>),
+    /// A comment behind the code on its line: where that code ends and where
+    /// the comment starts. What stands between them is layout.
+    pub tail: Option<(usize, usize)>,
     pub is_test: bool,
     pub skipped: bool,
     pub container: bool,
@@ -68,6 +72,18 @@ pub struct Sym {
 impl Sym {
     pub fn text<'a>(&self, src: &'a str) -> &'a str {
         &src[self.start..self.end]
+    }
+
+    /// The text of `self` in `src` says what `other` says in `other_src`.
+    pub fn same(&self, src: &str, other: &Sym, other_src: &str) -> bool {
+        self.compared(src) == other.compared(other_src)
+    }
+
+    fn compared<'a>(&self, src: &'a str) -> (&'a str, &'a str) {
+        match self.tail {
+            Some((code, comment)) => (&src[self.start..code], &src[comment..self.end]),
+            None => (self.text(src), ""),
+        }
     }
 
     /// This symbol's code and where its members stood in it.
@@ -215,7 +231,12 @@ pub fn parse_at(engine: u32, lang: Lang, src: &str) -> Parsed {
         };
     };
     let root = tree.root_node();
-    let ex = Extractor { engine, lang, src };
+    let ex = Extractor {
+        engine,
+        lang,
+        src,
+        scopes: RefCell::default(),
+    };
     let mut imports = Vec::new();
     let mut syms = Vec::new();
     ex.level(
@@ -450,6 +471,8 @@ struct Extractor<'s> {
     engine: u32,
     lang: Lang,
     src: &'s str,
+    /// Where each C# type name was first seen: its namespaces.
+    scopes: RefCell<BTreeMap<String, String>>,
 }
 
 impl<'s> Extractor<'s> {
@@ -475,12 +498,15 @@ impl<'s> Extractor<'s> {
         }
     }
 
-    /// A comment behind other code on its line.
+    /// A comment behind other code on its line. A comment node can hold its
+    /// own line end, and so can a preprocessor line.
     fn trails(&self, n: Node) -> bool {
-        let row = n.start_position().row;
-        let behind = n
-            .prev_sibling()
-            .is_some_and(|p| p.end_position().row == row);
+        let behind = n.prev_sibling().is_some_and(|p| {
+            let (end, start) = (p.end_byte(), n.start_byte());
+            let line_ended = self.src[..end].ends_with('\n');
+            let gap = self.src.get(end..start);
+            !line_ended && !p.kind().contains("comment") && gap.is_some_and(|g| !g.contains('\n'))
+        });
         self.groups() && n.kind().contains("comment") && behind
     }
 
@@ -569,6 +595,28 @@ impl<'s> Extractor<'s> {
             }
             _ => None,
         }
+    }
+
+    /// `n` stands in the namespaces where `name` was first seen. Namespaces
+    /// are no part of a name, and one can be written twice.
+    fn same_scope(&self, name: &str, n: Node) -> bool {
+        if !self.groups() || self.lang != Lang::CSharp {
+            return false;
+        }
+        let mut scope = String::new();
+        let mut at = n.parent();
+        while let Some(p) = at {
+            if p.kind().ends_with("namespace_declaration") {
+                scope.push_str(&self.field_text(p, "name").unwrap_or_default());
+                scope.push('.');
+            }
+            at = p.parent();
+        }
+        let mut scopes = self.scopes.borrow_mut();
+        let first = scopes
+            .entry(name.to_string())
+            .or_insert_with(|| scope.clone());
+        *first == scope
     }
 
     /// A later part of a C# `partial` type.
@@ -826,6 +874,7 @@ impl<'s> Extractor<'s> {
                 let joined = holder.is_some_and(|h| h.joined);
                 match out.last_mut() {
                     Some(last) if !joined && !last.container && self.ends_at(last, child) => {
+                        last.tail = Some((last.end, child.start_byte()));
                         last.end = child.end_byte();
                     }
                     _ => {}
@@ -866,9 +915,9 @@ impl<'s> Extractor<'s> {
             };
             let count = seen.entry(base.clone()).or_insert(0);
             *count += 1;
-            let earlier = out.iter().find(|s| s.name == base);
-            let same_place = earlier.is_some_and(|s| s.holder == holder);
-            let part_of = (same_place && self.is_partial(def_node)).then(|| base.clone());
+            let same_type = self.same_scope(&base, def_node);
+            let part_of =
+                (same_type && *count > 1 && self.is_partial(def_node)).then(|| base.clone());
             let qualified = if *count == 1 {
                 base
             } else {
@@ -944,6 +993,7 @@ impl<'s> Extractor<'s> {
                 def_of,
                 holder,
                 around,
+                tail: None,
                 is_test,
                 skipped,
                 container: def.members.is_some(),
@@ -1686,6 +1736,23 @@ mod tests {
         let p = parse_at(5, Lang::CSharp, src);
         assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C~2"));
         assert!(names(&p).contains(&"C~2.b".to_string()));
+    }
+
+    /// One type written in parts of a type or a namespace written twice.
+    #[test]
+    fn partial_types_in_one_scope_are_one_type() {
+        let src = "partial class A\n{\n    partial class C { int x; }\n}\n\npartial class A\n{\n    partial class C { int y; }\n}\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        assert_eq!(find(&p.syms, "A.C~2").def_of.as_deref(), Some("A.C"));
+        assert!(names(&p).contains(&"A.C.y".to_string()));
+        let src = "namespace N { partial class C { int x; } }\nnamespace N { partial class C { int y; } }\nnamespace M { partial class C { int z; } }\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C"));
+        assert_eq!(find(&p.syms, "C~3").def_of.as_deref(), Some("C~3"));
+        assert_eq!(names(&p), ["C", "C.x", "C~2", "C.y", "C~3", "C~3.z"]);
+        let src = "namespace N;\npartial class C { int x; }\npartial class C { int y; }\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C"));
     }
 
     /// One id per member, however many parts a type has in a file.

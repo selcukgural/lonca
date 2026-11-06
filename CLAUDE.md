@@ -67,11 +67,15 @@ git diff main -- crates > /tmp/git.diff && cargo mutants --in-diff /tmp/git.diff
 - Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
   paths, no writes to `$HOME`. Parallel jobs (`-j`) run copies at once.
 - CI (`.github/workflows/mutants.yml`): on every PR the mutants in the
-  diff against the base branch run over six shards (`mutants k/6`), each
+  diff against the base branch run over 20 shards (`mutants k/20`), each
   failing on any survivor, and the `mutants` job that the ruleset
   requires fails if any shard did; a PR waits for it. Survivors are in
-  the `mutants-diff-<k>` artifacts (`missed.txt`). Weekly (and on demand)
-  the whole workspace runs in 8 shards; a survivor in a security-critical
-  file fails the shard.
+  the `mutants-diff-<k>` artifacts (`missed.txt`). Every night at 00:07 UTC,
+  if main changed, and on demand, the whole workspace runs in 20 shards
+  (`full k/20`). That run blocks nothing; any survivor fails its shard and
+  is listed in the run's summary.
+- Before the day's first piece of work, look at the last night's run
+  (`gh run list --workflow=mutants.yml --event schedule --limit 1`). If it
+  found survivors, fix those first.
 - Every PR is opened with auto-merge (`gh pr merge --auto --merge`); it
   lands once every required check, mutants included, is green.

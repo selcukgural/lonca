@@ -310,7 +310,9 @@ fn release_items(c: &mut Client, set: &str, released: Vec<LeaseItem>) -> Result<
 pub fn lease_needed(c: &mut Client, ws: &Workspace) -> Result<Value> {
     let changes = ws.changes()?;
     if changes.is_empty() {
-        return Ok(json!({"changes": 0, "leases": [], "acquire": [], "advice": null}));
+        return Ok(
+            json!({"changes": 0, "leases": [], "acquire": [], "advice": null, "no_lease": []}),
+        );
     }
     let r = ctx::call(
         c,
@@ -319,7 +321,7 @@ pub fn lease_needed(c: &mut Client, ws: &Workspace) -> Result<Value> {
     )?;
     Ok(json!({
         "changes": changes.len(), "leases": r["leases"], "acquire": r["acquire"],
-        "advice": r["advice"],
+        "advice": r["advice"], "no_lease": r["no_lease"],
     }))
 }
 

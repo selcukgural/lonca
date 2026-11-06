@@ -1905,7 +1905,7 @@ fn mcp_leases_mixed_kinds_says_what_is_needed_and_releases_part_of_a_set() {
     let (_, none) = mcp.tool("lease_needed", json!({}));
     assert_eq!(
         none,
-        json!({"changes": 0, "leases": [], "acquire": [], "advice": null})
+        json!({"changes": 0, "leases": [], "acquire": [], "advice": null, "no_lease": []})
     );
 
     std::fs::write(

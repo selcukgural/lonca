@@ -1,0 +1,222 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.py#Till.deposit"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.py#Till.add"
+        ],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "renames": [
+          [
+            "src/sample.py#Till.add",
+            "src/sample.py#Till.deposit"
+          ]
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#Till.total_of"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "class Till:\n    def deposit(self, v):\n        self.total += v\n\n    def total_of(self):\n        return self.total * 2\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.add",
+              "own": "",
+              "signature": "def add(self, v):",
+              "skipped": false,
+              "span": [
+                16,
+                16,
+                57
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.total_of",
+              "own": "",
+              "signature": "def total_of(self):",
+              "skipped": false,
+              "span": [
+                63,
+                63,
+                108
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Till",
+          "own": "class_definition(class\u001fTill\u001f:\u001fblock())",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            108
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.deposit",
+              "own": "",
+              "signature": "def deposit(self, v):",
+              "skipped": false,
+              "span": [
+                16,
+                16,
+                61
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.total_of",
+              "own": "",
+              "signature": "def total_of(self):",
+              "skipped": false,
+              "span": [
+                67,
+                67,
+                112
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Till",
+          "own": "class_definition(class\u001fTill\u001f:\u001fblock())",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            112
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.add",
+              "own": "",
+              "signature": "def add(self, v):",
+              "skipped": false,
+              "span": [
+                16,
+                16,
+                57
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.total_of",
+              "own": "",
+              "signature": "def total_of(self):",
+              "skipped": false,
+              "span": [
+                63,
+                63,
+                112
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Till",
+          "own": "class_definition(class\u001fTill\u001f:\u001fblock())",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            112
+          ]
+        }
+      ]
+    }
+  }
+}

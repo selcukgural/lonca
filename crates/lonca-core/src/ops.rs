@@ -297,6 +297,10 @@ pub struct Facts {
     /// also in `deletes` and `adds`, one with new parameters in `edits`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub renames: Vec<[String; 2]>,
+    /// Text files changed that no parser reads, whole-file edits in `edits`.
+    /// Under `leases.unparsed_files = "optimistic"` they need no lease.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unparsed_files: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -7,7 +7,9 @@ use lonca_core::{FileMap, GitId, Result};
 
 #[cfg(test)]
 use crate::engine::ENGINE_KEYS;
-use crate::engine::{ENGINE_EXACT, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS};
+use crate::engine::{
+    ENGINE_EXACT, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS, ENGINE_UNPARSED,
+};
 use crate::extract::{
     MAX_COMPARED, Parsed, Sym, align, best_pairs, likeness, moved, parse_at, parse_together,
     shifted,
@@ -113,12 +115,16 @@ pub fn analyze(
                 f.lines_added += a;
                 f.lines_removed += r;
                 let Some(lang) = lang else {
+                    let format = Format::detect(path);
                     let by_section = (engine >= ENGINE_SECTIONS)
-                        .then(|| Format::detect(path))
+                        .then_some(format)
                         .flatten()
                         .is_some_and(|format| compare_sections(path, format, old, newt, &mut f));
                     if !by_section {
                         f.edits.push(sym_id(path, FILE));
+                    }
+                    if format.is_none() && engine >= ENGINE_UNPARSED {
+                        f.unparsed_files.push(path.clone());
                     }
                     continue;
                 };
@@ -149,6 +155,7 @@ pub fn analyze(
         &mut f.modified_files,
         &mut f.signature_changes,
         &mut f.import_only_files,
+        &mut f.unparsed_files,
     ] {
         v.sort();
         v.dedup();
@@ -603,6 +610,68 @@ mod tests {
         assert!(f.renames.is_empty(), "{f:?}");
         let f = section_facts(ENGINE_RENAMES, "a.ts", "class A {}\n", "class B {}\n");
         assert!(f.renames.is_empty(), "{f:?}");
+    }
+
+    /// Only text that a line merge can take: what reads a file has symbols
+    /// or sections, and a binary file has no lines.
+    #[test]
+    fn the_files_no_parser_reads_are_listed() {
+        let at = ENGINE_UNPARSED;
+        let f = section_facts(at, "a.java", "class A {}\n", "class B {}\n");
+        assert_eq!(f.unparsed_files, ["a.java"]);
+        assert_eq!(f.edits, ["a.java#<file>"]);
+        let f = section_facts(at, "Makefile", "a:\n", "b:\n");
+        assert_eq!(f.unparsed_files, ["Makefile"]);
+        for (path, old, new) in [
+            ("a.rs", "fn a() {}\n", "fn a() { b(); }\n"),
+            ("a.toml", "a = 1\n", "a = 2\n"),
+            ("a.md", "# A\n\nx\n", "# A\n\ny\n"),
+            ("a.json", "{\"a\": 1", "{\"a\": 2"),
+        ] {
+            assert!(
+                section_facts(at, path, old, new).unparsed_files.is_empty(),
+                "{path}"
+            );
+        }
+        let f = section_facts(at - 1, "a.java", "class A {}\n", "class B {}\n");
+        assert!(f.unparsed_files.is_empty());
+        assert_eq!(f.edits, ["a.java#<file>"]);
+    }
+
+    /// Files added or deleted, a change of mode and bytes that are no text
+    /// have nothing a line merge decides.
+    #[test]
+    fn a_file_with_no_lines_to_merge_is_not_listed() {
+        let entry = |text: &[u8], mode| lonca_core::FileEntry {
+            mode,
+            blob: GitId::of_blob(text),
+        };
+        let one = |e: lonca_core::FileEntry| {
+            let mut m = FileMap::new();
+            m.insert("a.java".to_string(), e);
+            m
+        };
+        let regular = lonca_core::FileMode::Regular;
+        let (text, changed) = (b"a\n".as_slice(), b"b\n".as_slice());
+        let (bytes, other) = ([0xff_u8, 0xfe].as_slice(), [0xfd_u8].as_slice());
+        let read = |id: &GitId| -> Result<Vec<u8>> {
+            let all = [text, changed, bytes, other];
+            let found = all.iter().find(|t| GitId::of_blob(t) == *id);
+            Ok(found.map(|t| t.to_vec()).unwrap_or_default())
+        };
+        let facts = |a: &FileMap, b: &FileMap| analyze(ENGINE_UNPARSED, a, b, &read).unwrap().facts;
+        let (b, n) = (one(entry(text, regular)), one(entry(changed, regular)));
+        assert_eq!(facts(&b, &n).unparsed_files, ["a.java"]);
+        let empty = FileMap::new();
+        assert!(facts(&empty, &n).unparsed_files.is_empty(), "added");
+        assert!(facts(&b, &empty).unparsed_files.is_empty(), "deleted");
+        let binary = (one(entry(bytes, regular)), one(entry(other, regular)));
+        assert!(
+            facts(&binary.0, &binary.1).unparsed_files.is_empty(),
+            "bytes"
+        );
+        let run = one(entry(text, lonca_core::FileMode::Executable));
+        assert!(facts(&b, &run).unparsed_files.is_empty(), "mode");
     }
 
     #[test]

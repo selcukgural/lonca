@@ -87,7 +87,18 @@ fn golden_repo() -> Env {
     wide_wait(&mut e);
     keyed_names(&mut e);
     renames(&mut e);
+    unparsed(&mut e);
     e
+}
+
+/// From format 15: facts list the text files no parser reads.
+fn unparsed(e: &mut Env) {
+    let java = "class A {\n}\n";
+    e.human_change(vec![file("src/A.java", java)], "seed");
+    e.svc.process_all();
+    let r = e.human_change(vec![file("src/A.java", &java.replace("A", "B"))], "edit");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    e.svc.process_all();
 }
 
 /// From format 14: facts say what was renamed, and the old name meets the
@@ -843,6 +854,20 @@ fn golden_v14_log_still_verifies_replays_and_audits() {
         reasons.into_iter().any(|r| r.starts_with(held)),
         "the old name met the new one"
     );
+}
+
+#[test]
+fn golden_v15_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v15.bundle",
+        "12bc536d9139deec8e9e0c418a75c064f08b2205ba3441962058ba26e8605797",
+        15,
+    );
+    let listed = ops.iter().filter_map(|o| o.entry.facts.as_ref());
+    let listed = listed
+        .flat_map(|f| f.unparsed_files.iter())
+        .collect::<Vec<_>>();
+    assert_eq!(listed, ["src/A.java"]);
 }
 
 #[test]

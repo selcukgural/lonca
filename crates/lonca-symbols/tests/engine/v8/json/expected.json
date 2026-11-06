@@ -1,0 +1,125 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.json#dependencies.b"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.json"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.json#dependencies.c"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.json#name"
+        ],
+        "import_only_files": [],
+        "lines_added": 3,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.json"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "{\n  \"name\": \"y\",\n  \"dependencies\": {\n    \"a\": \"1\",\n    \"c\": \"3\",\n    \"b\": \"2\"\n  }\n}\n"
+  },
+  "path": "src/sample.json",
+  "symbols": {
+    "base": [
+      {
+        "name": "<module>",
+        "text": "{\n  \n}\n"
+      },
+      {
+        "name": "name",
+        "text": "\"name\": \"x\""
+      },
+      {
+        "name": "dependencies",
+        "text": "\"dependencies\": {\n    \n  }"
+      },
+      {
+        "name": "dependencies.a",
+        "text": "\"a\": \"1\""
+      }
+    ],
+    "ours": [
+      {
+        "name": "<module>",
+        "text": "{\n  \n}\n"
+      },
+      {
+        "name": "name",
+        "text": "\"name\": \"x\""
+      },
+      {
+        "name": "dependencies",
+        "text": "\"dependencies\": {\n    \n  }"
+      },
+      {
+        "name": "dependencies.a",
+        "text": "\"a\": \"1\""
+      },
+      {
+        "name": "dependencies.b",
+        "text": "\"b\": \"2\""
+      }
+    ],
+    "theirs": [
+      {
+        "name": "<module>",
+        "text": "{\n  \n}\n"
+      },
+      {
+        "name": "name",
+        "text": "\"name\": \"y\""
+      },
+      {
+        "name": "dependencies",
+        "text": "\"dependencies\": {\n    \n  }"
+      },
+      {
+        "name": "dependencies.a",
+        "text": "\"a\": \"1\""
+      },
+      {
+        "name": "dependencies.c",
+        "text": "\"c\": \"3\""
+      }
+    ]
+  }
+}

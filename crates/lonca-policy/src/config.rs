@@ -45,6 +45,10 @@ reservation_ms = 60000
 # lease that conflicts with it for this long, so a wide change is not starved
 # by small ones. The interest stays in line after that, without this right.
 interest_block_ms = 600000
+# A file no parser reads is one lease, `<file>`, and one agent at a time
+# ("file"). With "optimistic" it needs no lease: the line merge at integration
+# decides, an overlap is `conflicted`, and verification runs on the result.
+unparsed_files = "file"
 
 [changes]
 max_files = 200
@@ -236,6 +240,19 @@ pub struct Leases {
     pub reservation_ms: i64,
     /// How long a waiting interest stops new leases that conflict with it.
     pub interest_block_ms: i64,
+    /// What an edit of a file no parser reads takes.
+    pub unparsed_files: UnparsedFiles,
+}
+
+/// `leases.unparsed_files`. Any other word is refused with the policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UnparsedFiles {
+    /// A lease on `<file>`.
+    #[default]
+    File,
+    /// No lease: the line merge decides.
+    Optimistic,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -413,6 +430,7 @@ impl Default for Leases {
             max_hold_minutes: 120,
             reservation_ms: 60_000,
             interest_block_ms: 600_000,
+            unparsed_files: UnparsedFiles::File,
         }
     }
 }
@@ -779,6 +797,27 @@ impl PolicyBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One agent at a time on a file no parser reads, unless a policy says
+    /// otherwise. Changing this default changes what every repository allows.
+    #[test]
+    fn an_edit_of_a_file_no_parser_reads_takes_a_lease_by_default() {
+        assert_eq!(Leases::default().unparsed_files, UnparsedFiles::File);
+        let bundle = PolicyBundle::parse(DEFAULT_CONFIG, DEFAULT_POLICY).unwrap();
+        assert_eq!(bundle.config.leases.unparsed_files, UnparsedFiles::File);
+        let open = DEFAULT_CONFIG.replace(
+            "unparsed_files = \"file\"",
+            "unparsed_files = \"optimistic\"",
+        );
+        assert_ne!(open, DEFAULT_CONFIG);
+        let bundle = PolicyBundle::parse(&open, DEFAULT_POLICY).unwrap();
+        assert_eq!(
+            bundle.config.leases.unparsed_files,
+            UnparsedFiles::Optimistic
+        );
+        let bad = DEFAULT_CONFIG.replace("unparsed_files = \"file\"", "unparsed_files = \"yes\"");
+        assert!(PolicyBundle::parse(&bad, DEFAULT_POLICY).is_err());
+    }
 
     /// A default that shrinks does so silently for every new repository,
     /// so each of these has to be taken out here as well. Patterns that

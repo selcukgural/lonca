@@ -116,6 +116,11 @@ unknown method: `unknown_method`, whatever the token.
   From log format 13 `path#Name` covers each `path#Name(key)`, in leases and
   in scopes, and the key reaches only its own symbol. What nothing tells
   apart is numbered in file order: `init~2`.
+- **`unparsed_files`** in facts, from symbol engine 8: text files changed that
+  no parser reads, each also a `path#<file>` in `edits`. Under
+  `[leases] unparsed_files = "optimistic"` they need no lease, and
+  `facts.preview` lists them in `no_lease`. `status` has the setting as
+  `unparsed_files`.
 - **`renames`** in facts, from symbol engine 7: `[[old, new]]`, symbols that
   go on under another name. A renamed one is also in `deletes` and `adds`, so
   a claim is what it was, and one with new parameters in `edits`. A `rename`

@@ -18,6 +18,7 @@ use lonca_core::ops::{
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, GitId, Result, Store};
 use lonca_policy::chain::Submission;
+use lonca_policy::config::UnparsedFiles;
 use lonca_policy::decide::{level_for, valid_token};
 use lonca_policy::details;
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
@@ -1057,6 +1058,7 @@ impl Service {
         let mut inner = self.lock();
         let now = self.now();
         let r = Self::repo(&mut inner, &name)?;
+        let unparsed = r.policy().ok().map(|p| p.config.leases.unparsed_files);
         let s = &r.chain.state;
         let sessions: Vec<Value> = s
             .sessions
@@ -1136,6 +1138,7 @@ impl Service {
         Ok(json!({
             "interests": interests, "reservations": s.reservations_at(now),
             "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "frozen": s.frozen, "queue": s.queue,
+            "unparsed_files": unparsed,
             "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
             "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now, "daemon_key": s.daemon_key,
         }))
@@ -2214,7 +2217,9 @@ impl Service {
         out["commit"] = json!(commit);
         out["facts"] = json!(analysis.facts);
         out["syntax_errors"] = json!(analysis.syntax_errors);
-        let missing = details::lease_missing(&r.chain.state, &session, &analysis.facts, now);
+        let unparsed = r.policy().or_fail()?.config.leases.unparsed_files;
+        let missing =
+            details::lease_missing(&r.chain.state, &session, &analysis.facts, unparsed, now);
         out["advice"] = json!(details::advice(&missing));
         out["details"] = json!(missing);
         Ok(out)
@@ -2242,11 +2247,16 @@ impl Service {
             .or_fail()?;
         let a = facts_of(&r.store, ENGINE_CURRENT, &p.base, &commit).or_fail()?;
         let session = actor.session().expect("agent");
-        let leases = details::lease_report(&r.chain.state, session, &a.facts, now);
+        let unparsed = r.policy().or_fail()?.config.leases.unparsed_files;
+        let leases = details::lease_report(&r.chain.state, session, &a.facts, unparsed, now);
+        let no_lease = match unparsed {
+            UnparsedFiles::Optimistic => a.facts.unparsed_files.clone(),
+            UnparsedFiles::File => Vec::new(),
+        };
         Ok(json!({
             "facts": a.facts, "syntax_errors": a.syntax_errors,
             "acquire": details::to_acquire(&leases), "advice": details::advice(&leases),
-            "leases": leases,
+            "leases": leases, "no_lease": no_lease,
         }))
     }
 

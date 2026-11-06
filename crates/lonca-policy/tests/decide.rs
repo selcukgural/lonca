@@ -9,7 +9,7 @@ use lonca_core::{ChangeId, GitId};
 use std::sync::Arc;
 
 use lonca_policy::chain::{Chain, Submission, replay_checked};
-use lonca_policy::config::{DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle};
+use lonca_policy::config::{DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle, UnparsedFiles};
 use lonca_policy::decide::{Ctx, decide};
 use lonca_policy::human::intent_bytes;
 use lonca_policy::state::{ChangeStatus, Provenance, Renamed, State};
@@ -3906,14 +3906,17 @@ fn a_stopped_lease_is_not_reported_free() {
     let h = wide_interest();
     let t = h.now + 1;
     let state = &h.chain.state;
-    let report = lonca_policy::details::lease_report(state, "c", &edit(MEMBER_B), t);
+    let report =
+        lonca_policy::details::lease_report(state, "c", &edit(MEMBER_B), UnparsedFiles::File, t);
     assert_eq!(report.len(), 1, "{report:?}");
     assert_eq!(report[0].code, "lease_wanted");
     assert_eq!(report[0].symbol, TYPE);
     assert_eq!(lonca_policy::details::to_acquire(&report), []);
-    let missing = lonca_policy::details::lease_missing(state, "c", &edit(MEMBER_B), t);
+    let missing =
+        lonca_policy::details::lease_missing(state, "c", &edit(MEMBER_B), UnparsedFiles::File, t);
     assert_eq!(missing[0].code, "lease_wanted");
-    let held = lonca_policy::details::lease_missing(state, "c", &edit(MEMBER_A), t);
+    let held =
+        lonca_policy::details::lease_missing(state, "c", &edit(MEMBER_A), UnparsedFiles::File, t);
     let codes: Vec<&str> = held.iter().map(|d| d.code).collect();
     assert_eq!(codes, ["lease_missing", "lease_wanted"], "{held:?}");
 }
@@ -4894,6 +4897,66 @@ fn a_lease_meets_its_symbol_by_either_name() {
     );
     s.renames.clear();
     assert!(!s.conflict(&item("a.cs#C.M(string)"), &item("a.cs#C.N")));
+}
+
+fn on_unparsed(file: &str) -> Facts {
+    Facts {
+        unparsed_files: vec![file.into()],
+        ..edit(&format!("{file}#<file>"))
+    }
+}
+
+fn optimistic() -> H {
+    let config = DEFAULT_CONFIG.replace(
+        "unparsed_files = \"file\"",
+        "unparsed_files = \"optimistic\"",
+    );
+    H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap())
+}
+
+/// By default a file no parser reads is one lease, and the same goes for
+/// what the facts do not call such a file under `optimistic`.
+#[test]
+fn a_file_no_parser_reads_takes_a_lease_unless_the_policy_says_otherwise() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.wrote("a", "src/A.java");
+    let d = h.propose("a", ChangeId::random(), on_unparsed("src/A.java"));
+    assert!(denied_with(&d, "lease_missing:src/A.java#<file>"), "{d:?}");
+    h.assert_replay();
+
+    let mut h = optimistic();
+    h.start("a", &["src/**"]);
+    h.wrote("a", "src/A.java");
+    let d = h.propose("a", ChangeId::random(), on_unparsed("src/A.java"));
+    assert!(!denied_with(&d, "lease_missing"), "{d:?}");
+    h.wrote("a", "src/a.bin");
+    let d = h.propose("a", ChangeId::random(), edit("src/a.bin#<file>"));
+    assert!(denied_with(&d, "lease_missing:src/a.bin#<file>"), "{d:?}");
+    h.wrote("a", "src/a.rs");
+    let d = h.propose("a", ChangeId::random(), edit("src/a.rs#f"));
+    assert!(denied_with(&d, "lease_missing:src/a.rs#f"), "{d:?}");
+    h.assert_replay();
+}
+
+/// `optimistic` waives a lease and nothing else: a scope still holds, and so
+/// does a deleted file.
+#[test]
+fn an_optimistic_file_stays_inside_the_scope() {
+    let mut h = optimistic();
+    h.start("a", &["src/**"]);
+    h.wrote("a", "docs/A.java");
+    let d = h.propose("a", ChangeId::random(), on_unparsed("docs/A.java"));
+    assert!(denied_with(&d, "scope_path:docs/A.java"), "{d:?}");
+    let gone = Facts {
+        deleted_files: vec!["src/A.java".into()],
+        unparsed_files: vec!["src/A.java".into()],
+        ..Default::default()
+    };
+    h.wrote("a", "src/A.java");
+    let d = h.propose("a", ChangeId::random(), gone);
+    assert!(denied_with(&d, "lease_missing:src/A.java#<file>"), "{d:?}");
+    h.assert_replay();
 }
 
 /// The meaning changed with format 13: in older entries two names are two

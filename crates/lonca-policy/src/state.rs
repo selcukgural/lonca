@@ -459,7 +459,7 @@ impl State {
             let path = symbols::split(&r.old).map(|(path, _)| path);
             let again =
                 |name: &&String| r.old == **name || (keys && symbols::stands_for(&r.old, name));
-            if taken.iter().any(|n| again(n)) || files.iter().any(|f| Some(f.as_str()) == path) {
+            if taken.iter().any(again) || files.iter().any(|f| Some(f.as_str()) == path) {
                 r.reused = Some(line);
             }
         }

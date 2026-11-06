@@ -52,9 +52,10 @@ git diff main -- crates > /tmp/git.diff && cargo mutants --in-diff /tmp/git.diff
 ```
 
 - Results are in `mutants.out/`: `missed.txt` lists survivors (tests still
-  pass with the mutant: a gap), `timeout.txt` hangs (counted as caught),
-  `unviable.txt` mutants that do not compile (ignored), `caught.txt` the
-  rest; `diff/` has each mutant as a patch.
+  pass with the mutant: a gap), `timeout.txt` hangs (counted as caught, so
+  read it: many mean the tests never ran, and CI fails a shard with more
+  timeouts than caught), `unviable.txt` mutants that do not compile
+  (ignored), `caught.txt` the rest; `diff/` has each mutant as a patch.
 - For a PR, run `--in-diff` over the whole diff against its base. Do not
   narrow it with `-f`, because survivors in other files are missed.
 - A new survivor in a security-critical file (`decide.rs`, `chain.rs`,

@@ -1360,9 +1360,14 @@ Passing tests do not show that they would catch a flipped `>=` or a
   Per-package testing would report those as survivors. A workspace test
   run is about 10 s, so the cost is acceptable. cargo-mutants has no
   per-crate test list, so this is one setting for all crates.
-- **Timeouts** come from the measured baseline: `timeout_multiplier = 5`,
-  `minimum_test_timeout = 60` s. A mutant that hangs the daemon or a
-  socket test ends as a timeout, which counts as caught.
+- **Timeouts** are at least `minimum_test_timeout = 300` s, about five times
+  a workspace test run on CI. They can not come from the measured baseline:
+  with `--in-diff` it runs `--package` of the changed crates while each mutant
+  runs `--workspace`, so a PR on one crate measured ~1 s and got the old
+  minimum of 60 s. A mutant in `lonca-symbols` was then cut off in the daemon's
+  tests, before its own, and counted as caught with no test having looked at
+  it. A mutant that hangs the daemon or a socket test ends as a timeout, which
+  counts as caught, so a shard with more timeouts than caught mutants fails.
 - **Exclusion policy.** `exclude_re` lists only mutants shown to be
   equivalent (no test could tell them apart from the original) or
   irrelevant (text that no caller reads), each with a comment giving the

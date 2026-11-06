@@ -116,6 +116,11 @@ unknown method: `unknown_method`, whatever the token.
   From log format 13 `path#Name` covers each `path#Name(key)`, in leases and
   in scopes, and the key reaches only its own symbol. What nothing tells
   apart is numbered in file order: `init~2`.
+- **`renames`** in facts, from symbol engine 7: `[[old, new]]`, symbols that
+  go on under another name. A renamed one is also in `deletes` and `adds`, so
+  a claim is what it was, and one with new parameters in `edits`. A `rename`
+  lease on the old name covers it. Once integrated, the old name and the new
+  one conflict in leases.
 - **lease item**: `{"symbol": "path#Qualified.name", "kind": "edit" |
   "insert" | "rename"}`; for `insert` the symbol is the container
   (`path#Type` or `path#<file>`). Markdown, TOML, JSON and YAML files

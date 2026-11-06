@@ -134,7 +134,17 @@ pub fn lease_needs(f: &Facts) -> Vec<LeaseNeed> {
     let edits = f.edits.iter().chain(&f.signature_changes);
     let edits = edits.map(|s| need(s.clone(), EDIT_KINDS));
     let deletes = f.deletes.iter().map(|s| need(s.clone(), DELETE_KINDS));
-    let adds = f.adds.iter().filter_map(|s| container(s));
+    // A rename takes a `rename` lease on the old name, and that is all of it
+    // while the symbol stays where it was.
+    let in_place = |old: &str, new: &str| container(old) == container(new);
+    let renamed = |s: &&String| {
+        let into = |new: &String| container(s).as_ref() == Some(new);
+        f.renames
+            .iter()
+            .any(|[old, new]| (new == *s && in_place(old, new)) || into(new))
+    };
+    let adds = f.adds.iter().filter(|s| !renamed(s));
+    let adds = adds.filter_map(|s| container(s));
     let adds = adds.map(|c| need(c, ADD_KINDS));
     let files = f.deleted_files.iter().map(|p| file_symbol(p));
     let files = files.map(|s| need(s, DELETE_KINDS));
@@ -265,6 +275,56 @@ mod tests {
     fn the_container_of_an_overload_is_the_type() {
         assert_eq!(container("a.cs#C.M(int)"), Some("a.cs#C".to_string()));
         assert_eq!(container("a.cs#M(int)"), Some("a.cs#<file>".to_string()));
+    }
+
+    /// What goes into a type under its new name goes with the type.
+    #[test]
+    fn a_member_of_a_renamed_type_needs_no_more_than_the_type() {
+        let f = Facts {
+            deletes: vec!["a.go#T".into(), "a.go#T.Old".into()],
+            adds: vec!["a.go#U".into(), "a.go#U.Old".into()],
+            renames: vec![["a.go#T".into(), "a.go#U".into()]],
+            ..Default::default()
+        };
+        let needs = lease_needs(&f);
+        assert!(needs.iter().all(|n| n.kinds == DELETE_KINDS), "{needs:?}");
+    }
+
+    /// Facts do not name such a pair, and the lease rule does not rest on it.
+    #[test]
+    fn a_symbol_renamed_into_another_container_needs_that_container() {
+        let f = Facts {
+            deletes: vec!["a.go#T.Old".into()],
+            adds: vec!["a.go#U.New".into()],
+            renames: vec![["a.go#T.Old".into(), "a.go#U.New".into()]],
+            ..Default::default()
+        };
+        let need = |symbol: &str, kinds| LeaseNeed {
+            symbol: symbol.into(),
+            kinds,
+        };
+        assert_eq!(
+            lease_needs(&f),
+            vec![need("a.go#T.Old", DELETE_KINDS), need("a.go#U", ADD_KINDS)]
+        );
+    }
+
+    #[test]
+    fn a_renamed_symbol_needs_only_its_old_name() {
+        let f = Facts {
+            deletes: vec!["a.rs#T.old".into()],
+            adds: vec!["a.rs#T.new".into(), "a.rs#U.other".into()],
+            renames: vec![["a.rs#T.old".into(), "a.rs#T.new".into()]],
+            ..Default::default()
+        };
+        let need = |symbol: &str, kinds| LeaseNeed {
+            symbol: symbol.into(),
+            kinds,
+        };
+        assert_eq!(
+            lease_needs(&f),
+            vec![need("a.rs#T.old", DELETE_KINDS), need("a.rs#U", ADD_KINDS)]
+        );
     }
 
     #[test]

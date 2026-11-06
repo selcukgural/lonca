@@ -12,7 +12,7 @@ use lonca_policy::chain::{Chain, Submission, replay_checked};
 use lonca_policy::config::{DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle};
 use lonca_policy::decide::{Ctx, decide};
 use lonca_policy::human::intent_bytes;
-use lonca_policy::state::{ChangeStatus, Provenance, State};
+use lonca_policy::state::{ChangeStatus, Provenance, Renamed, State};
 
 const REPO: &str = "demo";
 const T0: i64 = 1_760_000_000_000;
@@ -4727,6 +4727,25 @@ fn a_revert_of_a_name_counts_for_its_keyed_symbols() {
     assert!(!storm_since(6 * MIN, one, one, true));
 }
 
+/// A revert follows the symbol: it counts under the old name and the new.
+#[test]
+fn a_revert_counts_by_either_name() {
+    let storm = |reverted: &str, edited: &str| {
+        let mut h = H::new();
+        h.start("a", &["src/**"]);
+        assert!(h.lease("a", "l", &[(edited, LeaseKind::Edit)]).is_allow());
+        h.wrote("a", "src/a.py");
+        let at = h.now;
+        h.chain.state.renames = vec![renamed(1, "src/a.py#old", "src/a.py#new", None)];
+        h.chain.state.reverts = vec![(at, vec![reverted.to_string()]); 3];
+        let d = h.propose("a", ChangeId::random(), edit(edited));
+        d.reasons.iter().any(|r| r.contains("revert-storm"))
+    };
+    assert!(storm("src/a.py#old", "src/a.py#new"));
+    assert!(storm("src/a.py#old", "src/a.py#old"));
+    assert!(!storm("src/a.py#other", "src/a.py#new"));
+}
+
 /// `context.critical` says what it says.
 #[test]
 fn a_policy_reads_whether_a_change_is_critical() {
@@ -4772,6 +4791,109 @@ when { context.symbols.contains("src/a.cs#C.M") };
         assert_eq!(denied_with(&d, "policy:no-charge"), denied, "{d:?}");
         h.assert_replay();
     }
+}
+
+fn renamed(line: usize, old: &str, new: &str, reused: Option<usize>) -> Renamed {
+    Renamed {
+        line,
+        old: old.into(),
+        new: new.into(),
+        reused,
+    }
+}
+
+/// What a symbol is called now, from a state written by hand.
+#[test]
+fn a_name_follows_its_renames() {
+    let (first, second) = (gid('1'), gid('2'));
+    let mut s = State::new();
+    s.trunk_line = vec![gid('0'), first.clone(), second.clone()];
+    s.renames = vec![
+        renamed(1, "a#m", "a#n", None),
+        renamed(2, "a#n", "a#o", None),
+        renamed(2, "a#T", "a#U", None),
+        renamed(1, "a#gone", "a#kept", Some(2)),
+    ];
+    assert_eq!(s.renamed_to("a#m", None), "a#o", "a chain");
+    assert_eq!(s.renamed_to("a#T.x", None), "a#U.x", "a member");
+    assert_eq!(s.renamed_to("a#T", None), "a#U");
+    assert_eq!(s.renamed_to("a#Tx", None), "a#Tx", "a longer name");
+    assert_eq!(s.renamed_to("a#z", None), "a#z");
+    assert_eq!(s.renamed_to("a#gone", None), "a#gone", "the name is taken");
+
+    let old_base = gid('0');
+    assert_eq!(
+        s.renamed_to("a#gone", Some(&old_base)),
+        "a#gone",
+        "and stays so"
+    );
+    assert_eq!(
+        s.renamed_to("a#m", Some(&old_base)),
+        "a#o",
+        "both are later"
+    );
+    assert_eq!(s.renamed_to("a#m", Some(&first)), "a#m", "that base had it");
+    assert_eq!(s.renamed_to("a#n", Some(&first)), "a#o");
+    assert_eq!(s.renamed_to("a#n", Some(&second)), "a#n");
+}
+
+/// a to b to c, and then a new `b`: `a` is on its way to `c`, `b` is new.
+#[test]
+fn a_chain_goes_on_past_a_name_taken_again() {
+    let mut s = State::new();
+    s.renames = vec![
+        renamed(1, "a#a", "a#b", None),
+        renamed(2, "a#b", "a#c", Some(3)),
+    ];
+    assert_eq!(s.renamed_to("a#a", None), "a#c");
+    assert_eq!(s.renamed_to("a#b", None), "a#b");
+}
+
+fn item(symbol: &str) -> LeaseItem {
+    LeaseItem {
+        symbol: symbol.into(),
+        kind: LeaseKind::Edit,
+    }
+}
+
+/// Taken twice: a name that went on as `d` and was taken again says nothing
+/// of the symbol that took it, for a base from before either.
+#[test]
+fn a_name_taken_again_starts_no_chain_from_an_older_base() {
+    let base = gid('0');
+    let mut s = State::new();
+    s.trunk_line = vec![base.clone(), gid('1'), gid('2'), gid('3')];
+    s.renames = vec![
+        renamed(1, "a#a", "a#d", Some(2)),
+        renamed(3, "a#a", "a#f", None),
+    ];
+    assert_eq!(s.renamed_to("a#a", Some(&base)), "a#a");
+    assert_eq!(s.renamed_to("a#a", None), "a#a");
+}
+
+/// Two entries for one file: the lease by the old name and the lease by the
+/// new one are one symbol, and a name is not held by what left it.
+#[test]
+fn a_lease_meets_its_symbol_by_either_name() {
+    let mut s = State::new();
+    s.symbol_keys = true;
+    s.renames = vec![
+        renamed(1, "a.cs#C.M(string)", "a.cs#C.N", None),
+        renamed(1, "a.cs#C.P(long)", "a.cs#C.Q", Some(2)),
+    ];
+    assert!(s.conflict(&item("a.cs#C.M(string)"), &item("a.cs#C.N")));
+    assert!(s.conflict(&item("a.cs#C.N"), &item("a.cs#C.M(string)")));
+    assert!(
+        !s.conflict(&item("a.cs#C.M"), &item("a.cs#C.N")),
+        "the one left"
+    );
+    assert!(!s.conflict(&item("a.cs#C.M(int)"), &item("a.cs#C.N")));
+    assert!(
+        !s.conflict(&item("a.cs#C.P(long)"), &item("a.cs#C.Q")),
+        "taken again"
+    );
+    s.renames.clear();
+    assert!(!s.conflict(&item("a.cs#C.M(string)"), &item("a.cs#C.N")));
 }
 
 /// The meaning changed with format 13: in older entries two names are two

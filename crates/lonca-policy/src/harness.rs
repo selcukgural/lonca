@@ -279,6 +279,7 @@ const RULES: &str = "\
 - Before editing a function, method or type, lease it: {tool}lease_acquire with symbols like \"src/file.rs#Type.method\" ({tool}symbols lists them). Every lease needs an `intent`: what you are doing and why, in a sentence. An agent you hold up reads it.
 - To change a type's fields or header, lease \"src/file.rs#Type.<def>\", the `def` of the type in {tool}symbols: its methods stay free for others.
 - Overloads and other symbols that share a name have a key, as in \"src/file.cs#Type.method(int)\". Lease one by its id; the name alone holds all of them and keeps others off the rest.
+- To rename a symbol, a `rename` lease on the old name is enough. `preview` lists it under `renames`; claim it as what it is, a delete and an add.
 - A change across a whole type leases \"src/file.rs#Type\", which holds up all its methods. A rename, a delete and a whole file hold up others the same way. For these, say in `intent` why it needs that much, with the issue number if there is one.
 {where}
 - {tool}lease_needed says which leases your local changes need and who holds them.

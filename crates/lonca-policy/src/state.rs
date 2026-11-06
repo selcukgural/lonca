@@ -19,7 +19,7 @@ use lonca_core::ops::{
 use serde::Serialize;
 
 use crate::decide::leases_conflict;
-use crate::symbols;
+use crate::symbols::{self, LeaseNeed};
 
 /// When a session last reported itself alive, and for how long that holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -115,10 +115,16 @@ pub struct Reservation {
     pub until_ms: i64,
 }
 
-/// Something in `a` conflicts with something in `b`.
-fn clash(a: &[LeaseItem], b: &[LeaseItem], keys: bool) -> bool {
-    a.iter()
-        .any(|x| b.iter().any(|y| leases_conflict(x, y, keys)))
+/// A symbol that goes on under another name, from an integrated change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Renamed {
+    /// Where the new name starts, in `trunk_line`.
+    pub line: usize,
+    pub old: String,
+    pub new: String,
+    /// A symbol took the old name again here: from that trunk on, the old
+    /// name is that symbol.
+    pub reused: Option<usize>,
 }
 
 impl LeaseSet {
@@ -225,6 +231,8 @@ pub struct State {
     /// Every trunk commit in order, genesis first: how far a base is
     /// behind is its distance from the end.
     pub trunk_line: Vec<GitId>,
+    /// What integrated changes renamed, oldest first.
+    pub renames: Vec<Renamed>,
     pub sessions: BTreeMap<String, Session>,
     pub leases: BTreeMap<String, LeaseSet>,
     pub changes: BTreeMap<ChangeId, ChangeRecord>,
@@ -363,14 +371,107 @@ impl State {
         self.session_active(id, now_ms) && !self.session_lost(id, now_ms)
     }
 
-    fn held_against(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
+    /// What `symbol` is called on the trunk. With `base`, only by the renames
+    /// that trunk had not seen. A name taken again, or a symbol that was then
+    /// deleted, ends there: it is not what the name says now. A chain that
+    /// passed such a name goes on, since what was renamed before the name was
+    /// taken stays on its way.
+    pub fn renamed_to(&self, symbol: &str, base: Option<&GitId>) -> String {
+        let line = base.and_then(|b| self.trunk_line.iter().rposition(|t| t == b));
+        let later = |r: &&Renamed| line.is_none_or(|at| r.line > at);
+        let mut name = symbol.to_string();
+        let mut moved = false;
+        for r in self.renames.iter().filter(later) {
+            let Some(member) = name.strip_prefix(r.old.as_str()) else {
+                continue;
+            };
+            if !member.is_empty() && !member.starts_with('.') {
+                continue;
+            }
+            if r.reused.is_some() && !moved {
+                break;
+            }
+            name = format!("{}{member}", r.new);
+            moved = true;
+        }
+        name
+    }
+
+    fn renamed_item(&self, item: &LeaseItem) -> LeaseItem {
+        LeaseItem {
+            symbol: self.renamed_to(&item.symbol, None),
+            kind: item.kind,
+        }
+    }
+
+    /// `a` and `b` can not be held by two sessions, as they are named or as
+    /// they are called on the trunk: a session on an older base has a symbol
+    /// by its old name.
+    pub fn conflict(&self, a: &LeaseItem, b: &LeaseItem) -> bool {
         let keys = self.symbol_keys;
+        leases_conflict(a, b, keys)
+            || (!self.renames.is_empty()
+                && leases_conflict(&self.renamed_item(a), &self.renamed_item(b), keys))
+    }
+
+    /// Something in `a` conflicts with something in `b`.
+    fn clash(&self, a: &[LeaseItem], b: &[LeaseItem]) -> bool {
+        a.iter().any(|x| b.iter().any(|y| self.conflict(x, y)))
+    }
+
+    /// `item` covers `need`, by the name in the facts or by what that is
+    /// called now. A change from an older base has the old name.
+    pub fn covers_need(&self, need: &LeaseNeed, item: &LeaseItem, base: Option<&GitId>) -> bool {
+        let keys = self.symbol_keys;
+        let renamed = LeaseNeed {
+            symbol: self.renamed_to(&need.symbol, base),
+            kinds: need.kinds,
+        };
+        need.covered_by(item, keys) || renamed.covered_by(item, keys)
+    }
+
+    /// Notes what an integrated change renamed and which names it took
+    /// again: its additions, its new keys, every name of a file it deleted
+    /// or wrote from nothing. A symbol it deleted ends what led to it.
+    fn record_renames(&mut self, facts: &Facts) {
+        let line = self.trunk_line.len().saturating_sub(1);
+        let keys = self.symbol_keys;
+        let new_names = facts.renames.iter().map(|[_, new]| new);
+        let taken: Vec<&String> = facts.adds.iter().chain(new_names).collect();
+        let files: Vec<&String> = facts
+            .deleted_files
+            .iter()
+            .chain(&facts.added_files)
+            .collect();
+        let renamed = |name: &String| facts.renames.iter().any(|[old, _]| old == name);
+        for r in self.renames.iter_mut().filter(|r| r.reused.is_none()) {
+            let path = symbols::split(&r.old).map(|(path, _)| path);
+            if facts.deletes.iter().any(|d| *d == r.new && !renamed(d)) {
+                r.reused = Some(line);
+            }
+            let again =
+                |name: &&String| r.old == **name || (keys && symbols::stands_for(&r.old, name));
+            if taken.iter().any(again) || files.iter().any(|f| Some(f.as_str()) == path) {
+                r.reused = Some(line);
+            }
+        }
+        for [old, new] in &facts.renames {
+            self.renames.push(Renamed {
+                line,
+                old: old.clone(),
+                new: new.clone(),
+                reused: None,
+            });
+        }
+    }
+
+    fn held_against(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
         self.active_leases(now_ms)
             .filter(|h| h.lease.session != session)
             .any(|h| {
                 h.items
                     .iter()
-                    .any(|b| items.iter().any(|a| leases_conflict(a, b, keys)))
+                    .any(|b| items.iter().any(|a| self.conflict(a, b)))
             })
     }
 
@@ -379,7 +480,6 @@ impl State {
     /// interest gets its own. Pure, and a function of the entry's time, so
     /// `decide()` sees what the fold of the same entry will record.
     fn settled(&self, now_ms: i64) -> (Vec<Reservation>, Vec<u64>) {
-        let keys = self.symbol_keys;
         let mut out: Vec<Reservation> = self
             .reservations
             .iter()
@@ -392,7 +492,7 @@ impl State {
                 r.session != i.session
                     && r.items
                         .iter()
-                        .any(|b| i.items.iter().any(|a| leases_conflict(a, b, keys)))
+                        .any(|b| i.items.iter().any(|a| self.conflict(a, b)))
             };
             let mut older = self.interests.range(..seq).map(|(_, o)| o);
             if self.session_present(&i.session, now_ms)
@@ -414,11 +514,10 @@ impl State {
     /// `interest`, of another session, stands in the way of new leases on
     /// `items` at `now_ms`.
     fn stops(&self, interest: &Interest, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
-        let keys = self.symbol_keys;
         interest.session != session
             && interest.blocks_until_ms > now_ms
             && self.session_present(&interest.session, now_ms)
-            && clash(&interest.items, items, keys)
+            && self.clash(&interest.items, items)
     }
 
     /// Of `items`, what `session` does not have yet: neither held (a partial
@@ -449,14 +548,13 @@ impl State {
         items: &[LeaseItem],
         now_ms: i64,
     ) -> Vec<&Interest> {
-        let keys = self.symbol_keys;
         let new = self.new_items(session, items, now_ms);
         let served = self.settled(now_ms).1;
         // An interest goes first over those younger than it, so a younger
         // one does not stop it.
         let behind = |seq: &u64, i: &Interest| {
             let mut older = self.interests.range(..seq).map(|(_, o)| o);
-            older.any(|o| o.session == session && clash(&o.items, &i.items, keys))
+            older.any(|o| o.session == session && self.clash(&o.items, &i.items))
         };
         let waiting = self.interests.iter();
         let waiting = waiting.filter(|(seq, _)| !served.contains(seq));
@@ -503,14 +601,13 @@ impl State {
         items: &[LeaseItem],
         now_ms: i64,
     ) -> Option<String> {
-        let keys = self.symbol_keys;
         self.reservations_at(now_ms)
             .into_iter()
             .find(|r| {
                 r.session != session
                     && r.items
                         .iter()
-                        .any(|b| items.iter().any(|a| leases_conflict(a, b, keys)))
+                        .any(|b| items.iter().any(|a| self.conflict(a, b)))
             })
             .map(|r| r.session)
     }
@@ -565,14 +662,13 @@ impl State {
     /// what they got, so a line of interests does not stretch the cap. Sets
     /// that had no such time get this one.
     fn block_end(&mut self, session: &str, items: &[LeaseItem], now_ms: i64, limit: i64) -> i64 {
-        let keys = self.symbol_keys;
         let sets: Vec<&LeaseSet> = self
             .active_leases(now_ms)
             .filter(|h| h.lease.session != session)
             .filter(|h| {
                 h.items
                     .iter()
-                    .any(|b| items.iter().any(|a| leases_conflict(a, b, keys)))
+                    .any(|b| items.iter().any(|a| self.conflict(a, b)))
             })
             .map(|h| h.lease)
             .collect();
@@ -581,7 +677,7 @@ impl State {
         let older = self
             .interests
             .values()
-            .filter(|i| clash(&i.items, items, keys));
+            .filter(|i| self.clash(&i.items, items));
         let older = older.map(|i| i.blocks_until_ms);
         let end = earlier.chain(older).fold(limit, i64::min);
         for set in names {
@@ -753,12 +849,11 @@ impl State {
     }
 
     fn register_interest(&mut self, session: &str, items: &[LeaseItem], now_ms: i64) {
-        let keys = self.symbol_keys;
         let conflicts = |held: &ActiveLease| {
             let mine = || items.iter();
             held.items
                 .iter()
-                .any(|b| mine().any(|a| leases_conflict(a, b, keys)))
+                .any(|b| mine().any(|a| self.conflict(a, b)))
         };
         let sets = self.active_leases(now_ms);
         let sets = sets.filter(|h| h.lease.session != session && conflicts(h));
@@ -772,14 +867,13 @@ impl State {
 
     /// Pins the items of the session that the facts need to the change.
     fn pin(&mut self, session: &str, change: ChangeId, facts: Option<&Facts>, now_ms: i64) {
-        let keys = self.symbol_keys;
         let needs = facts.map(symbols::lease_needs).unwrap_or_default();
         let pinned: Vec<(String, Vec<LeaseItem>)> = self
             .active_leases(now_ms)
             .filter(|l| l.lease.session == session)
             .map(|l| {
                 let items = l.items.iter().copied();
-                let items = items.filter(|i| needs.iter().any(|n| n.covered_by(i, keys)));
+                let items = items.filter(|i| needs.iter().any(|n| self.covers_need(n, i, None)));
                 (l.lease.set.clone(), items.cloned().collect())
             })
             .collect();
@@ -1310,12 +1404,14 @@ impl State {
                     c.status = ChangeStatus::Integrated {
                         commit: merged.clone(),
                     };
+                    let facts = c.facts.clone();
                     if c.claim.revert_of.is_some() {
-                        let mut syms = c.facts.edits.clone();
-                        syms.extend(c.facts.deletes.iter().cloned());
-                        syms.extend(c.facts.adds.iter().cloned());
+                        let mut syms = facts.edits.clone();
+                        syms.extend(facts.deletes.iter().cloned());
+                        syms.extend(facts.adds.iter().cloned());
                         self.reverts.push((time_ms, syms));
                     }
+                    self.record_renames(&facts);
                 }
                 self.queue.retain(|q| q != change);
                 self.unpin(*change, !reasons.iter().any(|r| r == LEASES_KEPT));
@@ -1362,9 +1458,12 @@ impl State {
                     self.queue.retain(|q| q != change);
                     self.unpin(*change, false);
                     if let Some(session) = p.actor.session() {
+                        let now: Vec<String> =
+                            symbols.iter().map(|s| self.renamed_to(s, None)).collect();
                         let covers = |l: &LeaseSet| {
                             l.items.iter().any(|i| {
-                                symbols.iter().any(|s| symbols::covers(&i.symbol, s, keys))
+                                let all = symbols.iter().chain(&now);
+                                all.into_iter().any(|s| symbols::covers(&i.symbol, s, keys))
                             })
                         };
                         let sets = self.leases.values();

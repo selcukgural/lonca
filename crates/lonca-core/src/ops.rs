@@ -293,6 +293,10 @@ pub struct Facts {
     pub tests: TestDelta,
     pub lines_added: u32,
     pub lines_removed: u32,
+    /// Symbols that go on under another name: `[old, new]`. A renamed one is
+    /// also in `deletes` and `adds`, one with new parameters in `edits`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renames: Vec<[String; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

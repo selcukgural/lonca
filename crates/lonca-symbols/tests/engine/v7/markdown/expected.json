@@ -1,0 +1,124 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.md#Changes.<append>"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.md#Install"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.md"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.md#Changes.<append>",
+          "src/sample.md#Install.macOS"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.md#Install.Linux"
+        ],
+        "import_only_files": [],
+        "lines_added": 6,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.md"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "Intro.\n\n# Install\n\nRun it now.\n\n## Linux\n\nUse apt or dnf.\n\n## macOS\n\nUse brew.\n\n# Changes\n\n- first\n- ours\n- theirs\n"
+  },
+  "path": "src/sample.md",
+  "symbols": {
+    "base": [
+      {
+        "name": "<module>",
+        "text": "Intro.\n\n"
+      },
+      {
+        "name": "Install",
+        "text": "# Install\n\nRun it.\n\n"
+      },
+      {
+        "name": "Install.Linux",
+        "text": "## Linux\n\nUse apt.\n\n"
+      },
+      {
+        "name": "Changes",
+        "text": "# Changes\n\n- first\n"
+      }
+    ],
+    "ours": [
+      {
+        "name": "<module>",
+        "text": "Intro.\n\n"
+      },
+      {
+        "name": "Install",
+        "text": "# Install\n\nRun it now.\n\n"
+      },
+      {
+        "name": "Install.Linux",
+        "text": "## Linux\n\nUse apt.\n\n"
+      },
+      {
+        "name": "Changes",
+        "text": "# Changes\n\n- first\n- ours\n"
+      }
+    ],
+    "theirs": [
+      {
+        "name": "<module>",
+        "text": "Intro.\n\n"
+      },
+      {
+        "name": "Install",
+        "text": "# Install\n\nRun it.\n\n"
+      },
+      {
+        "name": "Install.Linux",
+        "text": "## Linux\n\nUse apt or dnf.\n\n"
+      },
+      {
+        "name": "Install.macOS",
+        "text": "## macOS\n\nUse brew.\n\n"
+      },
+      {
+        "name": "Changes",
+        "text": "# Changes\n\n- first\n- theirs\n"
+      }
+    ]
+  }
+}

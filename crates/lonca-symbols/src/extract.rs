@@ -440,7 +440,7 @@ pub struct Pair {
 
 /// How many pairs are compared by their text, at most, in one place. Past it,
 /// source order decides: a file can not make the daemon compare forever.
-const MAX_COMPARED: usize = 64;
+pub(crate) const MAX_COMPARED: usize = 64;
 
 /// A definition of a shared name that lost its old key and one that has a
 /// new key are one symbol whose parameters changed, as they are when no
@@ -615,18 +615,30 @@ fn open_ones<'s>(list: &'s [Sym], other: &BTreeSet<String>) -> Vec<(Place, &'s S
     out
 }
 
-/// Pairs by likeness, the best first; a tie goes to source order.
-fn closest<'s>(lost: Vec<&'s Sym>, gained: Vec<&'s Sym>) -> Vec<(&'s Sym, &'s Sym)> {
-    if lost.len().saturating_mul(gained.len()) > MAX_COMPARED {
-        return lost.into_iter().zip(gained).collect();
-    }
+/// How alike two texts are, from 0 to 1, word by word. Layout does not count.
+pub(crate) fn likeness(a: &str, b: &str) -> f32 {
+    let (a, b): (Vec<&str>, Vec<&str>) = (
+        a.split_whitespace().collect(),
+        b.split_whitespace().collect(),
+    );
+    similar::TextDiff::from_slices(&a, &b).ratio()
+}
+
+/// Indexes of `lost` and `gained`, each used once, by `like`: the best first,
+/// a tie to source order. Nothing under `floor` is a pair.
+pub(crate) fn best_pairs<T>(
+    lost: &[T],
+    gained: &[T],
+    like: impl Fn(&T, &T) -> f32,
+    floor: f32,
+) -> Vec<(usize, usize)> {
     let mut ranked = Vec::new();
     for (i, b) in lost.iter().enumerate() {
         for (j, n) in gained.iter().enumerate() {
-            let like = similar::TextDiff::from_words(&b.own, &n.own).ratio();
-            ranked.push((like, i, j));
+            ranked.push((like(b, n), i, j));
         }
     }
+    ranked.retain(|r| r.0 >= floor);
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then((a.1, a.2).cmp(&(b.1, b.2))));
     let (mut used_l, mut used_g) = (BTreeSet::new(), BTreeSet::new());
     let mut out = Vec::new();
@@ -634,10 +646,23 @@ fn closest<'s>(lost: Vec<&'s Sym>, gained: Vec<&'s Sym>) -> Vec<(&'s Sym, &'s Sy
         if !used_l.contains(&i) && !used_g.contains(&j) {
             used_l.insert(i);
             used_g.insert(j);
-            out.push((lost[i], gained[j]));
+            out.push((i, j));
         }
     }
     out
+}
+
+/// Pairs by likeness.
+fn closest<'s>(lost: Vec<&'s Sym>, gained: Vec<&'s Sym>) -> Vec<(&'s Sym, &'s Sym)> {
+    if lost.len().saturating_mul(gained.len()) > MAX_COMPARED {
+        return lost.into_iter().zip(gained).collect();
+    }
+    let like = |b: &&Sym, n: &&Sym| likeness(&b.own, &n.own);
+    let pairs = best_pairs(&lost, &gained, like, 0.0);
+    pairs
+        .into_iter()
+        .map(|(i, j)| (lost[i], gained[j]))
+        .collect()
 }
 
 /// Code with the symbols around it left out, and the symbols around it.

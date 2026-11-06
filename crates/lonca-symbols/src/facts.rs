@@ -7,14 +7,22 @@ use lonca_core::{FileMap, GitId, Result};
 
 #[cfg(test)]
 use crate::engine::ENGINE_KEYS;
-use crate::engine::{ENGINE_EXACT, ENGINE_PLACES, ENGINE_SECTIONS};
-use crate::extract::{Parsed, Sym, align, moved, parse_at, parse_together, shifted};
+use crate::engine::{ENGINE_EXACT, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS};
+use crate::extract::{
+    MAX_COMPARED, Parsed, Sym, align, best_pairs, likeness, moved, parse_at, parse_together,
+    shifted,
+};
 use crate::lang::Lang;
 use crate::sections::{APPEND, Format, Section, appended, sections};
 
 const FILE: &str = "<file>";
 const MODULE: &str = "<module>";
 const IMPORTS: &str = "<imports>";
+
+/// How alike a deleted and an added symbol must be, their names aside, to be
+/// one symbol renamed. A fixed number: it decides facts, and so it is engine
+/// data like the rest.
+const RENAME_LIKENESS: f32 = 0.8;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Analysis {
@@ -115,7 +123,12 @@ pub fn analyze(
                     continue;
                 };
                 let [pb, mut pn] = parse_together(engine, lang, [old, newt]);
-                align(&pb, &mut pn);
+                let pairs = align(&pb, &mut pn);
+                if engine >= ENGINE_RENAMES {
+                    let ids = pairs.iter();
+                    let ids = ids.map(|p| [sym_id(path, &p.base), sym_id(path, &p.side)]);
+                    f.renames.extend(ids);
+                }
                 if pn.has_error {
                     syntax_errors.push(path.clone());
                 }
@@ -140,6 +153,7 @@ pub fn analyze(
         v.sort();
         v.dedup();
     }
+    f.renames.sort();
     syntax_errors.sort();
     Ok(Analysis {
         facts: f,
@@ -217,6 +231,87 @@ fn compare_file(
     f.tests.deleted += bt.keys().filter(|k| !nt.contains_key(*k)).count() as u32;
 }
 
+/// The last part of a name as written in the code.
+fn written(name: &str) -> &str {
+    let last = name.rsplit('.').next().unwrap_or(name);
+    let end = last.find(['(', '[', '~']).filter(|at| *at > 0);
+    &last[..end.unwrap_or(last.len())]
+}
+
+/// What a name is a member of. One list is not one owner: a Go method stands
+/// beside the types, named after its own.
+fn owner(name: &str) -> Option<&str> {
+    name.rsplit_once('.').map(|(owner, _)| owner)
+}
+
+/// `own` with its name left out, also where the body calls it. Whole words
+/// only: `d` is not in `def`.
+fn nameless(s: &Sym) -> String {
+    let name = written(&s.name);
+    if name.is_empty() {
+        return s.own.clone();
+    }
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut rest = s.own.as_str();
+    while let Some(at) = rest.find(name) {
+        let (before, after) = (&rest[..at], &rest[at + name.len()..]);
+        let alone = !before.ends_with(is_word) && !after.starts_with(is_word);
+        out.push_str(before);
+        out.push_str(if alone { "\u{1}" } else { name });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A type goes on under another name only with its members: two shells say
+/// nothing. At least half the members of the larger must be in both.
+fn same_members(b: &Sym, n: &Sym) -> bool {
+    let names = |s: &Sym| -> BTreeSet<String> {
+        s.children
+            .iter()
+            .map(|c| written(&c.name).to_string())
+            .collect()
+    };
+    let (a, c) = (names(b), names(n));
+    2 * a.intersection(&c).count() >= a.len().max(c.len()) && !a.is_empty()
+}
+
+/// What in the list `bs` goes on under another name in the list `ns`.
+pub(crate) fn renames_between<'s>(engine: u32, bs: &'s [Sym], ns: &'s [Sym]) -> Vec<[&'s str; 2]> {
+    if engine < ENGINE_RENAMES {
+        return Vec::new();
+    }
+    let (bm, nm) = (by_name(bs), by_name(ns));
+    let open = |s: &&Sym, other: &BTreeMap<&str, &Sym>| {
+        !other.contains_key(s.name.as_str()) && s.impl_of(engine).is_none()
+    };
+    let lost: Vec<&Sym> = bs.iter().filter(|b| open(b, &nm)).collect();
+    let gained: Vec<&Sym> = ns.iter().filter(|n| open(n, &bm)).collect();
+    renamed(&lost, &gained)
+}
+
+/// Which of `lost` goes on as which of `gained`, in one list: what is the
+/// same with its name left out, or close to it. Past what can be compared, a
+/// rename stays a delete and an add.
+fn renamed<'s>(lost: &[&'s Sym], gained: &[&'s Sym]) -> Vec<[&'s str; 2]> {
+    if lost.len().saturating_mul(gained.len()) > MAX_COMPARED {
+        return Vec::new();
+    }
+    let like = |b: &&Sym, n: &&Sym| {
+        let (x, y) = (nameless(b), nameless(n));
+        let shape = b.container == n.container && (!b.container || same_members(b, n));
+        let shape = shape && owner(&b.name) == owner(&n.name);
+        if shape { likeness(&x, &y) } else { 0.0 }
+    };
+    let pairs = best_pairs(lost, gained, like, RENAME_LIKENESS);
+    let names = pairs.into_iter();
+    names
+        .map(|(i, j)| [lost[i].name.as_str(), gained[j].name.as_str()])
+        .collect()
+}
+
 fn by_name(syms: &[Sym]) -> BTreeMap<&str, &Sym> {
     syms.iter().map(|s| (s.name.as_str(), s)).collect()
 }
@@ -271,6 +366,9 @@ fn diff_level(
             None => f.deletes.push(sym_id(path, &b.name)),
         }
     }
+    let renames = renames_between(engine, bs, ns).into_iter();
+    f.renames
+        .extend(renames.map(|[b, n]| [sym_id(path, b), sym_id(path, n)]));
     if engine >= ENGINE_EXACT {
         let [a, b]: [Vec<&str>; 2] = [bs, ns].map(|l| l.iter().map(|s| s.name.as_str()).collect());
         for name in moved(&a, &b) {
@@ -398,6 +496,228 @@ mod tests {
         assert_eq!(f.edits, ["a.cs#C.M(int)"]);
         assert_eq!(f.signature_changes, ["a.cs#C.M(int)"]);
         assert!(f.adds.is_empty() && f.deletes.is_empty(), "{f:?}");
+    }
+
+    /// Each row: a language, its text, and the name that changes. The code
+    /// is the same, recursive calls included, or close to it.
+    #[test]
+    fn a_rename_is_reported_in_every_language() {
+        let rows = [
+            (
+                "a.rs",
+                "struct S;\nimpl S {\n    fn old(&self) -> u8 {\n        self.old() + 1\n    }\n}\n",
+                "old",
+                "new",
+                "a.rs#S.old",
+                "a.rs#S.new",
+            ),
+            (
+                "a.py",
+                "class C:\n    def old(self, a):\n        return a + 1\n",
+                "old",
+                "fresh",
+                "a.py#C.old",
+                "a.py#C.fresh",
+            ),
+            (
+                "a.ts",
+                "class C {\n  old(a: number) {\n    return a + 1;\n  }\n}\n",
+                "old",
+                "fresh",
+                "a.ts#C.old",
+                "a.ts#C.fresh",
+            ),
+            (
+                "a.js",
+                "function old(a) {\n  return a + 1;\n}\n",
+                "old",
+                "fresh",
+                "a.js#old",
+                "a.js#fresh",
+            ),
+            (
+                "a.cs",
+                "class C {\n    int Old(int a) {\n        return a + 1;\n    }\n}\n",
+                "Old",
+                "New",
+                "a.cs#C.Old",
+                "a.cs#C.New",
+            ),
+            (
+                "a.go",
+                "package p\n\nfunc (t T) Old(a int) int {\n\treturn a + 1\n}\n",
+                "Old",
+                "New",
+                "a.go#T.Old",
+                "a.go#T.New",
+            ),
+        ];
+        for (path, old, from, to, was, is) in rows {
+            let new = old.replace(from, to);
+            let f = section_facts(ENGINE_RENAMES, path, old, &new);
+            assert_eq!(f.renames, [[was.to_string(), is.to_string()]], "{path}");
+            assert_eq!(f.deletes, [was], "{path}");
+            assert_eq!(f.adds, [is], "{path}");
+            // Older engines report the delete and the add alone.
+            let f = section_facts(ENGINE_RENAMES - 1, path, old, &new);
+            assert!(f.renames.is_empty() && f.deletes == [was], "{path}");
+        }
+    }
+
+    #[test]
+    fn a_rename_can_change_a_little_and_not_a_lot() {
+        let old = "class C:\n    def old(self, a, b):\n        one = a + b\n        two = one * a\n        three = two - b\n        four = three * 2\n        return four\n";
+        let close = old
+            .replace("old", "new")
+            .replace("return four", "return four + 1");
+        let f = section_facts(ENGINE_RENAMES, "a.py", old, &close);
+        assert_eq!(f.renames.len(), 1, "{f:?}");
+        let far = "class C:\n    def new(self, a, b):\n        log(a)\n        send(b)\n        return 0\n";
+        let f = section_facts(ENGINE_RENAMES, "a.py", old, far);
+        assert!(f.renames.is_empty(), "{f:?}");
+    }
+
+    /// Among several, the same code wins, and each goes on as one.
+    #[test]
+    fn renames_pair_by_their_code() {
+        let old = "def a():\n    return one()\n\n\ndef b():\n    return two()\n";
+        let new = "def d():\n    return two()\n\n\ndef c():\n    return one()\n";
+        let f = section_facts(ENGINE_RENAMES, "a.py", old, new);
+        let pair = |a: &str, b: &str| [format!("a.py#{a}"), format!("a.py#{b}")];
+        assert_eq!(f.renames, [pair("a", "c"), pair("b", "d")]);
+    }
+
+    /// A renamed type takes its members along, and an empty shell says
+    /// nothing, in a list that holds it.
+    #[test]
+    fn a_type_is_renamed_with_its_members() {
+        let old = "class Old:\n    def m(self):\n        return 1\n\n    def n(self):\n        return 2\n";
+        let new = old.replace("Old", "New").replace("return 2", "return 3");
+        let f = section_facts(ENGINE_RENAMES, "a.py", old, &new);
+        assert_eq!(
+            f.renames,
+            [["a.py#Old".to_string(), "a.py#New".to_string()]]
+        );
+        let other = "class New:\n    def x(self):\n        return 1\n\n    def y(self):\n        return 2\n";
+        let f = section_facts(ENGINE_RENAMES, "a.py", old, other);
+        assert!(f.renames.is_empty(), "{f:?}");
+        let f = section_facts(ENGINE_RENAMES, "a.ts", "class A {}\n", "class B {}\n");
+        assert!(f.renames.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn what_a_name_is_written_as() {
+        for (name, want) in [
+            ("f", "f"),
+            ("C.M", "M"),
+            ("C.M(int)", "M"),
+            ("C.x[setter]", "x"),
+            ("C.M~2", "M"),
+            ("C.[k]", "[k]"),
+            ("C.~D", "~D"),
+        ] {
+            assert_eq!(written(name), want);
+        }
+    }
+
+    /// Up to what is compared a rename is found, past it not: `many_new_names`
+    /// has nine of each.
+    #[test]
+    fn eight_new_names_at_once_are_renames() {
+        let list = |letter: char| {
+            let defs = (0..8).map(|i| format!("def {letter}{i}():\n    return {i}\n\n\n"));
+            defs.collect::<String>()
+        };
+        let f = section_facts(ENGINE_RENAMES, "a.py", &list('a'), &list('b'));
+        assert_eq!(f.renames.len(), 8, "{f:?}");
+    }
+
+    /// A name with nothing written in it: a JavaScript `1.` is a method name.
+    #[test]
+    fn a_name_that_ends_in_a_dot_is_compared_and_ends() {
+        let old = "class C {\n  1.() {\n    return 1;\n  }\n}\n";
+        let new = "class C {\n  fresh() {\n    return 1;\n  }\n}\n";
+        let f = section_facts(ENGINE_RENAMES, "a.js", old, new);
+        assert_eq!(f.deletes.len(), 1, "{f:?}");
+        assert_eq!(f.adds, ["a.js#C.fresh"]);
+    }
+
+    /// A Go method stands in the file's list, so one list says nothing about
+    /// the owner.
+    #[test]
+    fn a_method_that_moved_to_another_owner_is_no_rename() {
+        let text = |recv: &str, name: &str| {
+            format!(
+                "package p\n\nfunc {recv}{name}(a int) int {{\n\tx := a + 1\n\ty := x * 2\n\treturn y\n}}\n"
+            )
+        };
+        for (old, new) in [
+            (text("(t T) ", "Old"), text("(u U) ", "New")),
+            (text("", "Helper"), text("(u U) ", "New")),
+            (text("(t T) ", "Old"), text("", "Helper")),
+        ] {
+            let f = section_facts(ENGINE_RENAMES, "a.go", &old, &new);
+            assert!(f.renames.is_empty(), "{f:?}");
+            assert_eq!((f.deletes.len(), f.adds.len()), (1, 1), "{f:?}");
+        }
+        let f = section_facts(
+            ENGINE_RENAMES,
+            "a.go",
+            &text("(t T) ", "Old"),
+            &text("(t T) ", "New"),
+        );
+        assert_eq!(f.renames.len(), 1, "{f:?}");
+    }
+
+    /// A function does not turn into a type, and members of a `impl` block
+    /// are no rename of the block.
+    #[test]
+    fn what_is_no_rename() {
+        let f = section_facts(
+            ENGINE_RENAMES,
+            "a.py",
+            "def a():\n    pass\n",
+            "class a2:\n    pass\n",
+        );
+        assert!(f.renames.is_empty(), "{f:?}");
+        let f = section_facts(
+            ENGINE_RENAMES,
+            "a.rs",
+            "impl A {\n    fn m() {}\n}\n",
+            "impl B {\n    fn m() {}\n}\n",
+        );
+        assert!(
+            f.renames.iter().all(|[old, _]| !old.contains("impl:")),
+            "{f:?}"
+        );
+    }
+
+    /// New parameters of an overload are a new name too, for whoever had the
+    /// old one, though the change stays an edit.
+    #[test]
+    fn a_change_of_key_is_recorded_as_a_rename() {
+        let old = "class C {\n    void M(int a) { A(); }\n    void M(string s) { B(); }\n}\n";
+        let new = old.replace("M(int a)", "M(long a)");
+        let f = section_facts(ENGINE_RENAMES, "a.cs", old, &new);
+        assert_eq!(f.edits, ["a.cs#C.M(int)"]);
+        assert_eq!(
+            f.renames,
+            [["a.cs#C.M(int)".to_string(), "a.cs#C.M(long)".to_string()]]
+        );
+        let f = section_facts(ENGINE_KEYS, "a.cs", old, &new);
+        assert!(f.renames.is_empty());
+    }
+
+    /// Past what is compared a rename is a delete and an add, as it was.
+    #[test]
+    fn many_new_names_at_once_are_no_renames() {
+        let list = |letter: char| {
+            let defs = (0..9).map(|i| format!("def {letter}{i}():\n    return {i}\n\n\n"));
+            defs.collect::<String>()
+        };
+        let f = section_facts(ENGINE_RENAMES, "a.py", &list('a'), &list('b'));
+        assert!(f.renames.is_empty());
+        assert_eq!(f.deletes.len(), 9);
     }
 
     /// A deletion and an addition in different places are that, not a

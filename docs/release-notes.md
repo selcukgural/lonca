@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Renames are tracked (symbol engine 7, log format 14)
+
+Facts now have `renames: [[old, new]]`: a deleted and an added symbol in one list whose
+code is the same with the name left out, or at least 80% alike. A `rename` lease on the
+old name is all such a change needs. Once it lands, a lease on the old name and one on the
+new name conflict, so a session on an older base and one on the trunk can not hold one
+symbol under two names, also after an overload's parameters changed. A proposal from an
+older base is checked against leases by either name. The merge keeps a renamed symbol in
+its place. `deletes` and `adds` stay, so claims do not change.
+
 ### Overloads keep their identity (symbol engine 6, log format 13)
 
 Symbols that share a name are now told apart by what they take, not by their place

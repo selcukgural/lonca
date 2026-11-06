@@ -197,6 +197,54 @@ fn forged_merge_is_caught() {
     );
 }
 
+/// What a batch says it verified has to be there, and of what trunk became.
+#[test]
+fn a_batch_with_no_evidence_or_another_tree_is_caught() {
+    let mut e = Env::new();
+    e.init(None);
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace("batch_size = 1", "batch_size = 2");
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+    e.human_change(vec![file("src/a", "a\n")], "a");
+    e.human_change(vec![file("src/b", "b\n")], "b");
+    assert_eq!(e.svc.process_all(), 2);
+    let the_batch = |entries: &mut Vec<OpEntry>| -> usize {
+        let is_batch = |x: &OpEntry| matches!(x.op, Op::ChangeIntegrateBatch { .. });
+        entries.iter().position(is_batch).expect("a batch")
+    };
+    let deep = |store: &Store| {
+        let options = Options {
+            deep: true,
+            check_refs: false,
+        };
+        audit(store, options).unwrap()
+    };
+    let none = forge(&e, "none", |entries| {
+        let at = the_batch(entries);
+        entries[at].evidence.clear();
+    });
+    assert!(
+        kinds(&deep(&none)).contains(&"merge".to_string()),
+        "no evidence"
+    );
+    let other = forge(&e, "other", |entries| {
+        let at = the_batch(entries);
+        entries[at].evidence[0].subject_tree = GitId::of_blob(b"another");
+    });
+    assert!(
+        kinds(&deep(&other)).contains(&"merge".to_string()),
+        "another tree"
+    );
+    let good = forge(&e, "good", |_| {});
+    assert!(kinds(&deep(&good)).is_empty());
+}
+
 #[test]
 fn auditor_flag_freezes_the_repository() {
     let mut e = Env::new();

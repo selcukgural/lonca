@@ -301,7 +301,9 @@ fn recheck_objects(store: &Store, state: &State, op: &SignedOp, rep: &mut Report
             }
             // What was verified is the tip, which is what trunk became.
             match store.read_commit(&trunk) {
-                Ok(tip) if e.evidence.iter().all(|a| a.subject_tree == tip.tree) => {}
+                Ok(tip)
+                    if !e.evidence.is_empty()
+                        && e.evidence.iter().all(|a| a.subject_tree == tip.tree) => {}
                 Ok(_) => rep.find(Some(e.seq), "merge", "evidence of another tree".to_string()),
                 Err(err) => rep.find(Some(e.seq), "merge", err.to_string()),
             }

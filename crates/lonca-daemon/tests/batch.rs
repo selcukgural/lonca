@@ -16,13 +16,17 @@ const TESTS: &str = "# test = \"cargo test --offline\"";
 
 /// A repository whose test fails when a file called `bad` is in the tree.
 fn repo(batch: u32) -> (Env, GitId) {
+    repo_with(batch, "test ! -e src/bad")
+}
+
+fn repo_with(batch: u32, test: &str) -> (Env, GitId) {
     let mut e = Env::new();
     e.init(None);
     let config = DEFAULT_CONFIG
         .replace("batch_size = 1", &format!("batch_size = {batch}"))
         .replace("required = false", "required = true")
-        .replace(TESTS, "test = \"test ! -e src/bad\"");
-    assert!(config.contains("test ! -e"));
+        .replace(TESTS, &format!("test = \"{test}\""));
+    assert!(config.contains(test));
     let prep = e.ok(
         "human.prepare_policy",
         Some("demo"),
@@ -103,7 +107,7 @@ fn ten_changes_in_batches_of_five_verify_twice() {
     let changes: Vec<Value> = (0..10)
         .map(|i| add(&mut e, &base, &format!("a{i}"), &format!("src/f{i}"))["change"].clone())
         .collect();
-    assert_eq!(e.svc.process_all(), 2);
+    assert_eq!(e.svc.process_all(), 10, "changes, not entries");
     assert_eq!(e.svc.verification_runs() - runs, 2);
     assert_eq!(batches(&e), [5, 5]);
     for change in &changes {
@@ -164,7 +168,7 @@ fn a_commit_inside_a_batch_was_never_trunk() {
     let (mut e, base) = repo(2);
     add(&mut e, &base, "a", "src/a");
     add(&mut e, &base, "b", "src/b");
-    assert_eq!(e.svc.process_all(), 1);
+    assert_eq!(e.svc.process_all(), 2);
     let ops = OpLog::new(&e.store()).read_all().unwrap();
     let o = ops
         .iter()
@@ -194,7 +198,7 @@ fn a_commit_inside_a_batch_was_never_trunk() {
 /// A tree that passed is not verified again: what is logged is what passed.
 #[test]
 fn a_tree_that_passed_is_not_verified_again() {
-    let (mut e, _) = repo(1);
+    let (mut e, _) = repo(2);
     let seed = "seed\n";
     let change = |e: &mut Env, text: &str| {
         let r = e.human_change(vec![file("src/seed", text)], "edit");
@@ -212,13 +216,120 @@ fn a_tree_that_passed_is_not_verified_again() {
         o.entry.evidence.iter().any(|a| a.check == CheckKind::Tests)
     };
     assert_eq!(ops.iter().filter(tests).count(), 4, "logged each time");
+    let reused = |o: &&lonca_core::oplog::SignedOp| {
+        let tests = o
+            .entry
+            .evidence
+            .iter()
+            .filter(|a| a.check == CheckKind::Tests);
+        tests.into_iter().any(|a| a.details.contains_key("reused"))
+    };
+    assert_eq!(
+        ops.iter().filter(reused).count(),
+        1,
+        "and marked when reused"
+    );
     audited(&e);
+}
+
+/// With one change at a time everything is verified, as before.
+#[test]
+fn the_default_verifies_every_tree() {
+    let (mut e, _) = repo(1);
+    let change = |e: &mut Env, text: &str| {
+        e.human_change(vec![file("src/seed", text)], "edit");
+        e.svc.process_all();
+    };
+    change(&mut e, "two\n");
+    let runs = e.svc.verification_runs();
+    change(&mut e, "seed\n");
+    assert_eq!(e.svc.verification_runs(), runs + 1);
+}
+
+/// What a check ran on is more than its tree, so a result does not last.
+#[test]
+fn a_result_is_kept_for_an_hour() {
+    let (mut e, _) = repo(2);
+    let change = |e: &mut Env, text: &str| {
+        e.human_change(vec![file("src/seed", text)], "edit");
+        e.svc.process_all();
+    };
+    let hour = 3_600_000;
+    change(&mut e, "two\n");
+    change(&mut e, "seed\n");
+    let runs = e.svc.verification_runs();
+    e.clock.fetch_add(hour - 60_000, Ordering::SeqCst);
+    change(&mut e, "two\n");
+    assert_eq!(e.svc.verification_runs(), runs, "still known");
+    e.clock.fetch_add(60_000, Ordering::SeqCst);
+    change(&mut e, "seed\n");
+    assert_eq!(e.svc.verification_runs(), runs + 1, "gone at the hour");
+}
+
+/// Withdrawn and proposed again while the worker verifies: the same id, other
+/// content. What lands is the new proposal, or nothing yet.
+#[test]
+fn a_proposal_replaced_during_verification_is_not_logged() {
+    for batch in [1, 2] {
+        let (mut e, base) = repo_with(batch, "sleep 1");
+        if batch > 1 {
+            add(&mut e, &base, "a", "src/a");
+        }
+        let t = e.session("b", &["src/**"]);
+        e.bind(&t);
+        e.wrote(&t, "src/b");
+        e.lease(&t, "src/b#<file>");
+        let propose = |e: &mut Env, text: &str, change: Option<&Value>| {
+            let claim = Claim {
+                intent: "b".into(),
+                ..Default::default()
+            };
+            let mut args = json!({"base": base, "files": [file("src/b", text)], "claim": claim});
+            if let Some(change) = change {
+                args["change"] = change.clone();
+            }
+            e.ok("change.propose", None, Some(&t), args)
+        };
+        let old = propose(&mut e, "old\n", None)["change"].clone();
+        let svc = e.svc.clone();
+        let worker = std::thread::spawn(move || svc.process_all());
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let id: ChangeId = serde_json::from_value(old.clone()).unwrap();
+        e.human(Op::ChangeWithdraw { change: id });
+        let r = propose(&mut e, "new\n", Some(&old));
+        assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+        worker.join().unwrap();
+        e.svc.process_all();
+        let head = e.trunk();
+        let text = e.store().read_file(&head, "src/b").unwrap().unwrap();
+        assert_eq!(text, b"new\n", "batch {batch}");
+        audited(&e);
+    }
+}
+
+/// A file where another change makes a directory: a conflict on the second,
+/// whichever way the queue runs, and the queue goes on.
+#[test]
+fn a_path_that_is_both_file_and_directory_is_a_conflict() {
+    for batch in [1, 2] {
+        let (mut e, base) = repo(batch);
+        let one = add(&mut e, &base, "a", "src/x")["change"].clone();
+        let two = add(&mut e, &base, "b", "src/x/y")["change"].clone();
+        let next = add(&mut e, &base, "c", "src/z")["change"].clone();
+        e.svc.process_all();
+        assert_eq!(status_of(&mut e, &one)["status"], "integrated");
+        assert_eq!(status_of(&mut e, &two)["status"], "conflicted");
+        let symbols = status_of(&mut e, &two)["symbols"].clone();
+        assert_eq!(symbols, json!(["src/x#<file>"]));
+        assert_eq!(status_of(&mut e, &next)["status"], "integrated");
+        audited(&e);
+    }
 }
 
 /// A failure is no result to keep: it may have been the machine.
 #[test]
 fn a_failed_tree_is_verified_again() {
-    let (mut e, base) = repo(1);
+    let (mut e, base) = repo(2);
     let change = add(&mut e, &base, "a", "src/bad")["change"].clone();
     let runs = e.svc.verification_runs();
     e.svc.process_all();
@@ -256,7 +367,7 @@ fn a_batch_tells_each_session_of_its_change() {
         assert_eq!(r["decision"]["outcome"], "allow", "{r}");
         changes.push(r["change"].clone());
     }
-    assert_eq!(e.svc.process_all(), 1);
+    assert_eq!(e.svc.process_all(), 2);
     for (i, t) in tokens.iter().enumerate() {
         let r = e.ok("events", None, Some(t), json!({"from": 0}));
         let kinds = r["events"].as_array().unwrap();

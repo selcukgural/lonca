@@ -107,7 +107,7 @@ fn batch(e: &mut Env) {
         let r = e.human_change(vec![file(name, "const a = 1;\n")], "one of two");
         assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     }
-    assert_eq!(e.svc.process_all(), 1);
+    assert_eq!(e.svc.process_all(), 2);
 }
 
 /// From format 15: facts list the text files no parser reads.

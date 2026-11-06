@@ -234,11 +234,13 @@ pub fn undo(c: &mut Client, human: &str, repo: &str, seq: u64) -> Result<()> {
             trunk_before,
             merged,
         } => {
-            let Some((_, tip)) = merged.last() else {
-                bail!("an empty batch");
-            };
-            let what = format!("{} changes", merged.len());
-            revert_change(c, human, repo, trunk_before, tip, None, &what)
+            // Each its own revert, the last first: a revert names one change.
+            let every = merged.iter().map(|(change, _)| *change).collect();
+            for (before, after, change) in steps_of(trunk_before, merged, &every).iter().rev() {
+                let what = format!("change {}", change.short());
+                revert_change(c, human, repo, before, after, Some(*change), &what)?;
+            }
+            Ok(())
         }
         other => bail!("{} can not be undone automatically", other.kind().as_str()),
     }

@@ -4347,3 +4347,70 @@ fn a_file_may_hold_what_reads_like_a_marker() {
     unparsed_land(&e, &b, "settled");
     assert!(trunk_text(&e).contains("a10 = 1500;"));
 }
+
+fn a_batch_landed(e: &Env) -> (u64, Vec<PathBuf>) {
+    agent_workspace(e);
+    let r = &e.root;
+    let shown = e.run(r, &["policy", "show", "--repo", "demo"]);
+    assert!(shown.contains("batch_size = 1"), "{shown}");
+    let cfg = lonca_policy::config::DEFAULT_CONFIG
+        .replace("batch_size = 1", "batch_size = 2")
+        .replace("# test = \"cargo test --offline\"", "test = \"sleep 2\"");
+    std::fs::write(r.join("c.toml"), cfg).unwrap();
+    std::fs::write(r.join("p.cedar"), lonca_policy::config::DEFAULT_POLICY).unwrap();
+    e.run(
+        r,
+        &[
+            "policy", "set", "--repo", "demo", "--config", "c.toml", "--policy", "p.cedar",
+        ],
+    );
+    let mut wss = Vec::new();
+    for w in ["w1", "w2", "w3"] {
+        e.run(r, &["workspace", "create", w, "--repo", "demo"]);
+        wss.push(r.join(w));
+    }
+    for (i, w) in wss.iter().enumerate() {
+        std::fs::write(w.join(format!("src/f{i}.txt")), "hello\n").unwrap();
+        e.run(w, &["propose", "-i", "add"]);
+    }
+    e.settle();
+    let log = parse(&e.run(r, &["log", "--repo", "demo", "--json"]));
+    let batch = log
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["entry"]["op"]["op"] == "change.integrate_batch")
+        .expect("a batch");
+    (batch["entry"]["seq"].as_u64().unwrap(), wss)
+}
+
+fn undo_claims(e: &Env) -> Vec<serde_json::Value> {
+    let log = parse(&e.run(&e.root, &["log", "--repo", "demo", "--json"]));
+    log.as_array()
+        .unwrap()
+        .iter()
+        .filter(|o| {
+            o["entry"]["op"]["op"] == "change.propose"
+                && o["entry"]["op"]["claim"]["intent"]
+                    .as_str()
+                    .is_some_and(|i| i.starts_with("Undo"))
+        })
+        .map(|o| o["entry"]["op"]["claim"].clone())
+        .collect()
+}
+
+/// `undo` of a batch is a revert of each change in it, so that what counts
+/// reverts counts them.
+#[test]
+fn undoing_a_batch_reverts_each_change() {
+    let e = Env::new();
+    let (seq, _) = a_batch_landed(&e);
+    e.run(&e.root, &["undo", &seq.to_string(), "--repo", "demo"]);
+    e.settle();
+    let claims = undo_claims(&e);
+    assert_eq!(claims.len(), 2, "{claims:?}");
+    assert!(
+        claims.iter().all(|c| !c["revert_of"].is_null()),
+        "{claims:?}"
+    );
+}

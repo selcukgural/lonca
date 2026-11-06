@@ -593,17 +593,32 @@ result (issue #49). Ten changes in batches of five verify twice.
   restore it. `change.integrate_batch` is all or nothing, and each change in it has
   the commit it merged to, for `undo` and for the auditor, which recomputes them in
   order and checks that the evidence is of the tip's tree.
-- **A failure halves the batch.** The longest prefix that passes goes, the rest stays
-  in the queue in its order, and a change alone goes the way it always did, so a
-  failing one is logged as before. A conflict ends a batch. What decides that a tip
-  passed is the code `decide()` uses, so a batch that would be denied is not logged.
-- **A tree that passed is not verified again.** The daemon keeps the checks that
-  passed by repository, tree and verification settings, in memory, for the last 256
-  trees: its environment is part of what passed, so the memory ends with it. A
-  failure is not kept, since it may have been the machine. What is reused is logged
-  as evidence again. Syntax is always checked: it depends on what changed.
-- **`undo` of a batch** reverts all of it, and says how many changes that is.
-  `lonca revert --actor` takes back only that actor's changes in it.
+- **A failure halves the batch.** A prefix of half the size is tried next, down to a
+  change alone, which goes the way it always did, so a failing one is logged as
+  before. What a failed batch leaves stays in the queue in its order. This finds
+  a prefix that passes, not the longest: a bad fifth change lands two, and the next
+  pass goes on from there. A conflict ends a batch, and so does a change that can
+  not be merged or verified at all: the changes ahead of it do not wait for it. What
+  decides that a tip passed is the code `decide()` uses, so a batch that would be
+  denied is not logged.
+- **A change is the proposal it was when work on it began.** While the worker verifies
+  off the lock a change can be withdrawn and proposed again with the same id. Its
+  commit and base are compared too before anything is logged.
+- **A path that would be both a file and a directory is a conflict** on that file:
+  two changes can each be fine and leave it, no tree can hold it, and with no entry to
+  record it the queue would stop there. No older entry can hold such a case, since
+  none could be written, so this takes no engine.
+- **With batches on, a tree that passed is not verified again.** The daemon keeps the
+  checks that passed by repository, tree and verification settings, in memory, for
+  the last 256 trees and for an hour at most: what a check ran on is more than its
+  tree, and a toolchain can change under a daemon that runs on. So this trades some
+  of that for the runs bisection would repeat, which is why `batch_size = 1` keeps
+  none and verifies everything as before. A failure is not kept, since it may have
+  been the machine. What is reused is logged again with `reused = true` in its
+  details. Syntax is always checked: it depends on what changed.
+- **`undo` of a batch** reverts each change in it, the last first, as a revert of that
+  change, so `revert-storm` counts them. `lonca revert --actor` takes back only that
+  actor's changes.
 
 ## The language table
 

@@ -18,7 +18,7 @@ use crate::extract::{
 use crate::lang::Lang;
 use crate::sections::{APPEND, Format, Section, appended, sections};
 
-const FILE: &str = "<file>";
+pub(crate) const FILE: &str = "<file>";
 const MODULE: &str = "<module>";
 const IMPORTS: &str = "<imports>";
 

@@ -472,6 +472,9 @@ fn each_symbol<'s>(syms: &'s [Sym], out: &mut Vec<&'s Sym>) {
     }
 }
 
+/// A scope, a block in it and a name.
+type Seat<'s> = (&'s str, Option<(u32, u32)>, &'s str);
+
 /// A key a side gave a symbol stands twice in one place of `merged`: two
 /// sides gave one key to two symbols, and only one can answer to it. In
 /// another block, or in an `impl` for other type arguments, each is valid.
@@ -480,7 +483,7 @@ pub fn key_twice(merged: &Parsed, pairs: &[Pair]) -> bool {
         syms: &'s [Sym],
         scope: &'s str,
         given: &BTreeSet<&str>,
-        seen: &mut BTreeSet<(&'s str, Option<(u32, u32)>, &'s str)>,
+        seen: &mut BTreeSet<Seat<'s>>,
     ) -> bool {
         syms.iter().any(|s| {
             let block = s.holder.map(|h| h.block);

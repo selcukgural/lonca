@@ -109,6 +109,8 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   symbols.
 - **Version 14** adds `renames` to facts, left out of the encoding when empty
   (see "Symbol engine versions", engine 7).
+- **Version 15** adds `unparsed_files` to facts, left out of the encoding when
+  empty (see "Symbol engine versions", engine 8).
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -518,6 +520,23 @@ entry format, so they have their own version
     symbol, so a caller is what verification finds (design §5.8). The list of
     tests counts a renamed test as deleted and added, and escalates: renaming
     a test and gutting it can not be told apart from outside.
+
+- **Engine 8** lists the files no parser reads (issue #113): `unparsed_files` in
+  facts, text on both sides with neither symbols nor sections. A file added or
+  deleted, a change of mode and bytes that are no text are not listed, because
+  a line merge decides nothing about them. The list is in facts, not worked out
+  from an extension in `decide()`, so that a new language changes it in one place.
+  - **`[leases] unparsed_files`**, `"file"` by default, `"optimistic"` by a signed
+    policy. Under `optimistic` an edit of a listed file needs no lease: the line
+    merge at integration decides, an overlap is `conflicted`, and verification
+    runs on the result as always. It waives the lease and nothing else: scopes
+    hold, and deleting such a file takes its `rename` lease.
+  - **The issue had the value travel in decision reasons.** The fold does not need
+    it: `pin` uses `lease_needs` as it is, so a lease someone did take is pinned,
+    and with none there is nothing to pin. `decide()` has the policy of the entry,
+    so replay holds.
+  - **A lease someone holds on such a file does not stop another's edit.** It is
+    no use to anyone under `optimistic`, and the merge is what decides.
 
 ## Harness profiles
 

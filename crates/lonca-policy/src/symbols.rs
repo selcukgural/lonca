@@ -13,6 +13,8 @@
 
 use lonca_core::ops::{DEF, Facts, LeaseItem, LeaseKind, names_are_headings};
 
+use crate::config::UnparsedFiles;
+
 pub const FILE: &str = "<file>";
 pub const MODULE: &str = "<module>";
 pub const IMPORTS: &str = "<imports>";
@@ -126,6 +128,20 @@ pub const EDIT_KINDS: &[LeaseKind] = &[LeaseKind::Edit, LeaseKind::Rename];
 pub const ADD_KINDS: &[LeaseKind] = &[LeaseKind::Insert, LeaseKind::Edit, LeaseKind::Rename];
 /// What deleting a symbol or a file takes.
 pub const DELETE_KINDS: &[LeaseKind] = &[LeaseKind::Rename];
+
+/// [`lease_needs`] when `leases.unparsed_files` is `optimistic`: a file no
+/// parser reads is left to the line merge.
+pub fn lease_needs_under(f: &Facts, unparsed: UnparsedFiles) -> Vec<LeaseNeed> {
+    let needs = lease_needs(f).into_iter();
+    let free = |need: &LeaseNeed| {
+        unparsed == UnparsedFiles::Optimistic
+            && need.kinds == EDIT_KINDS
+            && f.unparsed_files
+                .iter()
+                .any(|p| need.symbol == file_symbol(p))
+    };
+    needs.filter(|need| !free(need)).collect()
+}
 
 /// The leases the facts of a change need, in the order the proposal
 /// reports them: the one rule for `lease_missing` and for pinning.
@@ -306,6 +322,35 @@ mod tests {
         assert_eq!(
             lease_needs(&f),
             vec![need("a.go#T.Old", DELETE_KINDS), need("a.go#U", ADD_KINDS)]
+        );
+    }
+
+    #[test]
+    fn a_file_no_parser_reads_needs_no_lease_when_optimistic() {
+        let f = Facts {
+            edits: vec![
+                "a.java#<file>".into(),
+                "a.bin#<file>".into(),
+                "a.rs#f".into(),
+            ],
+            unparsed_files: vec!["a.java".into(), "b.java".into()],
+            deleted_files: vec!["b.java".into()],
+            ..Default::default()
+        };
+        let symbols = |unparsed| -> Vec<String> {
+            let needs = lease_needs_under(&f, unparsed).into_iter();
+            needs.map(|n| n.symbol).collect()
+        };
+        assert_eq!(
+            symbols(UnparsedFiles::File),
+            lease_needs(&f)
+                .into_iter()
+                .map(|n| n.symbol)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            symbols(UnparsedFiles::Optimistic),
+            ["a.bin#<file>", "a.rs#f", "b.java#<file>"]
         );
     }
 

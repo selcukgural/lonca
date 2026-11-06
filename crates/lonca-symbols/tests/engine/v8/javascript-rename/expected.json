@@ -1,0 +1,177 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.js#plus"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.js#add"
+        ],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.js"
+        ],
+        "renames": [
+          [
+            "src/sample.js#add",
+            "src/sample.js#plus"
+          ]
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.js#sum"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.js"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "function plus(a, b) {\n  return a + b;\n}\n\nfunction sum(list) {\n  return list.reduce(add, 1);\n}\n"
+  },
+  "path": "src/sample.js",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "add",
+          "own": "",
+          "signature": "function add(a, b)",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            38
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sum",
+          "own": "",
+          "signature": "function sum(list)",
+          "skipped": false,
+          "span": [
+            40,
+            40,
+            92
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "plus",
+          "own": "",
+          "signature": "function plus(a, b)",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            39
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sum",
+          "own": "",
+          "signature": "function sum(list)",
+          "skipped": false,
+          "span": [
+            41,
+            41,
+            93
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "add",
+          "own": "",
+          "signature": "function add(a, b)",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            38
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sum",
+          "own": "",
+          "signature": "function sum(list)",
+          "skipped": false,
+          "span": [
+            40,
+            40,
+            92
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1208,7 +1208,7 @@ fn propose(
                 .filter(|l| l.lease.session == *session)
                 .collect();
             let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
-            for need in symbols::lease_needs(f) {
+            for need in symbols::lease_needs_under(f, cfg.leases.unparsed_files) {
                 if !mine.iter().any(|l| state.covers_need(&need, l, Some(base))) {
                     v.deny(format!("lease_missing:{}", need.symbol));
                 }

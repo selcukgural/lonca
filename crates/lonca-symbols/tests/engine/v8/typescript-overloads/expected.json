@@ -1,0 +1,320 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.ts#Box.label",
+          "src/sample.ts#Box.value[set]",
+          "src/sample.ts#pick(any)",
+          "src/sample.ts#pick(number)"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.ts#pick(string)"
+        ],
+        "import_only_files": [],
+        "lines_added": 8,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.ts"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.ts#Box.value",
+          "src/sample.ts#pick"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.ts"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [
+      "src/sample.ts#pick(string)"
+    ],
+    "text": "export class Box {\n  size: number;\n  label: string;\n\n  get value() {\n    return this.size;\n  }\n\n  set value(v: number) {\n    this.size = v;\n  }\n}\n\nfunction pick(a: number): number;\nfunction pick(a: string): string;\nfunction pick(a: any): any {\n  return a;\n}\n"
+  },
+  "path": "src/sample.ts",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Box.size",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                34
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Box.value",
+              "own": "",
+              "signature": "get value()",
+              "skipped": false,
+              "span": [
+                38,
+                38,
+                77
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Box",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fBox\u001fclass_body({\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            7,
+            79
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "pick",
+          "own": "",
+          "signature": "function pick(a: string): string",
+          "skipped": false,
+          "span": [
+            81,
+            81,
+            129
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Box.size",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                34
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Box.label",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                37,
+                37,
+                51
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Box.value[get]",
+              "own": "",
+              "signature": "get value()",
+              "skipped": false,
+              "span": [
+                55,
+                55,
+                94
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Box.value[set]",
+              "own": "",
+              "signature": "set value(v: number)",
+              "skipped": false,
+              "span": [
+                98,
+                98,
+                143
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Box",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fBox\u001fclass_body({\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            7,
+            145
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "pick(number)",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            147,
+            147,
+            180
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "pick(string)",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            181,
+            181,
+            214
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "pick(any)",
+          "own": "",
+          "signature": "function pick(a: any): any",
+          "skipped": false,
+          "span": [
+            215,
+            215,
+            257
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Box.size",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                34
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Box.value",
+              "own": "",
+              "signature": "get value()",
+              "skipped": false,
+              "span": [
+                38,
+                38,
+                81
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Box",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fBox\u001fclass_body({\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            7,
+            83
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "pick",
+          "own": "",
+          "signature": "function pick(a: string): string",
+          "skipped": false,
+          "span": [
+            85,
+            85,
+            140
+          ]
+        }
+      ]
+    }
+  }
+}

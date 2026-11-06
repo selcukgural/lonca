@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Files no parser reads can be shared (symbol engine 8, log format 15)
+
+With `[leases] unparsed_files = "optimistic"` in a signed policy, an edit of a text file
+with no grammar and no sections (Java, Kotlin, C, Ruby, shell, ...) needs no lease: the
+line merge at integration decides, and a real overlap is `conflicted`. The default stays
+`"file"`, one `<file>` lease and one agent at a time. `status` shows the setting, and
+`preview` and `lease_needed` list such files under `no_lease`.
+
 ### Renames are tracked (symbol engine 7, log format 14)
 
 Facts now have `renames: [[old, new]]`: a deleted and an added symbol in one list whose

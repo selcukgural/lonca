@@ -11,6 +11,7 @@ use lonca_core::ChangeId;
 use lonca_core::ops::{Facts, LeaseItem, LeaseKind};
 use serde::Serialize;
 
+use crate::config::UnparsedFiles;
 use crate::state::{ActiveLease, State};
 use crate::symbols;
 
@@ -146,14 +147,20 @@ pub fn lease_wanted(
 /// Every lease the facts need, and where it stands: `held_by_you`, `free`,
 /// or one `lease_held` per holder and one `lease_wanted` per session that
 /// goes first.
-pub fn lease_report(state: &State, session: &str, facts: &Facts, now_ms: i64) -> Vec<Detail> {
+pub fn lease_report(
+    state: &State,
+    session: &str,
+    facts: &Facts,
+    unparsed: UnparsedFiles,
+    now_ms: i64,
+) -> Vec<Detail> {
     let leases: Vec<ActiveLease> = state
         .active_leases(now_ms)
         .filter(|l| l.lease.session == session)
         .collect();
     let mine = || leases.iter().flat_map(|l| l.items.iter().copied());
     let mut out = Vec::new();
-    for need in symbols::lease_needs(facts) {
+    for need in symbols::lease_needs_under(facts, unparsed) {
         let kind = need.kinds[0];
         if mine().any(|i| state.covers_need(&need, i, None)) {
             out.push(Detail::free(HELD_BY_YOU, &need.symbol, kind));
@@ -175,8 +182,14 @@ pub fn lease_report(state: &State, session: &str, facts: &Facts, now_ms: i64) ->
 }
 
 /// The leases a refused proposal lacks, with whoever holds them.
-pub fn lease_missing(state: &State, session: &str, facts: &Facts, now_ms: i64) -> Vec<Detail> {
-    let report = lease_report(state, session, facts, now_ms);
+pub fn lease_missing(
+    state: &State,
+    session: &str,
+    facts: &Facts,
+    unparsed: UnparsedFiles,
+    now_ms: i64,
+) -> Vec<Detail> {
+    let report = lease_report(state, session, facts, unparsed, now_ms);
     let missing = report.into_iter().filter(|d| d.code != HELD_BY_YOU);
     missing
         .map(|d| Detail {

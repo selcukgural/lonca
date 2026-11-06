@@ -1,0 +1,177 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.go#Till.Deposit"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.go#Till.Add"
+        ],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.go"
+        ],
+        "renames": [
+          [
+            "src/sample.go#Till.Add",
+            "src/sample.go#Till.Deposit"
+          ]
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.go#Till.Sum"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.go"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "package till\n\nfunc (t *Till) Deposit(v int) {\n\tt.total += v\n}\n\nfunc (t *Till) Sum() int {\n\treturn t.total * 2\n}\n"
+  },
+  "path": "src/sample.go",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001ftill\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till.Add",
+          "own": "",
+          "signature": "func (t *Till) Add(v int)",
+          "skipped": false,
+          "span": [
+            14,
+            14,
+            57
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till.Sum",
+          "own": "",
+          "signature": "func (t *Till) Sum() int",
+          "skipped": false,
+          "span": [
+            59,
+            59,
+            103
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001ftill\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till.Deposit",
+          "own": "",
+          "signature": "func (t *Till) Deposit(v int)",
+          "skipped": false,
+          "span": [
+            14,
+            14,
+            61
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till.Sum",
+          "own": "",
+          "signature": "func (t *Till) Sum() int",
+          "skipped": false,
+          "span": [
+            63,
+            63,
+            107
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001ftill\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till.Add",
+          "own": "",
+          "signature": "func (t *Till) Add(v int)",
+          "skipped": false,
+          "span": [
+            14,
+            14,
+            57
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till.Sum",
+          "own": "",
+          "signature": "func (t *Till) Sum() int",
+          "skipped": false,
+          "span": [
+            59,
+            59,
+            107
+          ]
+        }
+      ]
+    }
+  }
+}

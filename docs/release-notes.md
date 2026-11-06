@@ -10,6 +10,11 @@ line merge at integration decides, and a real overlap is `conflicted`. The defau
 `"file"`, one `<file>` lease and one agent at a time. `status` shows the setting, and
 `preview` and `lease_needed` list such files under `no_lease`.
 
+Only an edit of lines goes without a lease: a change of mode or of a link, text with a NUL and a
+change that leaves no line of the file keep the file's lease (symbol engine 9). `lonca status` and
+`lonca lease needed` say so too. After a conflict `lonca sync` brings in what trunk changed in the
+rest of a file with no symbols, as it does for symbols, and keeps only the lines that meet.
+
 ### Renames are tracked (symbol engine 7, log format 14)
 
 Facts now have `renames: [[old, new]]`: a deleted and an added symbol in one list whose

@@ -2174,6 +2174,9 @@ fn print_status(s: &Value) {
     }
     let q = s["queue"].as_array().map(|a| a.len()).unwrap_or(0);
     println!("queue  {q} change(s)");
+    if s["unparsed_files"] == "optimistic" {
+        println!("files no parser reads need no lease: the merge decides");
+    }
     let now = s["now_ms"].as_i64().unwrap_or(0);
     println!("sessions:");
     for x in s["sessions"]
@@ -2258,6 +2261,12 @@ fn lease_need_lines(report: &Value) -> Vec<String> {
 fn print_lease_needs(report: &Value) {
     for l in lease_need_lines(report) {
         println!("{l}");
+    }
+    for path in report["no_lease"].as_array().into_iter().flatten() {
+        println!(
+            "{}: no lease, the merge decides",
+            path.as_str().unwrap_or("")
+        );
     }
     if let Some(advice) = report["advice"].as_str() {
         println!("{advice}");

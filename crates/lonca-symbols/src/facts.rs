@@ -3,12 +3,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::ops::Facts;
-use lonca_core::{FileMap, GitId, Result};
+use lonca_core::{FileEntry, FileMap, FileMode, GitId, Result};
 
 #[cfg(test)]
 use crate::engine::ENGINE_KEYS;
 use crate::engine::{
-    ENGINE_EXACT, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS, ENGINE_UNPARSED,
+    ENGINE_EXACT, ENGINE_LINE_EDITS, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS,
+    ENGINE_UNPARSED,
 };
 use crate::extract::{
     MAX_COMPARED, Parsed, Sym, align, best_pairs, likeness, moved, parse_at, parse_together,
@@ -35,6 +36,16 @@ pub struct Analysis {
 
 fn sym_id(path: &str, name: &str) -> String {
     format!("{path}#{name}")
+}
+
+/// A change a line merge can stand in for a lease on: lines of one file that
+/// stays what it was. A change of mode or of where a link points is none,
+/// bytes with a NUL are no lines, and a change that leaves no line of the
+/// file takes it away as deleting it would.
+fn edits_lines(b: &FileEntry, n: &FileEntry, old: &str, new: &str, removed: u32) -> bool {
+    let plain = matches!(n.mode, FileMode::Regular | FileMode::Executable);
+    let text = !old.contains('\0') && !new.contains('\0');
+    b.mode == n.mode && plain && text && (removed as usize) < old.lines().count()
 }
 
 fn line_counts(old: &str, new: &str) -> (u32, u32) {
@@ -123,7 +134,8 @@ pub fn analyze(
                     if !by_section {
                         f.edits.push(sym_id(path, FILE));
                     }
-                    if format.is_none() && engine >= ENGINE_UNPARSED {
+                    let listed = engine < ENGINE_LINE_EDITS || edits_lines(b, n, old, newt, r);
+                    if format.is_none() && engine >= ENGINE_UNPARSED && listed {
                         f.unparsed_files.push(path.clone());
                     }
                     continue;
@@ -672,6 +684,36 @@ mod tests {
         );
         let run = one(entry(text, lonca_core::FileMode::Executable));
         assert!(facts(&b, &run).unparsed_files.is_empty(), "mode");
+    }
+
+    /// `edits_lines`, with the text that decides it. From engine 9 on; what
+    /// engine 8 listed stays listed, for the entries it wrote.
+    #[test]
+    fn only_an_edit_of_lines_is_listed() {
+        use lonca_core::FileMode::{Executable, Regular, Submodule, Symlink};
+        let e = |mode, text: &str| lonca_core::FileEntry {
+            mode,
+            blob: GitId::of_blob(text.as_bytes()),
+        };
+        let lists = |(from, old): (FileMode, &str), (to, new): (FileMode, &str)| {
+            let (b, n) = (e(from, old), e(to, new));
+            let removed = line_counts(old, new).1;
+            edits_lines(&b, &n, old, new, removed)
+        };
+        let (two, one_changed) = ("a\nb\n", "a\nc\n");
+        assert!(lists((Regular, two), (Regular, one_changed)));
+        assert!(lists((Executable, two), (Executable, one_changed)));
+        assert!(!lists((Regular, two), (Executable, one_changed)));
+        assert!(!lists((Regular, two), (Symlink, one_changed)));
+        assert!(!lists((Symlink, two), (Symlink, one_changed)));
+        assert!(!lists((Submodule, two), (Submodule, one_changed)));
+        assert!(!lists((Regular, "a\0\nb\n"), (Regular, "a\0\nc\n")));
+        assert!(!lists((Regular, two), (Regular, "a\0\nb\n")));
+        assert!(!lists((Regular, "a\0\nb\n"), (Regular, two)));
+        assert!(!lists((Regular, two), (Regular, "")));
+        assert!(!lists((Regular, two), (Regular, "x\ny\n")));
+        assert!(!lists((Regular, ""), (Regular, two)));
+        assert!(lists((Regular, two), (Regular, "a\n")), "one line stays");
     }
 
     #[test]

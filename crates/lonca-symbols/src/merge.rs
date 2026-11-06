@@ -36,9 +36,16 @@ fn outer_code(engine: u32, p: &Parsed) -> Code<'_> {
 fn differs(engine: u32, a: Code, b: Code) -> bool {
     a.0 != b.0 || engine >= ENGINE_PLACES && shifted(a.1, b.1)
 }
+use std::ops::Range;
+
+use similar::DiffTag;
+
 use crate::facts::renames_between;
 use crate::lang::Lang;
 use crate::sections::{self, Format};
+
+/// The lines of the base that go, and the text that stands there instead.
+type LineChange = (Range<usize>, String);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeResult {
@@ -200,6 +207,44 @@ pub fn merge_text_at(
         }
     }
     Ok(merged)
+}
+
+/// The lines of `b`, and one side's changes to them.
+fn line_changes(b: &str, side: &str) -> (Vec<String>, Vec<LineChange>) {
+    let diff = similar::TextDiff::from_lines(b, side);
+    let base = diff.iter_old_slices().map(str::to_string).collect();
+    let new: Vec<&str> = diff.iter_new_slices().collect();
+    let changed = diff.ops().iter().filter(|op| op.tag() != DiffTag::Equal);
+    let text = |at: Range<usize>| new[at].concat();
+    (
+        base,
+        changed
+            .map(|op| (op.old_range(), text(op.new_range())))
+            .collect(),
+    )
+}
+
+/// [`merge_around_conflicts`] for a file it has no answer for, by lines:
+/// every change of `t` applied, except those that meet a change of `o`, whose
+/// text stays. What `t` changed elsewhere must come in, or the next proposal
+/// from this text would take it back.
+pub fn lines_around_conflicts(b: &str, o: &str, t: &str) -> String {
+    let (base, ours) = line_changes(b, o);
+    let (_, theirs) = line_changes(b, t);
+    let meets = |a: &Range<usize>, c: &Range<usize>| a.start <= c.end && c.start <= a.end;
+    let clean = theirs.into_iter();
+    let clean = clean.filter(|(at, _)| !ours.iter().any(|(mine, _)| meets(at, mine)));
+    let mut changes: Vec<LineChange> = ours.iter().cloned().chain(clean).collect();
+    changes.sort_by_key(|(at, _)| (at.start, at.end));
+    let mut out = String::new();
+    let mut done = 0;
+    for (at, text) in changes {
+        out.push_str(&base[done..at.start].concat());
+        out.push_str(&text);
+        done = at.end;
+    }
+    out.push_str(&base[done..].concat());
+    out
 }
 
 /// What is left of a file whose merge has conflicts: every change of `t`
@@ -2648,6 +2693,30 @@ mod tests {
         let t = "class C {\n    short a;\n    int b;\n}\n";
         let kept = merge_around_conflicts(2, "x.cs", b, o, t).unwrap();
         assert!(kept.contains("long a") && kept.contains("int b"), "{kept}");
+    }
+
+    /// Line numbers in the names: a change only a side made comes in, one
+    /// that meets a change of `o` stays as `o` wrote it.
+    #[test]
+    fn lines_around_a_conflict() {
+        let b = "a\nb\nc\nd\ne\nf\ng\n";
+        let around = |o: &str, t: &str| lines_around_conflicts(b, o, t);
+        // `b` conflicts, `f` comes in.
+        let (o, t) = ("a\nO\nc\nd\ne\nf\ng\n", "a\nT\nc\nd\ne\nT\ng\n");
+        assert_eq!(around(o, t), "a\nO\nc\nd\ne\nT\ng\n");
+        // Next to a change of `o` is at it: the lines meet.
+        let (o, t) = ("a\nO\nc\nd\ne\nf\ng\n", "a\nb\nT\nd\ne\nf\ng\n");
+        assert_eq!(around(o, t), o);
+        // One line between them is apart.
+        let t = "a\nb\nc\nT\ne\nf\ng\n";
+        assert_eq!(around(o, t), "a\nO\nc\nT\ne\nf\ng\n");
+        // Lines added on either side of the file, and lines deleted.
+        let (o, t) = ("o\na\nb\nc\nd\ne\nf\ng\n", "a\nb\nc\ne\nf\ng\nt\n");
+        assert_eq!(around(o, t), "o\na\nb\nc\ne\nf\ng\nt\n");
+        assert_eq!(around(b, b), b);
+        assert_eq!(around(o, o), o);
+        assert_eq!(lines_around_conflicts("", "o\n", "t\n"), "o\n");
+        assert_eq!(lines_around_conflicts("a", "a", "b"), "b");
     }
 
     #[test]

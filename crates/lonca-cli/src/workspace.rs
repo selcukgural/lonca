@@ -18,7 +18,7 @@ use lonca_core::{FileEntry, FileMode, GitId};
 use lonca_daemon::Client;
 use lonca_daemon::protocol::{FileChange, LocalFile, TreeFile};
 use lonca_symbols::engine::ENGINE_CURRENT;
-use lonca_symbols::merge::{merge_around_conflicts, merge_text_at};
+use lonca_symbols::merge::{lines_around_conflicts, merge_around_conflicts, merge_text_at};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -291,8 +291,8 @@ impl Workspace {
     /// locally and on trunk are merged with Lonca's structural merge; on a
     /// conflict everything else of trunk still comes in, the conflicting
     /// symbols keep the local text and trunk's version is written next to
-    /// the file as `<file>.trunk`. A file with no symbol merge stays local
-    /// as a whole.
+    /// the file as `<file>.trunk`. A file with no symbol merge does the same
+    /// by lines. Only a file that is no text stays local as a whole.
     pub fn sync(&mut self, client: &mut Client) -> Result<SyncReport> {
         let status = call(client, "status", json!({}))?;
         let trunk: GitId = serde_json::from_value(status["trunk"].clone())?;
@@ -424,8 +424,9 @@ impl Workspace {
                     if let Some(Err(symbols)) = merged {
                         report.symbols.extend(symbols);
                     }
-                    let kept = texts.and_then(|(b, o, t)| {
+                    let kept = texts.map(|(b, o, t)| {
                         merge_around_conflicts(ENGINE_CURRENT, &path, b, o, t)
+                            .unwrap_or_else(|| lines_around_conflicts(b, o, t))
                     });
                     if let Some(text) = kept {
                         wsfs::write(&self.root, &path, text.as_bytes(), unix_mode(m.mode))?;

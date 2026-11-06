@@ -538,6 +538,14 @@ entry format, so they have their own version
   - **A lease someone holds on such a file does not stop another's edit.** It is
     no use to anyone under `optimistic`, and the merge is what decides.
 
+- **Engine 9** narrows what engine 8 lists to edits of lines: the mode stays and
+  is that of a plain file, neither text holds a NUL, and at least one line of the
+  old text is left. Anything else keeps the file's lease. A link's target is one
+  line of text and a change of it is no edit of lines; a change that leaves
+  nothing of a file takes it away as deleting it would, and deleting takes the
+  lease. A file with no line left in common and a rewrite are the same to this
+  rule, on purpose: it can not tell them apart.
+
 ## Harness profiles
 
 Which harnesses Lonca can read is data, not code (issue #109). A profile

@@ -4077,3 +4077,99 @@ fn a_partial_release_goes_through_while_another_session_waits() {
     assert_eq!(part["decision"]["outcome"], "allow", "{part}");
     assert_eq!(part["kept"][0]["symbol"], "src/lib.rs#charge");
 }
+
+fn unparsed_optimistic(e: &Env) {
+    let r = &e.root;
+    let shown = e.run(r, &["policy", "show", "--repo", "demo"]);
+    let (_, rest) = shown.split_once("==> lonca.toml <==\n").unwrap();
+    let (config, policy) = rest.split_once("==> policy.cedar <==\n").unwrap();
+    let open = config.replace(
+        "unparsed_files = \"file\"",
+        "unparsed_files = \"optimistic\"",
+    );
+    assert_ne!(open, config);
+    std::fs::write(r.join("c.toml"), open.trim_end()).unwrap();
+    std::fs::write(r.join("p.cedar"), policy.trim_end()).unwrap();
+    let args = [
+        "policy", "set", "--repo", "demo", "--config", "c.toml", "--policy", "p.cedar",
+    ];
+    assert!(e.run(r, &args).contains("allow"));
+}
+
+fn unparsed_agent(e: &Env, name: &str) -> PathBuf {
+    e.run(
+        &e.root,
+        &[
+            "session",
+            "start",
+            "--repo",
+            "demo",
+            "--agent",
+            "claude",
+            "--paths",
+            "src/**",
+            "--workspace",
+            name,
+        ],
+    );
+    e.root.join(name)
+}
+
+/// An unobserved session is escalated: a human approves, as in the workflow
+/// test above.
+fn unparsed_land(e: &Env, ws: &Path, intent: &str) -> String {
+    let out = e.run(ws, &["propose", "-i", intent, "--accept-facts"]);
+    if out.contains("escalate") {
+        let seq: String = out
+            .trim_start_matches('#')
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        e.run(&e.root, &["approve", &seq, "--repo", "demo"]);
+    }
+    e.settle();
+    out
+}
+
+/// A conflict in a file with no symbols holds back only the lines that meet:
+/// what trunk gained elsewhere comes in, so it can not look like a local
+/// edit that takes it back.
+#[test]
+fn settling_a_conflict_in_an_unparsed_file_keeps_what_others_landed() {
+    let e = Env::new();
+    agent_workspace(&e);
+    unparsed_optimistic(&e);
+    let hws = e.root.join("hws");
+    e.run(&hws, &["sync"]);
+    let seed: String = (0..40).map(|i| format!("    int a{i} = {i};\n")).collect();
+    std::fs::write(hws.join("src/Main.java"), &seed).unwrap();
+    land(&e, &hws, "seed");
+
+    let (a, b, c) = (
+        unparsed_agent(&e, "wa"),
+        unparsed_agent(&e, "wb"),
+        unparsed_agent(&e, "wc"),
+    );
+    let main = "src/Main.java";
+    let line =
+        |i: usize, to: &str, s: &str| s.replace(&format!("a{i} = {i};"), &format!("a{i} = {to};"));
+    std::fs::write(c.join(main), line(30, "3000", &seed)).unwrap();
+    unparsed_land(&e, &c, "line 30");
+    std::fs::write(a.join(main), line(10, "1000", &seed)).unwrap();
+    unparsed_land(&e, &a, "line 10");
+    std::fs::write(b.join(main), line(10, "2000", &seed)).unwrap();
+    unparsed_land(&e, &b, "line 10 too");
+
+    e.run(&b, &["sync", "--json"]);
+    let local = std::fs::read_to_string(b.join(main)).unwrap();
+    assert!(local.contains("a10 = 2000;"), "the conflict stays: {local}");
+    assert!(local.contains("a30 = 3000;"), "trunk comes in: {local}");
+    let settled = local.replace("a10 = 2000;", "a10 = 1500;");
+    std::fs::write(b.join(main), &settled).unwrap();
+    unparsed_land(&e, &b, "settle line 10");
+
+    e.run(&hws, &["sync"]);
+    let trunk = std::fs::read_to_string(hws.join(main)).unwrap();
+    assert!(trunk.contains("a10 = 1500;"), "{trunk}");
+    assert!(trunk.contains("a30 = 3000;"), "{trunk}");
+}

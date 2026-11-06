@@ -1,0 +1,264 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.rs#Till.deposit"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.rs#Till.add"
+        ],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "renames": [
+          [
+            "src/sample.rs#Till.add",
+            "src/sample.rs#Till.deposit"
+          ]
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#Till.sum"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "struct Till;\n\nimpl Till {\n    fn deposit(&mut self, v: u64) {\n        self.total += v;\n    }\n\n    fn sum(&self) -> u64 {\n        self.total * 2\n    }\n}\n"
+  },
+  "path": "src/sample.rs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            12
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.add",
+              "own": "",
+              "signature": "fn add(&mut self, v: u64)",
+              "skipped": false,
+              "span": [
+                30,
+                30,
+                88
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.sum",
+              "own": "",
+              "signature": "fn sum(&self) -> u64",
+              "skipped": false,
+              "span": [
+                94,
+                94,
+                141
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Till",
+          "own": "impl_item(impl\u001fTill\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            14,
+            14,
+            143
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            12
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.deposit",
+              "own": "",
+              "signature": "fn deposit(&mut self, v: u64)",
+              "skipped": false,
+              "span": [
+                30,
+                30,
+                92
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.sum",
+              "own": "",
+              "signature": "fn sum(&self) -> u64",
+              "skipped": false,
+              "span": [
+                98,
+                98,
+                145
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Till",
+          "own": "impl_item(impl\u001fTill\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            14,
+            14,
+            147
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Till",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            12
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.add",
+              "own": "",
+              "signature": "fn add(&mut self, v: u64)",
+              "skipped": false,
+              "span": [
+                30,
+                30,
+                88
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.sum",
+              "own": "",
+              "signature": "fn sum(&self) -> u64",
+              "skipped": false,
+              "span": [
+                94,
+                94,
+                145
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Till",
+          "own": "impl_item(impl\u001fTill\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            14,
+            14,
+            147
+          ]
+        }
+      ]
+    }
+  }
+}

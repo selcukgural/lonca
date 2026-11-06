@@ -902,17 +902,27 @@ pub(crate) fn print_decision(r: &Value) {
     }
 }
 
-/// A comma-separated list of symbol ids, each as often as the option was
-/// given. A comma inside a key is part of the id: `a.cs#C.M(int,int)`.
+/// What follows a comma starts a new symbol id: the path up to its `#`. A
+/// key can hold any comma and any bracket, cut or in quotes, but no path
+/// behind a comma of its own.
+fn starts_an_id(rest: &str) -> bool {
+    let path = rest.split_once('#').map(|(path, _)| path);
+    path.is_some_and(|p| !p.is_empty() && !p.contains(['(', ')', '[', ']', ',', ' ']))
+}
+
+/// A comma-separated list of symbol ids or of scope patterns, each as often
+/// as the option was given. A comma inside a key is part of the id:
+/// `a.cs#C.M(int,int)`.
 fn split_ids(values: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for value in values {
+        let ids = value.contains('#');
         let (mut depth, mut from) = (0usize, 0);
         for (at, c) in value.char_indices() {
             match c {
                 '(' | '[' => depth += 1,
                 ')' | ']' => depth = depth.saturating_sub(1),
-                ',' if depth == 0 => {
+                ',' if (ids && starts_an_id(&value[at + 1..])) || (!ids && depth == 0) => {
                     out.push(value[from..at].to_string());
                     from = at + 1;
                 }
@@ -2261,24 +2271,41 @@ mod tests {
 
     #[test]
     fn a_comma_in_a_key_does_not_split_an_id() {
-        let given = [
-            "a.cs#C.M(int,int),a.cs#C.N".to_string(),
-            "a.py#P.x[a,b]".to_string(),
-            "a.cs#C.M(Map<A,B>,(C,D)),b".to_string(),
-            "a)),b".to_string(),
-        ];
-        assert_eq!(
-            split_ids(&given),
-            [
-                "a.cs#C.M(int,int)",
-                "a.cs#C.N",
-                "a.py#P.x[a,b]",
-                "a.cs#C.M(Map<A,B>,(C,D))",
-                "b",
-                "a))",
-                "b",
-            ]
-        );
+        let split = |value: &str| split_ids(&[value.to_string()]);
+        for (value, want) in [
+            (
+                "a.cs#C.M(int,int),a.cs#C.N",
+                vec!["a.cs#C.M(int,int)", "a.cs#C.N"],
+            ),
+            ("a.py#P.x[a,b]", vec!["a.py#P.x[a,b]"]),
+            (
+                "a.cs#C.M(Map<A,B>,(C,D)),b.cs#c",
+                vec!["a.cs#C.M(Map<A,B>,(C,D))", "b.cs#c"],
+            ),
+            (
+                "a.ts#f([string,T0],[s),a.ts#g",
+                vec!["a.ts#f([string,T0],[s)", "a.ts#g"],
+            ),
+            ("a.ts#f('('),a.ts#g", vec!["a.ts#f('(')", "a.ts#g"]),
+            (
+                "a.ts#f(')',string),a.ts#g",
+                vec!["a.ts#f(')',string)", "a.ts#g"],
+            ),
+            ("a.ts#C.'a,b',a.ts#g", vec!["a.ts#C.'a,b'", "a.ts#g"]),
+            (
+                "a.rs#f(#[c(x)],u8),a.rs#g",
+                vec!["a.rs#f(#[c(x)],u8)", "a.rs#g"],
+            ),
+            ("a.ts#f,#x", vec!["a.ts#f,#x"]),
+            // Scopes have no path.
+            ("C.M(int,int),D", vec!["C.M(int,int)", "D"]),
+            ("C.*,P.x[a,b],Q", vec!["C.*", "P.x[a,b]", "Q"]),
+            ("a)),b", vec!["a))", "b"]),
+        ] {
+            assert_eq!(split(value), want, "{value}");
+        }
+        let two = ["a.cs#f,a.cs#g".to_string(), "b.cs#h".to_string()];
+        assert_eq!(split_ids(&two), ["a.cs#f", "a.cs#g", "b.cs#h"]);
     }
 
     #[test]

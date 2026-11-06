@@ -419,6 +419,30 @@ mod tests {
         assert!(f.edits.is_empty(), "{:?}", f.edits);
     }
 
+    /// A group added above renumbers the groups of the file, not this one.
+    #[test]
+    fn a_block_added_above_leaves_a_change_of_parameters_an_edit() {
+        let old = "if A:\n    def f(a: int):\n        pass\n    def f(a: str):\n        pass\n";
+        let new = format!(
+            "if B:\n    def g():\n        pass\n{}",
+            old.replace("a: int", "a: bytes")
+        );
+        let f = section_facts(ENGINE_KEYS, "a.py", old, &new);
+        assert_eq!(f.signature_changes, ["a.py#f(int)"]);
+        assert!(f.edits.contains(&"a.py#f(int)".to_string()), "{f:?}");
+        assert!(f.deletes.is_empty(), "{f:?}");
+    }
+
+    /// A symbol that stands elsewhere in the file did not lose its key, so
+    /// it can not be the old name of one that gained one.
+    #[test]
+    fn a_symbol_that_moved_between_impls_is_not_paired() {
+        let old = "impl S {\n    fn f(a: u8) { A(); }\n}\n";
+        let new = format!("impl S {{\n    fn f(a: u16) {{ B(); }}\n}}\n{old}");
+        let f = section_facts(ENGINE_KEYS, "a.rs", old, &new);
+        assert!(f.signature_changes.is_empty(), "{f:?}");
+    }
+
     #[test]
     fn the_closest_text_is_the_one_that_changed() {
         let old = "class C {\n    void M(int a) { Alpha(); Beta(); }\n    void M(string s) { Gamma(s, 1); Delta(s, 2); }\n}\n";

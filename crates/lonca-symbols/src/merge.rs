@@ -17,7 +17,7 @@ use crate::engine::{
     ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_PLACES, ENGINE_SECTIONS,
 };
 use crate::extract::{
-    Aligned, Holder, Keyed, Parsed, Placed, Sym, align, moved, normalize, parse_keyed,
+    Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_keyed,
     read_together, rename_aligned, shifted,
 };
 
@@ -247,28 +247,17 @@ fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
 #[derive(Default)]
 struct Naming {
     keyed: Keyed,
-    /// Each side's new key -> the name in the base. A symbol of the result
-    /// comes from a side, so that side says what it is, not its place there.
-    pairs: Aligned,
-    /// Both sides gave one key to two symbols of the base, and a file can
-    /// hold that key only once.
-    crossed: bool,
+    /// What each side changed the parameters of. A symbol of the result comes
+    /// from a side, and that says what it is.
+    pairs: Vec<Pair>,
 }
 
 /// The three sides of a merge, by one set of names: those of `base`.
 fn three_sides(engine: u32, lang: Lang, texts: [&str; 3]) -> (Naming, [Parsed; 3]) {
     let (keyed, [pb, mut po, mut pt]) = read_together(engine, lang, texts);
     let mut pairs = align(&pb, &mut po);
-    let theirs = align(&pb, &mut pt);
-    let same = |(key, name): (&String, &String)| pairs.get(key).is_none_or(|n| n == name);
-    let crossed = !theirs.iter().all(same);
-    pairs.extend(theirs);
-    let naming = Naming {
-        keyed,
-        pairs,
-        crossed,
-    };
-    (naming, [pb, po, pt])
+    pairs.extend(align(&pb, &mut pt));
+    (Naming { keyed, pairs }, [pb, po, pt])
 }
 
 /// Each side's code stands in `m` where that side put it among its symbols.
@@ -309,10 +298,10 @@ fn holds_up(
     conflicts: &[String],
 ) -> bool {
     let mut merged = parse_keyed(engine, lang, text, &naming.keyed);
-    rename_aligned(&mut merged, &naming.pairs);
-    if merged.has_error || naming.crossed {
+    if merged.has_error || key_twice(&merged, &naming.pairs) {
         return false;
     }
+    rename_aligned(&mut merged, &naming.pairs);
     if engine < ENGINE_DEFS {
         return true;
     }
@@ -378,14 +367,12 @@ fn numbered_places(syms: &[Sym], out: &mut BTreeMap<String, Vec<(u32, u32)>>) {
     }
 }
 
-/// How many of each numbered name a list holds, at any depth.
-fn numbered_counts(syms: &[Sym], out: &mut BTreeMap<String, u32>) {
+/// How many of each name a list holds, at any depth, and which are numbered.
+fn numbered_counts(syms: &[Sym], out: &mut BTreeMap<String, (u32, bool)>) {
     for s in syms {
-        let (name, number) = s.name.split_once('~').unwrap_or((&s.name, ""));
-        *out.entry(name.to_string()).or_default() += 1;
-        if !number.is_empty() {
-            out.entry(format!("~{name}")).or_default();
-        }
+        let entry = out.entry(s.stem.clone()).or_default();
+        entry.0 += 1;
+        entry.1 |= s.stem != s.name;
         numbered_counts(&s.children, out);
     }
 }
@@ -400,10 +387,11 @@ fn counts_hold([pb, po, pt]: [&Parsed; 3]) -> bool {
         out
     };
     let (b, o, t) = (counts(pb), counts(po), counts(pt));
-    let numbered = b.keys().filter_map(|k| k.strip_prefix('~'));
-    numbered.into_iter().all(|name| {
-        let (n, side) = (b.get(name), [o.get(name), t.get(name)]);
-        side[0] == n || side[1] == n
+    let how_many =
+        |side: &BTreeMap<String, (u32, bool)>, name: &String| side.get(name).map(|c| c.0);
+    let numbered = b.iter().filter(|(_, count)| count.1);
+    numbered.into_iter().all(|(name, count)| {
+        how_many(&o, name) == Some(count.0) || how_many(&t, name) == Some(count.0)
     })
 }
 
@@ -864,6 +852,87 @@ mod tests {
         let o = b.replace("M(int a)", "M(bool a)");
         let t = b.replace("M(long a)", "M(bool a)");
         assert!(keyed("a.cs", b, &o, &t).is_err());
+    }
+
+    /// One key is fine twice where the two can not meet: each row gives two
+    /// symbols of the base one new key.
+    #[test]
+    fn one_key_in_two_scopes_merges() {
+        let rows = [
+            (
+                "a.py",
+                "if X:\n    def f(a: int):\n        return 1\nelse:\n    def f(a: str):\n        return 2\n",
+                ("a: int", "a: bytes"),
+                ("a: str", "a: bytes"),
+            ),
+            (
+                "a.rs",
+                "impl W<u8> {\n    fn f(a: u8) {}\n}\nimpl W<u16> {\n    fn f(a: u16) {}\n}\n",
+                ("a: u8", "a: bool"),
+                ("a: u16", "a: bool"),
+            ),
+        ];
+        for (path, b, (ox, oy), (tx, ty)) in rows {
+            let (o, t) = (b.replace(ox, oy), b.replace(tx, ty));
+            let want = b.replace(ox, oy).replace(tx, ty);
+            assert_eq!(
+                keyed(path, b, &o, &t).as_deref(),
+                Ok(want.as_str()),
+                "{path}"
+            );
+            assert_eq!(
+                keyed(path, b, &t, &o).as_deref(),
+                Ok(want.as_str()),
+                "{path}"
+            );
+        }
+    }
+
+    /// A new key on one side and the same key added elsewhere on the other.
+    #[test]
+    fn a_new_key_and_an_addition_of_it_in_another_scope_merge() {
+        let b = "if X:\n    def f(a: int):\n        return 1\nelse:\n    def f(a: str):\n        return 2\n";
+        let o = b.replace("a: int", "a: bytes");
+        let t = b.replace(
+            "return 2\n",
+            "return 2\n    def f(a: bytes):\n        return 3\n",
+        );
+        for (o, t) in [(&o, &t), (&t, &o)] {
+            let m = keyed("a.py", b, o, t).unwrap();
+            assert_eq!(m.matches("a: bytes").count(), 2, "{m}");
+            assert!(m.contains("return 3") && !m.contains("a: int"), "{m}");
+        }
+        // In one scope that is the same key twice.
+        let b = "class C {\n    void M(int a) { A(); }\n\n    void M(string s) { B(); }\n}\n";
+        let o = b.replace("M(int a)", "M(long a)");
+        let t = b.replace(
+            "void M(string s) { B(); }",
+            "void M(string s) { B(); }\n\n    void M(long b) { C(); }",
+        );
+        assert!(keyed("a.cs", b, &o, &t).is_err());
+        assert!(keyed("a.cs", b, &t, &o).is_err());
+    }
+
+    /// The parts of a type are one scope, for all that they are two lists.
+    #[test]
+    fn one_key_in_two_parts_of_a_type_conflicts() {
+        let b = "partial class C {\n    void M(int a) {}\n}\npartial class C {\n    void M(long a) {}\n}\n";
+        let o = b.replace("M(int a)", "M(bool a)");
+        let t = b.replace("M(long a)", "M(bool a)");
+        assert!(keyed("a.cs", b, &o, &t).is_err());
+    }
+
+    /// A `~` in a key is no number: these are three overloads.
+    #[test]
+    fn a_tilde_in_a_key_counts_for_nothing() {
+        let b = "function f(a: '~a'): void;\nfunction f(a: '~b'): void;\nfunction f(a: '~c'): void;\nfunction f(a: any) {}\n";
+        let o = b.replace("function f(a: '~a'): void;\n", "");
+        let t = b.replace("function f(a: '~b'): void;\n", "");
+        let m = keyed("a.ts", b, &o, &t).unwrap();
+        assert!(
+            !m.contains("'~a'") && !m.contains("'~b'") && m.contains("'~c'"),
+            "{m}"
+        );
     }
 
     /// `t` deleted the first and changed the second; which it changed is

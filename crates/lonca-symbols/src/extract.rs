@@ -39,6 +39,8 @@ pub struct Sym {
     pub name: String,
     /// The name before its key, for a symbol that shares it with others.
     pub plain: Option<String>,
+    /// The name before its number.
+    pub stem: String,
     pub start: usize,
     pub end: usize,
     /// Start of the definition itself (after attached attributes/comments).
@@ -423,10 +425,16 @@ fn holders_of(syms: &[Sym]) -> Vec<Holder> {
     syms.iter().filter_map(|s| s.holder).collect()
 }
 
-/// The names a side gave symbols of the base: its name for it -> the base's.
-pub type Aligned = BTreeMap<String, String>;
+/// A symbol a side gave a new key: what it calls it, what the base calls it,
+/// and its text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pair {
+    pub side: String,
+    pub base: String,
+    pub own: String,
+}
 
-/// How many pairs are compared by their text, at most, in one gap. Past it,
+/// How many pairs are compared by their text, at most, in one place. Past it,
 /// source order decides: a file can not make the daemon compare forever.
 const MAX_COMPARED: usize = 64;
 
@@ -437,71 +445,148 @@ const MAX_COMPARED: usize = 64;
 /// symbols both have, or one is gone and the other new. Among several there,
 /// the closest texts pair, then source order. Containers stay: their members
 /// hang on the key. Returns the pairs.
-pub fn align(base: &Parsed, side: &mut Parsed) -> Aligned {
-    let mut pairs = Aligned::new();
-    pair_level(&base.syms, &side.syms, &mut pairs);
-    rename(&mut side.syms, &mut side.spots, &pairs);
+pub fn align(base: &Parsed, side: &mut Parsed) -> Vec<Pair> {
+    let [in_base, in_side] = [&base.syms, &side.syms].map(|syms| {
+        let mut names = BTreeSet::new();
+        each_name(syms, &mut names);
+        names
+    });
+    let mut pairs = Vec::new();
+    pair_level(&base.syms, &side.syms, [&in_base, &in_side], &mut pairs);
+    let names = pairs.iter().map(|p| (p.side.clone(), p.base.clone()));
+    rename(&mut side.syms, &mut side.spots, &names.collect());
     pairs
 }
 
-/// Gives `merged` the names of `pairs`: each symbol keeps the name its side
-/// gave it, wherever it landed.
-pub fn rename_aligned(merged: &mut Parsed, pairs: &Aligned) {
-    rename(&mut merged.syms, &mut merged.spots, pairs);
+fn each_name(syms: &[Sym], out: &mut BTreeSet<String>) {
+    for s in syms {
+        out.insert(s.name.clone());
+        each_name(&s.children, out);
+    }
 }
 
-fn rename(syms: &mut [Sym], spots: &mut [Spot], pairs: &Aligned) {
+fn each_symbol<'s>(syms: &'s [Sym], out: &mut Vec<&'s Sym>) {
     for s in syms {
-        if let Some(name) = pairs.get(&s.name).filter(|_| !s.container) {
+        out.push(s);
+        each_symbol(&s.children, out);
+    }
+}
+
+/// A key a side gave a symbol stands twice in one place of `merged`: two
+/// sides gave one key to two symbols, and only one can answer to it. In
+/// another block, or in an `impl` for other type arguments, each is valid.
+pub fn key_twice(merged: &Parsed, pairs: &[Pair]) -> bool {
+    fn walk<'s>(
+        syms: &'s [Sym],
+        scope: &'s str,
+        given: &BTreeSet<&str>,
+        seen: &mut BTreeSet<(&'s str, Option<(u32, u32)>, &'s str)>,
+    ) -> bool {
+        syms.iter().any(|s| {
+            let block = s.holder.map(|h| h.block);
+            // The parts of a type are one scope, and so are the `impl`s of
+            // one type that nothing tells apart.
+            let inner = s.def_of.as_deref().filter(|_| s.plain.is_none());
+            (given.contains(s.stem.as_str()) && !seen.insert((scope, block, &s.stem)))
+                || walk(&s.children, inner.unwrap_or(&s.name), given, seen)
+        })
+    }
+    let given: BTreeSet<&str> = pairs.iter().map(|p| p.side.as_str()).collect();
+    walk(&merged.syms, "", &given, &mut BTreeSet::new())
+}
+
+/// Gives `merged` the names the sides gave its symbols. Each came from a
+/// side, so its text finds its pair, and then its place. One the sides call
+/// by a key that also went to a pair has a number only for that.
+pub fn rename_aligned(merged: &mut Parsed, pairs: &[Pair]) {
+    let mut all = Vec::new();
+    each_symbol(&merged.syms, &mut all);
+    let keyed = |s: &&&Sym| !s.container && pairs.iter().any(|p| p.side == s.stem);
+    let mine: Vec<&Sym> = all.iter().filter(keyed).copied().collect();
+    let mut open: Vec<&Pair> = pairs.iter().collect();
+    let mut names = BTreeMap::new();
+    for s in &mine {
+        let same = |p: &&Pair| p.side == s.stem && p.own == s.own;
+        if let Some(at) = open.iter().position(same) {
+            names.insert(s.name.clone(), open.remove(at).base.clone());
+        }
+    }
+    for s in mine {
+        if !names.contains_key(&s.name) {
+            let at = open.iter().position(|p| p.side == s.stem);
+            let name = at.map_or(s.stem.clone(), |at| open.remove(at).base.clone());
+            names.insert(s.name.clone(), name);
+        }
+    }
+    rename(&mut merged.syms, &mut merged.spots, &names);
+}
+
+fn rename(syms: &mut [Sym], spots: &mut [Spot], names: &BTreeMap<String, String>) {
+    for s in syms {
+        if let Some(name) = names.get(&s.name).filter(|_| !s.container) {
             for spot in spots.iter_mut().filter(|at| at.name == s.name) {
                 spot.name = name.clone();
             }
             s.name = name.clone();
         }
-        rename(&mut s.children, &mut s.spots, pairs);
+        rename(&mut s.children, &mut s.spots, names);
     }
 }
 
-fn pair_level(bs: &[Sym], ns: &[Sym], pairs: &mut Aligned) {
-    let names =
-        |list: &[Sym]| -> BTreeSet<String> { list.iter().map(|s| s.name.clone()).collect() };
-    let (in_base, in_side) = (names(bs), names(ns));
-    let lost = open_ones(bs, &in_side, &in_base);
-    let gained = open_ones(ns, &in_base, &in_side);
-    let mut gaps: BTreeMap<_, (Vec<&Sym>, Vec<&Sym>)> = BTreeMap::new();
-    for (gap, b) in lost {
-        gaps.entry(gap).or_default().0.push(b);
+fn pair_level(
+    bs: &[Sym],
+    ns: &[Sym],
+    [in_base, in_side]: [&BTreeSet<String>; 2],
+    pairs: &mut Vec<Pair>,
+) {
+    let mut places: BTreeMap<Place, (Vec<&Sym>, Vec<&Sym>)> = BTreeMap::new();
+    for (place, b) in open_ones(bs, in_side) {
+        places.entry(place).or_default().0.push(b);
     }
-    for (gap, n) in gained {
-        gaps.entry(gap).or_default().1.push(n);
+    for (place, n) in open_ones(ns, in_base) {
+        places.entry(place).or_default().1.push(n);
     }
-    for (b, n) in gaps.into_values().flat_map(|(l, g)| closest(l, g)) {
-        pairs.insert(n.name.clone(), b.name.clone());
+    for (b, n) in places.into_values().flat_map(|(l, g)| closest(l, g)) {
+        pairs.push(Pair {
+            side: n.name.clone(),
+            base: b.name.clone(),
+            own: n.own.clone(),
+        });
     }
+    let by_name: BTreeMap<&str, &Sym> = bs.iter().map(|b| (b.name.as_str(), b)).collect();
     for n in ns {
-        if let Some(b) = bs.iter().find(|b| b.name == n.name) {
-            pair_level(&b.children, &n.children, pairs);
+        if let Some(b) = by_name.get(n.name.as_str()) {
+            pair_level(&b.children, &n.children, [in_base, in_side], pairs);
         }
     }
 }
 
-/// Where a symbol stands among those both sides have.
-type Gap<'s> = (Option<&'s str>, Option<&'s str>, Option<(u32, u32)>);
+/// Where a symbol stands among those both sides have: its bare name, the one
+/// in front of it, and its block. Groups count among those that hold this
+/// name, since a group added above renumbers the ones of the file.
+type Place = (Option<String>, Option<String>, Option<(usize, u32)>);
 
-/// The keyed symbols of `list` the other list does not have, each with its
-/// bare name, the shared symbol in front of it and its block.
-fn open_ones<'s>(
-    list: &'s [Sym],
-    other: &BTreeSet<String>,
-    own: &BTreeSet<String>,
-) -> Vec<(Gap<'s>, &'s Sym)> {
-    let mut out = Vec::new();
-    let mut behind: Option<&'s str> = None;
+/// The keyed symbols of `list` that `other` has nowhere.
+fn open_ones<'s>(list: &'s [Sym], other: &BTreeSet<String>) -> Vec<(Place, &'s Sym)> {
+    let mut groups: BTreeMap<&str, BTreeSet<u32>> = BTreeMap::new();
     for s in list {
-        if other.contains(&s.name) && own.contains(&s.name) {
-            behind = Some(&s.name);
+        if let (Some(name), Some(h)) = (&s.plain, s.holder) {
+            groups.entry(name).or_default().insert(h.block.0);
+        }
+    }
+    let block = |s: &Sym| {
+        let name = s.plain.as_deref().unwrap_or_default();
+        let held = s.holder.map(|h| h.block)?;
+        let rank = groups.get(name)?.iter().position(|g| *g == held.0)?;
+        Some((rank, held.1))
+    };
+    let mut out = Vec::new();
+    let mut behind = None;
+    for s in list {
+        if other.contains(&s.name) {
+            behind = Some(s.name.clone());
         } else if s.plain.is_some() && !s.container {
-            out.push(((s.plain.as_deref(), behind, s.holder.map(|h| h.block)), s));
+            out.push(((s.plain.clone(), behind.clone(), block(s)), s));
         }
     }
     out
@@ -509,12 +594,14 @@ fn open_ones<'s>(
 
 /// Pairs by likeness, the best first; a tie goes to source order.
 fn closest<'s>(lost: Vec<&'s Sym>, gained: Vec<&'s Sym>) -> Vec<(&'s Sym, &'s Sym)> {
+    if lost.len().saturating_mul(gained.len()) > MAX_COMPARED {
+        return lost.into_iter().zip(gained).collect();
+    }
     let mut ranked = Vec::new();
-    let compare = lost.len() * gained.len() <= MAX_COMPARED && lost.len() * gained.len() > 1;
     for (i, b) in lost.iter().enumerate() {
         for (j, n) in gained.iter().enumerate() {
-            let like = compare.then(|| similar::TextDiff::from_words(&b.own, &n.own).ratio());
-            ranked.push((like.unwrap_or(0.0), i, j));
+            let like = similar::TextDiff::from_words(&b.own, &n.own).ratio();
+            ranked.push((like, i, j));
         }
     }
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then((a.1, a.2).cmp(&(b.1, b.2))));
@@ -1259,7 +1346,7 @@ impl<'s> Extractor<'s> {
             let same_type = self.same_scope(&base, def_node);
             let part_of = (same_type && self.is_partial(def_node)).then(|| base.clone());
             let qualified = if *count == 1 {
-                named
+                named.clone()
             } else {
                 format!("{named}~{count}")
             };
@@ -1337,6 +1424,7 @@ impl<'s> Extractor<'s> {
             out.push(Sym {
                 name: qualified,
                 plain,
+                stem: named,
                 start,
                 end,
                 def_start: def_node.start_byte(),
@@ -1672,7 +1760,8 @@ mod tests {
         let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [&old, &new]);
         let pairs = align(&a, &mut b);
         assert_eq!(pairs.len(), 9);
-        assert_eq!(pairs["C.M(B3)"], "C.M(A3)");
+        let third = pairs.iter().find(|p| p.side == "C.M(B3)").unwrap();
+        assert_eq!(third.base, "C.M(A3)");
     }
 
     /// The key is how a symbol is known among others, so nothing that can

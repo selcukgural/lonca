@@ -396,22 +396,29 @@ entry format, so they have their own version
     keeps it an edit plus a `signature_change` on the name a lease was taken
     on, and two changes of one overload a conflict instead of two new methods.
     A lost and a gained symbol pair only under one bare name, in one block,
-    behind the same symbol both sides have. Elsewhere one is gone and the other
-    new: pairing them regardless reported what stood between them, and a
-    deletion could come undone. In one place the closest texts pair, then
-    source order; past 64 comparisons only source order, so that a file sets
-    no price. The texts can mislead when they are short: two empty overloads,
-    one deleted and one changed, pair by order. Containers are not paired,
-    because their members hang on the key.
+    behind the same symbol both sides have, and neither may stand anywhere else
+    in the other version. Elsewhere one is gone and the other new: pairing them
+    regardless reported what stood between them, and a deletion could come
+    undone. In one place the closest texts pair, then source order; past 64
+    comparisons only source order, in linear time, so that a file sets no
+    price. Texts can mislead: with like bodies, one overload deleted and one
+    changed pair by order, and the wrong pair can then pass a delete on the
+    other side in one queue order. Containers are not paired, because their
+    members hang on the key.
   - **A merge is read by origin.** Each symbol of a result came from a side, and
-    that side's pairs give its name, not its place there. Both sides giving
-    one key to two symbols of the base (`M(int)` and `M(long)` both become
-    `M(bool)`) would leave a file with that key twice, each passing as a symbol
-    that changed, so that is a conflict.
+    its text finds its pair there, not its place in the result. The same key
+    twice in one place is refused (`key_twice`), because each copy would pass as
+    a symbol that changed: both sides giving `M(int)` and `M(long)` the key
+    `M(bool)`, or one giving and the other adding it. In another block or in an
+    `impl` for other type arguments both are valid and merge. The parts of a
+    `partial` type are one place, and so are two `cfg` variants of a function,
+    which a merge can not tell from a duplicate: that one is refused though it
+    would compile, and it goes back to the agent.
   - **What is left to a number.** Exact duplicates (`init()` in Go), macro
-    calls, partial types and the members of generic inherent impls (`W.new`,
-    `W.new~2`, because a type's members do not hang on the impl): nothing but
-    the order tells them apart. `numbers_hold` guards their blocks, and when
+    calls, partial types, `impl` blocks of one type and the members of generic
+    inherent impls (`W.new`, `W.new~2`, because a type's members do not hang on
+    the impl): nothing but the order tells them apart, so a block added above
+    the first reads as a change of what the blocks hold. `numbers_hold` guards their blocks, and when
     both sides changed how many there are the line merge decides
     (`counts_hold`): neither side's `~2` says which one is meant.
   - **The `;` behind a member of a TypeScript class is the member's.** It is a

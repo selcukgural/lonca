@@ -66,7 +66,7 @@ git diff main -- crates > /tmp/git.diff && cargo mutants --in-diff /tmp/git.diff
 - Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
   paths, no writes to `$HOME`. Parallel jobs (`-j`) run copies at once.
 - CI (`.github/workflows/mutants.yml`): on every PR the mutants in the
-  diff against the base branch run over six shards (`mutants k/6`), each
+  diff against the base branch run over 20 shards (`mutants k/20`), each
   failing on any survivor, and the `mutants` job that the ruleset
   requires fails if any shard did; a PR waits for it. Survivors are in
   the `mutants-diff-<k>` artifacts (`missed.txt`). Every night at 02:00 UTC,

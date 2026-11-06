@@ -309,11 +309,11 @@ entry format, so they have their own version
     decide what a key means; otherwise lines place it. A member that stops being
     in a list, as in `int a, b;` to `int a;`, is a change of shape and of the
     code around it.
-  - **A symbol merge writes code of one side or the other** (`holds_up`). The
-    code outside symbols and every container's own text must equal `o`'s or
-    `t`'s, and no merge, by lines either, may bring a name neither side has.
-    Failing it, a symbol merge goes to the line merge, and a line merge is
-    `<file>` in `conflicts`. So a text operation in the wrong place can not
+  - **A merge writes code of one side or the other** (`holds_up`). The code
+    outside symbols and every container's own text must equal `o`'s or `t`'s,
+    because code both sides changed is a conflict before this, and no merge
+    may bring a name neither side has. Failing it, a symbol merge goes to the
+    line merge, and a line merge is `<file>` in `conflicts`. So a text operation in the wrong place can not
     drop or copy code that nobody touched. Two parts of a partial type each
     getting a member `x` are caught this way.
   - **Numbers in blocks.** `f~2` counts from the top of the file, so a name

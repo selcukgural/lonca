@@ -591,6 +591,21 @@ mod tests {
         }
     }
 
+    /// A file that goes takes its tests with it.
+    #[test]
+    fn a_deleted_file_counts_its_tests() {
+        let text = "#[test]\nfn a() {}\n\n#[test]\nfn b() {}\n";
+        let entry = lonca_core::FileEntry {
+            mode: lonca_core::FileMode::Regular,
+            blob: GitId::of_blob(text.as_bytes()),
+        };
+        let old = FileMap::from([("a.rs".to_string(), entry)]);
+        let read = |_: &GitId| Ok(text.as_bytes().to_vec());
+        let f = analyze(5, &old, &FileMap::new(), &read).unwrap().facts;
+        assert_eq!(f.tests.deleted, 2);
+        assert_eq!(f.deleted_files, ["a.rs"]);
+    }
+
     /// A part of a partial type stands in for the type, as an `impl` does.
     #[test]
     fn a_partial_part_taken_out_is_an_edit_of_its_type() {

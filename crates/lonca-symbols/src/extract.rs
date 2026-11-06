@@ -466,8 +466,7 @@ fn blocks<'t>(n: Node<'t>, out: &mut Vec<Node<'t>>) {
     for c in named(n) {
         match c.kind() {
             "block" => out.push(c),
-            k if k.ends_with("_clause") => blocks(c, out),
-            _ => {}
+            _ => blocks(c, out),
         }
     }
 }
@@ -560,7 +559,6 @@ impl<'s> Extractor<'s> {
             (Lang::CSharp, "namespace_declaration") => {
                 n.child_by_field_name("body").map(|b| Group::of(vec![b]))
             }
-            (Lang::CSharp, "file_scoped_namespace_declaration") => Some(Group::of(vec![n])),
             _ if !self.groups() => None,
             (Lang::Go, "const_declaration" | "type_declaration") => {
                 let parens = n.children(&mut n.walk()).any(|c| c.kind() == "(");
@@ -594,7 +592,7 @@ impl<'s> Extractor<'s> {
                 let only = stated.iter().all(|c| is_def(c) || plain(c));
                 (only && stated.iter().any(is_def)).then(|| Group::of(list))
             }
-            (Lang::TypeScript | Lang::Tsx | Lang::JavaScript, "expression_statement") if top => {
+            (Lang::TypeScript | Lang::Tsx | Lang::JavaScript, "expression_statement") => {
                 let set = n
                     .named_child(0)
                     .filter(|c| c.kind() == "assignment_expression")?;
@@ -610,9 +608,6 @@ impl<'s> Extractor<'s> {
     /// `n` stands in the namespaces where `name` was first seen. Namespaces
     /// are no part of a name, and one can be written twice.
     fn same_scope(&self, name: &str, n: Node) -> bool {
-        if !self.groups() || self.lang != Lang::CSharp {
-            return false;
-        }
         let mut scope = String::new();
         let mut at = n.parent();
         while let Some(p) = at {
@@ -929,8 +924,7 @@ impl<'s> Extractor<'s> {
             let count = seen.entry(base.clone()).or_insert(0);
             *count += 1;
             let same_type = self.same_scope(&base, def_node);
-            let part_of =
-                (same_type && *count > 1 && self.is_partial(def_node)).then(|| base.clone());
+            let part_of = (same_type && self.is_partial(def_node)).then(|| base.clone());
             let qualified = if *count == 1 {
                 base
             } else {
@@ -1740,6 +1734,33 @@ mod tests {
         let src = "class C {\n  @A()\n  // note\n\n  m() {}\n}\n";
         let p = parse_at(5, Lang::TypeScript, src);
         assert!(p.syms[0].children[0].text(src).starts_with("@A()"));
+    }
+
+    /// What a comment behind code needs: nothing but spaces between. In TS
+    /// a field's span stops before its `;`.
+    #[test]
+    fn a_comment_behind_a_separator_is_not_the_symbols() {
+        let src = "class C {\n  a = 1; // semi\n  b = 2;\n}\n";
+        let p = parse_at(5, Lang::TypeScript, src);
+        assert_eq!(p.syms[0].children[0].text(src), "a = 1");
+        assert_eq!(p.syms[0].children[1].text(src), "b = 2");
+    }
+
+    #[test]
+    fn only_an_object_set_on_module_exports_is_a_list() {
+        let js = |src| names_at(5, Lang::JavaScript, src);
+        assert_eq!(js("exports.x = { a() {} };\n"), ["x"]);
+        assert!(js("other = { a() {} };\n").is_empty());
+        assert!(js("module.exports = function () {};\n").is_empty());
+    }
+
+    /// `partial` is the word, not any modifier a type has.
+    #[test]
+    fn a_public_type_twice_is_not_partial() {
+        let src = "public class C { int a; }\npublic class C { int b; }\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C~2"));
+        assert!(names(&p).contains(&"C~2.b".to_string()));
     }
 
     /// Two namespaces, two types: only parts in one place are one type.

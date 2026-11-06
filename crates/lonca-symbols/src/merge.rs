@@ -188,7 +188,7 @@ pub fn merge_text_at(
         } else {
             engine
         };
-        if !holds_up(engine, path, lang, &merged, [&pb, &po, &pt], &[], false) {
+        if !holds_up(engine, path, lang, &merged, [&pb, &po, &pt], &[]) {
             return Err(file_conflict());
         }
     }
@@ -223,11 +223,11 @@ pub fn merge_around_conflicts(
     }
     let conflicts = std::mem::take(&mut m.conflicts);
     let sides = [&pb, &po, &pt];
-    if !numbers_hold(engine, sides) {
+    if !numbers_hold(sides) {
         return None;
     }
     m.apply()
-        .filter(|text| holds_up(engine, path, lang, text, sides, &conflicts, true))
+        .filter(|text| holds_up(engine, path, lang, text, sides, &conflicts))
 }
 
 fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
@@ -272,7 +272,6 @@ fn holds_up(
     text: &str,
     [pb, po, pt]: [&Parsed; 3],
     conflicts: &[String],
-    by_symbols: bool,
 ) -> bool {
     let merged = parse_at(engine, lang, text);
     if merged.has_error {
@@ -315,10 +314,11 @@ fn holds_up(
     let code_of = |p: &Parsed| p.residual_at(engine).to_string();
     let from_a_side = [po, pt].map(code_of).contains(&code_of(&merged))
         && own_from_a_side(engine, [&po.syms, &pt.syms], &merged.syms);
-    kept && there.iter().all(known) && (!by_symbols || from_a_side)
+    kept && there.iter().all(known) && from_a_side
 }
 
-/// A merge by symbols writes code of one side or the other, never a third.
+/// A merge writes code of one side or the other, never a third: code both
+/// sides changed is a conflict before it gets here.
 fn own_from_a_side(engine: u32, [os, ts]: [&[Sym]; 2], merged: &[Sym]) -> bool {
     let (om, tm) = (by_name(os), by_name(ts));
     merged.iter().filter(|m| m.container).all(|m| {
@@ -345,7 +345,7 @@ fn numbered_places(syms: &[Sym], out: &mut BTreeMap<String, Vec<(u32, u32)>>) {
 /// A number in a name counts from the top of the file: the same number can
 /// be another definition when a name came to stand in another block, even
 /// with as many of the name as before.
-fn numbers_hold(engine: u32, [pb, po, pt]: [&Parsed; 3]) -> bool {
+fn numbers_hold([pb, po, pt]: [&Parsed; 3]) -> bool {
     let places = |p: &Parsed| {
         let mut out = BTreeMap::new();
         numbered_places(&p.syms, &mut out);
@@ -353,7 +353,7 @@ fn numbers_hold(engine: u32, [pb, po, pt]: [&Parsed; 3]) -> bool {
         out
     };
     let base = places(pb);
-    engine < ENGINE_GROUPS || (places(po) == base && places(pt) == base)
+    places(po) == base && places(pt) == base
 }
 
 enum Sm {
@@ -481,7 +481,7 @@ impl<'a> Merger<'a> {
                     let after = ts[i + 1..].iter().find(beside);
                     let prev = ts[..i].iter().rev().filter(beside).find_map(anchor);
                     let prev = prev.filter(|_| touching(gap_start, before.map(|p| p.end)));
-                    let next = ts[i + 1..].iter().filter(beside).find_map(anchor);
+                    let next = ts[i..].iter().filter(beside).find_map(anchor);
                     let next = next.filter(|_| touching(gap_end, after.map(|a| a.start)));
                     let after_code = self.engine >= ENGINE_PLACES && i > 0 && {
                         let gap = &self.t[ts[i - 1].end..ts_sym.start];
@@ -577,7 +577,7 @@ impl<'a> Merger<'a> {
     }
 
     /// The symbols of `o` and of `t` stand in one block: they share a
-    /// neighbour, or neither has any and the file up to the block is the same.
+    /// neighbour, or with none to compare, the file up to the block is the same.
     fn same_block(&self, o: &Sym, os: &[Sym], t: &Sym, ts: &[Sym]) -> bool {
         let others = |s: &Sym, list: &[Sym]| -> BTreeSet<String> {
             let held = list.iter().filter(|x| x.holder == s.holder);
@@ -589,7 +589,7 @@ impl<'a> Merger<'a> {
             return o.holder == t.holder;
         };
         let (a, b) = (others(o, os), others(t, ts));
-        if a.is_empty() && b.is_empty() {
+        if a.is_empty() || b.is_empty() {
             return self.o[..ho.start] == self.t[..ht.start];
         }
         !a.is_disjoint(&b)
@@ -709,7 +709,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         }
         return Sm::Conflict(vec![format!("{path}#<module>")]);
     }
-    if !numbers_hold(engine, [&pb, &po, &pt]) {
+    if !numbers_hold([&pb, &po, &pt]) {
         return Sm::Fallback;
     }
     let mut m = Merger::new(engine, path, b, o, t);
@@ -728,9 +728,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         // Nothing of `theirs` came through, though the files differ: only
         // the line merge sees what it changed.
         Some(text) if engine >= ENGINE_EXACT && text == o => Sm::Fallback,
-        Some(text) if holds_up(engine, path, lang, &text, [&pb, &po, &pt], &[], true) => {
-            Sm::Merged(text)
-        }
+        Some(text) if holds_up(engine, path, lang, &text, [&pb, &po, &pt], &[]) => Sm::Merged(text),
         _ => Sm::Fallback,
     }
 }
@@ -1309,6 +1307,110 @@ mod tests {
         let t = b.replace("\"D\" {\n    fn f();", "\"D\" {\n    fn f(x: u8);");
         let m = merge_text_at(5, "a.rs", b, o, &t).unwrap();
         assert!(m.contains("\"D\" {\n    fn f(x: u8);"), "{m}");
+    }
+
+    /// The checks at the end of `holds_up`, on text no merge writes now.
+    #[test]
+    fn a_result_must_hold_code_of_a_side() {
+        let side = |text| parse_at(5, Lang::Python, text);
+        let b = "x = 1\n\nclass A:\n    y = 1\n\n    class B:\n        z = 1\n";
+        let (pb, po, pt) = (
+            side(b),
+            side(&b.replace("y = 1", "y = 2")),
+            side(&b.replace("z = 1", "z = 2")),
+        );
+        let held =
+            |engine, text: &str| holds_up(engine, "a.py", Lang::Python, text, [&pb, &po, &pt], &[]);
+        let fine = b.replace("y = 1", "y = 2").replace("z = 1", "z = 2");
+        assert!(held(5, &fine));
+        // Code of no side, outside every symbol, in a type and deeper.
+        let outer = fine.replace("x = 1", "x = 3");
+        let own = fine.replace("y = 2", "y = 3");
+        let inner = fine.replace("z = 2", "z = 3");
+        for third in [&outer, &own, &inner] {
+            assert!(!held(5, third), "{third}");
+            assert!(held(4, third), "{third}");
+        }
+    }
+
+    #[test]
+    fn a_third_kind_of_code_is_seen_at_any_depth() {
+        let syms = |text: &str| parse_at(5, Lang::Python, text).syms;
+        let b = "class A:\n    y = 1\n\n    class B:\n        z = 1\n";
+        let (o, t) = (
+            syms(&b.replace("y = 1", "y = 2")),
+            syms(&b.replace("z = 1", "z = 2")),
+        );
+        let kept = |text: String| own_from_a_side(5, [&o, &t], &syms(&text));
+        assert!(kept(b.replace("y = 1", "y = 2").replace("z = 1", "z = 2")));
+        assert!(!kept(b.replace("y = 1", "y = 3")));
+        assert!(!kept(b.replace("y = 1", "y = 2").replace("z = 1", "z = 3")));
+        // A container one side has not is that side's to add.
+        assert!(kept(format!("{b}\nclass N:\n    n = 1\n")));
+    }
+
+    /// A symbol that two sides moved apart is two symbols, and no side has
+    /// the second.
+    #[test]
+    fn a_name_no_side_has_stops_a_line_merge_too() {
+        let z = "fn z() {}\n\n";
+        let b = format!("{z}fn a() {{}}\n\nfn b() {{}}\n\nfn c() {{}}\n\nfn d() {{}}\n");
+        let o = b
+            .replace(z, "")
+            .replace("fn b() {}\n\n", &format!("fn b() {{}}\n\n{z}"));
+        let t = format!("{}\n{}", b.replace(z, ""), z.trim_end());
+        let t = format!("{t}\n");
+        let m = merge_text_at(4, "a.rs", &b, &o, &t);
+        assert_eq!(
+            m.as_ref().map(|m| m.matches("fn z").count()),
+            Ok(2),
+            "{m:?}"
+        );
+        let c = Err(vec!["a.rs#<file>".to_string()]);
+        assert_eq!(merge_text_at(5, "a.rs", &b, &o, &t), c);
+    }
+
+    /// With nothing around it, a new symbol gets a line of its own: a blank
+    /// one between items, none between members.
+    #[test]
+    fn a_new_symbol_written_on_the_same_line_gets_its_own() {
+        let (b, o) = ("fn a() {}\n", "fn a() { x(); }\n");
+        let m = merge_text_at(5, "a.rs", b, o, "fn a() {}fn n() {}\n").unwrap();
+        assert_eq!(m, "fn a() { x(); }\n\nfn n() {}\n");
+        let b = "impl S {\n    fn a() {}\n}\n";
+        let o = b.replace("fn a() {}", "fn a() { x(); }");
+        let t = b.replace("fn a() {}", "fn a() {}fn n() {}");
+        let m = merge_text_at(5, "a.rs", b, &o, &t).unwrap();
+        assert_eq!(m, "impl S {\n    fn a() { x(); }\nfn n() {}\n}\n");
+        // In front of its neighbour, the same.
+        let t = b.replace("fn a() {}", "fn n() {}fn a() {}");
+        let m = merge_text_at(5, "a.rs", b, &o, &t).unwrap();
+        assert_eq!(m, "impl S {\n    fn n() {}\nfn a() { x(); }\n}\n");
+        let (b, o) = ("fn a() {}\n", "fn a() { x(); }\n");
+        let m = merge_text_at(5, "a.rs", b, o, "fn n() {}fn a() {}\n").unwrap();
+        assert_eq!(m, "fn n() {}\n\nfn a() { x(); }\n");
+    }
+
+    #[test]
+    fn the_same_addition_needs_the_same_place() {
+        // Beside nothing that holds it: one addition.
+        let b = "fn a() {}\n\nfn b() {}\n";
+        let n = "\nfn n() {}\n";
+        let o = format!("{}{n}", b.replace("fn a() {}", "fn a() { x(); }"));
+        let t = format!("{}{n}", b.replace("fn b() {}", "fn b() { y(); }"));
+        let want = o.replace("fn b() {}", "fn b() { y(); }");
+        assert_eq!(merge_text_at(5, "a.rs", b, &o, &t).unwrap(), want);
+        // In a block on one side and not on the other: two.
+        let b = "def a():\n    return 1\n\nif A:\n    def g():\n        return 2\n";
+        let o = b.replace("def a", "def f():\n    return 9\n\ndef a");
+        let t = b.replace("    def g", "    def f():\n        return 9\n\n    def g");
+        let c = merge_text_at(5, "a.py", b, &o, &t);
+        assert!(c.is_err() || c.unwrap().matches("def f").count() == 2);
+        // With a neighbour on one side only, the file up to the block decides.
+        let b = "if A:\n    pass\n";
+        let o = format!("{b}\n    def f():\n        return 9\n");
+        let t = format!("{o}\n    def g():\n        return 1\n");
+        assert_eq!(merge_text_at(5, "a.py", b, &o, &t).unwrap(), t);
     }
 
     /// With no neighbour to go by, two empty blocks are not one.

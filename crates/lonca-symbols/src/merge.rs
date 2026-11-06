@@ -19,7 +19,7 @@ use crate::engine::{
 };
 use crate::extract::{
     Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_keyed,
-    read_together, rename_aligned, shifted,
+    parse_together, read_together, rename_aligned, shifted,
 };
 
 /// Code outside symbols as an engine compares it, and its place among them.
@@ -37,6 +37,8 @@ fn outer_code(engine: u32, p: &Parsed) -> Code<'_> {
 fn differs(engine: u32, a: Code, b: Code) -> bool {
     a.0 != b.0 || engine >= ENGINE_PLACES && shifted(a.1, b.1)
 }
+use std::ops::Range;
+
 use crate::facts::renames_between;
 use crate::lang::Lang;
 use crate::lines;
@@ -220,6 +222,66 @@ pub fn merge_around_conflicts(
     o: &str,
     t: &str,
 ) -> Option<String> {
+    around_conflicts(engine, path, b, o, t).map(|(text, _)| text)
+}
+
+/// The lines `s` stands on.
+fn lines_of(text: &str, s: &Sym) -> Range<usize> {
+    let start = text[..s.start].rfind('\n').map_or(0, |i| i + 1);
+    let end = text[s.end..]
+        .find('\n')
+        .map_or(text.len(), |i| s.end + i + 1);
+    start..end
+}
+
+fn find_sym<'s>(syms: &'s [Sym], name: &str) -> Option<&'s Sym> {
+    let deeper = |s: &'s Sym| find_sym(&s.children, name);
+    let here = syms.iter().find(|s| s.name == name);
+    here.or_else(|| syms.iter().find_map(deeper))
+}
+
+/// [`merge_around_conflicts`] with each conflicting symbol written out, both
+/// sides between markers, so that the text shows what trunk did to it and a
+/// proposal can not take that back unseen. `None` also when a conflict has no
+/// symbol of its name on both sides: a symbol trunk does not have under that
+/// name may be gone or may go by another, and only its lines can show which.
+pub fn marked_around_conflicts(
+    engine: u32,
+    path: &str,
+    [b, o, t]: [&str; 3],
+    tag: &str,
+) -> Option<String> {
+    let lang = Lang::detect_at(engine, path)?;
+    let (kept, conflicts) = around_conflicts(engine, path, b, o, t)?;
+    let [ours, theirs] = parse_together(engine, lang, [&kept, t]);
+    let prefix = format!("{path}#");
+    let mut blocks = Vec::new();
+    for id in &conflicts {
+        let name = id.strip_prefix(&prefix)?;
+        let mine = lines_of(&kept, find_sym(&ours.syms, name)?);
+        let other = lines_of(t, find_sym(&theirs.syms, name)?);
+        let block = lines::conflict_block(&kept[mine.clone()], &t[other], tag);
+        blocks.push((mine, block));
+    }
+    blocks.sort_by_key(|(at, _)| at.start);
+    let mut out = String::new();
+    let mut done = 0;
+    for (at, block) in blocks {
+        out.push_str(kept.get(done..at.start)?);
+        out.push_str(&block);
+        done = at.end;
+    }
+    out.push_str(&kept[done..]);
+    Some(out)
+}
+
+fn around_conflicts(
+    engine: u32,
+    path: &str,
+    b: &str,
+    o: &str,
+    t: &str,
+) -> Option<(String, Vec<String>)> {
     let lang = Lang::detect_at(engine, path)?;
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
@@ -239,8 +301,8 @@ pub fn merge_around_conflicts(
     if !numbers_hold(sides) || (engine >= ENGINE_KEYS && !counts_hold(sides)) {
         return None;
     }
-    m.apply()
-        .filter(|text| holds_up(engine, path, lang, text, &naming, sides, &conflicts))
+    let text = m.apply()?;
+    holds_up(engine, path, lang, &text, &naming, sides, &conflicts).then_some((text, conflicts))
 }
 
 fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
@@ -849,6 +911,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::ENGINE_CURRENT;
     use crate::engine::ENGINE_RENAMES;
     use crate::extract::{parse, parse_at};
 
@@ -2671,6 +2734,106 @@ mod tests {
         let (from, one, two) = ("a\nb\nc\nd\n", "A\nb\nc\nd\n", "a\nb\nc\nD\n");
         let merged = merge_text_at(ENGINE_LINE_MERGE, "a.zig", from, one, two);
         assert_eq!(merged.as_deref(), Ok("A\nb\nc\nD\n"));
+    }
+
+    /// Each conflicting symbol, whole lines of both sides; the rest merged.
+    #[test]
+    fn a_conflicting_symbol_is_written_out() {
+        let b = "fn a() {\n    1\n}\n\nfn b() {\n    2\n}\n";
+        let o = b.replace("    1", "    10");
+        let t = b.replace("    1", "    11").replace("    2", "    22");
+        let text = marked_around_conflicts(ENGINE_CURRENT, "a.rs", [b, &o, &t], "k").unwrap();
+        assert_eq!(
+            text,
+            "<<<<<<< local k\nfn a() {\n    10\n}\n======= k\nfn a() {\n    11\n}\n>>>>>>> trunk k\n\n\
+             fn b() {\n    22\n}\n"
+        );
+    }
+
+    /// What trunk has no symbol of that name for: deleted, renamed, or given
+    /// another key. Its lines show which, an empty side could only say gone.
+    #[test]
+    fn a_symbol_trunk_has_under_no_such_name_goes_by_lines() {
+        let at = |path, b: &str, o: &str, t: &str| {
+            let block = marked_around_conflicts(ENGINE_CURRENT, path, [b, o, t], "k");
+            assert_eq!(block, None, "{path}: {t}");
+            let text = lines::with_markers(b, o, t, "k");
+            assert!(lines::has_markers(&text, "k"), "{text}");
+            text
+        };
+        let b = "fn a() {\n    1\n}\n\nfn b() {\n    2\n}\n";
+        let o = b.replace("    1", "    10");
+        let gone = at("a.rs", b, &o, "fn b() {\n    2\n}\n");
+        assert!(gone.contains("    10"), "{gone}");
+        let t = b.replace("fn a", "fn renamed").replace("    1", "    11");
+        let renamed = at("a.rs", b, &o, &t);
+        assert!(
+            renamed.contains("    10") && renamed.contains("    11"),
+            "{renamed}"
+        );
+        let b = "class C {\n    void M(int a) {\n        A();\n    }\n\n    void M(string a) {\n    }\n}\n";
+        let o = b.replace("A()", "LOCAL()");
+        let t = b.replace("M(int a)", "M(long a)").replace("A()", "TRUNK()");
+        let keyed = at("a.cs", b, &o, &t);
+        assert!(keyed.contains("LOCAL()"), "{keyed}");
+        assert!(
+            keyed.contains("M(long a)") && keyed.contains("TRUNK()"),
+            "{keyed}"
+        );
+    }
+
+    /// One conflict on the last line of a file with no line end, and one
+    /// indented in a type: a marker stands on a line of its own.
+    #[test]
+    fn markers_stand_on_lines_of_their_own() {
+        let b =
+            "class C:\n    def a(self):\n        return 1\n\n    def b(self):\n        return 2";
+        let o = b
+            .replace("return 1", "return 10")
+            .replace("return 2", "return 20");
+        let t = b
+            .replace("return 1", "return 11")
+            .replace("return 2", "return 22");
+        let text = marked_around_conflicts(ENGINE_CURRENT, "a.py", [b, &o, &t], "k").unwrap();
+        assert!(
+            text.contains("\n<<<<<<< local k\n    def a(self):\n"),
+            "{text}"
+        );
+        assert!(text.ends_with("return 22\n>>>>>>> trunk k\n"), "{text}");
+        assert!(lines::has_markers(&text, "k"));
+    }
+
+    /// Two conflicts on one line can not each have their own block, and what
+    /// has no symbol has nothing to write out: the sync goes by lines.
+    #[test]
+    fn a_conflict_with_no_lines_of_its_own_is_no_symbol_block() {
+        let b = "fn a() { 1 } fn b() { 2 }\n";
+        let o = "fn a() { 10 } fn b() { 20 }\n";
+        let t = "fn a() { 11 } fn b() { 22 }\n";
+        assert_eq!(
+            marked_around_conflicts(ENGINE_CURRENT, "a.rs", [b, o, t], "k"),
+            None
+        );
+        assert_eq!(
+            marked_around_conflicts(ENGINE_CURRENT, "a.zig", [b, o, t], "k"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_nested_symbol_is_found_by_its_name() {
+        let b = "struct S;\nimpl S {\n    fn m() {\n        1;\n    }\n}\n";
+        let o = b.replace("1;", "2;");
+        let t = b.replace("1;", "3;");
+        let text = marked_around_conflicts(ENGINE_CURRENT, "a.rs", [b, &o, &t], "k").unwrap();
+        assert!(
+            text.contains("<<<<<<< local k\n    fn m() {\n        2;"),
+            "{text}"
+        );
+        assert!(
+            text.contains("======= k\n    fn m() {\n        3;"),
+            "{text}"
+        );
     }
 
     #[test]

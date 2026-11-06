@@ -205,6 +205,20 @@ fn what_a_grammar_can_not_read_is_a_file_with_no_grammar() {
     assert_eq!(conflicts, ["a.kt#<file>"]);
 }
 
+/// What a language reads it holds a line merge to, as any language does: one
+/// side moved a method and the other deleted it, and it must not come back.
+#[test]
+fn a_file_that_reads_is_held_to_what_it_says() {
+    let (fa, fb) = ("def a\n  1\nend\n\n", "def b\n  2\nend\n\n");
+    let fc = "def c\n  x = 1\n  y = 2\n  z = 3\n  x\nend\n\n";
+    let fd = "def d\n  4\nend\n";
+    let b = format!("{fa}{fb}{fc}{fd}");
+    let t = format!("{fa}{fc}{fb}{fd}");
+    let o = format!("{fa}{fc}{fd}");
+    let merged = merge_text_at(ENGINE_CURRENT, "a.rb", &b, &o, &t);
+    assert_eq!(merged, Err(vec!["a.rb#<file>".to_string()]));
+}
+
 /// A strict language still takes a parse error for a mistake.
 #[test]
 fn a_strict_language_is_not_read_that_way() {
@@ -338,6 +352,14 @@ fn what_each_language_has_of_its_own() {
     has(&s, "C.test_t", true, true);
     let calls: Vec<(&str, bool)> = calls.iter().map(|t| (t.name.as_str(), t.skipped)).collect();
     assert_eq!(calls, [("d > i", false), ("d > x", true)]);
+
+    // A skipped group skips what stands in it, however deep.
+    let (_, _, calls) = names(
+        "b.rb",
+        "xdescribe \"d\" do\n  context \"c\" do\n    it \"i\" do\n    end\n  end\nend\n",
+    );
+    let calls: Vec<(&str, bool)> = calls.iter().map(|t| (t.name.as_str(), t.skipped)).collect();
+    assert_eq!(calls, [("d > c > i", true)]);
 
     let (s, imports, _) = names(
         "a.php",

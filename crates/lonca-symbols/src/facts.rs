@@ -38,6 +38,11 @@ fn sym_id(path: &str, name: &str) -> String {
     format!("{path}#{name}")
 }
 
+/// `bytes` are text the grammar of `lang` can read.
+fn reads(engine: u32, lang: Lang, bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes).is_ok_and(|text| !parse_at(engine, lang, text).has_error)
+}
+
 /// A change a line merge can stand in for a lease on: lines of one file that
 /// stays what it was. A change of mode or of where a link points is none,
 /// bytes with a NUL are no lines, and a change that takes away more than
@@ -85,6 +90,9 @@ pub fn analyze(
             (None, Some(n)) => {
                 f.added_files.push(path.clone());
                 let bytes = read(&n.blob)?;
+                if lang.is_some_and(|l| !l.is_strict() && !reads(engine, l, &bytes)) {
+                    f.unread_files.push(path.clone());
+                }
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     f.lines_added += count_lines(text);
                     if let Some(lang) = lang {
@@ -121,6 +129,9 @@ pub fn analyze(
                     (std::str::from_utf8(&old), std::str::from_utf8(&new_bytes))
                 else {
                     f.edits.push(sym_id(path, FILE));
+                    if lang.is_some_and(|l| !l.is_strict() && reads(engine, l, &old)) {
+                        f.unread_files.push(path.clone());
+                    }
                     continue;
                 };
                 let (a, r) = line_counts(old, newt);
@@ -153,6 +164,14 @@ pub fn analyze(
                 }
                 if pb.has_error || pn.has_error {
                     f.edits.push(sym_id(path, FILE));
+                    // A file that read until now takes a person's word: what
+                    // comes after it here can be seen by nothing but lines.
+                    if !lang.is_strict() && !pb.has_error {
+                        f.unread_files.push(path.clone());
+                    }
+                    if !lang.is_strict() && pb.has_error && edits_lines(b, n, old, newt, r) {
+                        f.unparsed_files.push(path.clone());
+                    }
                     continue;
                 }
                 compare_file(engine, path, (&pb, old), (&pn, newt), &mut f);
@@ -169,6 +188,7 @@ pub fn analyze(
         &mut f.signature_changes,
         &mut f.import_only_files,
         &mut f.unparsed_files,
+        &mut f.unread_files,
     ] {
         v.sort();
         v.dedup();

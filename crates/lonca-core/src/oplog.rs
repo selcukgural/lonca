@@ -38,8 +38,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// version 11 adds the `unproposed` observation; version 12 makes a lease
 /// say why and lets a waiting interest go first; version 13 lets a name
 /// stand for every symbol of that name; version 14 adds `renames` to facts
-/// and follows them in leases; version 15 adds `unparsed_files` to facts.
-pub const FORMAT_CURRENT: u32 = 15;
+/// and follows them in leases; version 15 adds `unparsed_files` to facts;
+/// version 16 adds `unread_files`.
+pub const FORMAT_CURRENT: u32 = 16;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -79,6 +80,9 @@ pub const FORMAT_RENAMES: u32 = 14;
 /// The first format with `unparsed_files` in facts. Older entries have none,
 /// so nothing is gated on it.
 pub const FORMAT_UNPARSED: u32 = 15;
+/// The first format with `unread_files` in facts. Older entries have none,
+/// so nothing is gated on it.
+pub const FORMAT_UNREAD: u32 = 16;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

@@ -1,0 +1,1021 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.swift#Client.charge(amount: Int)"
+        ],
+        "import_only_files": [
+          "src/sample.swift"
+        ],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.swift"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.swift#Client.again"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.swift#Client.charge(amount: Int64,why: String)",
+          "src/sample.swift#Client.more",
+          "src/sample.swift#top"
+        ],
+        "import_only_files": [],
+        "lines_added": 7,
+        "lines_removed": 3,
+        "modified_files": [
+          "src/sample.swift"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "import Foundation\nimport Combine\n\n/// A client.\npublic class Client {\n    let id: Int = 0\n    var total = 0\n\n    init(total: Int) {\n        self.total = total\n    }\n\n    deinit {\n        stop()\n    }\n\n    func charge(amount: Int) -> Int {\n        return total + amount + 1\n    }\n\n    func charge(amount: Int64, why: String) -> Int {\n        return total - 1\n    }\n\n    func testCharge() {\n        assert(true)\n    }\n\n    @Test func marked() {\n        assert(true)\n    }\n}\n\nextension Client {\n    func more() -> Int {\n        return 2\n    }\n\n    func again() -> Int {\n        return 3\n    }\n}\n\nextension Client: Equatable {\n    func eq() -> Bool {\n        return true\n    }\n}\n\nstruct Point {\n    var x: Int\n\n    func sum() -> Int {\n        return x\n    }\n}\n\nprotocol Shape {\n    func area() -> Double\n    var name: String { get }\n}\n\ntypealias Name = String\n\nfunc top(x: Int) -> Int {\n    return x + 1\n}\n"
+  },
+  "path": "src/sample.swift",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          17
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.id",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                59,
+                59,
+                74
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                79,
+                79,
+                92
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.init",
+              "own": "",
+              "signature": "init(total: Int)",
+              "skipped": false,
+              "span": [
+                98,
+                98,
+                149
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.deinit",
+              "own": "",
+              "signature": "deinit",
+              "skipped": false,
+              "span": [
+                155,
+                155,
+                184
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int)",
+              "own": "",
+              "signature": "func charge(amount: Int) -> Int",
+              "skipped": false,
+              "span": [
+                190,
+                190,
+                259
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int64,why: String)",
+              "own": "",
+              "signature": "func charge(amount: Int64, why: String) -> Int",
+              "skipped": false,
+              "span": [
+                265,
+                265,
+                340
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.testCharge",
+              "own": "",
+              "signature": "func testCharge()",
+              "skipped": false,
+              "span": [
+                346,
+                346,
+                392
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.marked",
+              "own": "",
+              "signature": "@Test func marked()",
+              "skipped": false,
+              "span": [
+                398,
+                398,
+                446
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/// A client.\nclass_declaration(modifiers(visibility_modifier(public\u001f))class\u001fClient\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            19,
+            33,
+            448
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.more",
+              "own": "",
+              "signature": "func more() -> Int",
+              "skipped": false,
+              "span": [
+                473,
+                473,
+                516
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "extension:Client",
+          "own": "class_declaration(extension\u001fuser_type(Client\u001f)class_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            450,
+            450,
+            518
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.eq",
+              "own": "",
+              "signature": "func eq() -> Bool",
+              "skipped": false,
+              "span": [
+                554,
+                554,
+                599
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "extension:Client~2",
+          "own": "class_declaration(extension\u001fuser_type(Client\u001f):\u001finheritance_specifier(user_type(Equatable\u001f))class_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            520,
+            520,
+            601
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Point.x",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                622,
+                622,
+                632
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Point.sum",
+              "own": "",
+              "signature": "func sum() -> Int",
+              "skipped": false,
+              "span": [
+                638,
+                638,
+                680
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Point",
+          "own": "class_declaration(struct\u001fPoint\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            603,
+            603,
+            682
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                705,
+                705,
+                726
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.name",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                731,
+                731,
+                755
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "protocol_declaration(protocol\u001fShape\u001fprotocol_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            684,
+            684,
+            757
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Name",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            759,
+            759,
+            782
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "func top(x: Int) -> Int",
+          "skipped": false,
+          "span": [
+            784,
+            784,
+            824
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          17
+        ],
+        [
+          18,
+          32
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.id",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                74,
+                74,
+                89
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                94,
+                94,
+                107
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.init",
+              "own": "",
+              "signature": "init(total: Int)",
+              "skipped": false,
+              "span": [
+                113,
+                113,
+                164
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.deinit",
+              "own": "",
+              "signature": "deinit",
+              "skipped": false,
+              "span": [
+                170,
+                170,
+                199
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int)",
+              "own": "",
+              "signature": "func charge(amount: Int) -> Int",
+              "skipped": false,
+              "span": [
+                205,
+                205,
+                278
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int64,why: String)",
+              "own": "",
+              "signature": "func charge(amount: Int64, why: String) -> Int",
+              "skipped": false,
+              "span": [
+                284,
+                284,
+                359
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.testCharge",
+              "own": "",
+              "signature": "func testCharge()",
+              "skipped": false,
+              "span": [
+                365,
+                365,
+                411
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.marked",
+              "own": "",
+              "signature": "@Test func marked()",
+              "skipped": false,
+              "span": [
+                417,
+                417,
+                465
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/// A client.\nclass_declaration(modifiers(visibility_modifier(public\u001f))class\u001fClient\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            34,
+            48,
+            467
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.more",
+              "own": "",
+              "signature": "func more() -> Int",
+              "skipped": false,
+              "span": [
+                492,
+                492,
+                535
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "extension:Client",
+          "own": "class_declaration(extension\u001fuser_type(Client\u001f)class_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            469,
+            469,
+            537
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.eq",
+              "own": "",
+              "signature": "func eq() -> Bool",
+              "skipped": false,
+              "span": [
+                573,
+                573,
+                618
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "extension:Client~2",
+          "own": "class_declaration(extension\u001fuser_type(Client\u001f):\u001finheritance_specifier(user_type(Equatable\u001f))class_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            539,
+            539,
+            620
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Point.x",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                641,
+                641,
+                651
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Point.sum",
+              "own": "",
+              "signature": "func sum() -> Int",
+              "skipped": false,
+              "span": [
+                657,
+                657,
+                699
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Point",
+          "own": "class_declaration(struct\u001fPoint\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            622,
+            622,
+            701
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                724,
+                724,
+                745
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.name",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                750,
+                750,
+                774
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "protocol_declaration(protocol\u001fShape\u001fprotocol_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            703,
+            703,
+            776
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Name",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            778,
+            778,
+            801
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "func top(x: Int) -> Int",
+          "skipped": false,
+          "span": [
+            803,
+            803,
+            843
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          17
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.id",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                59,
+                59,
+                74
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                79,
+                79,
+                92
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.init",
+              "own": "",
+              "signature": "init(total: Int)",
+              "skipped": false,
+              "span": [
+                98,
+                98,
+                149
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.deinit",
+              "own": "",
+              "signature": "deinit",
+              "skipped": false,
+              "span": [
+                155,
+                155,
+                184
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int)",
+              "own": "",
+              "signature": "func charge(amount: Int) -> Int",
+              "skipped": false,
+              "span": [
+                190,
+                190,
+                259
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int64,why: String)",
+              "own": "",
+              "signature": "func charge(amount: Int64, why: String) -> Int",
+              "skipped": false,
+              "span": [
+                265,
+                265,
+                344
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.testCharge",
+              "own": "",
+              "signature": "func testCharge()",
+              "skipped": false,
+              "span": [
+                350,
+                350,
+                396
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.marked",
+              "own": "",
+              "signature": "@Test func marked()",
+              "skipped": false,
+              "span": [
+                402,
+                402,
+                450
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/// A client.\nclass_declaration(modifiers(visibility_modifier(public\u001f))class\u001fClient\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            19,
+            33,
+            452
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.more",
+              "own": "",
+              "signature": "func more() -> Int",
+              "skipped": false,
+              "span": [
+                477,
+                477,
+                520
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.again",
+              "own": "",
+              "signature": "func again() -> Int",
+              "skipped": false,
+              "span": [
+                526,
+                526,
+                570
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "extension:Client",
+          "own": "class_declaration(extension\u001fuser_type(Client\u001f)class_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            454,
+            454,
+            572
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.eq",
+              "own": "",
+              "signature": "func eq() -> Bool",
+              "skipped": false,
+              "span": [
+                608,
+                608,
+                653
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "extension:Client~2",
+          "own": "class_declaration(extension\u001fuser_type(Client\u001f):\u001finheritance_specifier(user_type(Equatable\u001f))class_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            574,
+            574,
+            655
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Point.x",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                676,
+                676,
+                686
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Point.sum",
+              "own": "",
+              "signature": "func sum() -> Int",
+              "skipped": false,
+              "span": [
+                692,
+                692,
+                734
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Point",
+          "own": "class_declaration(struct\u001fPoint\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            657,
+            657,
+            736
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                759,
+                759,
+                780
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.name",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                785,
+                785,
+                809
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "protocol_declaration(protocol\u001fShape\u001fprotocol_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            738,
+            738,
+            811
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Name",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            813,
+            813,
+            836
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "func top(x: Int) -> Int",
+          "skipped": false,
+          "span": [
+            838,
+            838,
+            882
+          ]
+        }
+      ]
+    }
+  }
+}

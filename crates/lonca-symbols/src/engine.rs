@@ -24,8 +24,8 @@ use lonca_core::{Error, Result};
 /// what they take instead of by their order; version 7 reports renames;
 /// version 8 reports the files no parser reads; version 9 lists among them
 /// only a change that is an edit of lines, and merges lines by their own
-/// rules.
-pub const ENGINE_CURRENT: u32 = 9;
+/// rules; version 10 reads Java, Kotlin, C, C++, Ruby, PHP and Swift.
+pub const ENGINE_CURRENT: u32 = 10;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -65,8 +65,12 @@ pub const ENGINE_LINE_EDITS: u32 = 9;
 /// among equal lines meets all of them.
 pub const ENGINE_LINE_MERGE: u32 = 9;
 
+/// The first engine that reads the languages with `since = 10`, and that
+/// holds a merge to the symbols and imports all three sides have.
+pub const ENGINE_LANGUAGES: u32 = 10;
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

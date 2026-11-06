@@ -14,12 +14,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
 use crate::engine::{
-    ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LINE_MERGE, ENGINE_PLACES,
-    ENGINE_SECTIONS,
+    ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LANGUAGES, ENGINE_LINE_MERGE,
+    ENGINE_PLACES, ENGINE_SECTIONS,
 };
 use crate::extract::{
-    Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_keyed,
-    parse_together, read_together, rename_aligned, shifted,
+    Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_at,
+    parse_keyed, parse_together, read_together, rename_aligned, shifted,
 };
 
 /// Code outside symbols as an engine compares it, and its place among them.
@@ -198,6 +198,15 @@ pub fn merge_text_at(
         // A side that does not parse has no symbols to hold the merge to,
         // and engines before this check only asked that the result parses.
         let unread = pb.has_error || po.has_error || pt.has_error;
+        // A grammar that could not read the file before says nothing now,
+        // unless trunk reads and the result would not: a base that does not
+        // read is no way to break what does. With one side changed there is
+        // nothing for it to judge.
+        let reads = || !parse_at(engine, lang, &merged).has_error;
+        let was_unread = pb.has_error && (po.has_error || reads());
+        if !lang.is_strict() && (was_unread || b == o || b == t) {
+            return Ok(merged);
+        }
         let engine = if unread || engine < ENGINE_PLACES {
             0
         } else {
@@ -319,6 +328,8 @@ struct Naming {
     /// What each side changed the parameters of. A symbol of the result comes
     /// from a side, and that says what it is.
     pairs: Vec<Pair>,
+    /// The imports both sides have.
+    imports: BTreeSet<String>,
 }
 
 /// The three sides of a merge, by one set of names: those of `base`.
@@ -326,7 +337,15 @@ fn three_sides(engine: u32, lang: Lang, texts: [&str; 3]) -> (Naming, [Parsed; 3
     let (keyed, [pb, mut po, mut pt]) = read_together(engine, lang, texts);
     let mut pairs = align(&pb, &mut po);
     pairs.extend(align(&pb, &mut pt));
-    (Naming { keyed, pairs }, [pb, po, pt])
+    let ours: BTreeSet<String> = po.import_texts(texts[1]).into_iter().collect();
+    let theirs = pt.import_texts(texts[2]).into_iter();
+    let imports = theirs.filter(|i| ours.contains(i)).collect();
+    let naming = Naming {
+        keyed,
+        pairs,
+        imports,
+    };
+    (naming, [pb, po, pt])
 }
 
 /// Each side's code stands in `m` where that side put it among its symbols.
@@ -392,10 +411,19 @@ fn holds_up(
     let (mut in_o, mut in_t) = (BTreeSet::new(), BTreeSet::new());
     all_names(&po.syms, &mut in_o);
     all_names(&pt.syms, &mut in_t);
-    let gone = base
-        .iter()
-        .filter(|n| !in_o.contains(*n) || !in_t.contains(*n));
+    let gone_from = |n: &&str| !in_o.contains(n) || !in_t.contains(n);
+    let gone = base.iter().copied().filter(gone_from);
     let code = [pb, po, pt].map(|p| outer_code(engine, p));
+    // A number goes with the order of its name: a sibling's change moves it.
+    let single = |n: &&&str| !n.contains('~') && !base.contains(format!("{n}~2").as_str());
+    let mut shared = base.iter().filter(|n| !gone_from(n)).filter(single);
+    let imports = merged.import_texts(text);
+    if engine >= ENGINE_LANGUAGES
+        && !(shared.all(|n| there.contains(n) || in_conflict(n))
+            && naming.imports.iter().all(|i| imports.contains(i)))
+    {
+        return false;
+    }
     let kept = gone
         .into_iter()
         .all(|n| !there.contains(n) || in_conflict(n))
@@ -656,7 +684,7 @@ impl<'a> Merger<'a> {
                         !code.is_empty() || ts[i - 1].holder != held
                     };
                     if let (Some(p), false) = (prev, after_code) {
-                        self.insert(p.end, format!("{sep_before}{t_text}"));
+                        self.insert(p.end, self.behind(p.end, &sep_before, t_text));
                     } else if let Some(n) = next {
                         let sep_after = match (gap_end, ws_after(self.t, ts_sym.end)) {
                             (Some(to), _) => &self.t[ts_sym.end..to],
@@ -774,8 +802,25 @@ impl<'a> Merger<'a> {
         match sym.around {
             (_, Some(next)) => (sym.start, next),
             (Some(prev), None) => (prev, sym.end),
+            (None, None) if self.holds_line_end(sym.end) => (sym.start, sym.end),
             (None, None) => (sym.start - ws_before(self.o, sym.start).len(), sym.end),
         }
+    }
+
+    /// What ends at `end` of `o` ends with its own line: a preprocessor line
+    /// does. The line end is then not there to take, or to add to.
+    fn holds_line_end(&self, end: usize) -> bool {
+        self.engine >= ENGINE_LANGUAGES && self.o[..end].ends_with('\n')
+    }
+
+    /// `text` to go behind what ends at `end` of `o`, after `sep`.
+    fn behind(&self, end: usize, sep: &str, text: &str) -> String {
+        if !self.holds_line_end(end) {
+            return format!("{sep}{text}");
+        }
+        let sep = sep.strip_prefix('\n').unwrap_or(sep);
+        let line_end = if text.ends_with('\n') { "" } else { "\n" };
+        format!("{sep}{text}{line_end}")
     }
 
     /// `t` changed the container's own text and `o` only its members. The
@@ -828,13 +873,14 @@ impl<'a> Merger<'a> {
             }
             let text = &self.t[*s..*e];
             match anchor {
-                Some(pos) => self.insert(pos, format!("\n{text}")),
+                Some(pos) => self.insert(pos, self.behind(pos, "\n", text)),
                 None => self.insert(0, format!("{text}\n")),
             }
         }
         for (n, (s, e)) in &oi {
             if bset.contains(n) && !tset.contains(n) {
-                let start = s - ws_before(self.o, *s).len().min(1);
+                let ws = ws_before(self.o, *s).len().min(1);
+                let start = if self.holds_line_end(*e) { *s } else { s - ws };
                 self.replace(start, *e, String::new());
             }
         }
@@ -2833,6 +2879,43 @@ mod tests {
         assert!(
             text.contains("======= k\n    fn m() {\n        3;"),
             "{text}"
+        );
+    }
+
+    /// What all three sides have must come through, whatever produced the
+    /// text: no step of a merge may be trusted for this.
+    #[test]
+    fn a_result_is_held_to_what_all_three_sides_have() {
+        let lang = Lang::named("c");
+        let holds = |engine: u32, b: &str, text: &str| {
+            let (naming, sides) = three_sides(engine, lang, [b, b, b]);
+            let [pb, po, pt] = &sides;
+            holds_up(engine, "a.c", lang, text, &naming, [pb, po, pt], &[])
+        };
+        let (at, before) = (ENGINE_LANGUAGES, ENGINE_LANGUAGES - 1);
+        let f = "int f(void) {\n    return 1;\n}\n";
+        let g = "int g(void) {\n    return 2;\n}\n";
+        let two = format!("{f}\n{g}");
+        assert!(holds(at, &two, &two));
+        assert!(!holds(at, &two, f), "a symbol gone");
+        assert!(holds(before, &two, f), "older entries keep their merge");
+        let with = format!("#include <a.h>\n\n{f}");
+        assert!(holds(at, &with, &with));
+        assert!(!holds(at, &with, f), "an import gone");
+        assert!(holds(before, &with, f), "older entries keep their merge");
+    }
+
+    /// Lines too close for a line merge: only the symbols can tell these
+    /// apart, so the deletion itself must leave each line on its own.
+    #[test]
+    fn a_line_with_its_own_end_goes_alone_next_to_a_change() {
+        let b = "#define A 1\n#define B 2\n#define C 3\n";
+        let o = "#define A 10\n#define B 2\n#define C 3\n";
+        let t = "#define A 1\n#define C 3\n";
+        let want = "#define A 10\n#define C 3\n";
+        assert_eq!(
+            merge_text_at(ENGINE_CURRENT, "a.c", b, o, t).as_deref(),
+            Ok(want)
         );
     }
 

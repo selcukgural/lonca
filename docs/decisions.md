@@ -111,6 +111,9 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   (see "Symbol engine versions", engine 7).
 - **Version 15** adds `unparsed_files` to facts, left out of the encoding when
   empty (see "Symbol engine versions", engine 8).
+- **Version 16** adds `unread_files` to facts, which escalates a proposal (see
+  "Symbol engine versions", engine 10 and "The language table"). Older entries have
+  none, so nothing is gated on the format.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -569,6 +572,10 @@ entry format, so they have their own version
     proposal list it as added. `lines.rs` is the one core for this and for the merge
     at integration.
 
+- **Engine 10** reads Java, Kotlin, C, C++, Ruby, PHP and Swift. Each is an entry
+  in the language table with `since = 10`: engine 9 and older still see their
+  files as text, and old entries recompute as they were.
+
 ## The language table
 
 What a language's syntax means to the symbol engine is data (issue #114):
@@ -593,6 +600,38 @@ a table entry, not an enum.
   Loading them at run time (WebAssembly, never native code from a policy) needs a
   design for pinning them, because a grammar's hash would become part of the
   engine. Until then `[leases] unparsed_files` covers every language with none.
+- **`strict` says what a parse error means.** For a language that shipped before
+  the table it means the file is wrong, and verification fails it. For the seven
+  of engine 10 it is `false`: the error may be the grammar's, as with Kotlin's on a
+  member and `}` on one line, or a C macro. Such a file counts as one no parser
+  reads: the syntax check passes it, the merge goes by lines and facts list it, so
+  it does no worse than with no grammar at all. `syntax_errors` still reports it.
+  Only a file the grammar could not read before counts. No file gets there unseen:
+  a proposal that leaves unreadable a file that read until then, by a syntax error
+  or by bytes that are no text, or that adds such a file, is listed in `unread_files`
+  (log format 16) and escalates, as `tests_weakened` does. From then on facts can not
+  see into the file, its symbols need no lease under `optimistic` and a deleted test
+  does not show, so a person has to agree. An edit also takes the `<file>` lease.
+  Valid code the grammar can not read goes through the same door, which is the price
+  of the rule. At integration a trunk that reads must still read: a proposal on an
+  older base that did not is a conflict unless the result reads. A repair on such
+  a base has no facts to go by, and a person agreed to that base once.
+  `strict` decides facts and merges, so changing it for a language is a new engine.
+- **`.h` goes to the C++ grammar,** which reads nearly all of C, and a file it can
+  not read falls back as above.
+- **Limits of the first entries:** declarations of several names go by the first
+  (`int a = 1, b = 2;`, Swift's `var b, c` and `case a, b`). In Ruby `private def`
+  is part of the class's text and `class A::B` keeps its `::`. A PHP function's
+  signature leaves out `function`. Reopened Ruby classes and Swift extensions of
+  one type are numbered, and a C++ method defined outside its class is `C.m`, the
+  same name as its declaration in the class, so in one file they are `~2`, and in
+  a namespace it keeps the namespace in its name where the class does not. A
+  forward declaration is no symbol. Tests are found by markers in the table: C and
+  C++ share the rule for `TEST(..)`.
+- **Engine 10 also holds a merge to what all three sides have:** a symbol or an
+  import in base, ours and theirs must be in the result, which is what catches a
+  merge that loses text in a way that still parses. A name with a number, or one
+  that has a numbered sibling, is left out: the number moves with its siblings.
 - **Heuristics that hold across grammars stay in the code:** `TYPE_KINDS`,
   `is_verbatim`, and the names `parameters` and `type_parameters` in a key.
 - **A word the table gets wrong would read as a kind that never comes,** so a

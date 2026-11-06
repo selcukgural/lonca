@@ -4939,6 +4939,28 @@ fn a_file_no_parser_reads_takes_a_lease_unless_the_policy_says_otherwise() {
     h.assert_replay();
 }
 
+/// A file a grammar stopped reading takes a person's word, whatever else
+/// the proposal holds.
+#[test]
+fn a_file_that_stops_reading_escalates() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let lease = [("src/A.java#<file>", LeaseKind::Edit)];
+    assert!(h.lease("a", "l1", &lease).is_allow());
+    h.wrote("a", "src/A.java");
+    let facts = Facts {
+        unread_files: vec!["src/A.java".into()],
+        ..edit("src/A.java#<file>")
+    };
+    let d = h.propose("a", ChangeId::random(), facts);
+    assert!(
+        d.reasons.iter().any(|r| r == "unread_file:src/A.java"),
+        "{d:?}"
+    );
+    assert!(!d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
 /// `optimistic` waives a lease and nothing else: a scope still holds, and so
 /// does a deleted file.
 #[test]

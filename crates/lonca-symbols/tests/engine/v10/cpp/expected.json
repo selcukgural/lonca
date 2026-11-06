@@ -1,0 +1,642 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cpp#Client.charge(int)"
+        ],
+        "import_only_files": [
+          "src/sample.cpp"
+        ],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cpp"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cpp#other"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cpp#Client.charge(long)",
+          "src/sample.cpp#run"
+        ],
+        "import_only_files": [],
+        "lines_added": 6,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.cpp"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "#include <vector>\n#include <string>\n\nusing std::vector;\n\nnamespace app {\n\n/// A client.\ntemplate <typename T>\nclass Client : public Base {\npublic:\n    Client(int total);\n    ~Client();\n    int charge(int amount) { return total + amount + 1; }\n    int charge(long amount) const { return total - 1; }\n    operator bool() const;\n\nprivate:\n    int total = 0;\n};\n\nClient::Client(int total) : total(total) {}\n\nint run(int x) {\n    return x + 1;\n}\n\nint other() {\n    return 2;\n}\n\n} // namespace app\n\nextern \"C\" {\nint exported(void) { return 1; }\n}\n\nTEST(Suite, Works) {\n    EXPECT_EQ(1, 1);\n}\n\nTEST(Suite, DISABLED_Later) {\n    EXPECT_EQ(1, 2);\n}\n"
+  },
+  "path": "src/sample.cpp",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          18
+        ],
+        [
+          19,
+          37
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit(namespace_definition(namespace\u001fapp\u001fdeclaration_list({\u001f}\u001f))// namespace app\u001flinkage_specification(extern\u001f\"C\"\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Client",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                133,
+                133,
+                151
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.~Client",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                156,
+                156,
+                166
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(int)",
+              "own": "",
+              "signature": "int charge(int amount)",
+              "skipped": false,
+              "span": [
+                171,
+                171,
+                220
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(long)",
+              "own": "",
+              "signature": "int charge(long amount) const",
+              "skipped": false,
+              "span": [
+                225,
+                225,
+                272
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.operator bool() const",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                277,
+                277,
+                299
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                314,
+                314,
+                328
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/// A client.\ntemplate_declaration(template\u001ftemplate_parameter_list(<\u001ftype_parameter_declaration(typename\u001fT\u001f)>\u001f)class_specifier(class\u001fClient\u001fbase_class_clause(:\u001faccess_specifier(public\u001f)Base\u001f)field_declaration_list({\u001faccess_specifier(public\u001f):\u001faccess_specifier(private\u001f):\u001f}\u001f));\u001f)",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            56,
+            92,
+            331
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Client.Client~2",
+          "own": "",
+          "signature": "Client::Client(int total) : total(total)",
+          "skipped": false,
+          "span": [
+            333,
+            333,
+            376
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "run",
+          "own": "",
+          "signature": "int run(int x)",
+          "skipped": false,
+          "span": [
+            378,
+            378,
+            410
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "exported",
+          "own": "",
+          "signature": "int exported(void)",
+          "skipped": false,
+          "span": [
+            445,
+            445,
+            477
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TEST(Suite,Works)",
+          "own": "",
+          "signature": "TEST(Suite, Works)",
+          "skipped": false,
+          "span": [
+            481,
+            481,
+            524
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TEST(Suite,DISABLED_Later)",
+          "own": "",
+          "signature": "TEST(Suite, DISABLED_Later)",
+          "skipped": true,
+          "span": [
+            526,
+            526,
+            578
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          18
+        ],
+        [
+          18,
+          36
+        ],
+        [
+          37,
+          55
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit(namespace_definition(namespace\u001fapp\u001fdeclaration_list({\u001f}\u001f))// namespace app\u001flinkage_specification(extern\u001f\"C\"\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Client",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                151,
+                151,
+                169
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.~Client",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                174,
+                174,
+                184
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(int)",
+              "own": "",
+              "signature": "int charge(int amount)",
+              "skipped": false,
+              "span": [
+                189,
+                189,
+                242
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(long)",
+              "own": "",
+              "signature": "int charge(long amount) const",
+              "skipped": false,
+              "span": [
+                247,
+                247,
+                294
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.operator bool() const",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                299,
+                299,
+                321
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                336,
+                336,
+                350
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/// A client.\ntemplate_declaration(template\u001ftemplate_parameter_list(<\u001ftype_parameter_declaration(typename\u001fT\u001f)>\u001f)class_specifier(class\u001fClient\u001fbase_class_clause(:\u001faccess_specifier(public\u001f)Base\u001f)field_declaration_list({\u001faccess_specifier(public\u001f):\u001faccess_specifier(private\u001f):\u001f}\u001f));\u001f)",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            74,
+            110,
+            353
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Client.Client~2",
+          "own": "",
+          "signature": "Client::Client(int total) : total(total)",
+          "skipped": false,
+          "span": [
+            355,
+            355,
+            398
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "run",
+          "own": "",
+          "signature": "int run(int x)",
+          "skipped": false,
+          "span": [
+            400,
+            400,
+            432
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "exported",
+          "own": "",
+          "signature": "int exported(void)",
+          "skipped": false,
+          "span": [
+            467,
+            467,
+            499
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TEST(Suite,Works)",
+          "own": "",
+          "signature": "TEST(Suite, Works)",
+          "skipped": false,
+          "span": [
+            503,
+            503,
+            546
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TEST(Suite,DISABLED_Later)",
+          "own": "",
+          "signature": "TEST(Suite, DISABLED_Later)",
+          "skipped": true,
+          "span": [
+            548,
+            548,
+            600
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          18
+        ],
+        [
+          19,
+          37
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit(namespace_definition(namespace\u001fapp\u001fdeclaration_list({\u001f}\u001f))// namespace app\u001flinkage_specification(extern\u001f\"C\"\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Client",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                133,
+                133,
+                151
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.~Client",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                156,
+                156,
+                166
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(int)",
+              "own": "",
+              "signature": "int charge(int amount)",
+              "skipped": false,
+              "span": [
+                171,
+                171,
+                220
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(long)",
+              "own": "",
+              "signature": "int charge(long amount) const",
+              "skipped": false,
+              "span": [
+                225,
+                225,
+                276
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.operator bool() const",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                281,
+                281,
+                303
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                318,
+                318,
+                332
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/// A client.\ntemplate_declaration(template\u001ftemplate_parameter_list(<\u001ftype_parameter_declaration(typename\u001fT\u001f)>\u001f)class_specifier(class\u001fClient\u001fbase_class_clause(:\u001faccess_specifier(public\u001f)Base\u001f)field_declaration_list({\u001faccess_specifier(public\u001f):\u001faccess_specifier(private\u001f):\u001f}\u001f));\u001f)",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            56,
+            92,
+            335
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Client.Client~2",
+          "own": "",
+          "signature": "Client::Client(int total) : total(total)",
+          "skipped": false,
+          "span": [
+            337,
+            337,
+            380
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "run",
+          "own": "",
+          "signature": "int run(int x)",
+          "skipped": false,
+          "span": [
+            382,
+            382,
+            418
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "other",
+          "own": "",
+          "signature": "int other()",
+          "skipped": false,
+          "span": [
+            420,
+            420,
+            449
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "exported",
+          "own": "",
+          "signature": "int exported(void)",
+          "skipped": false,
+          "span": [
+            484,
+            484,
+            516
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TEST(Suite,Works)",
+          "own": "",
+          "signature": "TEST(Suite, Works)",
+          "skipped": false,
+          "span": [
+            520,
+            520,
+            563
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TEST(Suite,DISABLED_Later)",
+          "own": "",
+          "signature": "TEST(Suite, DISABLED_Later)",
+          "skipped": true,
+          "span": [
+            565,
+            565,
+            617
+          ]
+        }
+      ]
+    }
+  }
+}

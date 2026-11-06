@@ -1243,6 +1243,9 @@ fn propose(
             if f.tests.deleted > 0 || f.tests.skipped > 0 {
                 v.escalate("tests_weakened", 1);
             }
+            for p in &f.unread_files {
+                v.escalate(format!("unread_file:{p}"), 1);
+            }
             // Observation/effect consistency: a file the session changed but
             // never wrote through an observed tool, with no shell activity
             // that could explain it.

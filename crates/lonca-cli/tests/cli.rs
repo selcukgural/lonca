@@ -4144,7 +4144,7 @@ fn unparsed_land(e: &Env, ws: &Path, intent: &str) -> String {
     out
 }
 
-const MAIN: &str = "src/Main.java";
+const MAIN: &str = "src/Main.zig";
 
 fn numbered() -> String {
     (0..40).map(|i| format!("    int a{i} = {i};\n")).collect()
@@ -4200,7 +4200,7 @@ fn a_conflict_in_an_unparsed_file_keeps_what_others_landed() {
     assert!(local.contains("a10 = 2000;"), "our side: {local}");
     let refused = fails(&e, &b, &["propose", "-i", "too soon", "--accept-facts"]);
     assert!(
-        refused.contains("conflict not settled in src/Main.java"),
+        refused.contains("conflict not settled in src/Main.zig"),
         "{refused}"
     );
 
@@ -4268,7 +4268,7 @@ fn a_second_sync_keeps_an_open_conflict() {
     unparsed_land(&e, &c, "line 35");
     let synced = parse(&e.run(&b, &["sync", "--json"]));
     assert_eq!(synced["conflicts"][0]["path"], MAIN, "{synced}");
-    let copy = std::fs::read_to_string(b.join("src/Main.java.trunk")).unwrap();
+    let copy = std::fs::read_to_string(b.join("src/Main.zig.trunk")).unwrap();
     assert!(copy.contains("a35 = 3500;"), "{copy}");
     let local = std::fs::read_to_string(b.join(MAIN)).unwrap();
     assert!(local.contains("a35 = 3500;"), "{local}");
@@ -4277,7 +4277,7 @@ fn a_second_sync_keeps_an_open_conflict() {
     assert!(refused.contains("conflict not settled"), "{refused}");
 }
 
-/// One conflict in `src/Main.java`, left open in the second workspace, and
+/// One conflict in `src/Main.zig`, left open in the second workspace, and
 /// the text there.
 fn an_open_conflict(e: &Env) -> (PathBuf, String) {
     let [a, b, _] = three_agents(e);
@@ -4299,10 +4299,10 @@ fn a_new_name_does_not_settle_a_conflict() {
     let e = Env::new();
     let (b, local) = an_open_conflict(&e);
     std::fs::remove_file(b.join(MAIN)).unwrap();
-    std::fs::write(b.join("src/Renamed.java"), &local).unwrap();
+    std::fs::write(b.join("src/Renamed.zig"), &local).unwrap();
     let refused = fails(&e, &b, &TOO_SOON);
     assert!(
-        refused.contains("conflict not settled in src/Renamed.java"),
+        refused.contains("conflict not settled in src/Renamed.zig"),
         "{refused}"
     );
 }

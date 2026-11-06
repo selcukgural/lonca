@@ -52,13 +52,69 @@ grammar = "go"
 extensions = ["go"]
 rules = "go"
 
+[[language]]
+name = "java"
+grammar = "java"
+extensions = ["java"]
+rules = "java"
+since = 10
+strict = false
+
+[[language]]
+name = "kotlin"
+grammar = "kotlin"
+extensions = ["kt", "kts"]
+rules = "kotlin"
+since = 10
+strict = false
+
+[[language]]
+name = "c"
+grammar = "c"
+extensions = ["c"]
+rules = "c_family"
+since = 10
+strict = false
+
+[[language]]
+name = "cpp"
+grammar = "cpp"
+extensions = ["cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx"]
+rules = "c_family"
+since = 10
+strict = false
+
+[[language]]
+name = "ruby"
+grammar = "ruby"
+extensions = ["rb", "rake"]
+rules = "ruby"
+since = 10
+strict = false
+
+[[language]]
+name = "php"
+grammar = "php"
+extensions = ["php"]
+rules = "php"
+since = 10
+strict = false
+
+[[language]]
+name = "swift"
+grammar = "swift"
+extensions = ["swift"]
+rules = "swift"
+since = 10
+strict = false
+
 # Rust
 
 [rules.rust]
 attached = [{ kinds = ["attribute_item", "line_comment", "block_comment"] }]
 imports = ["use_declaration", "extern_crate_declaration"]
 
-[rules.rust.tests]
+[[rules.rust.tests]]
 kinds = ["function_item"]
 marks = ["#[test", "::test", "#[rstest"]
 skips = ["#[ignore"]
@@ -106,7 +162,7 @@ attached = [{ kinds = ["comment"] }]
 imports = ["import_statement", "import_from_statement", "future_import_statement"]
 wrappers = [{ kind = "decorated_definition", field = "definition" }]
 
-[rules.python.tests]
+[[rules.python.tests]]
 kinds = ["function_definition"]
 name_prefix = "test"
 owner_prefix = "Test"
@@ -132,7 +188,7 @@ how = { members = { name = "name", members = "body" } }
 attached = [{ kinds = ["comment"] }, { kinds = ["decorator"], since = 5 }]
 imports = ["import_statement"]
 wrappers = [{ kind = "export_statement", field = "declaration" }]
-call_tests = true
+call_tests = { call = "call_expression", callee = "function", arguments = "arguments", name = "identifier", strings = ["string", "template_string"], member = "member_expression" }
 
 [[rules.ecmascript.groups]]
 kinds = ["expression_statement"]
@@ -183,7 +239,7 @@ imports = ["using_directive"]
 attributes = ["attribute_list"]
 partial = { kind = "modifier", word = "partial" }
 
-[rules.csharp.tests]
+[[rules.csharp.tests]]
 in = "attributes"
 marks = [
     "[Fact",
@@ -252,7 +308,7 @@ how = { inner = { descendant = ["variable_declarator"], field = "name", or_child
 attached = [{ kinds = ["comment"] }]
 imports = ["import_declaration"]
 
-[rules.go.tests]
+[[rules.go.tests]]
 kinds = ["function_declaration"]
 name_prefix = "Test"
 skips = [".Skip("]
@@ -287,3 +343,274 @@ how = { inner = { descendant = ["const_spec"], field = "name" } }
 [[rules.go.defs]]
 kinds = ["var_declaration"]
 how = { inner = { descendant = ["var_spec"], field = "name" } }
+
+# Java
+
+[rules.java]
+attached = [{ kinds = ["line_comment", "block_comment"] }]
+imports = ["import_declaration"]
+
+[[rules.java.tests]]
+kinds = ["method_declaration"]
+in = "header"
+marks = ["@Test", "@ParameterizedTest", "@RepeatedTest"]
+skips = ["@Disabled", "@Ignore"]
+skips_in = "header"
+
+[[rules.java.groups]]
+kinds = ["enum_body_declarations"]
+how = "own"
+
+[[rules.java.defs]]
+kinds = [
+    "class_declaration",
+    "interface_declaration",
+    "enum_declaration",
+    "record_declaration",
+    "annotation_type_declaration",
+]
+how = { members = { name = "name", members = "body" } }
+
+[[rules.java.defs]]
+kinds = [
+    "method_declaration",
+    "constructor_declaration",
+    "compact_constructor_declaration",
+    "annotation_type_element_declaration",
+    "enum_constant",
+]
+how = { leaf = "name" }
+
+[[rules.java.defs]]
+kinds = ["field_declaration", "constant_declaration"]
+how = { inner = { child = ["variable_declarator"], field = "name" } }
+
+# Kotlin. Its grammar has no fields for a class body or for parameters.
+
+[rules.kotlin]
+attached = [{ kinds = ["line_comment", "block_comment"] }]
+imports = ["import"]
+bodies = ["function_body"]
+parameters = [
+    { kinds = ["function_declaration", "secondary_constructor"], list = "function_value_parameters" },
+]
+types = ["class_declaration", "object_declaration"]
+
+[[rules.kotlin.tests]]
+kinds = ["function_declaration"]
+in = "header"
+marks = ["@Test", "@ParameterizedTest"]
+skips = ["@Ignore", "@Disabled"]
+skips_in = "header"
+
+[[rules.kotlin.groups]]
+kinds = ["companion_object"]
+how = { child = "class_body" }
+
+[[rules.kotlin.defs]]
+kinds = ["class_declaration", "object_declaration"]
+how = { members_in = { name = "name", kinds = ["class_body", "enum_class_body"] } }
+
+[[rules.kotlin.defs]]
+kinds = ["function_declaration"]
+how = { leaf = "name" }
+
+[[rules.kotlin.defs]]
+kinds = ["type_alias"]
+how = { leaf = "type" }
+
+[[rules.kotlin.defs]]
+kinds = ["secondary_constructor"]
+how = { fixed = "constructor" }
+
+[[rules.kotlin.defs]]
+kinds = ["property_declaration"]
+how = { inner = { child = ["variable_declaration"], field = "name", or_child = "identifier" } }
+
+[[rules.kotlin.defs]]
+kinds = ["enum_entry"]
+how = { inner = { child = ["identifier"] } }
+
+# C and C++. A `.h` file goes to the C++ grammar, which reads nearly all of C.
+
+[rules.c_family]
+attached = [{ kinds = ["comment"] }]
+imports = ["preproc_include", "using_declaration"]
+wrappers = [
+    { kind = "linkage_specification", field = "body" },
+    { kind = "template_declaration", children = [
+        "class_specifier",
+        "struct_specifier",
+        "function_definition",
+        "declaration",
+        "alias_declaration",
+    ] },
+]
+types = ["enum_specifier", "type_definition", "alias_declaration"]
+parameters = [
+    { kinds = ["function_definition", "declaration", "field_declaration"], list = "parameter_list" },
+]
+
+[[rules.c_family.tests]]
+kinds = ["function_definition"]
+name_prefix = "TEST"
+skips = ["DISABLED_"]
+skips_in = "header"
+
+[[rules.c_family.groups]]
+kinds = ["namespace_definition"]
+how = { field = "body" }
+
+[[rules.c_family.groups]]
+kinds = ["linkage_specification"]
+how = { child = "declaration_list" }
+
+[[rules.c_family.groups]]
+kinds = ["preproc_ifdef", "preproc_if", "preproc_else", "preproc_elif"]
+how = "own"
+
+[[rules.c_family.defs]]
+kinds = ["class_specifier", "struct_specifier", "union_specifier"]
+how = { members_only = { name = "name", members = "body" } }
+
+[[rules.c_family.defs]]
+kinds = ["enum_specifier", "preproc_def", "preproc_function_def", "alias_declaration"]
+how = { leaf = "name" }
+
+[[rules.c_family.defs]]
+kinds = ["function_definition", "declaration", "field_declaration", "type_definition"]
+how = { declared = { field = "declarator", wrapped = ["parenthesized_declarator", "reference_declarator"], scope = "::", ends = ["operator_cast"] } }
+
+# Ruby
+
+[rules.ruby]
+attached = [{ kinds = ["comment"] }]
+import_calls = { kind = "call", field = "method", names = ["require", "require_relative", "load"], receiver = "receiver" }
+call_tests = { call = "call", callee = "method", arguments = "arguments", name = "identifier", strings = ["string"] }
+
+[[rules.ruby.tests]]
+kinds = ["method"]
+name_prefix = "test_"
+skips = ["skip"]
+skips_in = "text"
+
+[[rules.ruby.groups]]
+kinds = ["singleton_class"]
+how = { field = "body" }
+
+[[rules.ruby.defs]]
+kinds = ["class", "module"]
+how = { members = { name = "name", members = "body" } }
+
+[[rules.ruby.defs]]
+kinds = ["method"]
+how = { leaf = "name" }
+
+[[rules.ruby.defs]]
+kinds = ["singleton_method"]
+how = { prefixed = { prefix = "self.", field = "name" } }
+
+[[rules.ruby.defs]]
+kinds = ["assignment"]
+how = { only = { field = "left", only = "constant" } }
+
+# PHP
+
+[rules.php]
+attached = [{ kinds = ["comment"] }]
+imports = ["namespace_use_declaration"]
+attributes = ["attribute_list"]
+
+[[rules.php.tests]]
+kinds = ["method_declaration"]
+name_prefix = "test"
+skips = ["markTestSkipped"]
+skips_in = "text"
+
+[[rules.php.tests]]
+kinds = ["method_declaration"]
+in = "attributes"
+marks = ["#[Test"]
+skips = ["markTestSkipped"]
+skips_in = "text"
+
+[[rules.php.groups]]
+kinds = ["namespace_definition"]
+how = { field = "body" }
+
+[[rules.php.defs]]
+kinds = [
+    "class_declaration",
+    "interface_declaration",
+    "trait_declaration",
+    "enum_declaration",
+]
+how = { members = { name = "name", members = "body" } }
+
+[[rules.php.defs]]
+kinds = ["function_definition", "method_declaration", "enum_case"]
+how = { leaf = "name" }
+
+[[rules.php.defs]]
+kinds = ["property_declaration"]
+how = { inner = { child = ["property_element"], field = "name", or_child = "variable_name" } }
+
+[[rules.php.defs]]
+kinds = ["const_declaration"]
+how = { inner = { child = ["const_element"], field = "name", or_child = "name" } }
+
+# Swift. `struct`, `enum`, `extension` and `actor` are all `class_declaration`
+# here, and a `func` has several `name` fields, the first being its own.
+
+[rules.swift]
+attached = [{ kinds = ["comment", "multiline_comment"] }]
+imports = ["import_declaration"]
+types = ["typealias_declaration"]
+parameters = [
+    { kinds = ["function_declaration", "init_declaration", "protocol_function_declaration"], item = "parameter" },
+]
+
+[[rules.swift.tests]]
+kinds = ["function_declaration"]
+name_prefix = "test"
+
+[[rules.swift.tests]]
+kinds = ["function_declaration"]
+in = "header"
+marks = ["@Test"]
+skips = [".disabled"]
+skips_in = "header"
+
+[[rules.swift.defs]]
+kinds = ["class_declaration"]
+token = "extension"
+how = { implementation = { of_type = "name", members = "body", prefix = "extension:" } }
+
+[[rules.swift.defs]]
+kinds = ["class_declaration", "protocol_declaration"]
+how = { members = { name = "name", members = "body" } }
+
+[[rules.swift.defs]]
+kinds = [
+    "function_declaration",
+    "protocol_function_declaration",
+    "typealias_declaration",
+    "enum_entry",
+]
+how = { leaf = "name" }
+
+[[rules.swift.defs]]
+kinds = ["init_declaration"]
+how = { fixed = "init" }
+
+[[rules.swift.defs]]
+kinds = ["deinit_declaration"]
+how = { fixed = "deinit" }
+
+[[rules.swift.defs]]
+kinds = ["subscript_declaration"]
+how = { fixed = "subscript" }
+
+[[rules.swift.defs]]
+kinds = ["property_declaration", "protocol_property_declaration"]
+how = { inner = { child = ["pattern"], field = "bound_identifier" } }

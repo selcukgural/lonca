@@ -1,0 +1,228 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.go#Ledger.Empty"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.go#Ledger.Total"
+        ],
+        "import_only_files": [],
+        "lines_added": 5,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.go"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.go#Ledger.<def>",
+          "src/sample.go#Ledger.Reset"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.go"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "package ledger\n\ntype Ledger struct {\n\tentries int\n\tclosed  bool\n}\n\nfunc (l Ledger) Total() int {\n\treturn l.entries + 0\n}\n\nfunc (l *Ledger) Reset() {\n\tl.entries = 1\n}\n\nfunc (l Ledger) Empty() bool {\n\treturn l.entries == 0\n}\n"
+  },
+  "path": "src/sample.go",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fledger\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            16,
+            16,
+            51
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Total",
+          "own": "",
+          "signature": "func (l Ledger) Total() int",
+          "skipped": false,
+          "span": [
+            53,
+            53,
+            102
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Reset",
+          "own": "",
+          "signature": "func (l *Ledger) Reset()",
+          "skipped": false,
+          "span": [
+            104,
+            104,
+            147
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fledger\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            16,
+            16,
+            51
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Total",
+          "own": "",
+          "signature": "func (l Ledger) Total() int",
+          "skipped": false,
+          "span": [
+            53,
+            53,
+            106
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Reset",
+          "own": "",
+          "signature": "func (l *Ledger) Reset()",
+          "skipped": false,
+          "span": [
+            108,
+            108,
+            151
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Empty",
+          "own": "",
+          "signature": "func (l Ledger) Empty() bool",
+          "skipped": false,
+          "span": [
+            153,
+            153,
+            208
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fledger\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            16,
+            16,
+            65
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Total",
+          "own": "",
+          "signature": "func (l Ledger) Total() int",
+          "skipped": false,
+          "span": [
+            67,
+            67,
+            116
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Reset",
+          "own": "",
+          "signature": "func (l *Ledger) Reset()",
+          "skipped": false,
+          "span": [
+            118,
+            118,
+            161
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -174,7 +174,8 @@ fn every_language_has_a_case_for_the_current_engine() {
     let current = *ENGINES_KNOWN.last().unwrap();
     let exts: Vec<String> = cases(current).iter().map(|d| side(d, "base").0).collect();
     for ext in [
-        "rs", "py", "ts", "tsx", "js", "cs", "go", "md", "toml", "json", "yaml",
+        "rs", "py", "ts", "tsx", "js", "cs", "go", "java", "kt", "c", "cpp", "rb", "php", "swift",
+        "md", "toml", "json", "yaml",
     ] {
         assert!(exts.iter().any(|e| e == ext), "no .{ext} case: {exts:?}");
     }

@@ -301,6 +301,11 @@ pub struct Facts {
     /// Under `leases.unparsed_files = "optimistic"` they need no lease.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unparsed_files: Vec<String>,
+    /// Files that a grammar read until this change and can not read after
+    /// it. From here on facts about them say nothing of their symbols, so a
+    /// person has to agree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unread_files: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

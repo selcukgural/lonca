@@ -112,6 +112,10 @@ impl Verifier {
             let (Some(lang), Some(e)) = (Lang::detect(p), files.get(p)) else {
                 continue;
             };
+            // A grammar that can not read valid code must not refuse it.
+            if !lang.is_strict() {
+                continue;
+            }
             let bytes = store.read_blob(&e.blob)?;
             let ok = std::str::from_utf8(&bytes)
                 .map(|t| !parse(lang, t).has_error)
@@ -638,5 +642,16 @@ mod tests {
             .unwrap();
         assert_eq!(a.result, CheckResult::Fail);
         assert_eq!(a.details["errors"], "b.rs");
+    }
+
+    /// A grammar that can not read a file says nothing about the file.
+    #[test]
+    fn syntax_passes_what_a_lenient_grammar_can_not_read() {
+        let unread = "class C { fun f() = 1 }\n";
+        let (dir, store, files, tree) = setup(&[("a.kt", unread)]);
+        assert!(parse(Lang::detect("a.kt").unwrap(), unread).has_error);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let a = v.syntax(&store, &files, &["a.kt".into()], &tree).unwrap();
+        assert_eq!(a.result, CheckResult::Pass);
     }
 }

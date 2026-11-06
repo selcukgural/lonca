@@ -12,7 +12,7 @@ use lonca_policy::config::DEFAULT_CONFIG;
 use lonca_policy::config::DEFAULT_POLICY;
 use serde_json::{Value, json};
 
-const PATH: &str = "src/Main.java";
+const PATH: &str = "src/Main.zig";
 
 /// A hundred lines, so that one-line changes far apart do not touch.
 fn seed() -> String {

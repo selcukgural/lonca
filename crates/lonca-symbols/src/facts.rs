@@ -6,7 +6,7 @@ use lonca_core::ops::Facts;
 use lonca_core::{FileMap, GitId, Result};
 
 use crate::engine::{ENGINE_EXACT, ENGINE_PLACES, ENGINE_SECTIONS};
-use crate::extract::{Parsed, Sym, moved, parse, shifted};
+use crate::extract::{Parsed, Sym, moved, parse_at, shifted};
 use crate::lang::Lang;
 use crate::sections::{APPEND, Format, Section, appended, sections};
 
@@ -64,7 +64,7 @@ pub fn analyze(
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     f.lines_added += count_lines(text);
                     if let Some(lang) = lang {
-                        let p = parse(lang, text);
+                        let p = parse_at(engine, lang, text);
                         if p.has_error {
                             syntax_errors.push(path.clone());
                         }
@@ -78,7 +78,7 @@ pub fn analyze(
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     f.lines_removed += count_lines(text);
                     if let Some(lang) = lang {
-                        f.tests.deleted += parse(lang, text).tests(text).len() as u32;
+                        f.tests.deleted += parse_at(engine, lang, text).tests(text).len() as u32;
                     }
                 }
             }
@@ -112,8 +112,8 @@ pub fn analyze(
                     }
                     continue;
                 };
-                let pb = parse(lang, old);
-                let pn = parse(lang, newt);
+                let pb = parse_at(engine, lang, old);
+                let pn = parse_at(engine, lang, newt);
                 if pn.has_error {
                     syntax_errors.push(path.clone());
                 }
@@ -331,6 +331,196 @@ mod tests {
         let f = section_facts(3, "a.rs", "fn f(a: u8) {}\n", "fn f(a: u16) {}\n");
         assert_eq!(f.edits, ["a.rs#f"]);
         assert_eq!(f.signature_changes, ["a.rs#f"]);
+    }
+
+    /// Each row: an edit is reported on the symbol that changed, where
+    /// engine 4 reports it on a neighbour or on the whole file's code.
+    #[test]
+    fn engine_5_reports_an_edit_on_the_right_symbol() {
+        let rows = [
+            (
+                "a.go",
+                "package p\nconst (\n\tX = 1\n\tY = 2\n)\n",
+                "Y = 2",
+                "Y = 3",
+                "a.go#Y",
+                "a.go#X",
+            ),
+            (
+                "a.go",
+                "package p\ntype (\n\tA struct{}\n\tB struct{}\n)\n",
+                "B struct{}",
+                "B struct{ n int }",
+                "a.go#B.<def>",
+                "a.go#A.<def>",
+            ),
+            (
+                "a.go",
+                "package p\nvar (\n\ta = 1\n\tb = 2\n)\n",
+                "b = 2",
+                "b = 3",
+                "a.go#b",
+                "a.go#a",
+            ),
+            (
+                "a.cs",
+                "class C { int a, b; }\n",
+                "b;",
+                "b = 1;",
+                "a.cs#C.b",
+                "a.cs#C.a",
+            ),
+            (
+                "a.ts",
+                "class C {\n  @A()\n  m() {}\n}\n",
+                "@A()",
+                "@B()",
+                "a.ts#C.m",
+                "a.ts#C.<def>",
+            ),
+            (
+                "a.js",
+                "module.exports.run = function () {};\n",
+                "{}",
+                "{ x(); }",
+                "a.js#run",
+                "a.js#<module>",
+            ),
+            (
+                "a.js",
+                "exports.run = () => 1;\n",
+                "1",
+                "2",
+                "a.js#run",
+                "a.js#<module>",
+            ),
+            (
+                "a.js",
+                "module.exports = {\n  a() {},\n  b() {},\n};\n",
+                "b() {}",
+                "b() { x(); }",
+                "a.js#b",
+                "a.js#<module>",
+            ),
+            (
+                "a.py",
+                "if A:\n    def f():\n        return 1\n",
+                "return 1",
+                "return 2",
+                "a.py#f",
+                "a.py#<module>",
+            ),
+            (
+                "a.py",
+                "try:\n    def f():\n        return 1\nexcept E:\n    def f():\n        return 2\n",
+                "return 2",
+                "return 3",
+                "a.py#f~2",
+                "a.py#<module>",
+            ),
+            (
+                "a.rs",
+                "extern \"C\" {\n    fn f(a: u8);\n}\n",
+                "a: u8",
+                "a: u16",
+                "a.rs#f",
+                "a.rs#<module>",
+            ),
+            (
+                "a.rs",
+                "m!(1);\nm!(2);\n",
+                "(2)",
+                "(3)",
+                "a.rs#m!~2",
+                "a.rs#<module>",
+            ),
+            (
+                "a.rs",
+                "// section\n\nfn f() {}\n",
+                "section",
+                "part",
+                "a.rs#<module>",
+                "a.rs#f",
+            ),
+            (
+                "a.py",
+                "# licence\n\nimport os\n",
+                "licence",
+                "notice",
+                "a.py#<module>",
+                "a.py#<imports>",
+            ),
+            (
+                "a.cs",
+                "partial class C { int a; }\npartial class C { int b; }\n",
+                "int b",
+                "long b",
+                "a.cs#C.b",
+                "a.cs#C~2.b",
+            ),
+        ];
+        for (path, old, from, to, now, before) in rows {
+            let new = old.replace(from, to);
+            let edits = |engine| section_facts(engine, path, old, &new).edits;
+            assert_eq!(edits(5), [now], "{old}");
+            assert_eq!(edits(4), [before], "{old}");
+        }
+    }
+
+    /// An addition or a removal in a group is of one name, and the group's
+    /// own lines are code.
+    #[test]
+    fn a_group_changes_by_its_members() {
+        let old = "package p\nconst (\n\tX = 1\n)\n";
+        let f = section_facts(5, "a.go", old, &old.replace("X = 1\n", "X = 1\n\tY = 2\n"));
+        assert_eq!(f.adds, ["a.go#Y"]);
+        assert!(f.edits.is_empty(), "{f:?}");
+        let f = section_facts(5, "a.go", &old.replace("X = 1\n", "X = 1\n\tY = 2\n"), old);
+        assert_eq!(f.deletes, ["a.go#Y"]);
+        let f = section_facts(5, "a.go", old, &old.replace("const", "var"));
+        assert_eq!(f.edits, ["a.go#<module>"]);
+
+        // Out of its group, a spec is still found among the code around it.
+        let old = "package p\nconst (\n\tA = 1\n\tB = 2\n)\nconst (\n\tC = 3\n)\n";
+        let new = "package p\nconst (\n\tA = 1\n)\nconst (\n\tB = 2\n\tC = 3\n)\n";
+        assert_eq!(section_facts(5, "a.go", old, new).edits, ["a.go#<module>"]);
+
+        // A block holding one member reads as one holding two.
+        let old = "if A:\n    def m():\n        return 1\n";
+        let new = format!("{old}\n    def n():\n        return 2\n");
+        let f = section_facts(5, "a.py", old, &new);
+        assert_eq!((f.adds, f.edits), (vec!["a.py#n".to_string()], vec![]));
+        let f = section_facts(5, "a.py", &new, old);
+        assert_eq!((f.deletes, f.edits), (vec!["a.py#n".to_string()], vec![]));
+        let old = "class A:\n    def m(self):\n        return 1\n";
+        let new = format!("{old}\n    def n(self):\n        return 2\n");
+        let f = section_facts(5, "a.py", old, &new);
+        assert_eq!((f.adds, f.edits), (vec!["a.py#A.n".to_string()], vec![]));
+        let f = section_facts(4, "a.py", old, &new);
+        assert_eq!(f.edits, ["a.py#A.<def>"]);
+
+        // In a list with separators, the separators go with the member.
+        let old = "class C { int a, b; }\n";
+        let f = section_facts(5, "a.cs", old, "class C { int a, b, c; }\n");
+        assert_eq!((f.adds, f.edits), (vec!["a.cs#C.c".to_string()], vec![]));
+        let old = "module.exports = {\n  a() {},\n  b() {},\n};\n";
+        let f = section_facts(5, "a.js", old, "module.exports = {\n  b() {},\n};\n");
+        assert_eq!((f.deletes, f.edits), (vec!["a.js#a".to_string()], vec![]));
+
+        // A list changes shape: the type's own text says so.
+        let old = "class C { int a, b; }\n";
+        let f = section_facts(5, "a.cs", old, "class C { int a; }\n");
+        assert_eq!(f.deletes, ["a.cs#C.b"]);
+        assert!(f.edits.contains(&"a.cs#C.<def>".to_string()), "{f:?}");
+    }
+
+    /// A part of a partial type stands in for the type, as an `impl` does.
+    #[test]
+    fn a_partial_part_taken_out_is_an_edit_of_its_type() {
+        let old = "partial class C { int a; }\npartial class C { int b; }\n";
+        let f = section_facts(5, "a.cs", old, "partial class C { int a; }\n");
+        assert_eq!(f.edits, ["a.cs#C"]);
+        assert_eq!(f.deletes, ["a.cs#C.b"]);
     }
 
     /// Code that changes places among symbols is a change of that code.

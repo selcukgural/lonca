@@ -2,7 +2,8 @@
 //!
 //! A symbol's span includes the attributes, decorators and comments directly
 //! in front of it, so that `#[ignore]` or a doc comment counts as part of the
-//! function it belongs to.
+//! function it belongs to. From [`ENGINE_GROUPS`] on, a blank line ends that:
+//! a comment that stands apart belongs to the code around it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,7 +11,7 @@ use tree_sitter::Node;
 
 use lonca_core::ops::DEF;
 
-use crate::engine::{ENGINE_DEFS, ENGINE_EXACT};
+use crate::engine::{ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS};
 use crate::lang::Lang;
 
 /// Declarations with a definition of their own even with no members in the
@@ -23,6 +24,8 @@ const TYPE_KINDS: &[&str] = &[
     "union_item",
     "type_item",
     "type_declaration",
+    "type_spec",
+    "type_alias",
     "interface_declaration",
     "type_alias_declaration",
     "enum_declaration",
@@ -47,8 +50,12 @@ pub struct Sym {
     /// Normalized declaration header for callables.
     pub signature: Option<String>,
     /// The type whose definition this symbol's own text belongs to: itself,
-    /// the type of a Rust `impl`, or nothing for what has no members.
+    /// the type of a Rust `impl` or of an earlier part of a C# `partial`
+    /// type, or nothing for what has no members.
     pub def_of: Option<String>,
+    /// The declaration or block this symbol stands in, when that is not
+    /// simply the level of its siblings.
+    pub holder: Option<Holder>,
     pub is_test: bool,
     pub skipped: bool,
     pub container: bool,
@@ -97,6 +104,19 @@ impl Sym {
         let ty = self.def_of.as_deref().filter(|ty| *ty != self.name);
         ty.filter(|_| engine >= ENGINE_DEFS)
     }
+}
+
+/// A part of the tree whose members are symbols of the level around it: a
+/// grouped declaration, a block, a namespace. Spans are only comparable
+/// within one side of a merge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Holder {
+    pub kind: u16,
+    pub start: usize,
+    pub end: usize,
+    /// Members are separated by more than whitespace, so a member added or
+    /// removed takes the separator with it.
+    pub joined: bool,
 }
 
 /// Where a symbol or an import stood in what [`exact_text`] wrote, which
@@ -173,7 +193,13 @@ pub fn normalize(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// [`parse_at`] with the current engine.
 pub fn parse(lang: Lang, src: &str) -> Parsed {
+    parse_at(ENGINE_CURRENT, lang, src)
+}
+
+/// The symbols of `src` as `engine` reads them.
+pub fn parse_at(engine: u32, lang: Lang, src: &str) -> Parsed {
     let Some(tree) = lang.parse(src) else {
         return Parsed {
             syms: vec![],
@@ -186,7 +212,7 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
         };
     };
     let root = tree.root_node();
-    let ex = Extractor { lang, src };
+    let ex = Extractor { engine, lang, src };
     let mut imports = Vec::new();
     let mut syms = Vec::new();
     ex.level(
@@ -195,6 +221,7 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
         &mut syms,
         Some(&mut imports),
         &mut BTreeMap::new(),
+        None,
     );
     let mut cut: Vec<(usize, usize)> = syms
         .iter()
@@ -213,7 +240,8 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
         .collect();
     let mut residual_exact = String::new();
     let mut spots = Vec::new();
-    exact_text(root, src, &marks, &mut residual_exact, &mut spots);
+    let holders = holders_of(&syms);
+    exact_text(root, src, &marks, &holders, &mut residual_exact, &mut spots);
     let js_tests = if lang.is_js_family() {
         ex.js_tests(root)
     } else {
@@ -261,10 +289,22 @@ type Mark<'a> = (usize, usize, &'a str);
 /// tokens, noting in `spots` where each cut part stood. Reformatting leaves
 /// this as it was; whatever changes the program does not, because
 /// indentation that means something is in the tree and whitespace in a
-/// string is in the token.
-fn exact_text(n: Node, src: &str, cut: &[Mark], out: &mut String, spots: &mut Vec<Spot>) {
+/// string is in the token. A holder stays, also with one member and so the
+/// span of that member, and the commas of a list go with their members: a
+/// member added or removed changes no code around it.
+fn exact_text(
+    n: Node,
+    src: &str,
+    cut: &[Mark],
+    holders: &[Holder],
+    out: &mut String,
+    spots: &mut Vec<Spot>,
+) {
     let (start, end) = (n.start_byte(), n.end_byte());
-    if let Some(&(.., name)) = cut.iter().find(|&&(s, e, _)| s <= start && end <= e) {
+    let same = |h: &&Holder| h.start == start && h.end == end && h.kind == n.kind_id();
+    let holder = holders.iter().find(same);
+    let cut_here = cut.iter().find(|&&(s, e, _)| s <= start && end <= e);
+    if let (Some(&(.., name)), None) = (cut_here, holder) {
         if spots.last().is_none_or(|last| last.name != name) {
             spots.push(Spot {
                 at: out.len(),
@@ -282,12 +322,20 @@ fn exact_text(n: Node, src: &str, cut: &[Mark], out: &mut String, spots: &mut Ve
         out.push_str(n.kind());
         out.push('(');
     }
+    let list = holder.is_some_and(|h| h.joined);
     for c in n.children(&mut n.walk()) {
-        exact_text(c, src, cut, out, spots);
+        if !(list && c.kind() == ",") {
+            exact_text(c, src, cut, holders, out, spots);
+        }
     }
     if n.is_named() {
         out.push(')');
     }
+}
+
+/// What `syms` stand in.
+fn holders_of(syms: &[Sym]) -> Vec<Holder> {
+    syms.iter().filter_map(|s| s.holder).collect()
 }
 
 /// Code with the symbols around it left out, and the symbols around it.
@@ -349,7 +397,54 @@ struct Def<'t> {
     header_start: usize,
 }
 
+/// Nodes whose members belong to the level around them.
+struct Group<'t> {
+    members: Vec<Node<'t>>,
+    joined: bool,
+}
+
+impl<'t> Group<'t> {
+    fn of(members: Vec<Node<'t>>) -> Self {
+        Group {
+            members,
+            joined: false,
+        }
+    }
+
+    fn joined(member: Node<'t>) -> Self {
+        Group {
+            members: vec![member],
+            joined: true,
+        }
+    }
+}
+
+fn holder_of(n: Node, joined: bool) -> Holder {
+    Holder {
+        kind: n.kind_id(),
+        start: n.start_byte(),
+        end: n.end_byte(),
+        joined,
+    }
+}
+
+fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
+    n.named_children(&mut n.walk()).collect()
+}
+
+/// The blocks of a Python `if` or `try`, its clauses included.
+fn blocks<'t>(n: Node<'t>, out: &mut Vec<Node<'t>>) {
+    for c in named(n) {
+        match c.kind() {
+            "block" => out.push(c),
+            k if k.ends_with("_clause") => blocks(c, out),
+            _ => {}
+        }
+    }
+}
+
 struct Extractor<'s> {
+    engine: u32,
     lang: Lang,
     src: &'s str,
 }
@@ -370,13 +465,25 @@ impl<'s> Extractor<'s> {
                 n.kind(),
                 "attribute_item" | "line_comment" | "block_comment"
             ),
-            Lang::Python
-            | Lang::Go
-            | Lang::TypeScript
-            | Lang::Tsx
-            | Lang::JavaScript
-            | Lang::CSharp => n.kind() == "comment",
+            Lang::TypeScript | Lang::Tsx | Lang::JavaScript => {
+                n.kind() == "comment" || self.groups() && n.kind() == "decorator"
+            }
+            Lang::Python | Lang::Go | Lang::CSharp => n.kind() == "comment",
         }
+    }
+
+    fn groups(&self) -> bool {
+        self.engine >= ENGINE_GROUPS
+    }
+
+    /// A blank line stands between a comment and what follows it. A comment
+    /// node can hold its own line end, as a Rust doc comment does.
+    fn stands_apart(&self, comment: Node, next: Node) -> bool {
+        let (end, start) = (comment.end_byte(), next.start_byte());
+        let held = self.src[..end].ends_with('\n');
+        self.groups()
+            && comment.kind().contains("comment")
+            && self.src[end..start].matches('\n').count() + usize::from(held) > 1
     }
 
     fn is_import(&self, n: Node) -> bool {
@@ -392,14 +499,66 @@ impl<'s> Extractor<'s> {
         }
     }
 
-    /// Nodes whose members belong to the enclosing level (namespaces) are
-    /// flattened: their names do not appear in symbol names.
-    fn transparent_members<'t>(&self, n: Node<'t>) -> Option<Node<'t>> {
+    /// Nodes whose members belong to the enclosing level are flattened: their
+    /// names do not appear in symbol names. `top` is the file's own level.
+    fn group<'t>(&self, n: Node<'t>, top: bool) -> Option<Group<'t>> {
         match (self.lang, n.kind()) {
-            (Lang::CSharp, "namespace_declaration") => n.child_by_field_name("body"),
-            (Lang::CSharp, "file_scoped_namespace_declaration") => Some(n),
+            (Lang::CSharp, "namespace_declaration") => {
+                n.child_by_field_name("body").map(|b| Group::of(vec![b]))
+            }
+            (Lang::CSharp, "file_scoped_namespace_declaration") => Some(Group::of(vec![n])),
+            _ if !self.groups() => None,
+            (Lang::Go, "const_declaration" | "type_declaration") => {
+                let parens = n.children(&mut n.walk()).any(|c| c.kind() == "(");
+                parens.then(|| Group::of(vec![n]))
+            }
+            (Lang::Go, "var_declaration") => {
+                let lists = named(n).into_iter();
+                let mut lists = lists.filter(|c| c.kind() == "var_spec_list");
+                lists.next().map(|l| Group::of(vec![l]))
+            }
+            (Lang::CSharp, "field_declaration" | "event_field_declaration") => {
+                let decl = find_descendant(n, "variable_declaration")?;
+                let parts = named(decl).into_iter();
+                let many = parts.filter(|c| c.kind() == "variable_declarator").count() > 1;
+                many.then(|| Group::joined(decl))
+            }
+            (Lang::Rust, "foreign_mod_item") => {
+                n.child_by_field_name("body").map(|b| Group::of(vec![b]))
+            }
+            (Lang::Python, "if_statement" | "try_statement") if top => {
+                let mut list = Vec::new();
+                blocks(n, &mut list);
+                let stated: Vec<Node> = list.iter().flat_map(|b| named(*b)).collect();
+                let is_def = |c: &Node| {
+                    matches!(
+                        c.kind(),
+                        "function_definition" | "class_definition" | "decorated_definition"
+                    )
+                };
+                let plain = |c: &Node| matches!(c.kind(), "comment" | "pass_statement");
+                let only = stated.iter().all(|c| is_def(c) || plain(c));
+                (only && stated.iter().any(is_def)).then(|| Group::of(list))
+            }
+            (Lang::TypeScript | Lang::Tsx | Lang::JavaScript, "expression_statement") if top => {
+                let set = n
+                    .named_child(0)
+                    .filter(|c| c.kind() == "assignment_expression")?;
+                let left = set.child_by_field_name("left")?;
+                let right = set.child_by_field_name("right")?;
+                (self.text(left) == "module.exports" && right.kind() == "object")
+                    .then(|| Group::joined(right))
+            }
             _ => None,
         }
+    }
+
+    /// A later part of a C# `partial` type.
+    fn is_partial(&self, n: Node) -> bool {
+        let mut parts = named(n).into_iter();
+        self.groups()
+            && self.lang == Lang::CSharp
+            && parts.any(|c| c.kind() == "modifier" && self.text(c) == "partial")
     }
 
     /// Unwraps `export ...` and `@decorator def ...` to the definition.
@@ -456,6 +615,16 @@ impl<'s> Extractor<'s> {
                 | "const_item"
                 | "static_item"
                 | "macro_definition" => leaf(name("name")),
+                "macro_invocation" | "expression_statement" if self.groups() => {
+                    let call = match kind {
+                        "macro_invocation" => n,
+                        _ => n
+                            .named_child(0)
+                            .filter(|c| c.kind() == "macro_invocation")?,
+                    };
+                    let called = self.field_text(call, "macro")?;
+                    leaf(Some(format!("{called}!")))
+                }
                 "trait_item" => container(name("name"), "body"),
                 "mod_item" => {
                     if n.child_by_field_name("body").is_some() {
@@ -508,6 +677,35 @@ impl<'s> Extractor<'s> {
                     }
                     leaf(Some(self.text(id).to_string()))
                 }
+                "expression_statement" if self.groups() => {
+                    let set = n
+                        .named_child(0)
+                        .filter(|c| c.kind() == "assignment_expression")?;
+                    let left = set.child_by_field_name("left")?;
+                    let object = left.child_by_field_name("object").map(|o| self.text(o));
+                    if !matches!(object, Some("exports" | "module.exports")) {
+                        return None;
+                    }
+                    let mut d = leaf(self.field_text(left, "property"))?;
+                    d.body = set
+                        .child_by_field_name("right")?
+                        .child_by_field_name("body");
+                    Some(d)
+                }
+                "pair" => {
+                    let key = n.child_by_field_name("key")?;
+                    let value = n.child_by_field_name("value")?;
+                    let is_fn = matches!(
+                        value.kind(),
+                        "function_expression" | "arrow_function" | "generator_function"
+                    );
+                    if key.kind() != "property_identifier" || !is_fn {
+                        return None;
+                    }
+                    let mut d = leaf(Some(self.text(key).to_string()))?;
+                    d.body = value.child_by_field_name("body");
+                    Some(d)
+                }
                 _ => None,
             },
             Lang::CSharp => {
@@ -528,7 +726,8 @@ impl<'s> Extractor<'s> {
                     "method_declaration"
                     | "constructor_declaration"
                     | "destructor_declaration"
-                    | "local_function_statement" => leaf(name("name")),
+                    | "local_function_statement"
+                    | "variable_declarator" => leaf(name("name")),
                     "operator_declaration" => leaf(Some(format!(
                         "operator{}",
                         name("operator").unwrap_or_default()
@@ -549,7 +748,9 @@ impl<'s> Extractor<'s> {
                 Some(d)
             }
             Lang::Go => match kind {
-                "function_declaration" => leaf(name("name")),
+                "function_declaration" | "const_spec" | "var_spec" | "type_spec" | "type_alias" => {
+                    leaf(name("name"))
+                }
                 "method_declaration" => {
                     let recv = n.child_by_field_name("receiver")?;
                     let ty = find_descendant(recv, "type_identifier")?;
@@ -590,10 +791,16 @@ impl<'s> Extractor<'s> {
         out: &mut Vec<Sym>,
         mut imports: Option<&mut Vec<(usize, usize)>>,
         seen: &mut BTreeMap<String, usize>,
+        holder: Option<Holder>,
     ) {
         let mut pending: Option<usize> = None;
+        let mut before: Option<Node> = None;
         let children: Vec<Node> = parent.named_children(&mut parent.walk()).collect();
         for child in children {
+            if before.is_some_and(|b| self.stands_apart(b, child)) {
+                pending = None;
+            }
+            before = Some(child).filter(|c| self.is_attachable(*c));
             if self.is_attachable(child) {
                 pending.get_or_insert(child.start_byte());
                 continue;
@@ -607,9 +814,12 @@ impl<'s> Extractor<'s> {
                 ));
                 continue;
             }
-            if let Some(members) = self.transparent_members(child) {
+            if let Some(group) = self.group(child, prefix.is_empty()) {
                 pending = None;
-                self.level(members, prefix, out, imports.as_deref_mut(), seen);
+                for members in group.members {
+                    let held = self.groups().then(|| holder_of(members, group.joined));
+                    self.level(members, prefix, out, imports.as_deref_mut(), seen, held);
+                }
                 continue;
             }
             let def_node = self.unwrap_def(child);
@@ -625,6 +835,7 @@ impl<'s> Extractor<'s> {
             };
             let count = seen.entry(base.clone()).or_insert(0);
             *count += 1;
+            let part_of = (*count > 1 && self.is_partial(def_node)).then(|| base.clone());
             let qualified = if *count == 1 {
                 base
             } else {
@@ -636,16 +847,18 @@ impl<'s> Extractor<'s> {
             };
             let mut children_syms = Vec::new();
             if let Some(m) = def.members {
-                let member_prefix = match &def.member_prefix {
-                    Some(p) => under_prefix(p),
-                    None => qualified.clone(),
+                let member_prefix = match (&part_of, &def.member_prefix) {
+                    (Some(whole), _) => whole.clone(),
+                    (None, Some(p)) => under_prefix(p),
+                    (None, None) => qualified.clone(),
                 };
-                self.level(m, &member_prefix, &mut children_syms, None, seen);
+                self.level(m, &member_prefix, &mut children_syms, None, seen, None);
             }
             let is_type = def.members.is_some() || TYPE_KINDS.contains(&def_node.kind());
-            let def_of = match &def.impl_for {
-                Some(ty) => Some(under_prefix(ty)),
-                None => is_type.then(|| qualified.clone()),
+            let def_of = match (&part_of, &def.impl_for) {
+                (Some(whole), _) => Some(whole.clone()),
+                (None, Some(ty)) => Some(under_prefix(ty)),
+                (None, None) => is_type.then(|| qualified.clone()),
             };
             let end = child.end_byte();
             let cut: Vec<(usize, usize)> = children_syms.iter().map(|s| (s.start, s.end)).collect();
@@ -655,7 +868,17 @@ impl<'s> Extractor<'s> {
             let mut spots = Vec::new();
             let own = if def.members.is_some() {
                 own_exact.push_str(&self.src[start..child.start_byte()]);
-                exact_text(child, self.src, &marks, &mut own_exact, &mut spots);
+                let mut holders = holders_of(&children_syms);
+                let body = def.members.filter(|_| self.groups());
+                holders.extend(body.map(|m| holder_of(m, false)));
+                exact_text(
+                    child,
+                    self.src,
+                    &marks,
+                    &holders,
+                    &mut own_exact,
+                    &mut spots,
+                );
                 normalize(&remove_spans(self.src, start, end, &cut))
             } else {
                 normalize(&self.src[start..end])
@@ -675,6 +898,7 @@ impl<'s> Extractor<'s> {
                 spots,
                 signature,
                 def_of,
+                holder,
                 is_test,
                 skipped,
                 container: def.members.is_some(),
@@ -1151,10 +1375,9 @@ mod tests {
             exact(Lang::Python, &s.replace("a  ", "a "))
         );
         let r = "const fn f() {}\nstatic S: &str = \"\";\nm!(\"a  b\");\n";
-        assert_ne!(
-            exact(Lang::Rust, r),
-            exact(Lang::Rust, &r.replace("a  b", "a b"))
-        );
+        // Engine 5 reads the macro call as a symbol: its text is compared.
+        let old = |src: &str| parse_at(4, Lang::Rust, src).residual_exact;
+        assert_ne!(old(r), old(&r.replace("a  b", "a b")));
         let c = "# one  two\nX = 1\n";
         assert_ne!(
             exact(Lang::Python, c),
@@ -1204,6 +1427,205 @@ mod tests {
         let src = "// one\nimpl C {\n    fn a() {}\n}\n";
         let own = |s: &str| parse(Lang::Rust, s).syms[0].own_exact.clone();
         assert_ne!(own(src), own(&src.replace("one", "two")));
+    }
+
+    fn names_at(engine: u32, lang: Lang, src: &str) -> Vec<String> {
+        let p = parse_at(engine, lang, src);
+        assert!(!p.has_error, "{src}");
+        names(&p)
+    }
+
+    /// Each row of what engine 4 could not see, and that it still does not.
+    #[test]
+    fn engine_5_reads_what_engine_4_left_out() {
+        let rows: &[(Lang, &str, &[&str], &[&str])] = &[
+            (
+                Lang::Go,
+                "package p\ntype (\n\tA struct{}\n\tB = int\n)\nconst (\n\tX = 1\n\tY = 2\n)\nvar (\n\ta = 1\n\tb = 2\n)\n",
+                &["A", "B", "X", "Y", "a", "b"],
+                &["A", "X", "a"],
+            ),
+            (
+                Lang::CSharp,
+                "class C {\n    int a, b;\n    event E x, y;\n    int one;\n}\n",
+                &["C", "C.a", "C.b", "C.x", "C.y", "C.one"],
+                &["C", "C.a", "C.x", "C.one"],
+            ),
+            (
+                Lang::JavaScript,
+                "exports.a = function () {};\nmodule.exports.b = () => 1;\nthing.c = 1;\nmodule.exports = {\n  d() {},\n  e: function () {},\n  f: () => 1,\n  g: 1,\n  'h': function () {},\n  i,\n};\n",
+                &["a", "b", "d", "e", "f"],
+                &[],
+            ),
+            (
+                Lang::Python,
+                "if TYPE_CHECKING:\n    def a(): pass\nelse:\n    class B: pass\ntry:\n    def c(): pass\nexcept E:\n    pass\nif __name__ == \"__main__\":\n    @d\n    def e(): pass\n",
+                &["a", "B", "c", "e"],
+                &[],
+            ),
+            (
+                Lang::Rust,
+                "extern \"C\" {\n    fn a(x: u8);\n    static B: u8;\n}\nm!(x);\nm! { y }\nn::o!(z);\nmod q {\n    r!();\n}\n",
+                &["a", "B", "m!", "m!~2", "n::o!", "q", "q.r!"],
+                &["q"],
+            ),
+        ];
+        for (lang, src, new, old) in rows {
+            assert_eq!(&names_at(5, *lang, src), new, "{src}");
+            assert_eq!(&names_at(4, *lang, src), old, "{src}");
+        }
+    }
+
+    /// What a block holds decides whether it is read at all.
+    #[test]
+    fn a_python_block_counts_only_when_it_holds_nothing_but_definitions() {
+        let py = |src| names_at(5, Lang::Python, src);
+        assert!(py("if A:\n    def a(): pass\n    x = 1\n").is_empty());
+        assert!(py("if A:\n    from b import c\n    def a(): pass\n").is_empty());
+        assert!(py("if A:\n    def a(): pass\nelse:\n    x = 1\n").is_empty());
+        assert!(py("try:\n    def a(): pass\nfinally:\n    close()\n").is_empty());
+        assert!(py("if A:\n    pass\n").is_empty());
+        // Nested ones stay code, and so does a block inside a class.
+        assert!(py("if A:\n    if B:\n        def a(): pass\n").is_empty());
+        assert_eq!(
+            py("class C:\n    if A:\n        def a(self): pass\n"),
+            ["C"]
+        );
+        // A comment or a `pass` is no statement to worry about.
+        let src = "if A:\n    # note\n    def a(): pass\nelse:\n    pass\n";
+        assert_eq!(py(src), ["a"]);
+        // The same name in two branches keeps one id each, by order.
+        let src = "if A:\n    def a(): pass\nelse:\n    def a(): pass\n";
+        assert_eq!(py(src), ["a", "a~2"]);
+    }
+
+    #[test]
+    fn go_declarations_without_parentheses_stay_whole() {
+        let src = "package p\ntype T struct{}\nconst X, Y = 1, 2\nvar v = 1\n";
+        let p = parse_at(5, Lang::Go, src);
+        assert_eq!(names(&p), ["T", "X", "v"]);
+        assert_eq!(p.syms[0].holder, None);
+        assert!(p.syms[1].text(src).starts_with("const"));
+        // In a group, a spec is the symbol and a type keeps its definition.
+        let src = "package p\ntype (\n\t// about\n\tT struct{}\n)\n";
+        let p = parse_at(5, Lang::Go, src);
+        let t = &p.syms[0];
+        assert_eq!(t.text(src), "// about\n\tT struct{}");
+        assert_eq!(t.def_of.as_deref(), Some("T"));
+        assert!(t.holder.is_some_and(|h| !h.joined));
+        assert!(p.residual_exact.contains("type"), "{}", p.residual_exact);
+    }
+
+    #[test]
+    fn a_csharp_field_with_one_declarator_is_the_whole_field() {
+        let src = "class C { private int a = 1; }\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        let a = &p.syms[0].children[0];
+        assert_eq!(a.text(src), "private int a = 1;");
+        assert_eq!(a.holder, None);
+        let src = "class C { private int a = 1, b; }\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        let c = &p.syms[0];
+        assert_eq!(c.children[0].text(src), "a = 1");
+        assert_eq!(c.children[1].text(src), "b");
+        assert!(c.children[0].holder.is_some_and(|h| h.joined));
+        assert!(c.own_exact.contains("private"), "{}", c.own_exact);
+    }
+
+    #[test]
+    fn exports_keep_their_signature() {
+        let src = "exports.a = function (x) { return x; };\nmodule.exports = { b: function (y) { return y; }, c(z) {} };\n";
+        let p = parse_at(5, Lang::JavaScript, src);
+        let sig = |i: usize| p.syms[i].signature.as_deref();
+        assert_eq!(sig(0), Some("exports.a = function (x)"));
+        assert_eq!(sig(1), Some("b: function (y)"));
+        assert_eq!(sig(2), Some("c(z)"));
+        assert!(p.syms[0].holder.is_none());
+        assert!(p.syms[1].holder.is_some_and(|h| h.joined));
+    }
+
+    #[test]
+    fn a_method_decorator_belongs_to_the_method() {
+        let src = "class C {\n  @Listen('x')\n  @Other()\n  onX() {}\n\n  @Input() f = 1;\n}\n";
+        let p = parse_at(5, Lang::TypeScript, src);
+        let m = &p.syms[0].children[0];
+        assert!(m.text(src).starts_with("@Listen"), "{}", m.text(src));
+        assert_eq!(m.signature.as_deref(), Some("onX()"));
+        assert_eq!(m.def_start, src.find("onX").unwrap());
+        assert!(!p.syms[0].own_exact.contains("Listen"));
+        let p = parse_at(4, Lang::TypeScript, src);
+        assert!(p.syms[0].children[0].text(src).starts_with("onX"));
+        assert!(p.syms[0].own_exact.contains("Listen"));
+    }
+
+    /// Only a comment with no blank line under it is about what follows.
+    #[test]
+    fn a_comment_attaches_across_no_blank_line() {
+        let py = "# licence\n\n# doc\ndef f(): pass\n\n# section\n\ndef g(): pass\n";
+        let p = parse_at(5, Lang::Python, py);
+        assert_eq!(p.syms[0].text(py), "# doc\ndef f(): pass");
+        assert_eq!(p.syms[1].text(py), "def g(): pass");
+        assert!(p.residual_exact.contains("# licence"));
+        assert!(p.residual_exact.contains("# section"));
+        assert!(!p.residual_exact.contains("# doc"));
+        assert!(
+            parse_at(4, Lang::Python, py).syms[0]
+                .text(py)
+                .starts_with("# licence")
+        );
+        // A Rust doc comment holds its own line end.
+        let rs = "//! crate\n\n/// doc\nfn f() {}\n\n/// apart\n\nfn g() {}\n";
+        let p = parse_at(5, Lang::Rust, rs);
+        assert_eq!(p.syms[0].text(rs), "/// doc\nfn f() {}");
+        assert_eq!(p.syms[1].text(rs), "fn g() {}");
+        // Line ends of another system, and an import.
+        let crlf = "// apart\r\n\r\n// doc\r\nfn f() {}\r\n";
+        let p = parse_at(5, Lang::Rust, crlf);
+        assert_eq!(p.syms[0].text(crlf), "// doc\r\nfn f() {}");
+        let py = "# licence\n\nimport os\n# about\nimport sys\n";
+        let p = parse_at(5, Lang::Python, py);
+        assert_eq!(&py[p.imports[0].0..p.imports[0].1], "import os");
+        assert!(py[p.imports[1].0..p.imports[1].1].starts_with("# about"));
+        // An attribute is no comment: a blank line does not part it.
+        let rs = "#[derive(Debug)]\n\nstruct S;\n";
+        let p = parse_at(5, Lang::Rust, rs);
+        assert_eq!(p.syms[0].start, 0);
+    }
+
+    /// One id per member, however many parts a type has in a file.
+    #[test]
+    fn the_parts_of_a_partial_type_share_its_names() {
+        let src = "partial class C { int a; void M() {} }\npartial class C { int b; void M(int x) {} }\nclass D { }\nclass D { int z; }\n";
+        assert_eq!(
+            names_at(5, Lang::CSharp, src),
+            [
+                "C", "C.a", "C.M", "C~2", "C.b", "C.M~2", "D", "D~2", "D~2.z"
+            ]
+        );
+        let p = parse_at(5, Lang::CSharp, src);
+        let part = find(&p.syms, "C~2");
+        assert_eq!(part.def_of.as_deref(), Some("C"));
+        assert_eq!(part.impl_of(5), Some("C"));
+        assert_eq!(part.changed_unit(part, 5), "C.<def>");
+        assert_eq!(find(&p.syms, "C").impl_of(5), None);
+        assert_eq!(find(&p.syms, "D~2").def_of.as_deref(), Some("D~2"));
+        let old = names_at(4, Lang::CSharp, src);
+        assert!(old.contains(&"C~2.b".to_string()), "{old:?}");
+        // Inside a namespace or a class, the name stays whole.
+        let src = "class A { partial class C { } partial class C { int b; } }\n";
+        let p = parse_at(5, Lang::CSharp, src);
+        assert_eq!(find(&p.syms, "A.C~2").def_of.as_deref(), Some("A.C"));
+        assert!(names(&p).contains(&"A.C.b".to_string()));
+    }
+
+    #[test]
+    fn a_namespace_is_a_holder_from_engine_5() {
+        let src = "namespace A { class C { } }\nnamespace B { class D { } }\n";
+        let at = |engine: u32| parse_at(engine, Lang::CSharp, src).syms[1].holder;
+        assert_eq!(at(4), None);
+        let held = at(5).unwrap();
+        assert_eq!(&src[held.start..held.end], "{ class D { } }");
+        assert!(!held.joined);
     }
 
     #[test]

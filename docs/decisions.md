@@ -270,6 +270,57 @@ entry format, so they have their own version
     keeps it; and adding a duplicate renumbers `name~2`, which reads as a
     move. Both wait for stable ids (#44), and the second only costs a lease.
 
+- **Engine 5** reads declarations that hold others (issue #47). Up to engine
+  4 such code was one symbol or none: an edit of `Y` in a Go `const (...)` was
+  an edit of `X`, and a function under `if TYPE_CHECKING:` could only be
+  changed under a lease on `<module>`. `parse_at` takes the engine, and
+  `parse` is the current one.
+  - **What became symbols.** One per spec in a Go group with parentheses, one
+    per declarator in a C# field with several, what stands in a Rust
+    `extern` block, a Rust macro call at item level (`m!`, then `m!~2`),
+    `exports.X =` and `module.exports.X =`, the methods and function-valued
+    keys of `module.exports = { … }`. A declaration without parentheses, or
+    with one declarator, stays whole. A Go spec with several names
+    (`const X, Y = 1, 2`) is named after the first, and `const o = { a() {} }`
+    stays one leaf: only an object that is exported lists symbols.
+  - **Python blocks.** A top-level `if` or `try` whose blocks hold nothing but
+    definitions, a comment or `pass`, with at least one definition, gives
+    symbols named as if they stood at the top level. Anything else in any of
+    its blocks, an import or a nested block included, and it stays code. This
+    is on purpose narrow: an import has one place in the merge, and a block
+    with statements can not be told apart from what they do. The same name in
+    two branches is `f` and `f~2`.
+  - **A symbol knows what holds it** (`Sym.holder`). The merge places a new
+    symbol only beside one of its own holder, on a side where that one has a
+    holder too. Nothing to stand beside goes to the line merge. Without this a
+    new function behind a Go group could land inside it, and one for `else:`
+    in the `if` branch. It also fixes C# namespaces, where a new class could
+    land in the namespace before it.
+  - **Separators go with the member.** A list with commas (`Holder.joined`) has
+    its commas left out of `exact_text`, so a member added or removed is no
+    change of `Type.<def>` or `<module>`. The merge adds the separator the
+    new member has in `t` and removes one with a deleted member. A member that
+    stops being in a list, as in `int a, b;` to `int a;`, is a change of shape
+    and of the code around it.
+  - **A holder stays in the compared code.** A block with one member has that
+    member's span, and `exact_text` used to cut it with the member, so a second
+    member changed the code around it. So adding a method to a Python class
+    with one method was a `Type.<def>` edit. From this engine it is an add.
+  - **Comments.** A comment attaches only when no blank line stands under it.
+    Otherwise it is code: `<module>`, or `Type.<def>` in a type. A licence or
+    section header is no longer the next symbol's. An attribute or a decorator
+    attaches across a blank line, because it is part of what follows.
+  - **TS method decorators** attach to the method, as a field's already did.
+  - **C# partial types.** A later `partial` part of a type in the same file
+    keeps its own name (`C~2`) but works like a Rust `impl`: its members are
+    `C.N`, overloads across parts get one id each, and its header is
+    `C.<def>`. Parts in other files stay unrelated, because a symbol id is per
+    file.
+  - **What this does not see.** A const in a Go `iota` group means what its
+    place says, so a spec added in the middle changes the ones after it with
+    no fact about them; verification catches that, as for any change between
+    symbols (design §5.8). Names by order (`f~2`, `m!~2`) wait for #44.
+
 ## Harness profiles
 
 Which harnesses Lonca can read is data, not code (issue #109). A profile

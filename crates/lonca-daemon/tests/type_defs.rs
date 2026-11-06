@@ -175,6 +175,75 @@ const TRAIT_IMPL: Case = Case {
     ],
 };
 
+/// The specs of a Go group are symbols of their own.
+const GO_GROUP: Case = Case {
+    path: "src/group.go",
+    base: "package p\n\nconst (\n\tA = 1\n\tB = 2\n\tC = 3\n)\n\ntype (\n\tT struct{ a int }\n\tU struct{}\n)\n\nfunc (t T) M() int {\n\treturn 1\n}\n",
+    changes: &[
+        change("a", "A = 1", "A = 10"),
+        change("b", "B = 2", "B = 20"),
+        change("add", "C = 3\n", "C = 3\n\tD = 4\n"),
+        change("gone", "\tB = 2\n", ""),
+        change("t", "T struct{ a int }", "T struct{ a, b int }"),
+        change("u", "U struct{}", "U struct{ n int }"),
+        change("m", "return 1", "return 2"),
+    ],
+};
+
+/// A decorator goes with its method.
+const TS_DECORATORS: Case = Case {
+    path: "src/decorated.ts",
+    base: "export class C {\n  @Listen('x')\n  a(): void {}\n\n  @Listen('y')\n  b(): void {}\n\n  @Input() f = 1;\n}\n",
+    changes: &[
+        change("a-decorator", "@Listen('x')", "@Listen('z')"),
+        change("a-body", "a(): void {}", "a(): void { go(); }"),
+        change("b-decorator", "@Listen('y')", "@Listen('w')"),
+        change("f", "f = 1", "f = 2"),
+        change("header", "export class C {", "export class C extends B {"),
+    ],
+};
+
+/// Declarators of one C# field, and two parts of a partial class.
+const CS_LISTS: Case = Case {
+    path: "src/lists.cs",
+    base: "partial class C\n{\n    int a, b, c;\n    void M() { }\n}\n\npartial class C\n{\n    int n;\n}\n",
+    changes: &[
+        change("a", "a, b", "a = 1, b"),
+        change("c", "b, c;", "b, c = 3;"),
+        change("add", "b, c;", "b, c, d;"),
+        change("m", "void M() { }", "void M() { X(); }"),
+        change("n", "int n;", "long n;"),
+    ],
+};
+
+const JS_EXPORTS: Case = Case {
+    path: "src/exports.js",
+    base: "exports.a = function () {\n  return 1;\n};\n\nmodule.exports = {\n  b() {},\n  c: function () {},\n  d() {},\n};\n",
+    changes: &[
+        change("a", "return 1", "return 2"),
+        change("b", "b() {}", "b() { x(); }"),
+        change("c", "c: function () {}", "c: function () { x(); }"),
+        change("add", "  d() {},\n", "  d() {},\n  e() {},\n"),
+        change("gone", "  c: function () {},\n", ""),
+    ],
+};
+
+const PY_BLOCKS: Case = Case {
+    path: "src/blocks.py",
+    base: "if A:\n    def a():\n        return 1\n\n    def b():\n        return 2\nelse:\n    def c():\n        return 3\n\ndef d():\n    return 4\n",
+    changes: &[
+        change("a", "return 1", "return 10"),
+        change("b", "return 2", "return 20"),
+        change("c", "return 3", "return 30"),
+        change("d", "return 4", "return 40"),
+        change(
+            "add",
+            "        return 2\n",
+            "        return 2\n\n    def e():\n        return 5\n",
+        ),
+    ],
+};
+
 impl Case {
     fn text(&self, c: &Change) -> String {
         assert_eq!(self.base.matches(c.from).count(), 1, "{}", c.name);
@@ -226,7 +295,17 @@ fn union(a: &[String], b: &[String]) -> Vec<String> {
 #[test]
 fn leases_and_the_merge_agree() {
     let mut free = Vec::new();
-    for case in CASES.iter().chain(&[NO_MEMBERS, NESTED, TRAIT_IMPL]) {
+    let more = [
+        NO_MEMBERS,
+        NESTED,
+        TRAIT_IMPL,
+        GO_GROUP,
+        TS_DECORATORS,
+        CS_LISTS,
+        JS_EXPORTS,
+        PY_BLOCKS,
+    ];
+    for case in CASES.iter().chain(&more) {
         for a in case.changes {
             for b in case.changes {
                 if a.name == b.name {
@@ -262,6 +341,18 @@ fn leases_and_the_merge_agree() {
         "src/nested.py outer inner",
         "src/nested.py inner one",
         "src/traits.rs header from",
+        // Engine 5: each of these was one symbol, or none.
+        "src/group.go a b",
+        "src/group.go add a",
+        "src/group.go gone t",
+        "src/decorated.ts a-decorator b-decorator",
+        "src/decorated.ts a-decorator header",
+        "src/lists.cs a c",
+        "src/lists.cs m n",
+        "src/exports.js a add",
+        "src/exports.js add gone",
+        "src/blocks.py a b",
+        "src/blocks.py add c",
     ] {
         assert!(free.iter().any(|p| p == pair), "{pair}: {free:?}");
     }

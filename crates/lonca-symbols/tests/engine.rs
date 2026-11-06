@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use lonca_core::{FileEntry, FileMap, FileMode, Store};
 use lonca_symbols::engine::{ENGINES_KNOWN, check};
 use lonca_symbols::sections::{Format, sections};
-use lonca_symbols::{Lang, Sym, analyze, merge3, parse};
+use lonca_symbols::{Lang, Sym, analyze, merge3, parse_at};
 use serde_json::{Value, json};
 
 /// Rebuilds objects with their keys in sorted order. A workspace build turns
@@ -51,7 +51,7 @@ fn sym_json(engine: u32, s: &Sym) -> Value {
 }
 
 fn parsed_json(engine: u32, lang: Lang, src: &str) -> Value {
-    let p = parse(lang, src);
+    let p = parse_at(engine, lang, src);
     json!({
         "syms": p.syms.iter().map(|s| sym_json(engine, s)).collect::<Vec<_>>(),
         "imports": p.imports,

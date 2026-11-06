@@ -19,8 +19,9 @@ use lonca_core::{Error, Result};
 /// written before versions were recorded; version 1 adds the sections of
 /// Markdown, TOML, JSON and YAML files; version 2 compares code exactly;
 /// version 3 tells a type's definition from its members; version 4 compares
-/// where code stands among symbols.
-pub const ENGINE_CURRENT: u32 = 4;
+/// where code stands among symbols; version 5 reads the members of grouped
+/// declarations and blocks.
+pub const ENGINE_CURRENT: u32 = 5;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -36,8 +37,13 @@ pub use lonca_core::ops::ENGINE_DEFS;
 /// around it as a change.
 pub const ENGINE_PLACES: u32 = 4;
 
+/// The first engine that reads symbols inside grouped declarations and
+/// blocks, attaches a comment only across no blank line, and keeps one name
+/// per member of a C# `partial` type.
+pub const ENGINE_GROUPS: u32 = 5;
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

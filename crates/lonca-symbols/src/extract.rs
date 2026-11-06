@@ -935,20 +935,32 @@ impl<'s> Extractor<'s> {
         rules.any(|a| is_one_of(&a.kinds, n.kind()))
     }
 
-    /// A comment behind other code on its line, maybe behind another such
-    /// comment. A comment node can hold its own line end, and so can a
-    /// preprocessor line.
-    fn trails(&self, n: Node) -> bool {
+    /// The comments in `parent` behind other code on their line, maybe
+    /// behind another such comment, by node id. A comment node can hold its
+    /// own line end, and so can a preprocessor line. In one pass: a line can
+    /// hold as many comments as a file has room for.
+    fn trailing(&self, parent: Node) -> BTreeSet<usize> {
+        let mut out = BTreeSet::new();
+        if !self.groups() {
+            return out;
+        }
         let is_comment = |c: Node| c.kind().contains("comment");
-        let behind = n.prev_sibling().is_some_and(|p| {
-            let (end, start) = (p.end_byte(), n.start_byte());
-            let line_ended = self.src[..end].ends_with('\n');
-            let gap = self.src.get(end..start);
-            !line_ended
-                && gap.is_some_and(|g| !g.contains('\n'))
-                && (!is_comment(p) || self.trails(p))
-        });
-        self.groups() && is_comment(n) && behind
+        let mut last: Option<Node> = None;
+        for n in parent.children(&mut parent.walk()) {
+            let behind = last.is_some_and(|p| {
+                let (end, start) = (p.end_byte(), n.start_byte());
+                let line_ended = self.src[..end].ends_with('\n');
+                let gap = self.src.get(end..start);
+                !line_ended
+                    && gap.is_some_and(|g| !g.contains('\n'))
+                    && (!is_comment(p) || out.contains(&p.id()))
+            });
+            if is_comment(n) && behind {
+                out.insert(n.id());
+            }
+            last = Some(n);
+        }
+        out
     }
 
     /// Only spaces stand between `sym` and the comment behind it.
@@ -1390,12 +1402,13 @@ impl<'s> Extractor<'s> {
         let mut firm: Option<usize> = None;
         let mut before: Option<Node> = None;
         let children: Vec<Node> = parent.named_children(&mut parent.walk()).collect();
+        let trailing = self.trailing(parent);
         for &child in &children {
             if before.is_some_and(|b| self.stands_apart(b, child)) {
                 pending = firm;
             }
             before = Some(child).filter(|c| self.is_attachable(*c));
-            if self.trails(child) {
+            if trailing.contains(&child.id()) {
                 before = None;
                 let joined = holder.is_some_and(|h| h.joined);
                 match out.last_mut() {
@@ -1946,7 +1959,6 @@ mod tests {
         assert_eq!(names, ["f(int)", "f(old)", "g(int)", "g(old)"]);
     }
 
-    /// A later engine reads names as this one does.
     /// `run` on a stack of the size the daemon's threads have.
     fn on_a_daemon_stack<F: FnOnce() + Send + 'static>(run: F) {
         let thread = std::thread::Builder::new().stack_size(2 << 20);
@@ -2146,6 +2158,28 @@ mod tests {
         assert_eq!(tests, [(MAX_LEVELS, true), (MAX_LEVELS, false)]);
     }
 
+    /// As many comments on a line as there is room for cost each the same.
+    #[test]
+    fn comments_on_one_line_are_read_in_one_pass() {
+        let src = format!("{}\nclass A {{ }}\n", "/**/".repeat(50_000));
+        on_a_daemon_stack(move || {
+            let p = parse(Lang::named("csharp"), &src);
+            assert_eq!(names(&p), ["A"]);
+        });
+    }
+
+    #[test]
+    fn a_comment_trails_what_stands_on_its_line() {
+        let lang = Lang::named("csharp");
+        let behind = "class C { int a; /* b */ /* c */\n int d; }\n";
+        let member = |src: &str, i: usize| parse(lang, src).syms[0].children[i].clone();
+        assert!(member(behind, 0).text(behind).ends_with("/* b */ /* c */"));
+        // Not behind anything: they belong to what follows.
+        let front = "class C { int a;\n /* b */ /* c */ int d; }\n";
+        assert!(member(front, 1).text(front).starts_with("/* b */ /* c */"));
+    }
+
+    /// A later engine reads names as this one does.
     #[test]
     fn keys_hold_for_later_engines() {
         let src = "class C { void M(int a) {} void M(string s) {} }";

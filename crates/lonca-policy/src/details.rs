@@ -83,7 +83,11 @@ pub fn lease_held(state: &State, session: &str, wanted: &[LeaseItem], now_ms: i6
             continue;
         }
         for a in wanted {
-            for b in held.items.iter().filter(|b| leases_conflict(a, b)) {
+            for b in held
+                .items
+                .iter()
+                .filter(|b| leases_conflict(a, b, state.symbol_keys))
+            {
                 if seen.insert((held.lease.set.clone(), b.symbol.clone())) {
                     out.push(Detail::held(state, &held, b, a.kind));
                 }
@@ -105,7 +109,11 @@ pub fn lease_reserved(
     let mut out = Vec::new();
     for r in theirs {
         for a in wanted {
-            for b in r.items.iter().filter(|b| leases_conflict(a, b)) {
+            for b in r
+                .items
+                .iter()
+                .filter(|b| leases_conflict(a, b, state.symbol_keys))
+            {
                 out.push(Detail {
                     holder_session: Some(r.session.clone()),
                     holder_agent: state.sessions.get(&r.session).map(|s| s.agent.clone()),
@@ -130,7 +138,11 @@ pub fn lease_wanted(
     let mut out = Vec::new();
     for i in state.wanted_against(session, wanted, now_ms) {
         for a in &new {
-            for b in i.items.iter().filter(|b| leases_conflict(a, b)) {
+            for b in i
+                .items
+                .iter()
+                .filter(|b| leases_conflict(a, b, state.symbol_keys))
+            {
                 out.push(Detail {
                     holder_session: Some(i.session.clone()),
                     holder_agent: state.sessions.get(&i.session).map(|s| s.agent.clone()),
@@ -156,7 +168,7 @@ pub fn lease_report(state: &State, session: &str, facts: &Facts, now_ms: i64) ->
     let mut out = Vec::new();
     for need in symbols::lease_needs(facts) {
         let kind = need.kinds[0];
-        if mine().any(|i| need.covered_by(i)) {
+        if mine().any(|i| need.covered_by(i, state.symbol_keys)) {
             out.push(Detail::free(HELD_BY_YOU, &need.symbol, kind));
             continue;
         }

@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::ChangeId;
 use lonca_core::GitId;
 use lonca_core::oplog::{
-    FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS, GENESIS_PREV, SignedOp,
+    FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS, FORMAT_SYMBOL_KEYS,
+    GENESIS_PREV, SignedOp,
 };
 use lonca_core::ops::{
     Actor, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind, ObservationLevel, Op,
@@ -115,8 +116,9 @@ pub struct Reservation {
 }
 
 /// Something in `a` conflicts with something in `b`.
-fn clash(a: &[LeaseItem], b: &[LeaseItem]) -> bool {
-    a.iter().any(|x| b.iter().any(|y| leases_conflict(x, y)))
+fn clash(a: &[LeaseItem], b: &[LeaseItem], keys: bool) -> bool {
+    a.iter()
+        .any(|x| b.iter().any(|y| leases_conflict(x, y, keys)))
 }
 
 impl LeaseSet {
@@ -217,6 +219,9 @@ pub struct State {
     pub policy: Option<GitId>,
     pub trunk: Option<GitId>,
     pub trunk_history: BTreeSet<GitId>,
+    /// The log reached [`FORMAT_SYMBOL_KEYS`]: a name stands for every
+    /// symbol of that name.
+    pub symbol_keys: bool,
     /// Every trunk commit in order, genesis first: how far a base is
     /// behind is its distance from the end.
     pub trunk_line: Vec<GitId>,
@@ -359,12 +364,13 @@ impl State {
     }
 
     fn held_against(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
+        let keys = self.symbol_keys;
         self.active_leases(now_ms)
             .filter(|h| h.lease.session != session)
             .any(|h| {
                 h.items
                     .iter()
-                    .any(|b| items.iter().any(|a| leases_conflict(a, b)))
+                    .any(|b| items.iter().any(|a| leases_conflict(a, b, keys)))
             })
     }
 
@@ -373,6 +379,7 @@ impl State {
     /// interest gets its own. Pure, and a function of the entry's time, so
     /// `decide()` sees what the fold of the same entry will record.
     fn settled(&self, now_ms: i64) -> (Vec<Reservation>, Vec<u64>) {
+        let keys = self.symbol_keys;
         let mut out: Vec<Reservation> = self
             .reservations
             .iter()
@@ -385,7 +392,7 @@ impl State {
                 r.session != i.session
                     && r.items
                         .iter()
-                        .any(|b| i.items.iter().any(|a| leases_conflict(a, b)))
+                        .any(|b| i.items.iter().any(|a| leases_conflict(a, b, keys)))
             };
             let mut older = self.interests.range(..seq).map(|(_, o)| o);
             if self.session_present(&i.session, now_ms)
@@ -407,22 +414,24 @@ impl State {
     /// `interest`, of another session, stands in the way of new leases on
     /// `items` at `now_ms`.
     fn stops(&self, interest: &Interest, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
+        let keys = self.symbol_keys;
         interest.session != session
             && interest.blocks_until_ms > now_ms
             && self.session_present(&interest.session, now_ms)
-            && clash(&interest.items, items)
+            && clash(&interest.items, items, keys)
     }
 
     /// Of `items`, what `session` does not have yet: neither held (a partial
     /// release acquires the rest again) nor reserved for it.
     pub fn new_items(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> Vec<LeaseItem> {
+        let keys = self.symbol_keys;
         let reservations = self.reservations_at(now_ms);
         let reserved = |i: &LeaseItem| {
             let mut mine = reservations.iter().filter(|r| r.session == session);
             mine.any(|r| {
                 r.items
                     .iter()
-                    .any(|b| symbols::covers(&b.symbol, &i.symbol))
+                    .any(|b| symbols::covers(&b.symbol, &i.symbol, keys))
             })
         };
         let new = items
@@ -440,13 +449,14 @@ impl State {
         items: &[LeaseItem],
         now_ms: i64,
     ) -> Vec<&Interest> {
+        let keys = self.symbol_keys;
         let new = self.new_items(session, items, now_ms);
         let served = self.settled(now_ms).1;
         // An interest goes first over those younger than it, so a younger
         // one does not stop it.
         let behind = |seq: &u64, i: &Interest| {
             let mut older = self.interests.range(..seq).map(|(_, o)| o);
-            older.any(|o| o.session == session && clash(&o.items, &i.items))
+            older.any(|o| o.session == session && clash(&o.items, &i.items, keys))
         };
         let waiting = self.interests.iter();
         let waiting = waiting.filter(|(seq, _)| !served.contains(seq));
@@ -471,12 +481,13 @@ impl State {
 
     /// `session` already waits for something that overlaps `items`.
     pub fn waiting(&self, session: &str, items: &[LeaseItem]) -> bool {
+        let keys = self.symbol_keys;
         self.interests.values().any(|i| {
             i.session == session
                 && i.items.iter().any(|b| {
                     items
                         .iter()
-                        .any(|a| symbols::overlaps(&a.symbol, &b.symbol))
+                        .any(|a| symbols::overlaps(&a.symbol, &b.symbol, keys))
                 })
         })
     }
@@ -492,13 +503,14 @@ impl State {
         items: &[LeaseItem],
         now_ms: i64,
     ) -> Option<String> {
+        let keys = self.symbol_keys;
         self.reservations_at(now_ms)
             .into_iter()
             .find(|r| {
                 r.session != session
                     && r.items
                         .iter()
-                        .any(|b| items.iter().any(|a| leases_conflict(a, b)))
+                        .any(|b| items.iter().any(|a| leases_conflict(a, b, keys)))
             })
             .map(|r| r.session)
     }
@@ -524,11 +536,12 @@ impl State {
     /// an interest of format 12 on: it keeps its place, and its session can
     /// not register a new one to start the cap again.
     fn acquired(&mut self, session: &str, items: &[LeaseItem]) {
+        let keys = self.symbol_keys;
         let overlaps = |theirs: &[LeaseItem]| {
             theirs.iter().any(|b| {
                 items
                     .iter()
-                    .any(|a| symbols::overlaps(&a.symbol, &b.symbol))
+                    .any(|a| symbols::overlaps(&a.symbol, &b.symbol, keys))
             })
         };
         self.reservations
@@ -539,7 +552,7 @@ impl State {
             }
             let covered = |b: &LeaseItem| {
                 let mut got = items.iter();
-                got.any(|a| symbols::covers(&a.symbol, &b.symbol))
+                got.any(|a| symbols::covers(&a.symbol, &b.symbol, keys))
             };
             i.items.iter().all(covered)
         };
@@ -552,19 +565,23 @@ impl State {
     /// what they got, so a line of interests does not stretch the cap. Sets
     /// that had no such time get this one.
     fn block_end(&mut self, session: &str, items: &[LeaseItem], now_ms: i64, limit: i64) -> i64 {
+        let keys = self.symbol_keys;
         let sets: Vec<&LeaseSet> = self
             .active_leases(now_ms)
             .filter(|h| h.lease.session != session)
             .filter(|h| {
                 h.items
                     .iter()
-                    .any(|b| items.iter().any(|a| leases_conflict(a, b)))
+                    .any(|b| items.iter().any(|a| leases_conflict(a, b, keys)))
             })
             .map(|h| h.lease)
             .collect();
         let names: Vec<String> = sets.iter().map(|l| l.set.clone()).collect();
         let earlier = sets.iter().filter_map(|l| l.stop_until_ms);
-        let older = self.interests.values().filter(|i| clash(&i.items, items));
+        let older = self
+            .interests
+            .values()
+            .filter(|i| clash(&i.items, items, keys));
         let older = older.map(|i| i.blocks_until_ms);
         let end = earlier.chain(older).fold(limit, i64::min);
         for set in names {
@@ -578,6 +595,7 @@ impl State {
     /// A new set over what the session holds goes on being wanted, as its
     /// hold goes on: a fresh id resets neither the hold limit nor the cap.
     fn carry_wanted(&mut self, set: &str, now_ms: i64) {
+        let keys = self.symbol_keys;
         let Some(new) = self.leases.get(set) else {
             return;
         };
@@ -586,7 +604,7 @@ impl State {
                 && h.lease.set != set
                 && h.items.iter().any(|b| {
                     let mut items = new.items.iter();
-                    items.any(|a| symbols::overlaps(&a.symbol, &b.symbol))
+                    items.any(|a| symbols::overlaps(&a.symbol, &b.symbol, keys))
                 })
         };
         let mut interest = BTreeMap::new();
@@ -617,6 +635,7 @@ impl State {
         self.next_seq = e.seq + 1;
         self.head_hash = s.hash.clone();
         self.last_time_ms = e.time_ms;
+        self.symbol_keys = e.format >= FORMAT_SYMBOL_KEYS;
         if let Some(h) = &e.human {
             self.nonces.insert(h.nonce.clone());
         }
@@ -734,11 +753,12 @@ impl State {
     }
 
     fn register_interest(&mut self, session: &str, items: &[LeaseItem], now_ms: i64) {
+        let keys = self.symbol_keys;
         let conflicts = |held: &ActiveLease| {
             let mine = || items.iter();
             held.items
                 .iter()
-                .any(|b| mine().any(|a| leases_conflict(a, b)))
+                .any(|b| mine().any(|a| leases_conflict(a, b, keys)))
         };
         let sets = self.active_leases(now_ms);
         let sets = sets.filter(|h| h.lease.session != session && conflicts(h));
@@ -752,13 +772,14 @@ impl State {
 
     /// Pins the items of the session that the facts need to the change.
     fn pin(&mut self, session: &str, change: ChangeId, facts: Option<&Facts>, now_ms: i64) {
+        let keys = self.symbol_keys;
         let needs = facts.map(symbols::lease_needs).unwrap_or_default();
         let pinned: Vec<(String, Vec<LeaseItem>)> = self
             .active_leases(now_ms)
             .filter(|l| l.lease.session == session)
             .map(|l| {
                 let items = l.items.iter().copied();
-                let items = items.filter(|i| needs.iter().any(|n| n.covered_by(i)));
+                let items = items.filter(|i| needs.iter().any(|n| n.covered_by(i, keys)));
                 (l.lease.set.clone(), items.cloned().collect())
             })
             .collect();
@@ -1009,6 +1030,7 @@ impl State {
         reasons: &[String],
         reviewed: bool,
     ) {
+        let keys = self.symbol_keys;
         match op {
             Op::RepoInit {
                 repo,
@@ -1195,7 +1217,7 @@ impl State {
                             && h.items.iter().any(|b| {
                                 items
                                     .iter()
-                                    .any(|a| symbols::overlaps(&a.symbol, &b.symbol))
+                                    .any(|a| symbols::overlaps(&a.symbol, &b.symbol, keys))
                             })
                     });
                     let acquired_ms = overlapping
@@ -1341,9 +1363,9 @@ impl State {
                     self.unpin(*change, false);
                     if let Some(session) = p.actor.session() {
                         let covers = |l: &LeaseSet| {
-                            l.items
-                                .iter()
-                                .any(|i| symbols.iter().any(|s| symbols::covers(&i.symbol, s)))
+                            l.items.iter().any(|i| {
+                                symbols.iter().any(|s| symbols::covers(&i.symbol, s, keys))
+                            })
                         };
                         let sets = self.leases.values();
                         let sets = sets.filter(|l| l.session == session && covers(l));

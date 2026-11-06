@@ -1,0 +1,316 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cs#Ledger.Empty"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#Ledger.Total"
+        ],
+        "import_only_files": [],
+        "lines_added": 6,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#Kind.<def>",
+          "src/sample.cs#Ledger.<def>",
+          "src/sample.cs#Ledger.Reset"
+        ],
+        "import_only_files": [],
+        "lines_added": 3,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "public sealed class Ledger : Base\n{\n    private int entries;\n\n    public int Total()\n    {\n        return entries + 0;\n    }\n\n    public void Reset()\n    {\n        entries = 1;\n    }\n\n    public bool Empty()\n    {\n        return entries == 0;\n    }\n}\n\npublic enum Kind\n{\n    A,\n    B,\n}\n"
+  },
+  "path": "src/sample.cs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                26,
+                26,
+                46
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Total",
+              "own": "",
+              "signature": "public int Total()",
+              "skipped": false,
+              "span": [
+                52,
+                52,
+                106
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Reset",
+              "own": "",
+              "signature": "public void Reset()",
+              "skipped": false,
+              "span": [
+                112,
+                112,
+                164
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_declaration(modifier(public\u001f)class\u001fLedger\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            166
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Kind",
+          "own": "",
+          "signature": "public enum Kind",
+          "skipped": false,
+          "span": [
+            168,
+            168,
+            195
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                26,
+                26,
+                46
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Total",
+              "own": "",
+              "signature": "public int Total()",
+              "skipped": false,
+              "span": [
+                52,
+                52,
+                110
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Reset",
+              "own": "",
+              "signature": "public void Reset()",
+              "skipped": false,
+              "span": [
+                116,
+                116,
+                168
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Empty",
+              "own": "",
+              "signature": "public bool Empty()",
+              "skipped": false,
+              "span": [
+                174,
+                174,
+                234
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_declaration(modifier(public\u001f)class\u001fLedger\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            236
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Kind",
+          "own": "",
+          "signature": "public enum Kind",
+          "skipped": false,
+          "span": [
+            238,
+            238,
+            265
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                40,
+                40,
+                60
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Total",
+              "own": "",
+              "signature": "public int Total()",
+              "skipped": false,
+              "span": [
+                66,
+                66,
+                120
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Reset",
+              "own": "",
+              "signature": "public void Reset()",
+              "skipped": false,
+              "span": [
+                126,
+                126,
+                178
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_declaration(modifier(public\u001f)modifier(sealed\u001f)class\u001fLedger\u001fbase_list(:\u001fBase\u001f)declaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            180
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Kind",
+          "own": "",
+          "signature": "public enum Kind",
+          "skipped": false,
+          "span": [
+            182,
+            182,
+            216
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -5,8 +5,13 @@
 //! (top-level code outside any symbol) and `path#<imports>` (the import
 //! block) are children of `path#<file>`. `path#Type.<def>` is the type's own
 //! text, a member of `Type` like its methods: a lease on it leaves them free.
+//! Symbols that share a name have a key behind it, `path#Client.charge(int)`
+//! or `path#P.x[setter]`, and from `FORMAT_SYMBOL_KEYS` on the name alone
+//! stands for all of them: that is what `keys` says below. It keeps the
+//! lease of a session that saw one such symbol apart from those of sessions
+//! that see several.
 
-use lonca_core::ops::{DEF, Facts, LeaseItem, LeaseKind};
+use lonca_core::ops::{DEF, Facts, LeaseItem, LeaseKind, names_are_headings};
 
 pub const FILE: &str = "<file>";
 pub const MODULE: &str = "<module>";
@@ -18,6 +23,33 @@ pub fn split(symbol: &str) -> Option<(&str, &str)> {
 
 pub fn file_symbol(path: &str) -> String {
     format!("{path}#{FILE}")
+}
+
+/// One part of a name without its key: `Name(key)`, `Name[key]`.
+fn plain(part: &str) -> &str {
+    match part.find(['(', '[']) {
+        Some(at) if at > 0 => &part[..at],
+        _ => part,
+    }
+}
+
+/// `whole` is `part`, or `part` by its name alone, or that name with the
+/// number `part` has: `f~2` is what the keys of `f` turn into `f(a)~2`.
+fn stands_for_part(whole: &str, part: &str) -> bool {
+    let number = part.rsplit_once('~').map(|(_, n)| n);
+    let numbered = number.is_some_and(|n| whole == format!("{}~{n}", plain(part)));
+    whole == part || whole == plain(part) || numbered
+}
+
+/// The name of `symbol` with no keys in it: what stands for every symbol it
+/// can be. A heading stays what it is.
+pub fn bare(symbol: &str) -> String {
+    let (path, name) = split(symbol).unwrap_or(("", symbol));
+    if names_are_headings(path) {
+        return name.to_string();
+    }
+    let parts: Vec<&str> = name.split('.').map(plain).collect();
+    parts.join(".")
 }
 
 /// Containers of `symbol`, innermost first, ending with `path#<file>`.
@@ -48,13 +80,31 @@ pub fn container(symbol: &str) -> Option<String> {
     ancestors(symbol).into_iter().next()
 }
 
-/// `a` is `b` or one of its containers.
-pub fn covers(a: &str, b: &str) -> bool {
-    a == b || ancestors(b).iter().any(|x| x == a)
+/// `a` is `b` or one of its containers, part by part with or without the
+/// key `b` has there.
+fn covers_keyed(a: &str, b: &str) -> bool {
+    let (Some((path_a, a)), Some((path_b, b))) = (split(a), split(b)) else {
+        return false;
+    };
+    let (mut a, mut b) = (a.split('.'), b.split('.'));
+    path_a == path_b
+        && !names_are_headings(path_a)
+        && a.all(|x| b.next().is_some_and(|y| stands_for_part(x, y)))
 }
 
-pub fn overlaps(a: &str, b: &str) -> bool {
-    covers(a, b) || covers(b, a)
+/// `a` is the name of `b` at `b`'s own level: `b` is one of the symbols it
+/// stands for, not a member of one.
+pub fn stands_for(a: &str, b: &str) -> bool {
+    a.matches('.').count() == b.matches('.').count() && covers_keyed(a, b)
+}
+
+/// `a` is `b` or one of its containers.
+pub fn covers(a: &str, b: &str, keys: bool) -> bool {
+    a == b || ancestors(b).iter().any(|x| x == a) || (keys && covers_keyed(a, b))
+}
+
+pub fn overlaps(a: &str, b: &str, keys: bool) -> bool {
+    covers(a, b, keys) || covers(b, a, keys)
 }
 
 /// One lease a change needs: an item of one of `kinds` covering `symbol`.
@@ -65,8 +115,8 @@ pub struct LeaseNeed {
 }
 
 impl LeaseNeed {
-    pub fn covered_by(&self, item: &LeaseItem) -> bool {
-        self.kinds.contains(&item.kind) && covers(&item.symbol, &self.symbol)
+    pub fn covered_by(&self, item: &LeaseItem, keys: bool) -> bool {
+        self.kinds.contains(&item.kind) && covers(&item.symbol, &self.symbol, keys)
     }
 }
 
@@ -106,14 +156,15 @@ mod tests {
             vec!["src/a.rs#<file>".to_string()]
         );
         assert!(ancestors("src/a.rs#<file>").is_empty());
-        assert!(covers("src/a.rs#Client", "src/a.rs#Client.charge"));
-        assert!(covers("src/a.rs#<file>", "src/a.rs#<module>"));
-        assert!(!covers("src/a.rs#Client", "src/a.rs#ClientX.charge"));
-        assert!(!covers("src/a.rs#Client", "src/b.rs#Client.charge"));
-        assert!(overlaps("src/a.rs#Client.charge", "src/a.rs#Client"));
+        assert!(covers("src/a.rs#Client", "src/a.rs#Client.charge", false));
+        assert!(covers("src/a.rs#<file>", "src/a.rs#<module>", false));
+        assert!(!covers("src/a.rs#Client", "src/a.rs#ClientX.charge", false));
+        assert!(!covers("src/a.rs#Client", "src/b.rs#Client.charge", false));
+        assert!(overlaps("src/a.rs#Client.charge", "src/a.rs#Client", false));
         assert!(!overlaps(
             "src/a.rs#Client.charge",
-            "src/a.rs#Client.refund"
+            "src/a.rs#Client.refund",
+            false
         ));
     }
 
@@ -122,14 +173,98 @@ mod tests {
     #[test]
     fn a_definition_is_a_member_of_its_type() {
         let def = "src/a.rs#Client.<def>";
-        assert!(covers("src/a.rs#Client", def));
-        assert!(covers("src/a.rs#<file>", def));
-        assert!(!overlaps(def, "src/a.rs#Client.charge"));
-        assert!(!covers(def, "src/a.rs#Client"));
+        assert!(covers("src/a.rs#Client", def, false));
+        assert!(covers("src/a.rs#<file>", def, false));
+        assert!(!overlaps(def, "src/a.rs#Client.charge", false));
+        assert!(!covers(def, "src/a.rs#Client", false));
         assert_eq!(def_of("m.Client.<def>"), Some("m.Client"));
         for name in ["Client", "<def>", "Client<def>", "Client.<def>.x"] {
             assert_eq!(def_of(name), None, "{name}");
         }
+    }
+
+    /// A name stands for every symbol of that name, so a lease taken where
+    /// a symbol was alone meets one taken where it has a key.
+    #[test]
+    fn a_name_covers_its_keyed_symbols() {
+        for (a, b) in [
+            ("a.cs#C.M", "a.cs#C.M(int)"),
+            ("a.cs#C.M", "a.cs#C.M(int)~2"),
+            ("a.py#P.x", "a.py#P.x[setter]"),
+            ("a.rs#S.From.from", "a.rs#S.From(u8).from"),
+            ("a.rs#S.From(u8).from", "a.rs#S.From(u8).from(a)"),
+            ("a.rs#S.From.from(a)", "a.rs#S.From(u8).from(a)"),
+            ("a.rs#S.From", "a.rs#S.From(u8).from"),
+            ("a.rs#impl:S.From", "a.rs#impl:S.From(u8)"),
+            ("a.cs#C.operator<", "a.cs#C.operator<(A,B)"),
+            ("a.py#f~2", "a.py#f(a)~2"),
+            ("a.cs#C", "a.cs#C.M(int)"),
+            ("a.cs#<file>", "a.cs#C.M(int)"),
+        ] {
+            assert!(covers(a, b, true), "{a} {b}");
+            assert!(overlaps(a, b, true) && overlaps(b, a, true), "{a} {b}");
+            assert!(!covers(b, a, true), "{a} {b}");
+        }
+        for (a, b) in [
+            ("a.cs#C.M(int)", "a.cs#C.M(string)"),
+            ("a.cs#C.M(int)", "a.cs#C.M(int)~2"),
+            ("a.cs#C.M", "a.cs#C.Mx(int)"),
+            ("a.cs#C.M", "a.cs#C~2.M(int)"),
+            ("a.cs#C.M", "b.cs#C.M(int)"),
+            ("a.cs#C.M", "a.cs#D.M(int)"),
+            ("a.cs#C.M.N", "a.cs#C.M(int)"),
+            ("no-separator", "a.cs#C.M(int)"),
+            ("a.cs#C.M(int)", "no-separator"),
+            ("a.py#f~2", "a.py#f(a)"),
+            ("a.py#f~2", "a.py#f(a)~3"),
+            ("a.md#Setup", "a.md#Setup(old)"),
+            ("a.toml#a", "a.toml#a[b]"),
+        ] {
+            assert!(!overlaps(a, b, true), "{a} {b}");
+        }
+    }
+
+    /// Entries of the formats before keys keep what they meant.
+    #[test]
+    fn before_keys_a_name_is_only_itself() {
+        assert!(!overlaps("a.md#Setup", "a.md#Setup(old)", false));
+        assert!(!overlaps("a.cs#C.M", "a.cs#C.M(int)", false));
+        assert!(covers("a.cs#C", "a.cs#C.M(int)", false));
+    }
+
+    #[test]
+    fn a_bare_name_has_no_keys_at_any_level() {
+        for (id, want) in [
+            ("a.cs#C.M(int)", "C.M"),
+            ("a.cs#C.M(int)~2", "C.M"),
+            ("a.rs#S.From(u8).from(a)", "S.From.from"),
+            ("a.py#P.x[setter]", "P.x"),
+            ("a.cs#C.M", "C.M"),
+            ("a.cs#C.<def>", "C.<def>"),
+            ("a.cs#(odd)", "(odd)"),
+            ("a.cs#C.operator<(A,B)", "C.operator<"),
+            ("a.md#Setup(old)", "Setup(old)"),
+            ("no-separator(x)", "no-separator"),
+        ] {
+            assert_eq!(bare(id), want);
+        }
+    }
+
+    /// An insert into `S.From` meets what is held of each `S.From(..)`, and
+    /// not their members, as an insert into a type does not meet its methods.
+    #[test]
+    fn a_name_stands_for_its_symbols_at_their_level() {
+        assert!(stands_for("a.rs#S.From", "a.rs#S.From(u8)"));
+        assert!(!stands_for("a.rs#S.From", "a.rs#S.From(u8).from"));
+        assert!(!stands_for("a.rs#S.From(u16)", "a.rs#S.From(u8)"));
+        assert!(!stands_for("a.rs#S.From(u8)", "a.rs#S.From"));
+    }
+
+    /// An overload goes into the type around it, not into its namesakes.
+    #[test]
+    fn the_container_of_an_overload_is_the_type() {
+        assert_eq!(container("a.cs#C.M(int)"), Some("a.cs#C".to_string()));
+        assert_eq!(container("a.cs#M(int)"), Some("a.cs#<file>".to_string()));
     }
 
     #[test]

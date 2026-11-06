@@ -138,15 +138,15 @@ enum Cmd {
         /// Use the computed facts as the claim (an explicit acknowledgement).
         #[arg(long)]
         accept_facts: bool,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         edits: Vec<String>,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         adds: Vec<String>,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         deletes: Vec<String>,
         #[arg(long, value_delimiter = ',')]
         deleted_files: Vec<String>,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         signature_changes: Vec<String>,
         /// From a git checkout: propose this commit (everything it changes
         /// against the last fetched trunk) as a human change.
@@ -516,7 +516,7 @@ enum SessionCmd {
         agent: String,
         #[arg(long, value_delimiter = ',', required = true)]
         paths: Vec<String>,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         symbols: Option<Vec<String>>,
         #[arg(long, default_value = "2h")]
         ttl: String,
@@ -902,6 +902,52 @@ pub(crate) fn print_decision(r: &Value) {
     }
 }
 
+/// What follows a comma starts a new symbol id: the path up to its `#`. A
+/// key can hold any comma and any bracket, cut or in quotes, but no path
+/// behind a comma of its own.
+fn starts_an_id(rest: &str) -> bool {
+    let path = rest.split_once('#').map(|(path, _)| path);
+    path.is_some_and(|p| !p.is_empty() && !p.contains(['(', ')', '[', ']', ',', ' ']))
+}
+
+/// A comma-separated list of symbol ids or of scope patterns, each as often
+/// as the option was given. A comma inside a key is part of the id:
+/// `a.cs#C.M(int,int)`.
+fn split_ids(values: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in values {
+        let ids = value.contains('#');
+        let (mut depth, mut from) = (0usize, 0);
+        for (at, c) in value.char_indices() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth = depth.saturating_sub(1),
+                ',' if (ids && starts_an_id(&value[at + 1..])) || (!ids && depth == 0) => {
+                    out.push(value[from..at].to_string());
+                    from = at + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(value[from..].to_string());
+    }
+    out
+}
+
+/// A claim from the command line: `[edits, adds, deletes, signature_changes]`.
+fn claim_of(intent: String, symbols: [&Vec<String>; 4], deleted_files: Vec<String>) -> Claim {
+    let [edits, adds, deletes, signature_changes] = symbols.map(|list| split_ids(list));
+    Claim {
+        intent,
+        edits,
+        adds,
+        deletes,
+        deleted_files,
+        signature_changes,
+        ..Default::default()
+    }
+}
+
 fn lease_items(symbols: Vec<String>, kind: &str) -> Result<Vec<LeaseItem>> {
     let kind = match kind {
         "edit" => LeaseKind::Edit,
@@ -1216,7 +1262,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 task,
                 scope: Scope {
                     paths: paths.clone(),
-                    symbols,
+                    symbols: symbols.as_deref().map(split_ids),
                     ops: vec![
                         OpKind::ChangePropose,
                         OpKind::ChangeWithdraw,
@@ -1689,15 +1735,8 @@ fn run(cmd: Cmd) -> Result<()> {
                 Some(_) => {
                     let mut c = connect()?;
                     c.token = Some(ws.token()?);
-                    let mut claim = Claim {
-                        intent,
-                        edits,
-                        adds,
-                        deletes,
-                        deleted_files,
-                        signature_changes,
-                        ..Default::default()
-                    };
+                    let symbols = [&edits, &adds, &deletes, &signature_changes];
+                    let mut claim = claim_of(intent, symbols, deleted_files);
                     if accept_facts {
                         let p = call(
                             &mut c,
@@ -2235,7 +2274,58 @@ fn pin_note(lease: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{lease_need_lines, pin_note, source};
+    use super::{claim_of, lease_need_lines, pin_note, source, split_ids};
+
+    #[test]
+    fn each_option_of_a_claim_goes_to_its_list() {
+        let [a, b, c, d] = ["a.cs#a", "a.cs#b", "a.cs#c", "a.cs#d"].map(|id| vec![id.to_string()]);
+        let claim = claim_of("why".into(), [&a, &b, &c, &d], vec!["x".to_string()]);
+        assert_eq!(claim.intent, "why");
+        assert_eq!(claim.edits, a);
+        assert_eq!(claim.adds, b);
+        assert_eq!(claim.deletes, c);
+        assert_eq!(claim.signature_changes, d);
+        assert_eq!(claim.deleted_files, ["x"]);
+    }
+
+    #[test]
+    fn a_comma_in_a_key_does_not_split_an_id() {
+        let split = |value: &str| split_ids(&[value.to_string()]);
+        for (value, want) in [
+            (
+                "a.cs#C.M(int,int),a.cs#C.N",
+                vec!["a.cs#C.M(int,int)", "a.cs#C.N"],
+            ),
+            ("a.py#P.x[a,b]", vec!["a.py#P.x[a,b]"]),
+            (
+                "a.cs#C.M(Map<A,B>,(C,D)),b.cs#c",
+                vec!["a.cs#C.M(Map<A,B>,(C,D))", "b.cs#c"],
+            ),
+            (
+                "a.ts#f([string,T0],[s),a.ts#g",
+                vec!["a.ts#f([string,T0],[s)", "a.ts#g"],
+            ),
+            ("a.ts#f('('),a.ts#g", vec!["a.ts#f('(')", "a.ts#g"]),
+            (
+                "a.ts#f(')',string),a.ts#g",
+                vec!["a.ts#f(')',string)", "a.ts#g"],
+            ),
+            ("a.ts#C.'a,b',a.ts#g", vec!["a.ts#C.'a,b'", "a.ts#g"]),
+            (
+                "a.rs#f(#[c(x)],u8),a.rs#g",
+                vec!["a.rs#f(#[c(x)],u8)", "a.rs#g"],
+            ),
+            ("a.ts#f,#x", vec!["a.ts#f,#x"]),
+            // Scopes have no path.
+            ("C.M(int,int),D", vec!["C.M(int,int)", "D"]),
+            ("C.*,P.x[a,b],Q", vec!["C.*", "P.x[a,b]", "Q"]),
+            ("a)),b", vec!["a))", "b"]),
+        ] {
+            assert_eq!(split(value), want, "{value}");
+        }
+        let two = ["a.cs#f,a.cs#g".to_string(), "b.cs#h".to_string()];
+        assert_eq!(split_ids(&two), ["a.cs#f", "a.cs#g", "b.cs#h"]);
+    }
 
     #[test]
     fn a_session_that_left_work_reads_as_one_line() {

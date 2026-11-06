@@ -313,7 +313,9 @@ fn leases_and_the_merge_agree() {
                 }
                 let (ta, tb) = (case.text(a), case.text(b));
                 let (la, lb) = (case.leases(&case.facts(&ta)), case.leases(&case.facts(&tb)));
-                let held_apart = !la.iter().any(|x| lb.iter().any(|y| leases_conflict(x, y)));
+                let held_apart = !la
+                    .iter()
+                    .any(|x| lb.iter().any(|y| leases_conflict(x, y, true)));
                 let merged = case.merge(&ta, &tb);
                 if !held_apart {
                     continue;

@@ -13,8 +13,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
-use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_PLACES, ENGINE_SECTIONS};
-use crate::extract::{Holder, Parsed, Placed, Sym, moved, normalize, parse_at, shifted};
+use crate::engine::{
+    ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_PLACES, ENGINE_SECTIONS,
+};
+use crate::extract::{
+    Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_keyed,
+    read_together, rename_aligned, shifted,
+};
 
 /// Code outside symbols as an engine compares it, and its place among them.
 type Code<'a> = (&'a str, Placed<'a>);
@@ -179,7 +184,8 @@ pub fn merge_text_at(
     }
     let merged = diffy::merge(b, o, t).map_err(|_| file_conflict())?;
     if let Some(lang) = lang {
-        let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
+        let (naming, sides) = three_sides(engine, lang, [b, o, t]);
+        let [pb, po, pt] = &sides;
         // A side that does not parse has no symbols to hold the merge to,
         // and engines before this check only asked that the result parses.
         let unread = pb.has_error || po.has_error || pt.has_error;
@@ -188,7 +194,7 @@ pub fn merge_text_at(
         } else {
             engine
         };
-        if !holds_up(engine, path, lang, &merged, [&pb, &po, &pt], &[]) {
+        if !holds_up(engine, path, lang, &merged, &naming, [pb, po, pt], &[]) {
             return Err(file_conflict());
         }
     }
@@ -208,7 +214,7 @@ pub fn merge_around_conflicts(
     t: &str,
 ) -> Option<String> {
     let lang = Lang::detect(path)?;
-    let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
+    let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return None;
     }
@@ -223,11 +229,11 @@ pub fn merge_around_conflicts(
     }
     let conflicts = std::mem::take(&mut m.conflicts);
     let sides = [&pb, &po, &pt];
-    if !numbers_hold(sides) {
+    if !numbers_hold(sides) || (engine >= ENGINE_KEYS && !counts_hold(sides)) {
         return None;
     }
     m.apply()
-        .filter(|text| holds_up(engine, path, lang, text, sides, &conflicts))
+        .filter(|text| holds_up(engine, path, lang, text, &naming, sides, &conflicts))
 }
 
 fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
@@ -235,6 +241,23 @@ fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
         out.insert(&s.name);
         all_names(&s.children, out);
     }
+}
+
+/// What the three sides of a merge call things, for reading the result.
+#[derive(Default)]
+struct Naming {
+    keyed: Keyed,
+    /// What each side changed the parameters of. A symbol of the result comes
+    /// from a side, and that says what it is.
+    pairs: Vec<Pair>,
+}
+
+/// The three sides of a merge, by one set of names: those of `base`.
+fn three_sides(engine: u32, lang: Lang, texts: [&str; 3]) -> (Naming, [Parsed; 3]) {
+    let (keyed, [pb, mut po, mut pt]) = read_together(engine, lang, texts);
+    let mut pairs = align(&pb, &mut po);
+    pairs.extend(align(&pb, &mut pt));
+    (Naming { keyed, pairs }, [pb, po, pt])
 }
 
 /// Each side's code stands in `m` where that side put it among its symbols.
@@ -270,13 +293,15 @@ fn holds_up(
     path: &str,
     lang: Lang,
     text: &str,
+    naming: &Naming,
     [pb, po, pt]: [&Parsed; 3],
     conflicts: &[String],
 ) -> bool {
-    let merged = parse_at(engine, lang, text);
-    if merged.has_error {
+    let mut merged = parse_keyed(engine, lang, text, &naming.keyed);
+    if merged.has_error || key_twice(&merged, [pb, po, pt]) {
         return false;
     }
+    rename_aligned(&mut merged, &naming.pairs);
     if engine < ENGINE_DEFS {
         return true;
     }
@@ -340,6 +365,34 @@ fn numbered_places(syms: &[Sym], out: &mut BTreeMap<String, Vec<(u32, u32)>>) {
         }
         numbered_places(&s.children, out);
     }
+}
+
+/// How many of each name a list holds, at any depth, and which are numbered.
+fn numbered_counts(syms: &[Sym], out: &mut BTreeMap<String, (u32, bool)>) {
+    for s in syms {
+        let entry = out.entry(s.stem.clone()).or_default();
+        entry.0 += 1;
+        entry.1 |= s.stem != s.name;
+        numbered_counts(&s.children, out);
+    }
+}
+
+/// Exact duplicates are told apart by their order only: when both sides
+/// took some away, `f~2` of one is not `f~2` of the other, and neither side
+/// can say which was removed.
+fn counts_hold([pb, po, pt]: [&Parsed; 3]) -> bool {
+    let counts = |p: &Parsed| {
+        let mut out = BTreeMap::new();
+        numbered_counts(&p.syms, &mut out);
+        out
+    };
+    let (b, o, t) = (counts(pb), counts(po), counts(pt));
+    let how_many =
+        |side: &BTreeMap<String, (u32, bool)>, name: &String| side.get(name).map(|c| c.0);
+    let numbered = b.iter().filter(|(_, count)| count.1);
+    numbered.into_iter().all(|(name, count)| {
+        how_many(&o, name) == Some(count.0) || how_many(&t, name) == Some(count.0)
+    })
 }
 
 /// A number in a name counts from the top of the file: the same number can
@@ -698,7 +751,7 @@ impl<'a> Merger<'a> {
 }
 
 fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
-    let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
+    let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return Sm::Fallback;
     }
@@ -709,7 +762,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         }
         return Sm::Conflict(vec![format!("{path}#<module>")]);
     }
-    if !numbers_hold([&pb, &po, &pt]) {
+    if !numbers_hold([&pb, &po, &pt]) || (engine >= ENGINE_KEYS && !counts_hold([&pb, &po, &pt])) {
         return Sm::Fallback;
     }
     let mut m = Merger::new(engine, path, b, o, t);
@@ -728,7 +781,9 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         // Nothing of `theirs` came through, though the files differ: only
         // the line merge sees what it changed.
         Some(text) if engine >= ENGINE_EXACT && text == o => Sm::Fallback,
-        Some(text) if holds_up(engine, path, lang, &text, [&pb, &po, &pt], &[]) => Sm::Merged(text),
+        Some(text) if holds_up(engine, path, lang, &text, &naming, [&pb, &po, &pt], &[]) => {
+            Sm::Merged(text)
+        }
         _ => Sm::Fallback,
     }
 }
@@ -736,7 +791,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extract::parse;
+    use crate::extract::{parse, parse_at};
 
     const CLASS: &str = "class A:\n    x = 1\n\n    def a(self):\n        return 1\n\n    def b(self):\n        return 2\n\n    def c(self):\n        return 3\n";
 
@@ -747,6 +802,337 @@ mod tests {
 
     /// Which side changes the header and which a method does not matter
     /// any more: the queue decides that, not the agents.
+    /// Each row: three versions of a file and what the merge gives.
+    fn keyed(path: &str, b: &str, o: &str, t: &str) -> std::result::Result<String, Vec<String>> {
+        merge_text_at(ENGINE_KEYS, path, b, o, t)
+    }
+
+    const CHARGE: &str = "class C {\n    void M(int a) {\n        A();\n    }\n}\n";
+
+    #[test]
+    fn an_overload_added_above_does_not_stop_an_edit_of_the_first() {
+        let o = CHARGE.replace(
+            "    void M(int a)",
+            "    void M(string s) {\n        B();\n    }\n\n    void M(int a)",
+        );
+        let t = CHARGE.replace("A();", "C();");
+        let m = keyed("a.cs", CHARGE, &o, &t).unwrap();
+        assert!(m.contains("void M(string s) {\n        B();"), "{m}");
+        assert!(m.contains("void M(int a) {\n        C();"), "{m}");
+        assert_eq!(keyed("a.cs", CHARGE, &t, &o).unwrap(), m);
+        // Engine 5 reads the new overload as the first one changed.
+        assert!(merge_text_at(ENGINE_KEYS - 1, "a.cs", CHARGE, &o, &t).is_err());
+    }
+
+    #[test]
+    fn two_changes_of_one_overload_conflict_on_it() {
+        let b = "class C {\n    void M(int a) { A(); }\n    void M(string s) { B(); }\n}\n";
+        let o = b.replace("M(int a)", "M(long a)");
+        let t = b.replace("M(int a)", "M(short a)");
+        assert_eq!(
+            keyed("a.cs", b, &o, &t),
+            Err(vec!["a.cs#C.M(int)".to_string()])
+        );
+        let t = b.replace("A();", "X();");
+        assert_eq!(
+            keyed("a.cs", b, &o, &t),
+            Err(vec!["a.cs#C.M(int)".to_string()])
+        );
+    }
+
+    /// One file can hold a key once. The two definitions would both pass as
+    /// the symbols of the base that the sides changed.
+    #[test]
+    fn two_symbols_given_one_key_conflict() {
+        let b = "def f(a: int):\n    return 1\n\n\ndef f(a: str):\n    return 2\n";
+        let o = b.replace("a: int", "a: bytes");
+        let t = b.replace("a: str", "a: bytes");
+        assert!(keyed("a.py", b, &o, &t).is_err());
+        let b = "class C {\n    void M(int a) { A(); }\n\n    void M(long a) { B(); }\n}\n";
+        let o = b.replace("M(int a)", "M(bool a)");
+        let t = b.replace("M(long a)", "M(bool a)");
+        assert!(keyed("a.cs", b, &o, &t).is_err());
+    }
+
+    /// One key is fine twice where the two can not meet: each row gives two
+    /// symbols of the base one new key.
+    #[test]
+    fn one_key_in_two_scopes_merges() {
+        let rows = [
+            (
+                "a.py",
+                "if X:\n    def f(a: int):\n        return 1\nelse:\n    def f(a: str):\n        return 2\n",
+                ("a: int", "a: bytes"),
+                ("a: str", "a: bytes"),
+            ),
+            (
+                "a.rs",
+                "impl W<u8> {\n    fn f(a: u8) {}\n}\nimpl W<u16> {\n    fn f(a: u16) {}\n}\n",
+                ("a: u8", "a: bool"),
+                ("a: u16", "a: bool"),
+            ),
+        ];
+        for (path, b, (ox, oy), (tx, ty)) in rows {
+            let (o, t) = (b.replace(ox, oy), b.replace(tx, ty));
+            let want = b.replace(ox, oy).replace(tx, ty);
+            assert_eq!(
+                keyed(path, b, &o, &t).as_deref(),
+                Ok(want.as_str()),
+                "{path}"
+            );
+            assert_eq!(
+                keyed(path, b, &t, &o).as_deref(),
+                Ok(want.as_str()),
+                "{path}"
+            );
+        }
+    }
+
+    /// A new key on one side and the same key added elsewhere on the other.
+    #[test]
+    fn a_new_key_and_an_addition_of_it_in_another_scope_merge() {
+        let b = "if X:\n    def f(a: int):\n        return 1\nelse:\n    def f(a: str):\n        return 2\n";
+        let o = b.replace("a: int", "a: bytes");
+        let t = b.replace(
+            "return 2\n",
+            "return 2\n    def f(a: bytes):\n        return 3\n",
+        );
+        for (o, t) in [(&o, &t), (&t, &o)] {
+            let m = keyed("a.py", b, o, t).unwrap();
+            assert_eq!(m.matches("a: bytes").count(), 2, "{m}");
+            assert!(m.contains("return 3") && !m.contains("a: int"), "{m}");
+        }
+        // In one scope that is the same key twice.
+        let b = "class C {\n    void M(int a) { A(); }\n\n    void M(string s) { B(); }\n}\n";
+        let o = b.replace("M(int a)", "M(long a)");
+        let t = b.replace(
+            "void M(string s) { B(); }",
+            "void M(string s) { B(); }\n\n    void M(long b) { C(); }",
+        );
+        assert!(keyed("a.cs", b, &o, &t).is_err());
+        assert!(keyed("a.cs", b, &t, &o).is_err());
+    }
+
+    /// A key the base already has can land beside itself, too.
+    #[test]
+    fn a_key_of_the_base_given_to_a_symbol_beside_its_new_namesake_conflicts() {
+        let b = "if X:\n    def f(a: short):\n        return 2\nelse:\n    def f(a: long):\n        return 1\n";
+        let o = b.replace(
+            "return 1\n",
+            "return 1\n    def f(a: short):\n        return 9\n",
+        );
+        let t = b
+            .replace("a: short", "a: char")
+            .replace("a: long", "a: short");
+        assert!(keyed("a.py", b, &o, &t).is_err());
+        assert!(keyed("a.py", b, &t, &o).is_err());
+    }
+
+    /// What a file has twice already is not the merge's doing.
+    #[test]
+    fn a_duplicate_of_a_side_does_not_stop_a_merge() {
+        let b = "class C {\n    void M(int a) { A(); }\n\n    void M(int b) { B(); }\n\n    void M(string s) {}\n\n    void N() {}\n}\n";
+        let o = b.replace("A();", "X();");
+        let t = b.replace("void N() {}", "void N() { Y(); }");
+        let m = keyed("a.cs", b, &o, &t).unwrap();
+        assert!(m.contains("X();") && m.contains("Y();"), "{m}");
+    }
+
+    /// One side giving both scopes a key leaves it numbered on that side.
+    #[test]
+    fn one_side_may_give_one_key_to_two_scopes() {
+        let rows = [
+            (
+                "a.py",
+                "if X:\n    def f(a: int):\n        return 1\nelse:\n    def f(a: str):\n        return 2\n\n\ndef k():\n    return 3\n",
+                ["a: int", "a: str"],
+                "a: bytes",
+                ("return 3", "return 4"),
+            ),
+            (
+                "a.rs",
+                "impl W<u8> {\n    fn f(a: u8) {}\n}\nimpl W<u16> {\n    fn f(a: u16) {}\n}\n\nfn k() {\n    a();\n}\n",
+                ["a: u8", "a: u16"],
+                "a: bool",
+                ("a();", "b();"),
+            ),
+        ];
+        for (path, b, [first, second], new, (from, to)) in rows {
+            let o = b.replace(first, new).replace(second, new);
+            let t = b.replace(from, to);
+            let want = o.replace(from, to);
+            assert_eq!(
+                keyed(path, b, &o, &t).as_deref(),
+                Ok(want.as_str()),
+                "{path}"
+            );
+            assert_eq!(
+                keyed(path, b, &t, &o).as_deref(),
+                Ok(want.as_str()),
+                "{path}"
+            );
+        }
+    }
+
+    /// With one text for two symbols, the order of the base tells them.
+    #[test]
+    fn equal_texts_keep_their_order_in_both_queue_orders() {
+        let b = "if X:\n    def f(a: int):\n        return 1\nelse:\n    def f(a: str):\n        return 1\n";
+        let o = b.replace("a: str", "a: bytes");
+        let t = b.replace("a: int", "a: bytes");
+        let want = o.replace("a: int", "a: bytes");
+        assert_eq!(keyed("a.py", b, &o, &t).as_deref(), Ok(want.as_str()));
+        assert_eq!(keyed("a.py", b, &t, &o).as_deref(), Ok(want.as_str()));
+    }
+
+    /// The parts of a type are one scope, for all that they are two lists.
+    #[test]
+    fn one_key_in_two_parts_of_a_type_conflicts() {
+        let b = "partial class C {\n    void M(int a) {}\n}\npartial class C {\n    void M(long a) {}\n}\n";
+        let o = b.replace("M(int a)", "M(bool a)");
+        let t = b.replace("M(long a)", "M(bool a)");
+        assert!(keyed("a.cs", b, &o, &t).is_err());
+    }
+
+    /// A `~` in a key is no number: these are three overloads.
+    #[test]
+    fn a_tilde_in_a_key_counts_for_nothing() {
+        let b = "function f(a: '~a'): void;\nfunction f(a: '~b'): void;\nfunction f(a: '~c'): void;\nfunction f(a: any) {}\n";
+        let o = b.replace("function f(a: '~a'): void;\n", "");
+        let t = b.replace("function f(a: '~b'): void;\n", "");
+        let m = keyed("a.ts", b, &o, &t).unwrap();
+        assert!(
+            !m.contains("'~a'") && !m.contains("'~b'") && m.contains("'~c'"),
+            "{m}"
+        );
+    }
+
+    /// `t` deleted the first and changed the second; which it changed is
+    /// read from their texts, or the delete of `o` would come undone.
+    #[test]
+    fn a_change_of_a_symbol_the_other_side_deleted_conflicts_in_both_orders() {
+        let b = "class C {\n    void M(int a) { Alpha(); Beta(); }\n\n    void M(string s) { Gamma(s, 1); Delta(s, 2); }\n\n    void N() {}\n}\n";
+        let o = b.replace("    void M(string s) { Gamma(s, 1); Delta(s, 2); }\n\n", "");
+        let t = b
+            .replace("    void M(int a) { Alpha(); Beta(); }\n\n", "")
+            .replace("M(string s) { Gamma(s, 1)", "M(long s) { Gamma(s, 3)");
+        let want = Err(vec!["a.cs#C.M(string)".to_string()]);
+        assert_eq!(keyed("a.cs", b, &o, &t), want);
+        assert_eq!(keyed("a.cs", b, &t, &o), want);
+    }
+
+    /// What a row says: what it is, the base, both sides, what the result
+    /// has and what it has not.
+    type Row<'a> = (
+        &'a str,
+        &'a str,
+        String,
+        String,
+        &'a [&'a str],
+        &'a [&'a str],
+    );
+
+    /// Each row: changes to different overloads, which the leases allow.
+    #[test]
+    fn changes_to_different_overloads_merge() {
+        let two = "class C {\n    void M(int a) { A(); }\n\n    void M(string s) { B(); }\n}\n";
+        let one = "class C {\n    void M(int a) { A(); }\n}\n";
+        let add = |text: &str, line: &str| {
+            text.replacen("    void M", &format!("    {line}\n\n    void M"), 1)
+        };
+        let drop_int = two.replace("    void M(int a) { A(); }\n\n", "");
+        let drop_string = two.replace("\n\n    void M(string s) { B(); }", "");
+        let rows: [Row; 5] = [
+            (
+                "new one and a delete",
+                two,
+                add(two, "void M(long a) { X(); }"),
+                drop_string.clone(),
+                &["M(long a) { X(); }", "M(int a) { A(); }"],
+                &["M(string"],
+            ),
+            (
+                "new parameters and a new one",
+                two,
+                two.replace("M(int a)", "M(long a)"),
+                add(two, "void M(short a) { X(); }"),
+                &["M(long a) { A(); }", "M(short a) { X(); }", "M(string s)"],
+                &["M(int"],
+            ),
+            (
+                "a delete and new parameters",
+                two,
+                drop_int.clone(),
+                two.replace("M(string s)", "M(long s)"),
+                &["M(long s) { B(); }"],
+                &["M(int", "M(string"],
+            ),
+            (
+                "a first overload and a delete of the only one",
+                one,
+                one.replace("}\n}", "}\n\n    void M(string s) { B(); }\n}"),
+                "class C {\n}\n".to_string(),
+                &["M(string s) { B(); }"],
+                &["M(int"],
+            ),
+            (
+                "new parameters next to an edit",
+                two,
+                two.replace("M(int a)", "M(long a)"),
+                two.replace("B();", "Y();"),
+                &["M(long a) { A(); }", "M(string s) { Y(); }"],
+                &["M(int"],
+            ),
+        ];
+        for (what, b, o, t, has, hasnt) in rows {
+            for (o, t) in [(&o, &t), (&t, &o)] {
+                let m = keyed("a.cs", b, o, t).unwrap_or_else(|c| panic!("{what}: {c:?}"));
+                assert!(has.iter().all(|x| m.contains(x)), "{what}\n{m}");
+                assert!(!hasnt.iter().any(|x| m.contains(x)), "{what}\n{m}");
+            }
+        }
+    }
+
+    /// Exact duplicates have only their order, so two sides that each took
+    /// one away can not be told from two sides that took the same.
+    #[test]
+    fn duplicates_both_sides_took_from_do_not_merge_by_number() {
+        let b = "package p\n\nfunc init() {\n\ta()\n}\n\nfunc init() {\n\tb()\n}\n\nfunc k() {}\n";
+        let o = b.replace("func init() {\n\tb()\n}\n\n", "");
+        let t = b.replace("func init() {\n\ta()\n}\n\n", "");
+        assert!(keyed("a.go", b, &o, &t).is_err());
+        assert!(keyed("a.go", b, &t, &o).is_err());
+        assert_eq!(merge_around_conflicts(ENGINE_KEYS, "a.go", b, &o, &t), None);
+        // One side alone does not stop anything.
+        let t = b.replace("func k() {}", "func k() {\n\tc()\n}");
+        let m = keyed("a.go", b, &o, &t).unwrap();
+        assert!(!m.contains("b()") && m.contains("c()"), "{m}");
+    }
+
+    #[test]
+    fn a_change_of_parameters_merges_with_another_overload() {
+        let b = "class C {\n    void M(int a) { A(); }\n\n    void M(string s) { B(); }\n}\n";
+        let o = b.replace("M(int a)", "M(long a)");
+        let t = b.replace("B();", "X();");
+        let m = keyed("a.cs", b, &o, &t).unwrap();
+        assert!(
+            m.contains("M(long a) { A(); }") && m.contains("M(string s) { X(); }"),
+            "{m}"
+        );
+        assert_eq!(keyed("a.cs", b, &t, &o).unwrap(), m);
+    }
+
+    #[test]
+    fn the_members_of_a_trait_impl_follow_its_arguments() {
+        let one = "impl From<u8> for S {\n    fn from(v: u8) -> S {\n        S\n    }\n}\n";
+        let two = "impl From<u16> for S {\n    fn from(v: u16) -> S {\n        S\n    }\n}\n";
+        let o = format!("{two}\n{one}");
+        let t = one.replace("        S\n", "        S::new()\n");
+        let m = keyed("a.rs", one, &o, &t).unwrap();
+        assert!(m.contains("v: u16) -> S {\n        S\n"), "{m}");
+        assert!(m.contains("v: u8) -> S {\n        S::new()\n"), "{m}");
+    }
+
     #[test]
     fn a_header_and_a_method_merge_in_either_order() {
         let header = class("class A:", "class A(B):");
@@ -1319,8 +1705,17 @@ mod tests {
             side(&b.replace("y = 1", "y = 2")),
             side(&b.replace("z = 1", "z = 2")),
         );
-        let held =
-            |engine, text: &str| holds_up(engine, "a.py", Lang::Python, text, [&pb, &po, &pt], &[]);
+        let held = |engine, text: &str| {
+            holds_up(
+                engine,
+                "a.py",
+                Lang::Python,
+                text,
+                &Naming::default(),
+                [&pb, &po, &pt],
+                &[],
+            )
+        };
         let fine = b.replace("y = 1", "y = 2").replace("z = 1", "z = 2");
         assert!(held(5, &fine));
         // Code of no side, outside every symbol, in a type and deeper.

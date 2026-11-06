@@ -85,7 +85,22 @@ fn golden_repo() -> Env {
     continuation(&mut e);
     queue(&mut e);
     wide_wait(&mut e);
+    keyed_names(&mut e);
     e
+}
+
+/// From format 13: symbols of one name have a key, and the name alone stands
+/// for all of them.
+fn keyed_names(e: &mut Env) {
+    let overloads = "class Client\n{\n    public void Charge(int a)\n    {\n    }\n\n    public void Charge(string s)\n    {\n    }\n}\n";
+    e.human_change(vec![file("src/client.cs", overloads)], "overloads");
+    e.svc.process_all();
+    let a = e.session("s21", &["src/client.cs"]);
+    let b = e.session("s22", &["src/client.cs"]);
+    let r = e.lease(&a, "src/client.cs#Client.Charge");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let r = e.lease(&b, "src/client.cs#Client.Charge(int)");
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
 }
 
 /// From format 12: a waiting interest stops a new lease inside what it
@@ -774,6 +789,21 @@ fn golden_v12_log_still_verifies_replays_and_audits() {
     assert!(s.interests.is_empty(), "served");
     let wide = s.leases.values().find(|l| l.session == "s19").expect("set");
     assert_eq!(wide.items[0].symbol, "wide.md#Part");
+}
+
+#[test]
+fn golden_v13_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v13.bundle",
+        "3cca6e32db6117b176675d4fda8b419728f259dc3abbf1823872eb5794493212",
+        13,
+    );
+    let held = "lease_held:src/client.cs#Client.Charge:s21:";
+    let stopped = ops.iter().any(|o| {
+        let reasons = &o.entry.decision.reasons;
+        reasons.iter().any(|r| r.starts_with(held))
+    });
+    assert!(stopped, "a key met the lease on its name");
 }
 
 #[test]

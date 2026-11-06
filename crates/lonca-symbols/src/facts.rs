@@ -5,8 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::ops::Facts;
 use lonca_core::{FileMap, GitId, Result};
 
+#[cfg(test)]
+use crate::engine::ENGINE_KEYS;
 use crate::engine::{ENGINE_EXACT, ENGINE_PLACES, ENGINE_SECTIONS};
-use crate::extract::{Parsed, Sym, moved, parse_at, shifted};
+use crate::extract::{Parsed, Sym, align, moved, parse_at, parse_together, shifted};
 use crate::lang::Lang;
 use crate::sections::{APPEND, Format, Section, appended, sections};
 
@@ -112,8 +114,8 @@ pub fn analyze(
                     }
                     continue;
                 };
-                let pb = parse_at(engine, lang, old);
-                let pn = parse_at(engine, lang, newt);
+                let [pb, mut pn] = parse_together(engine, lang, [old, newt]);
+                align(&pb, &mut pn);
                 if pn.has_error {
                     syntax_errors.push(path.clone());
                 }
@@ -331,6 +333,179 @@ mod tests {
         let f = section_facts(3, "a.rs", "fn f(a: u8) {}\n", "fn f(a: u16) {}\n");
         assert_eq!(f.edits, ["a.rs#f"]);
         assert_eq!(f.signature_changes, ["a.rs#f"]);
+    }
+
+    /// Each row: a file, what stands above the symbol that was there, and
+    /// the name a second symbol of that name gives it. The new one is an
+    /// addition and nothing else, wherever it landed.
+    #[test]
+    fn a_symbol_added_in_front_of_another_of_its_name_renames_nothing() {
+        let rows = [
+            (
+                "a.cs",
+                "class C {\n    void Charge(string s) {\n        A();\n    }\n}\n",
+                "    void Charge(int a, int b) {\n        B();\n    }\n",
+                "    void Charge(string s) {",
+                "a.cs#C.Charge(int,int)",
+            ),
+            (
+                "a.ts",
+                "class C {\n  m(a: string) {\n    x();\n  }\n}\n",
+                "  m(a: number): void;\n",
+                "  m(a: string) {",
+                "a.ts#C.m(number)",
+            ),
+            (
+                "a.py",
+                "class P:\n    @x.setter\n    def x(self, v):\n        pass\n",
+                "    @property\n    def x(self):\n        return 1\n\n",
+                "    @x.setter",
+                "a.py#P.x(self)",
+            ),
+        ];
+        for (path, old, above, at, added) in rows {
+            let new = old.replacen(at, &format!("{above}{at}"), 1);
+            let f = section_facts(ENGINE_KEYS, path, old, &new);
+            assert_eq!(f.adds, [added], "{path}");
+            assert!(f.edits.is_empty(), "{path}: {:?}", f.edits);
+            assert!(f.deletes.is_empty(), "{path}: {:?}", f.deletes);
+            // The number of engine 5 is what this replaces.
+            let f = section_facts(ENGINE_KEYS - 1, path, old, &new);
+            assert!(!f.edits.is_empty() || f.adds != [added], "{path}");
+        }
+    }
+
+    #[test]
+    fn a_trait_impl_added_in_front_of_another_renames_nothing() {
+        let (first, second) = (
+            "impl From<u8> for S {\n    fn from(v: u8) -> S {\n        S\n    }\n}\n",
+            "impl From<u16> for S {\n    fn from(v: u16) -> S {\n        S\n    }\n}\n",
+        );
+        let new = format!("{second}{first}");
+        let f = section_facts(ENGINE_KEYS, "a.rs", first, &new);
+        assert_eq!(f.adds, ["a.rs#impl:S.From(u16)"]);
+        assert!(f.edits.is_empty(), "{:?}", f.edits);
+        assert!(f.deletes.is_empty(), "{:?}", f.deletes);
+    }
+
+    /// Facts name a symbol as `base` does when the edit gives it a new key,
+    /// or a lease on it would not reach its own change.
+    #[test]
+    fn a_change_of_parameters_is_an_edit_of_the_symbol() {
+        let old = "class C {\n    void M(int a) { A(); }\n    void M(string s) { B(); }\n}\n";
+        let new = old.replace("M(int a)", "M(long a)");
+        let f = section_facts(ENGINE_KEYS, "a.cs", old, &new);
+        assert_eq!(f.edits, ["a.cs#C.M(int)"]);
+        assert_eq!(f.signature_changes, ["a.cs#C.M(int)"]);
+        assert!(f.adds.is_empty() && f.deletes.is_empty(), "{f:?}");
+    }
+
+    /// A deletion and an addition in different places are that, not a
+    /// change of the first, which would report what stands between them.
+    #[test]
+    fn symbols_in_different_places_are_no_change_of_parameters() {
+        let old = "class C {\n    void M(int a) { A(); }\n    void M(long a) { B(); }\n}\n";
+        let new = "class C {\n    void M(long a) { B(); }\n    void M(short a) { X(); }\n}\n";
+        let f = section_facts(ENGINE_KEYS, "a.cs", old, new);
+        assert_eq!(f.deletes, ["a.cs#C.M(int)"]);
+        assert_eq!(f.adds, ["a.cs#C.M(short)"]);
+        assert!(f.edits.is_empty(), "{:?}", f.edits);
+
+        let old = "if A:\n    def f(a: int):\n        pass\n    def f(a: str):\n        pass\nelse:\n    def f(a: bool):\n        pass\n";
+        let new = "if A:\n    def f(a: str):\n        pass\nelse:\n    def f(a: bool):\n        pass\n    def f(a: bytes):\n        pass\n";
+        let f = section_facts(ENGINE_KEYS, "a.py", old, new);
+        assert_eq!(f.deletes, ["a.py#f(int)"]);
+        assert_eq!(f.adds, ["a.py#f(bytes)"]);
+        assert!(f.edits.is_empty(), "{:?}", f.edits);
+    }
+
+    /// A group added above renumbers the groups of the file, not this one.
+    #[test]
+    fn a_block_added_above_leaves_a_change_of_parameters_an_edit() {
+        let old = "if A:\n    def f(a: int):\n        pass\n    def f(a: str):\n        pass\n";
+        let new = format!(
+            "if B:\n    def g():\n        pass\n{}",
+            old.replace("a: int", "a: bytes")
+        );
+        let f = section_facts(ENGINE_KEYS, "a.py", old, &new);
+        assert_eq!(f.signature_changes, ["a.py#f(int)"]);
+        assert!(f.edits.contains(&"a.py#f(int)".to_string()), "{f:?}");
+        assert!(f.deletes.is_empty(), "{f:?}");
+    }
+
+    /// A symbol that stands elsewhere in the file did not lose its key, so
+    /// it can not be the old name of one that gained one.
+    #[test]
+    fn a_symbol_that_moved_between_impls_is_not_paired() {
+        let old = "impl S {\n    fn f(a: u8) { A(); }\n}\n";
+        let new = format!("impl S {{\n    fn f(a: u16) {{ B(); }}\n}}\n{old}");
+        let f = section_facts(ENGINE_KEYS, "a.rs", old, &new);
+        assert!(f.signature_changes.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn the_closest_text_is_the_one_that_changed() {
+        let old = "class C {\n    void M(int a) { Alpha(); Beta(); }\n    void M(string s) { Gamma(s, 1); Delta(s, 2); }\n}\n";
+        let new = "class C {\n    void M(long s) { Gamma(s, 3); Delta(s, 2); }\n}\n";
+        let f = section_facts(ENGINE_KEYS, "a.cs", old, new);
+        assert_eq!(f.edits, ["a.cs#C.M(string)"]);
+        assert_eq!(f.deletes, ["a.cs#C.M(int)"]);
+    }
+
+    /// One symbol of a name has no key while it is alone, so the change of
+    /// its parameters is what it always was.
+    #[test]
+    fn a_symbol_alone_with_its_name_keeps_it_through_a_change_of_parameters() {
+        let f = section_facts(
+            ENGINE_KEYS,
+            "a.cs",
+            "class C {\n    void M(int a) {}\n}\n",
+            "class C {\n    void M(long a) {}\n}\n",
+        );
+        assert_eq!(f.edits, ["a.cs#C.M"]);
+        assert_eq!(f.signature_changes, ["a.cs#C.M"]);
+    }
+
+    /// Only a second symbol of the name brings the key, and the edit of the
+    /// first in the same change is reported on the first.
+    #[test]
+    fn an_overload_added_beside_an_edit_of_the_first() {
+        let old = "class C {\n    void M(int a) { A(); }\n}\n";
+        let new = "class C {\n    void M(string s) { B(); }\n    void M(int a) { C(); }\n}\n";
+        let f = section_facts(ENGINE_KEYS, "a.cs", old, new);
+        assert_eq!(f.edits, ["a.cs#C.M(int)"]);
+        assert_eq!(f.adds, ["a.cs#C.M(string)"]);
+        assert!(f.deletes.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn a_test_that_gets_an_overload_is_not_a_deleted_test() {
+        let old = "class T {\n    [Fact] void A(int x) {}\n}\n";
+        let new = "class T {\n    void A(string s) {}\n    [Fact] void A(int x) {}\n}\n";
+        let f = section_facts(ENGINE_KEYS, "a.cs", old, new);
+        assert_eq!(f.tests.deleted, 0);
+        assert_eq!(f.tests.added, 0);
+    }
+
+    /// A `;` that stands behind a member is the member's, not the class's.
+    #[test]
+    fn a_member_with_its_semicolon_is_an_addition() {
+        let old = "class C {\n  a: number;\n}\n";
+        let new = "class C {\n  a: number;\n  b: string;\n}\n";
+        let f = section_facts(ENGINE_KEYS, "a.ts", old, new);
+        assert_eq!(f.adds, ["a.ts#C.b"]);
+        assert!(f.edits.is_empty(), "{:?}", f.edits);
+        let f = section_facts(ENGINE_KEYS - 1, "a.ts", old, new);
+        assert_eq!(f.edits, ["a.ts#C.<def>"]);
+    }
+
+    /// Exact duplicates have nothing to tell them apart but their order.
+    #[test]
+    fn exact_duplicates_stay_numbered() {
+        let old = "package p\nfunc init() {}\n";
+        let new = "package p\nfunc init() {\n\tx()\n}\nfunc init() {}\n";
+        let f = section_facts(ENGINE_KEYS, "a.go", old, new);
+        assert_eq!(f.adds, ["a.go#init~2"]);
     }
 
     /// Each row: an edit is reported on the symbol that changed, where

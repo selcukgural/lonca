@@ -8,6 +8,12 @@
 # A workspace test run takes ~10 s, so this is affordable.
 test_workspace = true
 
+# `cargo test` runs one crate after another, so a mutant in a crate late in the
+# alphabet waits for all the others before its own tests can catch it. nextest
+# runs them side by side and stops at the first failure, so only a survivor
+# pays for a whole run. It runs no doctests; the workspace has none.
+test_tool = "nextest"
+
 # `--in-diff` measures the baseline with `--package` of the changed crates only,
 # while every mutant runs the whole workspace (`test_workspace`). For a PR on
 # one crate the baseline is ~1 s, so the auto timeout falls to this minimum.

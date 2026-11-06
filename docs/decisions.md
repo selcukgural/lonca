@@ -1360,6 +1360,12 @@ Passing tests do not show that they would catch a flipped `>=` or a
   Per-package testing would report those as survivors. A workspace test
   run is about 10 s, so the cost is acceptable. cargo-mutants has no
   per-crate test list, so this is one setting for all crates.
+- **`nextest` runs the tests of a mutant** (`test_tool`), still the whole
+  workspace. `cargo test` goes crate by crate, so a mutant in `lonca-symbols`
+  waited for the daemon's and the CLI's tests before its own could catch it.
+  nextest stops at the first failure, so only a survivor pays for a full run.
+  Doctests do not run with it; the workspace has none, and a new one would
+  need its own check.
 - **Timeouts** are at least `minimum_test_timeout = 300` s, about five times
   a workspace test run on CI. They can not come from the measured baseline:
   with `--in-diff` it runs `--package` of the changed crates while each mutant

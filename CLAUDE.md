@@ -45,7 +45,7 @@ or a `decide()` arm replaced with `Ok(Allow)`. Config: `.cargo/mutants.toml`
 (whole-workspace tests per mutant, timeouts); policy: `docs/decisions.md`.
 
 ```sh
-cargo install --locked cargo-mutants@27.1.0
+cargo install --locked cargo-mutants@27.1.0 cargo-nextest@0.9.151
 cargo mutants --list -p lonca-policy        # what would be mutated
 cargo mutants -p lonca-policy -j 4          # one crate
 git diff main -- crates > /tmp/git.diff && cargo mutants --in-diff /tmp/git.diff -j 4

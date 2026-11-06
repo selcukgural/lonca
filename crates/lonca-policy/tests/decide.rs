@@ -4727,6 +4727,25 @@ fn a_revert_of_a_name_counts_for_its_keyed_symbols() {
     assert!(!storm_since(6 * MIN, one, one, true));
 }
 
+/// A revert follows the symbol: it counts under the old name and the new.
+#[test]
+fn a_revert_counts_by_either_name() {
+    let storm = |reverted: &str, edited: &str| {
+        let mut h = H::new();
+        h.start("a", &["src/**"]);
+        assert!(h.lease("a", "l", &[(edited, LeaseKind::Edit)]).is_allow());
+        h.wrote("a", "src/a.py");
+        let at = h.now;
+        h.chain.state.renames = vec![renamed(1, "src/a.py#old", "src/a.py#new", None)];
+        h.chain.state.reverts = vec![(at, vec![reverted.to_string()]); 3];
+        let d = h.propose("a", ChangeId::random(), edit(edited));
+        d.reasons.iter().any(|r| r.contains("revert-storm"))
+    };
+    assert!(storm("src/a.py#old", "src/a.py#new"));
+    assert!(storm("src/a.py#old", "src/a.py#old"));
+    assert!(!storm("src/a.py#other", "src/a.py#new"));
+}
+
 /// `context.critical` says what it says.
 #[test]
 fn a_policy_reads_whether_a_change_is_critical() {

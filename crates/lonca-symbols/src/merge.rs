@@ -1282,6 +1282,17 @@ mod tests {
         assert!(m.contains("return 4"), "{m}");
     }
 
+    /// A symbol `t` deleted beside the rename is no move.
+    #[test]
+    fn a_rename_stays_in_place_beside_a_delete() {
+        let b = "def old():\n    a()\n\n\ndef gone():\n    b()\n\n\ndef k():\n    return 1\n";
+        let t = "def new():\n    a()\n\n\ndef k():\n    return 1\n";
+        let o = b.replace("return 1", "return 2");
+        let want = "def new():\n    a()\n\n\ndef k():\n    return 2\n";
+        let m = merge_text_at(ENGINE_RENAMES, "a.py", b, &o, t);
+        assert_eq!(m.as_deref(), Ok(want));
+    }
+
     /// Two renamed symbols that changed places: the order is `t`'s, or code
     /// that needs it breaks in silence.
     #[test]

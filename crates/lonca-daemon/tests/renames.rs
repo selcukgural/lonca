@@ -394,3 +394,43 @@ fn the_overload_left_behind_a_rename_is_free_of_it() {
     assert_eq!(acquire(&mut e, &x, "M"), "allow");
     audited(&e);
 }
+
+/// a to b to c: the rename of `b` deletes it, which ends nothing, and what
+/// is added or deleted elsewhere leaves the link alone.
+#[test]
+fn a_link_lasts_through_a_second_rename_and_other_changes() {
+    let (mut e, base) = seeded(SEED);
+    rename_on_trunk(&mut e, &base);
+    let third = RENAMED.replace("def bill", "def invoice");
+    let r = e.human_change(vec![file(PATH, &third)], "another name");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let more = third.replace(
+        "def other():\n    return 1\n",
+        "def added():\n    return 2\n",
+    );
+    e.human_change(vec![file(PATH, &more)], "elsewhere");
+    assert_eq!(e.svc.process_all(), 1);
+    let (old, trunk) = (agent(&mut e, "old"), agent(&mut e, "trunk"));
+    let d = lease(&mut e, &old, "charge", LeaseKind::Edit);
+    assert_eq!(d["outcome"], "allow", "{d}");
+    let d = lease(&mut e, &trunk, "invoice", LeaseKind::Edit);
+    assert_eq!(d["outcome"], "deny", "{d}");
+}
+
+/// A name that was one symbol and is taken by two keys: both are new.
+#[test]
+fn a_name_taken_again_with_keys_is_free_of_the_rename() {
+    let (mut e, base) = seeded(SEED);
+    rename_on_trunk(&mut e, &base);
+    let again = format!(
+        "{RENAMED}\n\ndef charge(a: int):\n    return a\n\n\ndef charge(a: str):\n    return a\n"
+    );
+    e.human_change(vec![file(PATH, &again)], "two new ones");
+    assert_eq!(e.svc.process_all(), 1);
+    let (a, b) = (agent(&mut e, "a"), agent(&mut e, "b"));
+    let d = lease(&mut e, &a, "charge", LeaseKind::Edit);
+    assert_eq!(d["outcome"], "allow", "{d}");
+    let d = lease(&mut e, &b, "bill", LeaseKind::Edit);
+    assert_eq!(d["outcome"], "allow", "{d}");
+}

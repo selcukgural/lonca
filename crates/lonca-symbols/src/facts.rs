@@ -303,11 +303,7 @@ fn renamed<'s>(lost: &[&'s Sym], gained: &[&'s Sym]) -> Vec<[&'s str; 2]> {
         let (x, y) = (nameless(b), nameless(n));
         let shape = b.container == n.container && (!b.container || same_members(b, n));
         let shape = shape && owner(&b.name) == owner(&n.name);
-        match shape {
-            true if x == y => 1.0,
-            true => likeness(&x, &y),
-            false => 0.0,
-        }
+        if shape { likeness(&x, &y) } else { 0.0 }
     };
     let pairs = best_pairs(lost, gained, like, RENAME_LIKENESS);
     let names = pairs.into_iter();
@@ -607,6 +603,33 @@ mod tests {
         assert!(f.renames.is_empty(), "{f:?}");
         let f = section_facts(ENGINE_RENAMES, "a.ts", "class A {}\n", "class B {}\n");
         assert!(f.renames.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn what_a_name_is_written_as() {
+        for (name, want) in [
+            ("f", "f"),
+            ("C.M", "M"),
+            ("C.M(int)", "M"),
+            ("C.x[setter]", "x"),
+            ("C.M~2", "M"),
+            ("C.[k]", "[k]"),
+            ("C.~D", "~D"),
+        ] {
+            assert_eq!(written(name), want);
+        }
+    }
+
+    /// Up to what is compared a rename is found, past it not: `many_new_names`
+    /// has nine of each.
+    #[test]
+    fn eight_new_names_at_once_are_renames() {
+        let list = |letter: char| {
+            let defs = (0..8).map(|i| format!("def {letter}{i}():\n    return {i}\n\n\n"));
+            defs.collect::<String>()
+        };
+        let f = section_facts(ENGINE_RENAMES, "a.py", &list('a'), &list('b'));
+        assert_eq!(f.renames.len(), 8, "{f:?}");
     }
 
     /// A name with nothing written in it: a JavaScript `1.` is a method name.

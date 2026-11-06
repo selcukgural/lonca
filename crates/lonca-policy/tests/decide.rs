@@ -4703,17 +4703,18 @@ fn a_heading_is_not_a_name_with_a_key() {
 /// so this one does not replay.
 #[test]
 fn a_revert_of_a_name_counts_for_its_keyed_symbols() {
-    let storm = |reverted: &str, edited: &str, keys: bool| {
+    let storm_since = |ago: i64, reverted: &str, edited: &str, keys: bool| {
         let mut h = H::new();
         h.start("a", &["src/**"]);
         assert!(h.lease("a", "l", &[(edited, LeaseKind::Edit)]).is_allow());
         h.wrote("a", "src/a.cs");
-        let at = h.now;
+        let at = h.now - ago;
         h.chain.state.symbol_keys = keys;
         h.chain.state.reverts = vec![(at, vec![reverted.to_string()]); 3];
         let d = h.propose("a", ChangeId::random(), edit(edited));
         d.reasons.iter().any(|r| r.contains("revert-storm"))
     };
+    let storm = |reverted: &str, edited: &str, keys: bool| storm_since(0, reverted, edited, keys);
     let (name, one) = ("src/a.cs#C.M", "src/a.cs#C.M(int)");
     assert!(storm(one, one, true));
     assert!(storm(name, one, true));
@@ -4721,6 +4722,35 @@ fn a_revert_of_a_name_counts_for_its_keyed_symbols() {
     assert!(!storm("src/a.cs#C.M(string)", one, true));
     assert!(!storm(name, one, false));
     assert!(!storm(one, name, false));
+    // The default window is five minutes.
+    assert!(storm_since(4 * MIN, one, one, true));
+    assert!(!storm_since(6 * MIN, one, one, true));
+}
+
+/// `context.critical` says what it says.
+#[test]
+fn a_policy_reads_whether_a_change_is_critical() {
+    let rule = r#"
+@id("no-critical")
+forbid(principal is Lonca::Agent, action == Lonca::Action::"change.propose", resource)
+when { context.critical };
+"#;
+    let source = format!("{DEFAULT_POLICY}\n{rule}");
+    for (path, denied) in [("src/a.rs", false), (".github/workflows/x.yml", true)] {
+        let policy = PolicyBundle::parse(DEFAULT_CONFIG, &source).unwrap();
+        let mut h = H::with_policy(policy);
+        h.start("a", &["**"]);
+        let symbol = format!("{path}#<file>");
+        let lease = [(symbol.as_str(), LeaseKind::Edit)];
+        assert!(h.lease("a", "l", &lease).is_allow());
+        h.wrote("a", path);
+        let d = h.propose("a", ChangeId::random(), edit(&symbol));
+        assert_eq!(
+            denied_with(&d, "policy:no-critical"),
+            denied,
+            "{path}: {d:?}"
+        );
+    }
 }
 
 /// A rule that names a symbol goes on working when it gets a key.

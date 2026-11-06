@@ -934,6 +934,20 @@ fn split_ids(values: &[String]) -> Vec<String> {
     out
 }
 
+/// A claim from the command line: `[edits, adds, deletes, signature_changes]`.
+fn claim_of(intent: String, symbols: [&Vec<String>; 4], deleted_files: Vec<String>) -> Claim {
+    let [edits, adds, deletes, signature_changes] = symbols.map(|list| split_ids(list));
+    Claim {
+        intent,
+        edits,
+        adds,
+        deletes,
+        deleted_files,
+        signature_changes,
+        ..Default::default()
+    }
+}
+
 fn lease_items(symbols: Vec<String>, kind: &str) -> Result<Vec<LeaseItem>> {
     let kind = match kind {
         "edit" => LeaseKind::Edit,
@@ -1721,15 +1735,8 @@ fn run(cmd: Cmd) -> Result<()> {
                 Some(_) => {
                     let mut c = connect()?;
                     c.token = Some(ws.token()?);
-                    let mut claim = Claim {
-                        intent,
-                        edits: split_ids(&edits),
-                        adds: split_ids(&adds),
-                        deletes: split_ids(&deletes),
-                        deleted_files,
-                        signature_changes: split_ids(&signature_changes),
-                        ..Default::default()
-                    };
+                    let symbols = [&edits, &adds, &deletes, &signature_changes];
+                    let mut claim = claim_of(intent, symbols, deleted_files);
                     if accept_facts {
                         let p = call(
                             &mut c,
@@ -2267,7 +2274,19 @@ fn pin_note(lease: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{lease_need_lines, pin_note, source, split_ids};
+    use super::{claim_of, lease_need_lines, pin_note, source, split_ids};
+
+    #[test]
+    fn each_option_of_a_claim_goes_to_its_list() {
+        let [a, b, c, d] = ["a.cs#a", "a.cs#b", "a.cs#c", "a.cs#d"].map(|id| vec![id.to_string()]);
+        let claim = claim_of("why".into(), [&a, &b, &c, &d], vec!["x".to_string()]);
+        assert_eq!(claim.intent, "why");
+        assert_eq!(claim.edits, a);
+        assert_eq!(claim.adds, b);
+        assert_eq!(claim.deletes, c);
+        assert_eq!(claim.signature_changes, d);
+        assert_eq!(claim.deleted_files, ["x"]);
+    }
 
     #[test]
     fn a_comma_in_a_key_does_not_split_an_id() {

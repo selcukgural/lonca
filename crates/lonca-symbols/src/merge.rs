@@ -1102,6 +1102,7 @@ mod tests {
         let t = b.replace("func init() {\n\ta()\n}\n\n", "");
         assert!(keyed("a.go", b, &o, &t).is_err());
         assert!(keyed("a.go", b, &t, &o).is_err());
+        assert_eq!(merge_around_conflicts(ENGINE_KEYS, "a.go", b, &o, &t), None);
         // One side alone does not stop anything.
         let t = b.replace("func k() {}", "func k() {\n\tc()\n}");
         let m = keyed("a.go", b, &o, &t).unwrap();

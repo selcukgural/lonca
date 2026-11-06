@@ -17,7 +17,8 @@ to the member, so adding a field is an add, not an edit of `<def>`.
 
 **For clients:** symbol ids can now hold `(`, `)`, `[`, `]`, `,` and spaces: quote them
 in a shell, and take them from `symbols` or `preview` instead of building them.
-Entries already in a log keep their recorded engine and meaning.
+`--edits` and the like split on commas outside brackets only. Entries already in a
+log keep their recorded engine and meaning.
 
 ### More of a file can be leased on its own (symbol engine 5)
 

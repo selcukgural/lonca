@@ -138,15 +138,15 @@ enum Cmd {
         /// Use the computed facts as the claim (an explicit acknowledgement).
         #[arg(long)]
         accept_facts: bool,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         edits: Vec<String>,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         adds: Vec<String>,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         deletes: Vec<String>,
         #[arg(long, value_delimiter = ',')]
         deleted_files: Vec<String>,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         signature_changes: Vec<String>,
         /// From a git checkout: propose this commit (everything it changes
         /// against the last fetched trunk) as a human change.
@@ -516,7 +516,7 @@ enum SessionCmd {
         agent: String,
         #[arg(long, value_delimiter = ',', required = true)]
         paths: Vec<String>,
-        #[arg(long, value_delimiter = ',')]
+        #[arg(long)]
         symbols: Option<Vec<String>>,
         #[arg(long, default_value = "2h")]
         ttl: String,
@@ -902,6 +902,28 @@ pub(crate) fn print_decision(r: &Value) {
     }
 }
 
+/// A comma-separated list of symbol ids, each as often as the option was
+/// given. A comma inside a key is part of the id: `a.cs#C.M(int,int)`.
+fn split_ids(values: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in values {
+        let (mut depth, mut from) = (0usize, 0);
+        for (at, c) in value.char_indices() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 => {
+                    out.push(value[from..at].to_string());
+                    from = at + 1;
+                }
+                _ => {}
+            }
+        }
+        out.push(value[from..].to_string());
+    }
+    out
+}
+
 fn lease_items(symbols: Vec<String>, kind: &str) -> Result<Vec<LeaseItem>> {
     let kind = match kind {
         "edit" => LeaseKind::Edit,
@@ -1216,7 +1238,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 task,
                 scope: Scope {
                     paths: paths.clone(),
-                    symbols,
+                    symbols: symbols.as_deref().map(split_ids),
                     ops: vec![
                         OpKind::ChangePropose,
                         OpKind::ChangeWithdraw,
@@ -1691,11 +1713,11 @@ fn run(cmd: Cmd) -> Result<()> {
                     c.token = Some(ws.token()?);
                     let mut claim = Claim {
                         intent,
-                        edits,
-                        adds,
-                        deletes,
+                        edits: split_ids(&edits),
+                        adds: split_ids(&adds),
+                        deletes: split_ids(&deletes),
                         deleted_files,
-                        signature_changes,
+                        signature_changes: split_ids(&signature_changes),
                         ..Default::default()
                     };
                     if accept_facts {
@@ -2235,7 +2257,29 @@ fn pin_note(lease: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{lease_need_lines, pin_note, source};
+    use super::{lease_need_lines, pin_note, source, split_ids};
+
+    #[test]
+    fn a_comma_in_a_key_does_not_split_an_id() {
+        let given = [
+            "a.cs#C.M(int,int),a.cs#C.N".to_string(),
+            "a.py#P.x[a,b]".to_string(),
+            "a.cs#C.M(Map<A,B>,(C,D)),b".to_string(),
+            "a)),b".to_string(),
+        ];
+        assert_eq!(
+            split_ids(&given),
+            [
+                "a.cs#C.M(int,int)",
+                "a.cs#C.N",
+                "a.py#P.x[a,b]",
+                "a.cs#C.M(Map<A,B>,(C,D))",
+                "b",
+                "a))",
+                "b",
+            ]
+        );
+    }
 
     #[test]
     fn a_session_that_left_work_reads_as_one_line() {

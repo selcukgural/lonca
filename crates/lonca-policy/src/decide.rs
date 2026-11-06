@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use lonca_core::oplog::{FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_SYMBOL_KEYS};
+use lonca_core::oplog::{FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS};
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, ENGINE_DEFS,
@@ -162,7 +162,14 @@ fn is_key_op(op: &Op) -> bool {
 }
 
 /// What a lease request and an interest in one have in common.
-fn check_lease_request(s: &Session, items: &[LeaseItem], intent: &str, ctx: &Ctx, v: &mut Verdict) {
+fn check_lease_request(
+    s: &Session,
+    items: &[LeaseItem],
+    intent: &str,
+    ctx: &Ctx,
+    keys: bool,
+    v: &mut Verdict,
+) {
     if items.is_empty() || items.len() > ctx.policy.config.leases.max_items {
         v.deny("lease_item_count");
     }
@@ -186,7 +193,7 @@ fn check_lease_request(s: &Session, items: &[LeaseItem], intent: &str, ctx: &Ctx
         }
         if let Some(pats) = &s.scope.symbols {
             // Who may change a name may change every symbol of that name.
-            let bare = (ctx.format >= FORMAT_SYMBOL_KEYS).then(|| symbols::bare(name));
+            let bare = keys.then(|| symbols::bare(&item.symbol));
             let bare = bare.as_deref().unwrap_or(name);
             let ok = if name.starts_with('<') {
                 pats.iter().any(|p| p == "*")
@@ -424,8 +431,14 @@ pub fn leases_conflict(a: &LeaseItem, b: &LeaseItem, keys: bool) -> bool {
     use LeaseKind::*;
     match (a.kind, b.kind) {
         (Insert, Insert) => false,
-        (Insert, _) => symbols::covers(&b.symbol, &a.symbol, keys),
-        (_, Insert) => symbols::covers(&a.symbol, &b.symbol, keys),
+        (Insert, _) => {
+            symbols::covers(&b.symbol, &a.symbol, keys)
+                || (keys && symbols::stands_for(&a.symbol, &b.symbol))
+        }
+        (_, Insert) => {
+            symbols::covers(&a.symbol, &b.symbol, keys)
+                || (keys && symbols::stands_for(&b.symbol, &a.symbol))
+        }
         _ => symbols::overlaps(&a.symbol, &b.symbol, keys),
     }
 }
@@ -744,7 +757,7 @@ pub fn decide(
             if *ttl_ms <= 0 || *ttl_ms > cfg.leases.max_ttl_minutes * 60_000 {
                 v.deny("lease_ttl");
             }
-            check_lease_request(s, items, intent, ctx, &mut v);
+            check_lease_request(s, items, intent, ctx, state.symbol_keys, &mut v);
             if let Some(holder) = state.reserved_against(own, items, t) {
                 v.deny(format!("lease_reserved:{holder}"));
             }
@@ -757,7 +770,7 @@ pub fn decide(
                 }
                 for a in items {
                     for b in &held.items {
-                        if leases_conflict(a, b, ctx.format >= FORMAT_SYMBOL_KEYS) {
+                        if leases_conflict(a, b, state.symbol_keys) {
                             v.deny(format!(
                                 "lease_held:{}:{}:{}",
                                 b.symbol, held.lease.session, held.lease.intent
@@ -769,7 +782,14 @@ pub fn decide(
         }
         Op::LeaseInterest { items, intent } => {
             let own = actor.session().unwrap_or_default();
-            check_lease_request(&state.sessions[own], items, intent, ctx, &mut v);
+            check_lease_request(
+                &state.sessions[own],
+                items,
+                intent,
+                ctx,
+                state.symbol_keys,
+                &mut v,
+            );
             // Nothing to wait for means nothing to hold: an interest in a
             // free symbol would be a way to reserve it.
             if !state.taken(own, items, t) {
@@ -1167,8 +1187,10 @@ fn propose(
                     let defs = ctx.symbols_engine.is_some_and(|v| v >= ENGINE_DEFS);
                     let of = symbols::def_of(name).filter(|_| defs);
                     let of = of.unwrap_or(name);
-                    let bare = (ctx.format >= FORMAT_SYMBOL_KEYS).then(|| symbols::bare(of));
-                    let bare = bare.as_deref().unwrap_or(of);
+                    let bare = state.symbol_keys.then(|| symbols::bare(sym));
+                    let bare = bare.as_deref();
+                    let bare = bare.map(|b| symbols::def_of(b).filter(|_| defs).unwrap_or(b));
+                    let bare = bare.unwrap_or(of);
                     let ok = if name.starts_with('<') {
                         pats.iter().any(|p| p == "*")
                     } else {
@@ -1187,7 +1209,7 @@ fn propose(
                 .collect();
             let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
             for need in symbols::lease_needs(f) {
-                let keys = ctx.format >= FORMAT_SYMBOL_KEYS;
+                let keys = state.symbol_keys;
                 if !mine.iter().any(|l| need.covered_by(l, keys)) {
                     v.deny(format!("lease_missing:{}", need.symbol));
                 }
@@ -1249,11 +1271,25 @@ fn propose(
     }
     let window = cfg.reverts.window_minutes * 60_000;
     let mine: BTreeSet<&String> = f.edits.iter().chain(&f.deletes).chain(&f.adds).collect();
+    // A revert of `Name` is one of `Name(key)`, and the other way around.
+    let reverted = |s: &String| {
+        mine.contains(s)
+            || (state.symbol_keys
+                && mine
+                    .iter()
+                    .any(|m| symbols::stands_for(s, m) || symbols::stands_for(m, s)))
+    };
     let recent_reverts = state
         .reverts
         .iter()
-        .filter(|(at, syms)| t - at <= window && syms.iter().any(|s| mine.contains(s)))
+        .filter(|(at, syms)| t - at <= window && syms.iter().any(reverted))
         .count() as i64;
+    // A policy names a symbol as a person does: by its name, too.
+    let bare_ids = mine.iter().filter(|_| state.symbol_keys).filter_map(|s| {
+        let (path, _) = symbols::split(s)?;
+        Some(format!("{path}#{}", symbols::bare(s)))
+    });
+    let named: BTreeSet<String> = bare_ids.chain(mine.iter().map(|s| s.to_string())).collect();
     base_ctx.extend([
         ("files", CVal::Long(files.len() as i64)),
         (
@@ -1265,7 +1301,7 @@ fn propose(
         ("tests_deleted", CVal::Long(f.tests.deleted as i64)),
         ("tests_skipped", CVal::Long(f.tests.skipped as i64)),
         ("critical", CVal::Bool(!critical.is_empty())),
-        ("symbols", CVal::StrSet(mine.into_iter().cloned().collect())),
+        ("symbols", CVal::StrSet(named.into_iter().collect())),
     ]);
     v.cedar(policy.evaluate(actor, "change.propose", base_ctx));
 }

@@ -604,6 +604,27 @@ pub fn merge(format: Format, b: &str, o: &str, t: &str) -> Option<Result<String,
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_files_with_sections_are_those_policy_reads_as_headings() {
+        for path in [
+            "a.md",
+            "a.markdown",
+            "a.toml",
+            "a.json",
+            "a.yml",
+            "a.yaml",
+            "a.rs",
+            "a.cs",
+            "a",
+        ] {
+            assert_eq!(
+                Format::detect(path).is_some(),
+                lonca_core::ops::names_are_headings(path),
+                "{path}"
+            );
+        }
+    }
+
     fn names(format: Format, text: &str) -> Vec<String> {
         let s = sections(format, text).unwrap_or_else(|| panic!("no sections: {text}"));
         s.into_iter().map(|x| x.name).collect()

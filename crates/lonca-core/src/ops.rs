@@ -264,6 +264,16 @@ pub struct Claim {
 /// `impl` header of the type, without its methods.
 pub const DEF: &str = "<def>";
 
+/// A file whose symbols are sections: their names are its headings and keys,
+/// written by people, and a `(` in one is only that.
+pub fn names_are_headings(path: &str) -> bool {
+    let ext = path.rsplit_once('.').map(|(_, ext)| ext);
+    matches!(
+        ext,
+        Some("md" | "markdown" | "toml" | "json" | "yml" | "yaml")
+    )
+}
+
 /// The first symbol engine whose facts name `Type.<def>`. Before it the same
 /// text could only be the heading of a document section.
 pub const ENGINE_DEFS: u32 = 3;

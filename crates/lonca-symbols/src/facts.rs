@@ -400,6 +400,34 @@ mod tests {
         assert!(f.adds.is_empty() && f.deletes.is_empty(), "{f:?}");
     }
 
+    /// A deletion and an addition in different places are that, not a
+    /// change of the first, which would report what stands between them.
+    #[test]
+    fn symbols_in_different_places_are_no_change_of_parameters() {
+        let old = "class C {\n    void M(int a) { A(); }\n    void M(long a) { B(); }\n}\n";
+        let new = "class C {\n    void M(long a) { B(); }\n    void M(short a) { X(); }\n}\n";
+        let f = section_facts(ENGINE_KEYS, "a.cs", old, new);
+        assert_eq!(f.deletes, ["a.cs#C.M(int)"]);
+        assert_eq!(f.adds, ["a.cs#C.M(short)"]);
+        assert!(f.edits.is_empty(), "{:?}", f.edits);
+
+        let old = "if A:\n    def f(a: int):\n        pass\n    def f(a: str):\n        pass\nelse:\n    def f(a: bool):\n        pass\n";
+        let new = "if A:\n    def f(a: str):\n        pass\nelse:\n    def f(a: bool):\n        pass\n    def f(a: bytes):\n        pass\n";
+        let f = section_facts(ENGINE_KEYS, "a.py", old, new);
+        assert_eq!(f.deletes, ["a.py#f(int)"]);
+        assert_eq!(f.adds, ["a.py#f(bytes)"]);
+        assert!(f.edits.is_empty(), "{:?}", f.edits);
+    }
+
+    #[test]
+    fn the_closest_text_is_the_one_that_changed() {
+        let old = "class C {\n    void M(int a) { Alpha(); Beta(); }\n    void M(string s) { Gamma(s, 1); Delta(s, 2); }\n}\n";
+        let new = "class C {\n    void M(long s) { Gamma(s, 3); Delta(s, 2); }\n}\n";
+        let f = section_facts(ENGINE_KEYS, "a.cs", old, new);
+        assert_eq!(f.edits, ["a.cs#C.M(string)"]);
+        assert_eq!(f.deletes, ["a.cs#C.M(int)"]);
+    }
+
     /// One symbol of a name has no key while it is alone, so the change of
     /// its parameters is what it always was.
     #[test]

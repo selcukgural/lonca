@@ -368,31 +368,52 @@ entry format, so they have their own version
     with something to tell them apart, every one of them has a key, the first
     included: anything else depends on which came first.
   - **The key.** `(int,string)`: for each parameter its type, with its
-    modifiers (`ref int`), else its name, as Python has none. A name or a
-    default can change with the same symbol, so neither is in a key that has a
-    type. `[setter]`, `[get]`: an accessor is named by that word, in the syntax
-    (`get v()`) or hung on the name (`@x.setter`). A Rust `impl` takes the
-    arguments of its trait and type, `impl:S.From(u8)`, and a trait's members
-    follow: `S.From(u8).from`. It all comes from field names that hold across
+    modifiers (`ref int`, `number?`), else its name, as Python has none. A name
+    or a default can change with the same symbol, so neither is in a key that
+    has a type. In front go what else an overload can differ by: how many type
+    parameters (`G(<2>)`), a C# conversion's type, an explicit interface
+    (`M(IA)`), TypeScript's `static`. `[setter]`, `[get]`, `[destructor]`: such
+    a symbol is named by that word, in the syntax (`get v()`) or hung on the
+    name (`@x.setter`); `@f.register` says nothing about which overload this
+    is, so it goes by its parameters. A Rust `impl` takes the arguments of its
+    trait and type, `impl:S.From(u8)`, and a trait's members follow:
+    `S.From(u8).from`. It all comes from field and node names that hold across
     grammars, `parameters`, `type`, `name`, `pattern`, not from a table per
     language. A `.` in a key is written `::`, so that a `.` always separates
-    the levels of a name.
+    the levels of a name. A key stops at 200 bytes: it is written in every
+    lease and fact that names its symbol, and what differs past that is
+    numbered.
   - **Versions read together.** Facts and merges need one name for one symbol,
     and a second overload appears in only one of the versions. So they read
     all versions with the names any of them needs a key for
     (`parse_together`): a merged text too, through the same set (`parse_keyed`).
     Names depend on a parent's name, so the set is found in rounds, with a pass
-    that only counts; it ends with the depth of the file.
+    that only counts; it ends with the depth of the file. Only a name shared
+    within one version has a key: a union across versions would give every
+    change of parameters a new id.
   - **A change of parameters.** A keyed symbol that changes them has a new
-    name on that side. `align` gives it the name it has in the base, pairing
-    what the base lost and the side gained under one bare name, in source
-    order. That keeps it an edit plus a `signature_change` on the name a lease
-    was taken on, and two changes of one overload a conflict instead of two
-    new methods. A wrong pair can only be between symbols that both changed.
-    Containers are not paired, because their members hang on the key.
+    name on that side. `align` gives it the name it has in the base, which
+    keeps it an edit plus a `signature_change` on the name a lease was taken
+    on, and two changes of one overload a conflict instead of two new methods.
+    A lost and a gained symbol pair only under one bare name, in one block,
+    behind the same symbol both sides have. Elsewhere one is gone and the other
+    new: pairing them regardless reported what stood between them, and a
+    deletion could come undone. In one place the closest texts pair, then
+    source order; past 64 comparisons only source order, so that a file sets
+    no price. The texts can mislead when they are short: two empty overloads,
+    one deleted and one changed, pair by order. Containers are not paired,
+    because their members hang on the key.
+  - **A merge is read by origin.** Each symbol of a result came from a side, and
+    that side's pairs give its name, not its place there. Both sides giving
+    one key to two symbols of the base (`M(int)` and `M(long)` both become
+    `M(bool)`) would leave a file with that key twice, each passing as a symbol
+    that changed, so that is a conflict.
   - **What is left to a number.** Exact duplicates (`init()` in Go), macro
-    calls, partial types: nothing but the order tells them apart, and
-    `numbers_hold` still guards merges of those.
+    calls, partial types and the members of generic inherent impls (`W.new`,
+    `W.new~2`, because a type's members do not hang on the impl): nothing but
+    the order tells them apart. `numbers_hold` guards their blocks, and when
+    both sides changed how many there are the line merge decides
+    (`counts_hold`): neither side's `~2` says which one is meant.
   - **The `;` behind a member of a TypeScript class is the member's.** It is a
     sibling in the tree, so it stayed in the class's own text, and adding a
     field or an overload signature was an edit of `<def>`.
@@ -407,10 +428,30 @@ entry format, so they have their own version
   the fold by `State.symbol_keys`, because in older entries `a.md#Setup` and
   `a.md#Setup(old)` are two headings. A new overload needs a lease on the type
   or file around it, not on its namesakes.
+  - **Files with sections have no keys.** A heading can hold a `(`, and a scope
+    on `Setup` must not reach `Setup(old)`. `names_are_headings` keeps the
+    extensions; a test keeps them equal to `Format::detect`.
+  - **Everything that compares names by hand follows.** The revert count takes
+    `Name` and `Name(key)` for one symbol, and Cedar's `context.symbols` holds
+    the bare ids as well, so that a rule on `path#C.M` does not stop matching
+    when a second overload arrives. An `insert` on `S.From` meets a lease on
+    `S.From(u8)`: `stands_for`, one level, because members of it are free for
+    an insert as a type's are.
+  - **`decide()` reads `state.symbol_keys` throughout.** It is set by the fold,
+    so the first entry of format 13 in an old log is decided by the old rules
+    as a whole. Mixing `Ctx.format` and the state let that one entry pass a
+    reservation that any later entry would have stopped.
   - **What this does not do.** A lease on `Charge(string)` does not cover the
     fact `Charge` once the other overload is gone from the base: the session is
-    told `lease_missing` and takes the name, and nobody else can hold that. A
-    rename is still a delete and an add (the rest of #44).
+    told `lease_missing` and takes the name, and nobody else can hold that.
+    After a change of parameters lands, a session on an older base has the old
+    key and one on the trunk the new one, which no string relates; recording
+    those changes is the rest of #44, like renames, which are still a delete
+    and an add. Two sides that each add a first overload to a name conflict on
+    it, since neither version has two. A scope on `C.M` can not be narrowed to
+    `C.M(int)` with `cap.attenuate`: narrowing has no file to tell a heading
+    from a key by, so this stays refused. A key with `*` in it can not be
+    written as a scope; leases and facts are fine, and `C.M*` reaches it.
 
 ## Harness profiles
 

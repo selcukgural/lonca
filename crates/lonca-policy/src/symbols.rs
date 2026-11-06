@@ -11,7 +11,7 @@
 //! lease of a session that saw one such symbol apart from those of sessions
 //! that see several.
 
-use lonca_core::ops::{DEF, Facts, LeaseItem, LeaseKind};
+use lonca_core::ops::{DEF, Facts, LeaseItem, LeaseKind, names_are_headings};
 
 pub const FILE: &str = "<file>";
 pub const MODULE: &str = "<module>";
@@ -33,9 +33,23 @@ fn plain(part: &str) -> &str {
     }
 }
 
-/// `name` with no keys in it: what stands for every symbol it can be.
-pub fn bare(name: &str) -> String {
-    name.split('.').map(plain).collect::<Vec<_>>().join(".")
+/// `whole` is `part`, or `part` by its name alone, or that name with the
+/// number `part` has: `f~2` is what the keys of `f` turn into `f(a)~2`.
+fn stands_for_part(whole: &str, part: &str) -> bool {
+    let number = part.rsplit_once('~').map(|(_, n)| n);
+    let numbered = number.is_some_and(|n| whole == format!("{}~{n}", plain(part)));
+    whole == part || whole == plain(part) || numbered
+}
+
+/// The name of `symbol` with no keys in it: what stands for every symbol it
+/// can be. A heading stays what it is.
+pub fn bare(symbol: &str) -> String {
+    let (path, name) = split(symbol).unwrap_or(("", symbol));
+    if names_are_headings(path) {
+        return name.to_string();
+    }
+    let parts: Vec<&str> = name.split('.').map(plain).collect();
+    parts.join(".")
 }
 
 /// Containers of `symbol`, innermost first, ending with `path#<file>`.
@@ -73,7 +87,15 @@ fn covers_keyed(a: &str, b: &str) -> bool {
         return false;
     };
     let (mut a, mut b) = (a.split('.'), b.split('.'));
-    path_a == path_b && a.all(|x| b.next().is_some_and(|y| x == y || x == plain(y)))
+    path_a == path_b
+        && !names_are_headings(path_a)
+        && a.all(|x| b.next().is_some_and(|y| stands_for_part(x, y)))
+}
+
+/// `a` is the name of `b` at `b`'s own level: `b` is one of the symbols it
+/// stands for, not a member of one.
+pub fn stands_for(a: &str, b: &str) -> bool {
+    a.matches('.').count() == b.matches('.').count() && covers_keyed(a, b)
 }
 
 /// `a` is `b` or one of its containers.
@@ -175,6 +197,7 @@ mod tests {
             ("a.rs#S.From", "a.rs#S.From(u8).from"),
             ("a.rs#impl:S.From", "a.rs#impl:S.From(u8)"),
             ("a.cs#C.operator<", "a.cs#C.operator<(A,B)"),
+            ("a.py#f~2", "a.py#f(a)~2"),
             ("a.cs#C", "a.cs#C.M(int)"),
             ("a.cs#<file>", "a.cs#C.M(int)"),
         ] {
@@ -192,6 +215,10 @@ mod tests {
             ("a.cs#C.M.N", "a.cs#C.M(int)"),
             ("no-separator", "a.cs#C.M(int)"),
             ("a.cs#C.M(int)", "no-separator"),
+            ("a.py#f~2", "a.py#f(a)"),
+            ("a.py#f~2", "a.py#f(a)~3"),
+            ("a.md#Setup", "a.md#Setup(old)"),
+            ("a.toml#a", "a.toml#a[b]"),
         ] {
             assert!(!overlaps(a, b, true), "{a} {b}");
         }
@@ -207,18 +234,30 @@ mod tests {
 
     #[test]
     fn a_bare_name_has_no_keys_at_any_level() {
-        for (name, want) in [
-            ("C.M(int)", "C.M"),
-            ("C.M(int)~2", "C.M"),
-            ("S.From(u8).from(a)", "S.From.from"),
-            ("P.x[setter]", "P.x"),
-            ("C.M", "C.M"),
-            ("C.<def>", "C.<def>"),
-            ("(odd)", "(odd)"),
-            ("C.operator<(A,B)", "C.operator<"),
+        for (id, want) in [
+            ("a.cs#C.M(int)", "C.M"),
+            ("a.cs#C.M(int)~2", "C.M"),
+            ("a.rs#S.From(u8).from(a)", "S.From.from"),
+            ("a.py#P.x[setter]", "P.x"),
+            ("a.cs#C.M", "C.M"),
+            ("a.cs#C.<def>", "C.<def>"),
+            ("a.cs#(odd)", "(odd)"),
+            ("a.cs#C.operator<(A,B)", "C.operator<"),
+            ("a.md#Setup(old)", "Setup(old)"),
+            ("no-separator(x)", "no-separator"),
         ] {
-            assert_eq!(bare(name), want);
+            assert_eq!(bare(id), want);
         }
+    }
+
+    /// An insert into `S.From` meets what is held of each `S.From(..)`, and
+    /// not their members, as an insert into a type does not meet its methods.
+    #[test]
+    fn a_name_stands_for_its_symbols_at_their_level() {
+        assert!(stands_for("a.rs#S.From", "a.rs#S.From(u8)"));
+        assert!(!stands_for("a.rs#S.From", "a.rs#S.From(u8).from"));
+        assert!(!stands_for("a.rs#S.From(u16)", "a.rs#S.From(u8)"));
+        assert!(!stands_for("a.rs#S.From(u8)", "a.rs#S.From"));
     }
 
     /// An overload goes into the type around it, not into its namesakes.

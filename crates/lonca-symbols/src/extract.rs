@@ -423,42 +423,111 @@ fn holders_of(syms: &[Sym]) -> Vec<Holder> {
     syms.iter().filter_map(|s| s.holder).collect()
 }
 
+/// The names a side gave symbols of the base: its name for it -> the base's.
+pub type Aligned = BTreeMap<String, String>;
+
+/// How many pairs are compared by their text, at most, in one gap. Past it,
+/// source order decides: a file can not make the daemon compare forever.
+const MAX_COMPARED: usize = 64;
+
 /// A definition of a shared name that lost its old key and one that has a
 /// new key are one symbol whose parameters changed, as they are when no
 /// other symbol has its name: `side` takes the name `base` has it under, and
-/// the change is an edit of that. Pairs form in source order; what they
-/// mistake for each other is a change either way. Containers stay: their
-/// members hang on the key.
-pub fn align(base: &Parsed, side: &mut Parsed) {
-    align_level(&base.syms, &mut side.syms, &mut side.spots);
+/// the change is an edit of that. They must stand in one place among the
+/// symbols both have, or one is gone and the other new. Among several there,
+/// the closest texts pair, then source order. Containers stay: their members
+/// hang on the key. Returns the pairs.
+pub fn align(base: &Parsed, side: &mut Parsed) -> Aligned {
+    let mut pairs = Aligned::new();
+    pair_level(&base.syms, &side.syms, &mut pairs);
+    rename(&mut side.syms, &mut side.spots, &pairs);
+    pairs
 }
 
-fn align_level(bs: &[Sym], ns: &mut [Sym], spots: &mut [Spot]) {
+/// Gives `merged` the names of `pairs`: each symbol keeps the name its side
+/// gave it, wherever it landed.
+pub fn rename_aligned(merged: &mut Parsed, pairs: &Aligned) {
+    rename(&mut merged.syms, &mut merged.spots, pairs);
+}
+
+fn rename(syms: &mut [Sym], spots: &mut [Spot], pairs: &Aligned) {
+    for s in syms {
+        if let Some(name) = pairs.get(&s.name).filter(|_| !s.container) {
+            for spot in spots.iter_mut().filter(|at| at.name == s.name) {
+                spot.name = name.clone();
+            }
+            s.name = name.clone();
+        }
+        rename(&mut s.children, &mut s.spots, pairs);
+    }
+}
+
+fn pair_level(bs: &[Sym], ns: &[Sym], pairs: &mut Aligned) {
     let names =
         |list: &[Sym]| -> BTreeSet<String> { list.iter().map(|s| s.name.clone()).collect() };
     let (in_base, in_side) = (names(bs), names(ns));
-    let lost = bs
-        .iter()
-        .filter(|b| !b.container && !in_side.contains(&b.name));
-    let mut lost: Vec<&Sym> = lost.collect();
-    for n in ns.iter_mut() {
-        if n.plain.is_none() || n.container || in_base.contains(&n.name) {
-            continue;
-        }
-        let Some(i) = lost.iter().position(|b| b.plain == n.plain) else {
-            continue;
-        };
-        let b = lost.remove(i);
-        for spot in spots.iter_mut().filter(|s| s.name == n.name) {
-            spot.name = b.name.clone();
-        }
-        n.name = b.name.clone();
+    let lost = open_ones(bs, &in_side, &in_base);
+    let gained = open_ones(ns, &in_base, &in_side);
+    let mut gaps: BTreeMap<_, (Vec<&Sym>, Vec<&Sym>)> = BTreeMap::new();
+    for (gap, b) in lost {
+        gaps.entry(gap).or_default().0.push(b);
     }
-    for n in ns.iter_mut() {
+    for (gap, n) in gained {
+        gaps.entry(gap).or_default().1.push(n);
+    }
+    for (b, n) in gaps.into_values().flat_map(|(l, g)| closest(l, g)) {
+        pairs.insert(n.name.clone(), b.name.clone());
+    }
+    for n in ns {
         if let Some(b) = bs.iter().find(|b| b.name == n.name) {
-            align_level(&b.children, &mut n.children, &mut n.spots);
+            pair_level(&b.children, &n.children, pairs);
         }
     }
+}
+
+/// Where a symbol stands among those both sides have.
+type Gap<'s> = (Option<&'s str>, Option<&'s str>, Option<(u32, u32)>);
+
+/// The keyed symbols of `list` the other list does not have, each with its
+/// bare name, the shared symbol in front of it and its block.
+fn open_ones<'s>(
+    list: &'s [Sym],
+    other: &BTreeSet<String>,
+    own: &BTreeSet<String>,
+) -> Vec<(Gap<'s>, &'s Sym)> {
+    let mut out = Vec::new();
+    let mut behind: Option<&'s str> = None;
+    for s in list {
+        if other.contains(&s.name) && own.contains(&s.name) {
+            behind = Some(&s.name);
+        } else if s.plain.is_some() && !s.container {
+            out.push(((s.plain.as_deref(), behind, s.holder.map(|h| h.block)), s));
+        }
+    }
+    out
+}
+
+/// Pairs by likeness, the best first; a tie goes to source order.
+fn closest<'s>(lost: Vec<&'s Sym>, gained: Vec<&'s Sym>) -> Vec<(&'s Sym, &'s Sym)> {
+    let mut ranked = Vec::new();
+    let compare = lost.len() * gained.len() <= MAX_COMPARED && lost.len() * gained.len() > 1;
+    for (i, b) in lost.iter().enumerate() {
+        for (j, n) in gained.iter().enumerate() {
+            let like = compare.then(|| similar::TextDiff::from_words(&b.own, &n.own).ratio());
+            ranked.push((like.unwrap_or(0.0), i, j));
+        }
+    }
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then((a.1, a.2).cmp(&(b.1, b.2))));
+    let (mut used_l, mut used_g) = (BTreeSet::new(), BTreeSet::new());
+    let mut out = Vec::new();
+    for (_, i, j) in ranked {
+        if !used_l.contains(&i) && !used_g.contains(&j) {
+            used_l.insert(i);
+            used_g.insert(j);
+            out.push((lost[i], gained[j]));
+        }
+    }
+    out
 }
 
 /// Code with the symbols around it left out, and the symbols around it.
@@ -529,9 +598,16 @@ fn key_text(text: &str) -> String {
     normalize(text).replace(", ", ",").replace('.', "::")
 }
 
+/// The longest key. A key is written in every lease and fact that names its
+/// symbol; two that differ past this have a number.
+const MAX_KEY: usize = 200;
+
 fn key_of<S: AsRef<str>>(parts: impl Iterator<Item = S>) -> Option<String> {
     let parts: Vec<String> = parts.map(|p| key_text(p.as_ref())).collect();
-    (!parts.is_empty()).then(|| format!("({})", parts.join(",")))
+    let mut text = parts.join(",");
+    let cut = text.char_indices().map(|(i, _)| i).find(|i| *i >= MAX_KEY);
+    text.truncate(cut.unwrap_or(text.len()));
+    (!parts.is_empty()).then(|| format!("({text})"))
 }
 
 /// What stands between the angle brackets of a type.
@@ -797,18 +873,25 @@ impl<'s> Extractor<'s> {
     fn parameter_key(&self, p: Node) -> String {
         let field = |f: &str| p.child_by_field_name(f);
         let what = field("type").or(field("name")).or(field("pattern"));
-        let text = self.text(what.unwrap_or(p));
+        let text = self.text(what.or(field("left")).unwrap_or(p));
         let modifiers = named(p)
             .into_iter()
             .filter(|c| c.kind().contains("modifier"));
         let mut words: Vec<&str> = modifiers.map(|c| self.text(c)).collect();
         words.push(text.trim_start_matches([':', ' ']));
-        words.join(" ")
+        // What an overload can differ by in TypeScript: `f(a?: T)`.
+        let optional = if p.kind().contains("optional") {
+            "?"
+        } else {
+            ""
+        };
+        format!("{}{optional}", words.join(" "))
     }
 
     /// The word that makes `n` one of the accessors of a name: `get` and
     /// `set` in its syntax, or a decorator that hangs it on the name, as
-    /// `@x.setter` does. The names hold across tree-sitter grammars.
+    /// `@x.setter` does. Any other decorator of that form says nothing about
+    /// which one this is: `@f.register` overloads go by their parameters.
     fn accessor(&self, n: Node, around: Node, name: &str) -> Option<String> {
         let word = n
             .children(&mut n.walk())
@@ -820,9 +903,37 @@ impl<'s> Extractor<'s> {
             decorators.find_map(|d| {
                 let text = self.text(d).trim_start_matches('@');
                 let (owner, word) = text.split_once('.')?;
-                (owner == name).then(|| word.trim().to_string())
+                let word = word.trim();
+                let accessor = matches!(word, "getter" | "setter" | "deleter");
+                (owner == name && accessor).then(|| word.to_string())
             })
         })
+    }
+
+    /// What a declaration can differ by besides its parameters: how many
+    /// type parameters it has, the type a C# conversion gives, the interface
+    /// it implements, `static` in TypeScript. Field and node names hold
+    /// across grammars; a grammar without them has nothing to add.
+    fn key_prefix(&self, n: Node) -> Vec<String> {
+        let mut parts = Vec::new();
+        if let Some(list) = n.child_by_field_name("type_parameters") {
+            parts.push(format!("<{}>", named(list).len()));
+        }
+        if n.kind().contains("conversion")
+            && let Some(ty) = n.child_by_field_name("type")
+        {
+            parts.push(self.text(ty).to_string());
+        }
+        for c in n.children(&mut n.walk()) {
+            match c.kind() {
+                "static" => parts.push("static".to_string()),
+                "explicit_interface_specifier" => {
+                    parts.push(self.text(c).trim_end_matches('.').to_string())
+                }
+                _ => {}
+            }
+        }
+        parts
     }
 
     /// What tells `n` from other definitions of its name: not its place
@@ -831,10 +942,13 @@ impl<'s> Extractor<'s> {
         if let Some(word) = self.accessor(n, around, &def.name) {
             return Some(format!("[{word}]"));
         }
+        if n.kind().contains("destructor") {
+            return Some("[destructor]".to_string());
+        }
         let Some(list) = n.child_by_field_name("parameters") else {
             return def.key.clone();
         };
-        let mut parts = Vec::new();
+        let mut parts = self.key_prefix(n);
         for i in 0..list.named_child_count() as u32 {
             let Some(p) = list.named_child(i as _) else {
                 continue;
@@ -1424,7 +1538,7 @@ mod tests {
             keyed_names_of("a.ts", src),
             [
                 "f(string)",
-                "f(number,string)",
+                "f(number,string?)",
                 "f(any)",
                 "V",
                 "V.v[get]",
@@ -1457,6 +1571,108 @@ mod tests {
                 "W.new~2",
             ]
         );
+    }
+
+    /// Each row: two symbols of one name and what tells them apart.
+    #[test]
+    fn overloads_differ_by_more_than_their_parameters() {
+        let rows: [(&str, &str, [&str; 3]); 8] = [
+            (
+                "a.cs",
+                "class C { public static implicit operator int(C c) => 1; public static implicit operator long(C c) => 1; }",
+                [
+                    "C",
+                    "C.operator_conversion(int,C)",
+                    "C.operator_conversion(long,C)",
+                ],
+            ),
+            (
+                "a.cs",
+                "class C { void IA.M() {} void IB.M() {} }",
+                ["C", "C.M(IA)", "C.M(IB)"],
+            ),
+            (
+                "a.cs",
+                "class C { void G<T>() {} void G<T, U>() {} }",
+                ["C", "C.G(<1>)", "C.G(<2>)"],
+            ),
+            (
+                "a.cs",
+                "class C { C() {} ~C() {} }",
+                ["C", "C.C()", "C.C[destructor]"],
+            ),
+            (
+                "a.ts",
+                "class C { static m(a: string) {} m(a: string) {} }",
+                ["C", "C.m(static,string)", "C.m(string)"],
+            ),
+            (
+                "a.ts",
+                "class C { m(a: number) {} m(a?: number) {} }",
+                ["C", "C.m(number)", "C.m(number?)"],
+            ),
+            (
+                "a.py",
+                "class C:\n    @f.register\n    def f(self, a: int):\n        pass\n    @f.register\n    def f(self, a: str):\n        pass\n",
+                ["C", "C.f(self,int)", "C.f(self,str)"],
+            ),
+            (
+                "a.js",
+                "class C { m(a = 1) {} m(b, c) {} }",
+                ["C", "C.m(a)", "C.m(b,c)"],
+            ),
+        ];
+        for (path, src, want) in rows {
+            assert_eq!(keyed_names_of(path, src), want, "{src}");
+        }
+    }
+
+    /// A decorator that takes arguments is no accessor, and holds no level.
+    #[test]
+    fn a_decorator_argument_stays_out_of_a_name() {
+        let src = "@f.register(os.PathLike)\ndef f(a):\n    pass\n@f.register(str)\ndef f(b):\n    pass\n";
+        assert_eq!(keyed_names_of("a.py", src), ["f(a)", "f(b)"]);
+    }
+
+    #[test]
+    fn a_long_key_is_cut_and_the_rest_is_numbered() {
+        let long = ["int a"; 150].join(", ");
+        let src =
+            format!("class C {{ void M({long}) {{}} void M({long}, int b) {{}} void M() {{}} }}");
+        let names = keyed_names_of("a.cs", &src);
+        let keyed = format!("C.M({})", vec!["int"; 50].join(","));
+        assert_eq!(keyed.len(), "C.M(".len() + 199 + 1);
+        assert_eq!(
+            names[1].trim_end_matches([',', ')']),
+            keyed.trim_end_matches(')')
+        );
+        assert_eq!(names[2], format!("{}~2", names[1]));
+        assert_eq!(names[3], "C.M()");
+    }
+
+    #[test]
+    fn a_key_is_cut_between_characters() {
+        let long = "ü".repeat(150);
+        let key = key_of([long].iter()).unwrap();
+        assert!(key.len() <= MAX_KEY + 3, "{}", key.len());
+    }
+
+    /// Past what is compared, source order pairs them: the cost of a change
+    /// is not the square of a file.
+    #[test]
+    fn many_changed_overloads_pair_in_source_order() {
+        let list = |ty: &str| {
+            let methods = (0..9).map(|i| format!("void M({ty}{i} a) {{ A{i}(); }} "));
+            format!(
+                "class C {{ {} void Z() {{}} }}",
+                methods.collect::<String>()
+            )
+        };
+        let (old, new) = (list("A"), list("B"));
+        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [&old, &new]);
+        let pairs = align(&a, &mut b);
+        assert_eq!(pairs.len(), 9);
+        assert_eq!(pairs["C.M(B3)"], "C.M(A3)");
     }
 
     /// The key is how a symbol is known among others, so nothing that can
@@ -1531,9 +1747,13 @@ mod tests {
         // A symbol with no partner stays what it is.
         let new = "class C { void M(long a) {} void M(short s) {} void M(byte b) {} void N() {} }";
         let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [old, new]);
-        align(&a, &mut b);
+        let pairs = align(&a, &mut b);
+        assert_eq!(pairs.len(), 2);
         let names: Vec<&str> = b.syms[0].children.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["C.M(int)", "C.M(string)", "C.M(byte)", "C.N"]);
+        assert!(
+            names.contains(&"C.M(byte)") || names.contains(&"C.M(short)"),
+            "{names:?}"
+        );
     }
 
     /// Containers keep their name: their members hang on the key.

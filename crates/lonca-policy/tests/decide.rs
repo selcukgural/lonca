@@ -4648,13 +4648,109 @@ fn a_scope_on_a_name_reaches_its_keyed_symbols() {
     h.assert_replay();
 }
 
+/// An insert into a name meets a lease on one of its symbols, as it does on
+/// that symbol's own name.
+#[test]
+fn an_insert_into_a_name_meets_its_keyed_symbols() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start("b", &["src/**"]);
+    let held = "src/a.rs#S.From(u8)";
+    assert!(h.lease("a", "l1", &[(held, LeaseKind::Edit)]).is_allow());
+    for wide in ["src/a.rs#S.From", held] {
+        let d = h.lease("b", "l2", &[(wide, LeaseKind::Insert)]);
+        assert!(denied_with(&d, &format!("lease_held:{held}:a:")), "{d:?}");
+    }
+    let other = "src/a.rs#S.From(u16)";
+    assert!(h.lease("b", "l3", &[(other, LeaseKind::Insert)]).is_allow());
+    assert!(h.agent("a", release("l1")).is_allow());
+    assert!(
+        h.lease("a", "l4", &[("src/a.rs#S.From", LeaseKind::Insert)])
+            .is_allow()
+    );
+    let d = h.lease("b", "l5", &[(held, LeaseKind::Edit)]);
+    assert!(denied_with(&d, "lease_held:src/a.rs#S.From:a:"), "{d:?}");
+    h.assert_replay();
+}
+
+/// In a document a `(` is part of the heading.
+#[test]
+fn a_heading_is_not_a_name_with_a_key() {
+    let mut h = H::new();
+    start_with_symbols(&mut h, "doc", &["Setup"]);
+    let heading = "docs/a.md#Setup(old)";
+    h.start("other", &["docs/**"]);
+    let op = h.start_op("scoped", &["docs/**"], None);
+    let mut op = op;
+    if let Op::SessionStart { scope, .. } = &mut op {
+        scope.symbols = Some(vec!["Setup".into()]);
+    }
+    assert!(h.human("ayse", op).is_allow());
+    let d = h.lease("scoped", "l1", &[(heading, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("scope_symbol:{heading}")), "{d:?}");
+    let d = h.lease("other", "l2", &[(heading, LeaseKind::Edit)]);
+    assert!(d.is_allow(), "{d:?}");
+    let name = ("docs/a.md#Setup", LeaseKind::Edit);
+    assert!(h.lease("scoped", "l3", &[name]).is_allow(), "two headings");
+    h.wrote("scoped", "docs/a.md");
+    let d = h.propose("scoped", ChangeId::random(), edit(heading));
+    assert!(denied_with(&d, &format!("scope_symbol:{heading}")), "{d:?}");
+    h.assert_replay();
+}
+
+/// What was reverted by a name counts for its keyed symbols and the other
+/// way around, and not for another overload. The state is written by hand,
+/// so this one does not replay.
+#[test]
+fn a_revert_of_a_name_counts_for_its_keyed_symbols() {
+    let storm = |reverted: &str, edited: &str, keys: bool| {
+        let mut h = H::new();
+        h.start("a", &["src/**"]);
+        assert!(h.lease("a", "l", &[(edited, LeaseKind::Edit)]).is_allow());
+        h.wrote("a", "src/a.cs");
+        let at = h.now;
+        h.chain.state.symbol_keys = keys;
+        h.chain.state.reverts = vec![(at, vec![reverted.to_string()]); 3];
+        let d = h.propose("a", ChangeId::random(), edit(edited));
+        d.reasons.iter().any(|r| r.contains("revert-storm"))
+    };
+    let (name, one) = ("src/a.cs#C.M", "src/a.cs#C.M(int)");
+    assert!(storm(one, one, true));
+    assert!(storm(name, one, true));
+    assert!(storm(one, name, true));
+    assert!(!storm("src/a.cs#C.M(string)", one, true));
+    assert!(!storm(name, one, false));
+    assert!(!storm(one, name, false));
+}
+
+/// A rule that names a symbol goes on working when it gets a key.
+#[test]
+fn a_policy_on_a_name_reaches_its_keyed_symbols() {
+    let rule = r#"
+@id("no-charge")
+forbid(principal is Lonca::Agent, action == Lonca::Action::"change.propose", resource)
+when { context.symbols.contains("src/a.cs#C.M") };
+"#;
+    let source = format!("{DEFAULT_POLICY}\n{rule}");
+    for (symbol, denied) in [("src/a.cs#C.M(int)", true), ("src/a.cs#C.N(int)", false)] {
+        let policy = PolicyBundle::parse(DEFAULT_CONFIG, &source).unwrap();
+        let mut h = H::with_policy(policy);
+        h.start("a", &["src/**"]);
+        assert!(h.lease("a", "l", &[(symbol, LeaseKind::Edit)]).is_allow());
+        h.wrote("a", "src/a.cs");
+        let d = h.propose("a", ChangeId::random(), edit(symbol));
+        assert_eq!(denied_with(&d, "policy:no-charge"), denied, "{d:?}");
+        h.assert_replay();
+    }
+}
+
 /// The meaning changed with format 13: in older entries two names are two
-/// symbols whatever they look like, as with headings in a document.
+/// symbols whatever they look like.
 #[test]
 fn entries_of_an_older_format_know_no_keys() {
     let mut h = H::new();
     h.start("a", &["src/**"]);
-    let (name, keyed) = ("src/a.md#Setup", "src/a.md#Setup(old)");
+    let (name, keyed) = ("src/a.cs#C.M", "src/a.cs#C.M(int)");
     h.start("b", &["src/**"]);
     assert!(h.lease("a", "l1", &[(keyed, LeaseKind::Edit)]).is_allow());
     assert!(h.chain.state.symbol_keys);

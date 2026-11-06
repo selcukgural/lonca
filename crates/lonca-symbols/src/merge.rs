@@ -36,6 +36,7 @@ fn outer_code(engine: u32, p: &Parsed) -> Code<'_> {
 fn differs(engine: u32, a: Code, b: Code) -> bool {
     a.0 != b.0 || engine >= ENGINE_PLACES && shifted(a.1, b.1)
 }
+use crate::facts::renames_between;
 use crate::lang::Lang;
 use crate::sections::{self, Format};
 
@@ -496,6 +497,14 @@ impl<'a> Merger<'a> {
         let (bm, om, tm) = (by_name(bs), by_name(os), by_name(ts));
         let top = o_container.is_none();
         self.note_moves(&names(bs), &names(ts));
+        // A symbol `t` renamed stays where `o` has it.
+        let renames = renames_between(self.engine, bs, ts);
+        let in_place = |new: &str| {
+            let old = renames.iter().find(|[_, n]| *n == new).map(|[o, _]| *o)?;
+            let (b_sym, o_sym) = (bm.get(old)?, om.get(old)?);
+            o_sym.same(self.o, b_sym, self.b).then_some((old, *o_sym))
+        };
+        let mut renamed = BTreeSet::new();
         for (i, ts_sym) in ts.iter().enumerate() {
             let name = ts_sym.name.as_str();
             let t_text = ts_sym.text(self.t);
@@ -507,6 +516,11 @@ impl<'a> Merger<'a> {
                         {
                             self.conflict(name);
                         }
+                        continue;
+                    }
+                    if let Some((old, o_sym)) = in_place(name) {
+                        renamed.insert(old);
+                        self.replace(o_sym.start, o_sym.end, t_text.to_string());
                         continue;
                     }
                     // A new symbol stands next to one of its own group, on
@@ -615,7 +629,7 @@ impl<'a> Merger<'a> {
             }
         }
         for b_sym in bs {
-            if tm.contains_key(b_sym.name.as_str()) {
+            if tm.contains_key(b_sym.name.as_str()) || renamed.contains(b_sym.name.as_str()) {
                 continue;
             }
             if let Some(o_sym) = om.get(b_sym.name.as_str()) {
@@ -791,6 +805,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::ENGINE_RENAMES;
     use crate::extract::{parse, parse_at};
 
     const CLASS: &str = "class A:\n    x = 1\n\n    def a(self):\n        return 1\n\n    def b(self):\n        return 2\n\n    def c(self):\n        return 3\n";
@@ -1130,6 +1145,82 @@ mod tests {
         let m = keyed("a.rs", one, &o, &t).unwrap();
         assert!(m.contains("v: u16) -> S {\n        S\n"), "{m}");
         assert!(m.contains("v: u8) -> S {\n        S::new()\n"), "{m}");
+    }
+
+    /// Each row: a rename on one side and an edit of another symbol on the
+    /// other, in both orders.
+    #[test]
+    fn a_rename_merges_with_an_edit_of_another_symbol() {
+        let rows = [
+            (
+                "a.rs",
+                "fn old() {\n    a();\n}\n\nfn other() {\n    b();\n}\n",
+                "old",
+                "new",
+                "b();",
+                "c();",
+            ),
+            (
+                "a.py",
+                "def old():\n    a()\n\n\ndef other():\n    b()\n",
+                "old",
+                "new",
+                "b()",
+                "c()",
+            ),
+            (
+                "a.ts",
+                "function old() {\n  a();\n}\n\nfunction other() {\n  b();\n}\n",
+                "old",
+                "fresh",
+                "b();",
+                "c();",
+            ),
+            (
+                "a.js",
+                "function old() {\n  a();\n}\n\nfunction other() {\n  b();\n}\n",
+                "old",
+                "fresh",
+                "b();",
+                "c();",
+            ),
+            (
+                "a.cs",
+                "class C {\n    void Old() { A(); }\n\n    void Other() { B(); }\n}\n",
+                "Old",
+                "New",
+                "B();",
+                "C();",
+            ),
+            (
+                "a.go",
+                "package p\n\nfunc Old() {\n\ta()\n}\n\nfunc Other() {\n\tb()\n}\n",
+                "Old",
+                "New",
+                "b()",
+                "c()",
+            ),
+        ];
+        for (path, b, from, to, edit, edited) in rows {
+            let (o, t) = (b.replacen(from, to, 1), b.replace(edit, edited));
+            let want = o.replace(edit, edited);
+            for (o, t) in [(&o, &t), (&t, &o)] {
+                let m = merge_text_at(ENGINE_RENAMES, path, b, o, t);
+                assert_eq!(m.as_deref(), Ok(want.as_str()), "{path}");
+            }
+        }
+    }
+
+    /// An edit of what the other side renamed reaches no symbol.
+    #[test]
+    fn a_rename_conflicts_with_an_edit_of_the_symbol() {
+        let b = "def old():\n    a()\n\n\ndef other():\n    b()\n";
+        let o = b.replace("old", "new");
+        let t = b.replace("a()", "c()");
+        assert_eq!(
+            merge_text_at(ENGINE_RENAMES, "a.py", b, &o, &t),
+            Err(vec!["a.py#old".to_string()])
+        );
     }
 
     #[test]

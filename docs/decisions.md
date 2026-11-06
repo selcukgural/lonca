@@ -107,6 +107,8 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 13** adds no field: `path#Name` stands for every `path#Name(key)`
   (see "Symbol engine versions", engine 6). In older entries they are two
   symbols.
+- **Version 14** adds `renames` to facts, left out of the encoding when empty
+  (see "Symbol engine versions", engine 7).
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -455,14 +457,48 @@ entry format, so they have their own version
   - **What this does not do.** A lease on `Charge(string)` does not cover the
     fact `Charge` once the other overload is gone from the base: the session is
     told `lease_missing` and takes the name, and nobody else can hold that.
-    After a change of parameters lands, a session on an older base has the old
-    key and one on the trunk the new one, which no string relates; recording
-    those changes is the rest of #44, like renames, which are still a delete
-    and an add. Two sides that each add a first overload to a name conflict on
+    Two sides that each add a first overload to a name conflict on
     it, since neither version has two. A scope on `C.M` can not be narrowed to
     `C.M(int)` with `cap.attenuate`: narrowing has no file to tell a heading
     from a key by, so this stays refused. A key with `*` in it can not be
     written as a scope; leases and facts are fine, and `C.M*` reaches it.
+
+- **Engine 7** says what was renamed (issue #44, its rest). A rename was a
+  delete and an add, so a session that had the old name and one that has the
+  new one held one symbol, and only the merge found out.
+  - **What counts.** A deleted and an added symbol of one list, of one shape,
+    that are the same with the name left out, recursive calls included, or
+    alike by at least 0.8, word by word. The number is engine data: it decides
+    facts. A type also needs half its members in both, because two shells say
+    nothing. Past 64 comparisons in one list a rename stays a delete and an add.
+    `impl` blocks are not renamed, since they stand for their type. A move to
+    another type or file is not detected: nothing in a list says it, and a
+    wrong guess there would free a lease on a symbol that was only deleted.
+  - **Facts.** `renames: [[old, new]]`, beside the `deletes` and `adds` that
+    stay. So `Claim` does not change and no client has to, and an auditor of
+    an old log has nothing new to read. A change of parameters that `align`
+    paired is in `renames` too, though it stays an edit: the old key and the
+    new one are one symbol, and no string says that.
+  - **Leases.** A `rename` lease on the old name covers the whole change: the
+    new name needs no lease on its container.
+  - **What the issue proposed and this does not do.** It proposed resolving
+    lease items against the trunk and recording the trunk in the set. That
+    takes a tree in `decide()` or a value the daemon computes and the auditor
+    recomputes. The integrated facts already say all of it, so the fold keeps
+    them (`State.renames`, with where in `trunk_line` each starts) and names are
+    compared as they are and as they are called on the trunk
+    (`State.conflict`). A session on an older base asks for a name a lease on
+    the new one meets, and a proposal from an older base has its facts mapped by
+    the renames that base had not seen. A name taken again is that new symbol
+    for a new lease, though not for a proposal from before the rename. A
+    member follows its type.
+  - **The merge** leaves a symbol `t` renamed where `o` has it, instead of a
+    delete here and an add there. An edit of what the other side renamed is a
+    conflict, as with a delete: the edit does not follow the name.
+  - **What this does not do.** A rename does not change the code that calls the
+    symbol, so a caller is what verification finds (design §5.8). The list of
+    tests counts a renamed test as deleted and added, and escalates: renaming
+    a test and gutting it can not be told apart from outside.
 
 ## Harness profiles
 

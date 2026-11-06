@@ -770,7 +770,7 @@ pub fn decide(
                 }
                 for a in items {
                     for b in &held.items {
-                        if leases_conflict(a, b, state.symbol_keys) {
+                        if state.conflict(a, b) {
                             v.deny(format!(
                                 "lease_held:{}:{}:{}",
                                 b.symbol, held.lease.session, held.lease.intent
@@ -1209,8 +1209,16 @@ fn propose(
                 .collect();
             let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
             for need in symbols::lease_needs(f) {
+                // From an older base the fact has the old name of what the
+                // session may hold by the new one.
                 let keys = state.symbol_keys;
-                if !mine.iter().any(|l| need.covered_by(l, keys)) {
+                let renamed = symbols::LeaseNeed {
+                    symbol: state.renamed_to(&need.symbol, Some(base)),
+                    kinds: need.kinds,
+                };
+                let covered =
+                    |l: &&LeaseItem| need.covered_by(l, keys) || renamed.covered_by(l, keys);
+                if !mine.iter().any(covered) {
                     v.deny(format!("lease_missing:{}", need.symbol));
                 }
             }
@@ -1271,8 +1279,10 @@ fn propose(
     }
     let window = cfg.reverts.window_minutes * 60_000;
     let mine: BTreeSet<&String> = f.edits.iter().chain(&f.deletes).chain(&f.adds).collect();
-    // A revert of `Name` is one of `Name(key)`, and the other way around.
+    // A revert of `Name` is one of `Name(key)`, and the other way around,
+    // and it follows the symbol to its new name.
     let reverted = |s: &String| {
+        let s = &state.renamed_to(s, None);
         mine.contains(s)
             || (state.symbol_keys
                 && mine

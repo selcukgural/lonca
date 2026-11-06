@@ -556,7 +556,7 @@ Lisansları kullanmadan önce kontrol edilmeli.
 - **Marka:** "Lonca" için TÜRKPATENT ve EUIPO'da marka araması yapılmalı.
 - **Dil desteği:** Sembol desteği ilk hangi dil(ler) için verilecek?
 - **change-id:** Commit başlığı olarak mı, trailer olarak mı tutulacak? GitHub'ın ek commit başlıklarını koruyup korumadığı doğrulanmalı.
-- **Sembol kimliği:** Yeniden adlandırma ve taşıma sırasında nasıl stabil tutulacak?
+- **Sembol kimliği:** Aynı adlı semboller parametreleriyle ayrılır, yeniden adlandırma facts'te kayıtlıdır (bkz. `docs/decisions.md`, engine 6 ve 7). Sınıflar ve dosyalar arası taşıma açık.
 - **Redaction:** Push edilmiş geçmişte nasıl uygulanacak?
 - **Sandbox:** macOS'ta container mı, OS sandbox mı? Tekrarlanabilirlik nasıl sağlanacak (Nix, container imajı)?
 - **Auditor:** Karar fonksiyonu kütüphanesini Gatekeeper ile paylaşacak mı? Paylaşırsa ortak hatalar yakalanmaz.

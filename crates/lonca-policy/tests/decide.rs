@@ -12,7 +12,7 @@ use lonca_policy::chain::{Chain, Submission, replay_checked};
 use lonca_policy::config::{DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle};
 use lonca_policy::decide::{Ctx, decide};
 use lonca_policy::human::intent_bytes;
-use lonca_policy::state::{ChangeStatus, Provenance, State};
+use lonca_policy::state::{ChangeStatus, Provenance, Renamed, State};
 
 const REPO: &str = "demo";
 const T0: i64 = 1_760_000_000_000;
@@ -4742,6 +4742,47 @@ when { context.symbols.contains("src/a.cs#C.M") };
         assert_eq!(denied_with(&d, "policy:no-charge"), denied, "{d:?}");
         h.assert_replay();
     }
+}
+
+/// What a symbol is called now, from a state written by hand.
+#[test]
+fn a_name_follows_its_renames() {
+    let (first, second) = (gid('1'), gid('2'));
+    let mut s = State::new();
+    s.trunk_line = vec![gid('0'), first.clone(), second.clone()];
+    let renamed = |line, old: &str, new: &str, reused| Renamed {
+        line,
+        old: old.into(),
+        new: new.into(),
+        reused,
+    };
+    s.renames = vec![
+        renamed(1, "a#m", "a#n", None),
+        renamed(2, "a#n", "a#o", None),
+        renamed(2, "a#T", "a#U", None),
+        renamed(1, "a#gone", "a#kept", Some(2)),
+    ];
+    assert_eq!(s.renamed_to("a#m", None), "a#o", "a chain");
+    assert_eq!(s.renamed_to("a#T.x", None), "a#U.x", "a member");
+    assert_eq!(s.renamed_to("a#T", None), "a#U");
+    assert_eq!(s.renamed_to("a#Tx", None), "a#Tx", "a longer name");
+    assert_eq!(s.renamed_to("a#z", None), "a#z");
+    assert_eq!(s.renamed_to("a#gone", None), "a#gone", "the name is taken");
+
+    assert_eq!(
+        s.renamed_to("a#gone", Some(&gid('0'))),
+        "a#kept",
+        "not on that base"
+    );
+    assert_eq!(
+        s.renamed_to("a#m", Some(&gid('0'))),
+        "a#o",
+        "both are later"
+    );
+    assert_eq!(s.renamed_to("a#m", Some(&first)), "a#m", "that base had it");
+    assert_eq!(s.renamed_to("a#n", Some(&first)), "a#o");
+    assert_eq!(s.renamed_to("a#n", Some(&second)), "a#n");
+    assert_eq!(s.renamed_to("a#m", Some(&gid('9'))), "a#o", "never trunk");
 }
 
 /// The meaning changed with format 13: in older entries two names are two

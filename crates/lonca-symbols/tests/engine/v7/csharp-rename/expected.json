@@ -1,0 +1,272 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cs#Till.Tally"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.cs#Till.Sum"
+        ],
+        "edits": [
+          "src/sample.cs#Till.Add(string)"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "renames": [
+          [
+            "src/sample.cs#Till.Add(string)",
+            "src/sample.cs#Till.Add(object)"
+          ],
+          [
+            "src/sample.cs#Till.Sum",
+            "src/sample.cs#Till.Tally"
+          ]
+        ],
+        "signature_changes": [
+          "src/sample.cs#Till.Add(string)"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#Till.Add(int)"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "class Till\n{\n    void Add(int v)\n    {\n        Total += v + 1;\n    }\n\n    void Add(object v)\n    {\n        Total += v.Length;\n    }\n\n    int Tally()\n    {\n        return Total;\n    }\n}\n"
+  },
+  "path": "src/sample.cs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Add(int)",
+              "own": "",
+              "signature": "void Add(int v)",
+              "skipped": false,
+              "span": [
+                17,
+                17,
+                64
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Add(string)",
+              "own": "",
+              "signature": "void Add(string v)",
+              "skipped": false,
+              "span": [
+                70,
+                70,
+                127
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Sum",
+              "own": "",
+              "signature": "int Sum()",
+              "skipped": false,
+              "span": [
+                133,
+                133,
+                176
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Till",
+          "own": "class_declaration(class\u001fTill\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            178
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Add(int)",
+              "own": "",
+              "signature": "void Add(int v)",
+              "skipped": false,
+              "span": [
+                17,
+                17,
+                64
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Add(object)",
+              "own": "",
+              "signature": "void Add(object v)",
+              "skipped": false,
+              "span": [
+                70,
+                70,
+                127
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Tally",
+              "own": "",
+              "signature": "int Tally()",
+              "skipped": false,
+              "span": [
+                133,
+                133,
+                178
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Till",
+          "own": "class_declaration(class\u001fTill\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            180
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Add(int)",
+              "own": "",
+              "signature": "void Add(int v)",
+              "skipped": false,
+              "span": [
+                17,
+                17,
+                68
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Add(string)",
+              "own": "",
+              "signature": "void Add(string v)",
+              "skipped": false,
+              "span": [
+                74,
+                74,
+                131
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Till.Sum",
+              "own": "",
+              "signature": "int Sum()",
+              "skipped": false,
+              "span": [
+                137,
+                137,
+                180
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Till",
+          "own": "class_declaration(class\u001fTill\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            182
+          ]
+        }
+      ]
+    }
+  }
+}

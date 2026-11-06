@@ -1,0 +1,231 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cs#Client.Charge(int,int)"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 5,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#Client.Charge",
+          "src/sample.cs#Client.Refund"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [
+          "src/sample.cs#Client.Refund"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "class Client\n{\n    public void Charge(int amount, int fee)\n    {\n        Pay(amount + fee);\n    }\n\n    public void Charge(string card)\n    {\n        Log(card);\n        Pay(card);\n    }\n\n    public void Refund(long amount)\n    {\n        Back(amount);\n    }\n}\n"
+  },
+  "path": "src/sample.cs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Charge",
+              "own": "",
+              "signature": "public void Charge(string card)",
+              "skipped": false,
+              "span": [
+                19,
+                19,
+                81
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Refund",
+              "own": "",
+              "signature": "public void Refund(int amount)",
+              "skipped": false,
+              "span": [
+                87,
+                87,
+                151
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "class_declaration(class\u001fClient\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            153
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Charge(int,int)",
+              "own": "",
+              "signature": "public void Charge(int amount, int fee)",
+              "skipped": false,
+              "span": [
+                19,
+                19,
+                97
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Charge(string)",
+              "own": "",
+              "signature": "public void Charge(string card)",
+              "skipped": false,
+              "span": [
+                103,
+                103,
+                165
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Refund",
+              "own": "",
+              "signature": "public void Refund(int amount)",
+              "skipped": false,
+              "span": [
+                171,
+                171,
+                235
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "class_declaration(class\u001fClient\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            237
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Charge",
+              "own": "",
+              "signature": "public void Charge(string card)",
+              "skipped": false,
+              "span": [
+                19,
+                19,
+                100
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Refund",
+              "own": "",
+              "signature": "public void Refund(long amount)",
+              "skipped": false,
+              "span": [
+                106,
+                106,
+                171
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "class_declaration(class\u001fClient\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            173
+          ]
+        }
+      ]
+    }
+  }
+}

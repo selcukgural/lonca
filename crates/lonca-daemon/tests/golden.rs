@@ -86,7 +86,28 @@ fn golden_repo() -> Env {
     queue(&mut e);
     wide_wait(&mut e);
     keyed_names(&mut e);
+    renames(&mut e);
     e
+}
+
+/// From format 14: facts say what was renamed, and the old name meets the
+/// new one.
+fn renames(e: &mut Env) {
+    let seed = "def charge(card):\n    pay(card)\n    log(card)\n";
+    e.human_change(vec![file("src/pay.py", seed)], "seed");
+    e.svc.process_all();
+    let r = e.human_change(
+        vec![file("src/pay.py", &seed.replace("charge", "bill"))],
+        "a better name",
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    e.svc.process_all();
+    let a = e.session("s23", &["src/pay.py"]);
+    let b = e.session("s24", &["src/pay.py"]);
+    let r = e.lease(&a, "src/pay.py#charge");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let r = e.lease(&b, "src/pay.py#bill");
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
 }
 
 /// From format 13: symbols of one name have a key, and the name alone stands
@@ -804,6 +825,24 @@ fn golden_v13_log_still_verifies_replays_and_audits() {
         reasons.iter().any(|r| r.starts_with(held))
     });
     assert!(stopped, "a key met the lease on its name");
+}
+
+#[test]
+fn golden_v14_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v14.bundle",
+        "da4e0fb625a65552eb148ec095f1c5079869ad76ca9361d933b94146e2ebde4f",
+        14,
+    );
+    let renamed = ops.iter().filter_map(|o| o.entry.facts.as_ref());
+    let renamed = renamed.flat_map(|f| f.renames.iter()).collect::<Vec<_>>();
+    assert_eq!(renamed, [&["src/pay.py#charge", "src/pay.py#bill"]]);
+    let held = "lease_held:src/pay.py#charge:s23:";
+    let reasons = ops.iter().flat_map(|o| o.entry.decision.reasons.iter());
+    assert!(
+        reasons.into_iter().any(|r| r.starts_with(held)),
+        "the old name met the new one"
+    );
 }
 
 #[test]

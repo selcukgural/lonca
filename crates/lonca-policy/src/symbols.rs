@@ -134,7 +134,10 @@ pub fn lease_needs(f: &Facts) -> Vec<LeaseNeed> {
     let edits = f.edits.iter().chain(&f.signature_changes);
     let edits = edits.map(|s| need(s.clone(), EDIT_KINDS));
     let deletes = f.deletes.iter().map(|s| need(s.clone(), DELETE_KINDS));
-    let adds = f.adds.iter().filter_map(|s| container(s));
+    // A rename takes a `rename` lease on the old name, and that is all of it.
+    let renamed = |s: &&String| f.renames.iter().any(|[_, new]| new == *s);
+    let adds = f.adds.iter().filter(|s| !renamed(s));
+    let adds = adds.filter_map(|s| container(s));
     let adds = adds.map(|c| need(c, ADD_KINDS));
     let files = f.deleted_files.iter().map(|p| file_symbol(p));
     let files = files.map(|s| need(s, DELETE_KINDS));
@@ -265,6 +268,24 @@ mod tests {
     fn the_container_of_an_overload_is_the_type() {
         assert_eq!(container("a.cs#C.M(int)"), Some("a.cs#C".to_string()));
         assert_eq!(container("a.cs#M(int)"), Some("a.cs#<file>".to_string()));
+    }
+
+    #[test]
+    fn a_renamed_symbol_needs_only_its_old_name() {
+        let f = Facts {
+            deletes: vec!["a.rs#T.old".into()],
+            adds: vec!["a.rs#T.new".into(), "a.rs#U.other".into()],
+            renames: vec![["a.rs#T.old".into(), "a.rs#T.new".into()]],
+            ..Default::default()
+        };
+        let need = |symbol: &str, kinds| LeaseNeed {
+            symbol: symbol.into(),
+            kinds,
+        };
+        assert_eq!(
+            lease_needs(&f),
+            vec![need("a.rs#T.old", DELETE_KINDS), need("a.rs#U", ADD_KINDS)]
+        );
     }
 
     #[test]

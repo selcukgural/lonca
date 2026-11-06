@@ -190,6 +190,9 @@ pub fn merge_text_at(
         // A side that does not parse has no symbols to hold the merge to,
         // and engines before this check only asked that the result parses.
         let unread = pb.has_error || po.has_error || pt.has_error;
+        if unread && !lang.is_strict() {
+            return Ok(merged);
+        }
         let engine = if unread || engine < ENGINE_PLACES {
             0
         } else {

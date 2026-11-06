@@ -112,6 +112,10 @@ impl Verifier {
             let (Some(lang), Some(e)) = (Lang::detect(p), files.get(p)) else {
                 continue;
             };
+            // A grammar that can not read valid code must not refuse it.
+            if !lang.is_strict() {
+                continue;
+            }
             let bytes = store.read_blob(&e.blob)?;
             let ok = std::str::from_utf8(&bytes)
                 .map(|t| !parse(lang, t).has_error)

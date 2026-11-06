@@ -13,7 +13,10 @@ use tree_sitter::Node;
 use lonca_core::ops::DEF;
 
 use crate::engine::{ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS};
-use crate::lang::{DefHow, DefRule, GroupHow, GroupRule, Lang, Marked, Partial, Rules};
+use crate::lang::{
+    CallTests, DefHow, DefRule, GroupHow, GroupRule, ImportCalls, Lang, Marked, Partial, Rules,
+    Tests,
+};
 
 /// Declarations with a definition of their own even with no members in the
 /// file's tree: a Rust `struct` or a Go `type`, whose methods stand beside
@@ -329,10 +332,9 @@ pub fn parse_keyed(engine: u32, lang: Lang, src: &str, keyed: &Keyed) -> Parsed 
     let mut spots = Vec::new();
     let holders = holders_of(&syms);
     exact_text(root, src, &marks, &holders, &mut residual_exact, &mut spots);
-    let js_tests = if lang.rules().call_tests {
-        ex.js_tests(root)
-    } else {
-        vec![]
+    let js_tests = match &lang.rules().call_tests {
+        Some(calls) => ex.js_tests(root, calls),
+        None => vec![],
     };
     Parsed {
         syms,
@@ -889,7 +891,12 @@ impl<'s> Extractor<'s> {
     }
 
     fn is_import(&self, n: Node) -> bool {
+        let calls = |c: &ImportCalls| {
+            let called = self.field_text(n, &c.field);
+            n.kind() == c.kind && called.is_some_and(|name| is_one_of(&c.names, &name))
+        };
         is_one_of(&self.rules.imports, n.kind())
+            || self.rules.import_calls.as_ref().is_some_and(calls)
     }
 
     /// Nodes whose members belong to the enclosing level are flattened: their
@@ -908,6 +915,7 @@ impl<'s> Extractor<'s> {
                 let parens = n.children(&mut n.walk()).any(|c| c.kind() == token);
                 parens.then(|| Group::of(vec![n]))
             }
+            GroupHow::Own => Some(Group::of(vec![n])),
             GroupHow::Child(kind) => {
                 let mut lists = named(n).into_iter().filter(|c| c.kind() == kind);
                 lists.next().map(|l| Group::of(vec![l]))
@@ -972,7 +980,13 @@ impl<'s> Extractor<'s> {
     fn unwrap_def<'t>(&self, n: Node<'t>) -> Node<'t> {
         let mut wrappers = self.rules.wrappers.iter();
         match wrappers.find(|w| w.kind == n.kind()) {
-            Some(w) => n.child_by_field_name(&w.field).unwrap_or(n),
+            Some(w) => {
+                let field = w.field.as_ref().and_then(|f| n.child_by_field_name(f));
+                let mut parts = named(n).into_iter();
+                field
+                    .or_else(|| parts.find(|c| is_one_of(&w.children, c.kind())))
+                    .unwrap_or(n)
+            }
             None => n,
         }
     }
@@ -1062,7 +1076,17 @@ impl<'s> Extractor<'s> {
         if n.kind().contains("destructor") {
             return Some("[destructor]".to_string());
         }
-        let Some(list) = n.child_by_field_name("parameters") else {
+        let rule = self.rules.parameters.iter();
+        let rule = rule.clone().find(|p| is_one_of(&p.kinds, n.kind()));
+        if let Some(item) = rule.and_then(|p| p.item.as_ref()) {
+            let mut parts = self.key_prefix(n);
+            let written = named(n).into_iter().filter(|c| c.kind() == item);
+            parts.extend(written.map(|p| self.text(p).to_string()));
+            return key_of(parts.iter()).or(Some("()".to_string()));
+        }
+        let listed = rule.and_then(|p| p.list.as_ref());
+        let listed = listed.and_then(|kind| find_descendant(n, kind));
+        let Some(list) = n.child_by_field_name("parameters").or(listed) else {
             return def.key.clone();
         };
         let mut parts = self.key_prefix(n);
@@ -1085,7 +1109,12 @@ impl<'s> Extractor<'s> {
     }
 
     fn def<'t>(&self, n: Node<'t>) -> Option<Def<'t>> {
-        let fits = |r: &&DefRule| self.engine >= r.since && is_one_of(&r.kinds, n.kind());
+        let has = |token: &String| n.children(&mut n.walk()).any(|c| c.kind() == token);
+        let fits = |r: &&DefRule| {
+            self.engine >= r.since
+                && is_one_of(&r.kinds, n.kind())
+                && r.token.as_ref().is_none_or(has)
+        };
         let rule = self.rules.defs.iter().find(fits)?;
         let mut d = self.named_by(n, &rule.how)?;
         if !self.rules.attributes.is_empty() {
@@ -1104,7 +1133,10 @@ impl<'s> Extractor<'s> {
                 member_prefix: None,
                 impl_for: None,
                 members: None,
-                body: n.child_by_field_name("body"),
+                body: n.child_by_field_name("body").or_else(|| {
+                    let mut parts = named(n).into_iter();
+                    parts.find(|c| is_one_of(&self.rules.bodies, c.kind()))
+                }),
                 header_start: n.start_byte(),
                 key: None,
             })
@@ -1130,6 +1162,35 @@ impl<'s> Extractor<'s> {
                     leaf(name(id))
                 }
             }
+            DefHow::MembersIn { name: id, kinds } => {
+                let mut parts = named(n).into_iter();
+                let members = parts.find(|c| is_one_of(kinds, c.kind()));
+                let mut d = container(name(id), id)?;
+                d.members = members;
+                Some(d)
+            }
+            DefHow::Only { field, only } => {
+                let id = n.child_by_field_name(field).filter(|c| c.kind() == only)?;
+                leaf(Some(self.text(id).to_string()))
+            }
+            DefHow::Declared {
+                field,
+                wrapped,
+                scope,
+                ends,
+            } => {
+                let mut at = n;
+                while !is_one_of(ends, at.kind()) {
+                    let wraps = is_one_of(wrapped, at.kind());
+                    let next = at.child_by_field_name(field);
+                    match next.or_else(|| at.named_child(0).filter(|_| wraps)) {
+                        Some(inner) => at = inner,
+                        None => break,
+                    }
+                }
+                let name = self.text(at).replace(scope, ".");
+                (at != n).then(|| leaf(Some(name))).flatten()
+            }
             DefHow::Fixed(fixed) => leaf(Some(fixed.clone())),
             DefHow::Prefixed { prefix, field } => {
                 let word = name(field).unwrap_or_default();
@@ -1146,10 +1207,13 @@ impl<'s> Extractor<'s> {
                 let inner = parts
                     .find(|c| is_one_of(child, c.kind()))
                     .or_else(|| descendant.iter().find_map(|k| find_descendant(n, k)))?;
-                let id = inner.child_by_field_name(field).or_else(|| {
-                    let mut parts = named(inner).into_iter();
-                    parts.find(|c| or_child.as_ref().is_some_and(|k| c.kind() == k))
-                })?;
+                let id = match field {
+                    None => inner,
+                    Some(field) => inner.child_by_field_name(field).or_else(|| {
+                        let mut parts = named(inner).into_iter();
+                        parts.find(|c| or_child.as_ref().is_some_and(|k| c.kind() == k))
+                    })?,
+                };
                 if only.as_ref().is_some_and(|k| id.kind() != k) {
                     return None;
                 }
@@ -1173,7 +1237,7 @@ impl<'s> Extractor<'s> {
             } => {
                 let of_type = name(of_type)?;
                 let ty = Self::base_type_name(&of_type);
-                let of_trait = name(of_trait);
+                let of_trait = of_trait.as_ref().and_then(|f| name(f));
                 let full = match &of_trait {
                     Some(tr) => format!("{ty}.{}", Self::base_type_name(tr)),
                     None => ty.clone(),
@@ -1332,7 +1396,9 @@ impl<'s> Extractor<'s> {
             if self.census.is_some() {
                 continue;
             }
-            let is_type = def.members.is_some() || TYPE_KINDS.contains(&def_node.kind());
+            let is_type = def.members.is_some()
+                || TYPE_KINDS.contains(&def_node.kind())
+                || is_one_of(&self.rules.types, def_node.kind());
             let def_of = match (&part_of, &def.impl_for) {
                 (Some(whole), _) => Some(whole.clone()),
                 (None, Some(ty)) => Some(under_prefix(ty)),
@@ -1407,12 +1473,16 @@ impl<'s> Extractor<'s> {
 
     fn test_markers(&self, def: &Def, n: Node, qualified: &str, attached: &str) -> (bool, bool) {
         let leaf_name = qualified.rsplit('.').next().unwrap_or(qualified);
-        let Some(tests) = self.rules.tests.as_ref().filter(|_| def.members.is_none()) else {
+        if def.members.is_some() {
             return (false, false);
-        };
+        }
         let text = |marked: Marked| match marked {
             Marked::Attached => attached,
             Marked::Attributes => &self.src[n.start_byte()..def.header_start],
+            Marked::Header => {
+                let end = def.body.map_or(n.end_byte(), |b| b.start_byte());
+                &self.src[n.start_byte()..end]
+            }
             Marked::Text => self.text(n),
         };
         let owner_fits = |prefix: &String| match qualified.rsplit_once('.') {
@@ -1423,36 +1493,46 @@ impl<'s> Extractor<'s> {
                 .starts_with(prefix),
             None => true,
         };
-        let marked = text(tests.marks_in);
-        let is_test = (tests.kinds.is_empty() || is_one_of(&tests.kinds, n.kind()))
-            && tests
-                .name_prefix
-                .as_ref()
-                .is_none_or(|p| leaf_name.starts_with(p))
-            && tests.owner_prefix.as_ref().is_none_or(owner_fits)
-            && (tests.marks.is_empty() || tests.marks.iter().any(|m| marked.contains(m)));
-        let skips = text(tests.skips_in);
-        (
-            is_test,
-            is_test && tests.skips.iter().any(|s| skips.contains(s)),
-        )
+        let fits = |t: &&Tests| {
+            let marked = text(t.marks_in);
+            (t.kinds.is_empty() || is_one_of(&t.kinds, n.kind()))
+                && t.name_prefix
+                    .as_ref()
+                    .is_none_or(|p| leaf_name.starts_with(p))
+                && t.owner_prefix.as_ref().is_none_or(owner_fits)
+                && (t.marks.is_empty() || t.marks.iter().any(|m| marked.contains(m)))
+        };
+        match self.rules.tests.iter().find(fits) {
+            Some(t) => {
+                let skips = text(t.skips_in);
+                (true, t.skips.iter().any(|s| skips.contains(s)))
+            }
+            None => (false, false),
+        }
     }
 
     /// `it("..")` / `test("..")` calls, named by their `describe` path.
-    fn js_tests(&self, root: Node) -> Vec<JsTest> {
+    fn js_tests(&self, root: Node, calls: &CallTests) -> Vec<JsTest> {
         let mut out = Vec::new();
-        self.walk_calls(root, &mut Vec::new(), false, &mut out);
+        self.walk_calls(root, calls, &mut Vec::new(), false, &mut out);
         out
     }
 
-    fn walk_calls(&self, n: Node, path: &mut Vec<String>, skipped: bool, out: &mut Vec<JsTest>) {
-        if n.kind() == "call_expression"
-            && let Some((callee, modifier)) = self.callee(n)
+    fn walk_calls(
+        &self,
+        n: Node,
+        calls: &CallTests,
+        path: &mut Vec<String>,
+        skipped: bool,
+        out: &mut Vec<JsTest>,
+    ) {
+        if n.kind() == calls.call
+            && let Some((callee, modifier)) = self.callee(n, calls)
         {
             let title = n
-                .child_by_field_name("arguments")
+                .child_by_field_name(&calls.arguments)
                 .and_then(|a| a.named_children(&mut a.walk()).next())
-                .filter(|a| matches!(a.kind(), "string" | "template_string"))
+                .filter(|a| is_one_of(&calls.strings, a.kind()))
                 .map(|a| {
                     self.text(a)
                         .trim_matches(|c| c == '"' || c == '\'' || c == '`')
@@ -1465,7 +1545,7 @@ impl<'s> Extractor<'s> {
                     "describe" | "context" => {
                         path.push(title);
                         for c in n.named_children(&mut n.walk()) {
-                            self.walk_calls(c, path, skipped || skip_here, out);
+                            self.walk_calls(c, calls, path, skipped || skip_here, out);
                         }
                         path.pop();
                         return;
@@ -1485,26 +1565,26 @@ impl<'s> Extractor<'s> {
             }
         }
         for c in n.named_children(&mut n.walk()) {
-            self.walk_calls(c, path, skipped, out);
+            self.walk_calls(c, calls, path, skipped, out);
         }
     }
 
-    fn callee(&self, call: Node) -> Option<(String, Option<String>)> {
-        let f = call.child_by_field_name("function")?;
-        match f.kind() {
-            "identifier" => Some((self.text(f).to_string(), None)),
-            "member_expression" => {
-                let obj = f.child_by_field_name("object")?;
-                let prop = f.child_by_field_name("property")?;
-                (obj.kind() == "identifier").then(|| {
-                    (
-                        self.text(obj).to_string(),
-                        Some(self.text(prop).to_string()),
-                    )
-                })
-            }
-            _ => None,
+    fn callee(&self, call: Node, calls: &CallTests) -> Option<(String, Option<String>)> {
+        let f = call.child_by_field_name(&calls.callee)?;
+        if f.kind() == calls.name {
+            return Some((self.text(f).to_string(), None));
         }
+        if calls.member.as_ref().is_none_or(|m| f.kind() != m) {
+            return None;
+        }
+        let obj = f.child_by_field_name("object")?;
+        let prop = f.child_by_field_name("property")?;
+        (obj.kind() == calls.name).then(|| {
+            (
+                self.text(obj).to_string(),
+                Some(self.text(prop).to_string()),
+            )
+        })
     }
 }
 

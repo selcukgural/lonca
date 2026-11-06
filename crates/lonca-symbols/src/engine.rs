@@ -22,8 +22,9 @@ use lonca_core::{Error, Result};
 /// where code stands among symbols; version 5 reads the members of grouped
 /// declarations and blocks; version 6 tells symbols of one name apart by
 /// what they take instead of by their order; version 7 reports renames;
-/// version 8 reports the files no parser reads.
-pub const ENGINE_CURRENT: u32 = 8;
+/// version 8 reports the files no parser reads; version 9 reads Java, Kotlin,
+/// C, C++, Ruby, PHP and Swift.
+pub const ENGINE_CURRENT: u32 = 9;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -56,7 +57,7 @@ pub const ENGINE_RENAMES: u32 = 7;
 pub const ENGINE_UNPARSED: u32 = 8;
 
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

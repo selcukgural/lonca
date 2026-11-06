@@ -22,6 +22,13 @@ fn grammar(name: &str) -> Option<Language> {
         "javascript" => tree_sitter_javascript::LANGUAGE.into(),
         "c_sharp" => tree_sitter_c_sharp::LANGUAGE.into(),
         "go" => tree_sitter_go::LANGUAGE.into(),
+        "java" => tree_sitter_java::LANGUAGE.into(),
+        "kotlin" => tree_sitter_kotlin_ng::LANGUAGE.into(),
+        "c" => tree_sitter_c::LANGUAGE.into(),
+        "cpp" => tree_sitter_cpp::LANGUAGE.into(),
+        "ruby" => tree_sitter_ruby::LANGUAGE.into(),
+        "php" => tree_sitter_php::LANGUAGE_PHP.into(),
+        "swift" => tree_sitter_swift::LANGUAGE.into(),
         _ => return None,
     })
 }
@@ -43,6 +50,14 @@ struct Entry {
     /// The first engine that reads this language.
     #[serde(default)]
     since: u32,
+    /// Whether a parse error says the file is wrong, and not that the grammar
+    /// could not read it.
+    #[serde(default = "yes")]
+    strict: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// What a family of grammars means to the engine.
@@ -54,6 +69,8 @@ pub(crate) struct Rules {
     pub attached: Vec<Attached>,
     #[serde(default)]
     pub imports: Vec<String>,
+    /// Imports that are calls of a method.
+    pub import_calls: Option<ImportCalls>,
     /// Kinds that stand in a definition before its header.
     #[serde(default)]
     pub attributes: Vec<String>,
@@ -62,10 +79,20 @@ pub(crate) struct Rules {
     pub wrappers: Vec<Wrapper>,
     /// A word that makes a later part of one type.
     pub partial: Option<Partial>,
-    /// Whether tests are calls such as `it("..")`.
+    /// A body with no field of its own.
     #[serde(default)]
-    pub call_tests: bool,
-    pub tests: Option<Tests>,
+    pub bodies: Vec<String>,
+    /// Declarations with a definition of their own, besides `TYPE_KINDS`.
+    #[serde(default)]
+    pub types: Vec<String>,
+    /// Parameters a grammar has no `parameters` field for.
+    #[serde(default)]
+    pub parameters: Vec<Parameters>,
+    /// Tests that are calls such as `it("..")`.
+    pub call_tests: Option<CallTests>,
+    /// What makes a definition a test: any of these.
+    #[serde(default)]
+    pub tests: Vec<Tests>,
     #[serde(default)]
     pub groups: Vec<GroupRule>,
     #[serde(default)]
@@ -84,7 +111,42 @@ pub(crate) struct Attached {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Wrapper {
     pub kind: String,
+    /// The field that holds the definition.
+    pub field: Option<String>,
+    /// Or its first child of one of these kinds.
+    #[serde(default)]
+    pub children: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ImportCalls {
+    pub kind: String,
     pub field: String,
+    pub names: Vec<String>,
+}
+
+/// Where a declaration's parameters stand.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Parameters {
+    pub kinds: Vec<String>,
+    /// In the first descendant of this kind.
+    pub list: Option<String>,
+    /// Or in the children of this kind, read as they are written.
+    pub item: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CallTests {
+    pub call: String,
+    pub callee: String,
+    pub arguments: String,
+    pub name: String,
+    pub strings: Vec<String>,
+    /// `describe.skip`: a call through this kind of node.
+    pub member: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,11 +165,13 @@ pub(crate) enum Marked {
     Attached,
     /// The kinds of [`Rules::attributes`] at its start.
     Attributes,
+    /// What stands in front of its body.
+    Header,
     /// The whole definition.
     Text,
 }
 
-/// What makes a definition a test: all that is set here.
+/// What makes a definition a test: all that is set in one rule.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Tests {
@@ -147,6 +211,8 @@ pub(crate) enum GroupHow {
     Field(String),
     /// In the node itself, when it has this token.
     Parens(String),
+    /// In the node itself.
+    Own,
     /// In its first child of this kind.
     Child(String),
     /// In a list of two or more items, joined by separators.
@@ -171,6 +237,8 @@ pub(crate) struct DefRule {
     pub kinds: Vec<String>,
     #[serde(default)]
     pub since: u32,
+    /// Only a node with this token among its children.
+    pub token: Option<String>,
     pub how: DefHow,
 }
 
@@ -190,6 +258,26 @@ pub(crate) enum DefHow {
         name: String,
         members: String,
     },
+    /// Members in a child of one of these kinds.
+    MembersIn {
+        name: String,
+        kinds: Vec<String>,
+    },
+    /// Named by a field, when that holds a node of this kind.
+    Only {
+        field: String,
+        only: String,
+    },
+    /// Named at the end of a chain of `declarator` fields.
+    Declared {
+        field: String,
+        /// Links of the chain with no field to go on by.
+        wrapped: Vec<String>,
+        /// What separates a scope in a name.
+        scope: String,
+        /// Where the chain ends, with more fields behind it.
+        ends: Vec<String>,
+    },
     /// Always this name.
     Fixed(String),
     Prefixed {
@@ -204,7 +292,8 @@ pub(crate) enum DefHow {
         /// Or the first descendant of one of them.
         #[serde(default)]
         descendant: Vec<String>,
-        field: String,
+        /// The field of that node with the name, or the node itself.
+        field: Option<String>,
         /// A child of that node that names it when the field is not there.
         or_child: Option<String>,
         /// The name is a node of this kind, or this is no definition.
@@ -219,7 +308,7 @@ pub(crate) enum DefHow {
     /// A block of members of a type, or of a trait for a type.
     Implementation {
         of_type: String,
-        of_trait: String,
+        of_trait: Option<String>,
         members: String,
         prefix: String,
     },
@@ -297,6 +386,12 @@ impl Lang {
         &self.entry.name
     }
 
+    /// Whether a parse error means the file is wrong. If not, it means that
+    /// the grammar could not read the file, which then counts as unread.
+    pub fn is_strict(self) -> bool {
+        self.entry.strict
+    }
+
     pub(crate) fn rules(self) -> &'static Rules {
         self.rules
     }
@@ -323,13 +418,26 @@ mod tests {
         let mut out: BTreeSet<&str> = r.imports.iter().map(String::as_str).collect();
         out.extend(r.attached.iter().flat_map(|a| &a.kinds).map(String::as_str));
         out.extend(r.attributes.iter().map(String::as_str));
-        out.extend(r.wrappers.iter().map(|w| w.kind.as_str()));
+        for w in &r.wrappers {
+            out.insert(&w.kind);
+            out.extend(w.children.iter().map(String::as_str));
+        }
         out.extend(r.partial.iter().map(|p| p.kind.as_str()));
         out.extend(r.tests.iter().flat_map(|t| &t.kinds).map(String::as_str));
+        out.extend(r.bodies.iter().chain(&r.types).map(String::as_str));
+        out.extend(r.import_calls.iter().map(|i| i.kind.as_str()));
+        for p in &r.parameters {
+            out.extend(p.kinds.iter().map(String::as_str));
+            out.extend(p.list.iter().chain(&p.item).map(String::as_str));
+        }
+        for t in &r.call_tests {
+            out.extend([t.call.as_str(), t.name.as_str()]);
+            out.extend(t.strings.iter().chain(&t.member).map(String::as_str));
+        }
         for g in &r.groups {
             out.extend(g.kinds.iter().map(String::as_str));
             match &g.how {
-                GroupHow::Field(_) | GroupHow::Parens(_) => {}
+                GroupHow::Field(_) | GroupHow::Parens(_) | GroupHow::Own => {}
                 GroupHow::Child(kind) => {
                     out.insert(kind);
                 }
@@ -358,6 +466,15 @@ mod tests {
                     out.extend(child.iter().chain(descendant).map(String::as_str));
                     out.extend(or_child.iter().chain(only).map(String::as_str));
                 }
+                DefHow::MembersIn { kinds, .. } => {
+                    out.extend(kinds.iter().map(String::as_str));
+                }
+                DefHow::Only { only, .. } => {
+                    out.insert(only);
+                }
+                DefHow::Declared { wrapped, ends, .. } => {
+                    out.extend(wrapped.iter().chain(ends).map(String::as_str));
+                }
                 DefHow::MethodOf { kind, .. } => {
                     out.insert(kind);
                 }
@@ -378,7 +495,12 @@ mod tests {
     }
 
     fn fields_of(r: &Rules) -> BTreeSet<&str> {
-        let mut out: BTreeSet<&str> = r.wrappers.iter().map(|w| w.field.as_str()).collect();
+        let wrappers = r.wrappers.iter().flat_map(|w| &w.field);
+        let mut out: BTreeSet<&str> = wrappers.map(String::as_str).collect();
+        out.extend(r.import_calls.iter().map(|i| i.field.as_str()));
+        for t in &r.call_tests {
+            out.extend([t.callee.as_str(), t.arguments.as_str()]);
+        }
         for g in &r.groups {
             if let GroupHow::Field(field) = &g.how {
                 out.insert(field);
@@ -386,7 +508,11 @@ mod tests {
         }
         for d in &r.defs {
             out.extend(match &d.how {
-                DefHow::Leaf(name) | DefHow::Inner { field: name, .. } => vec![name.as_str()],
+                DefHow::Inner { field, .. } => field.iter().map(String::as_str).collect(),
+                DefHow::Leaf(name)
+                | DefHow::MembersIn { name, .. }
+                | DefHow::Only { field: name, .. }
+                | DefHow::Declared { field: name, .. } => vec![name.as_str()],
                 DefHow::Members { name, members } | DefHow::MembersIfAny { name, members } => {
                     vec![name.as_str(), members.as_str()]
                 }
@@ -399,7 +525,12 @@ mod tests {
                     of_trait,
                     members,
                     ..
-                } => vec![of_type.as_str(), of_trait.as_str(), members.as_str()],
+                } => {
+                    let trait_field = of_trait.iter().map(String::as_str);
+                    trait_field
+                        .chain([of_type.as_str(), members.as_str()])
+                        .collect()
+                }
                 _ => vec![],
             });
         }

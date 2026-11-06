@@ -1,0 +1,387 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.js#charge"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.js"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.js#added"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.js#gone"
+        ],
+        "edits": [
+          "src/sample.js#<module>",
+          "src/sample.js#Ledger.add",
+          "src/sample.js#sig"
+        ],
+        "import_only_files": [
+          "src/sample.js"
+        ],
+        "lines_added": 8,
+        "lines_removed": 5,
+        "modified_files": [
+          "src/sample.js"
+        ],
+        "signature_changes": [
+          "src/sample.js#sig"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 1,
+          "skipped": 1
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "import { readFileSync } from \"fs\";\nimport { join } from \"path\";\n\nexport function charge(amount) {\n  return amount * 2;\n}\n\nexport function sig(a, b) {\n  return a + b;\n}\n\nexport function added() {\n  return join(\"a\", \"b\");\n}\n\nexport class Ledger {\n  constructor() {\n    this.entries = new Map();\n  }\n\n  add(k, v) {\n    if (!this.entries.has(k)) this.entries.set(k, v);\n  }\n}\n\ntest.skip(\"charges\", () => {\n  expect(charge(2)).toBe(2);\n});\n"
+  },
+  "path": "src/sample.js",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          34
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "charges",
+          "skipped": false,
+          "text": "test(\"charges\", () => { expect(charge(2)).toBe(2); })"
+        }
+      ],
+      "residual": "program(expression_statement(call_expression(test\u001farguments((\u001f\"charges\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(member_expression(call_expression(expect\u001farguments((\u001fcall_expression(charge\u001farguments((\u001f2\u001f)\u001f)))\u001f)).\u001ftoBe\u001f)arguments((\u001f2\u001f)\u001f));\u001f)}\u001f)))\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "function charge(amount)",
+          "skipped": false,
+          "span": [
+            36,
+            43,
+            87
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "gone",
+          "own": "",
+          "signature": "function gone()",
+          "skipped": false,
+          "span": [
+            89,
+            96,
+            114
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "",
+          "signature": "function sig(a)",
+          "skipped": false,
+          "span": [
+            116,
+            123,
+            158
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.constructor",
+              "own": "",
+              "signature": "constructor()",
+              "skipped": false,
+              "span": [
+                184,
+                184,
+                233
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "",
+              "signature": "add(k, v)",
+              "skipped": false,
+              "span": [
+                237,
+                237,
+                280
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fLedger\u001fclass_body({\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            160,
+            167,
+            282
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          34
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "charges",
+          "skipped": false,
+          "text": "test(\"charges\", () => { expect(charge(2)).toBe(2); })"
+        }
+      ],
+      "residual": "program(expression_statement(call_expression(test\u001farguments((\u001f\"charges\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(member_expression(call_expression(expect\u001farguments((\u001fcall_expression(charge\u001farguments((\u001f2\u001f)\u001f)))\u001f)).\u001ftoBe\u001f)arguments((\u001f2\u001f)\u001f));\u001f)}\u001f)))\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "function charge(amount)",
+          "skipped": false,
+          "span": [
+            36,
+            43,
+            91
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "gone",
+          "own": "",
+          "signature": "function gone()",
+          "skipped": false,
+          "span": [
+            93,
+            100,
+            118
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "",
+          "signature": "function sig(a)",
+          "skipped": false,
+          "span": [
+            120,
+            127,
+            162
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.constructor",
+              "own": "",
+              "signature": "constructor()",
+              "skipped": false,
+              "span": [
+                188,
+                188,
+                237
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "",
+              "signature": "add(k, v)",
+              "skipped": false,
+              "span": [
+                241,
+                241,
+                284
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fLedger\u001fclass_body({\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            164,
+            171,
+            286
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          34
+        ],
+        [
+          35,
+          63
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "charges",
+          "skipped": true,
+          "text": "test.skip(\"charges\", () => { expect(charge(2)).toBe(2); })"
+        }
+      ],
+      "residual": "program(expression_statement(call_expression(member_expression(test\u001f.\u001fskip\u001f)arguments((\u001f\"charges\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(member_expression(call_expression(expect\u001farguments((\u001fcall_expression(charge\u001farguments((\u001f2\u001f)\u001f)))\u001f)).\u001ftoBe\u001f)arguments((\u001f2\u001f)\u001f));\u001f)}\u001f)))\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "function charge(amount)",
+          "skipped": false,
+          "span": [
+            65,
+            72,
+            116
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "",
+          "signature": "function sig(a, b)",
+          "skipped": false,
+          "span": [
+            118,
+            125,
+            163
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "added",
+          "own": "",
+          "signature": "function added()",
+          "skipped": false,
+          "span": [
+            165,
+            172,
+            217
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.constructor",
+              "own": "",
+              "signature": "constructor()",
+              "skipped": false,
+              "span": [
+                243,
+                243,
+                292
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "",
+              "signature": "add(k, v)",
+              "skipped": false,
+              "span": [
+                296,
+                296,
+                365
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fLedger\u001fclass_body({\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            219,
+            226,
+            367
+          ]
+        }
+      ]
+    }
+  }
+}

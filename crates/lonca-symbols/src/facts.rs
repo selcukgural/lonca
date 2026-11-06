@@ -140,6 +140,9 @@ pub fn analyze(
                 }
                 if pb.has_error || pn.has_error {
                     f.edits.push(sym_id(path, FILE));
+                    if !lang.is_strict() {
+                        f.unparsed_files.push(path.clone());
+                    }
                     continue;
                 }
                 compare_file(engine, path, (&pb, old), (&pn, newt), &mut f);

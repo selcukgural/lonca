@@ -1,0 +1,552 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.java#Client.charge(int)"
+        ],
+        "import_only_files": [
+          "src/sample.java"
+        ],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.java"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.java#Client.refund"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.java#Client.State.open",
+          "src/sample.java#Client.charge(long,String)",
+          "src/sample.java#Client.chargesOnce"
+        ],
+        "import_only_files": [],
+        "lines_added": 7,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.java"
+        ],
+        "signature_changes": [
+          "src/sample.java#Client.chargesOnce"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 1,
+          "skipped": 1
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "package app;\n\nimport java.util.List;\nimport java.util.Map;\n\n/** A client. */\npublic class Client {\n    private int total = 0;\n\n    public Client(int total) {\n        this.total = total;\n    }\n\n    int charge(int amount) {\n        return total + amount + 1;\n    }\n\n    int charge(long amount, String why) {\n        return total - 1;\n    }\n\n    enum State {\n        OPEN, SHUT;\n\n        boolean open() {\n            return this != SHUT;\n        }\n    }\n\n    int refund() {\n        return 0;\n    }\n\n    @Test\n    @Disabled\n    void chargesOnce() {\n        assert charge(1) == 1;\n    }\n}\n"
+  },
+  "path": "src/sample.java",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          14,
+          36
+        ]
+      ],
+      "js_tests": [],
+      "residual": "program(package_declaration(package\u001fapp\u001f;\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                81,
+                81,
+                103
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Client",
+              "own": "",
+              "signature": "public Client(int total)",
+              "skipped": false,
+              "span": [
+                109,
+                109,
+                169
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(int)",
+              "own": "",
+              "signature": "int charge(int amount)",
+              "skipped": false,
+              "span": [
+                175,
+                175,
+                236
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(long,String)",
+              "own": "",
+              "signature": "int charge(long amount, String why)",
+              "skipped": false,
+              "span": [
+                242,
+                242,
+                307
+              ]
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.OPEN",
+                  "own": "",
+                  "signature": null,
+                  "skipped": false,
+                  "span": [
+                    334,
+                    334,
+                    338
+                  ]
+                },
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.SHUT",
+                  "own": "",
+                  "signature": null,
+                  "skipped": false,
+                  "span": [
+                    340,
+                    340,
+                    344
+                  ]
+                },
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.open",
+                  "own": "",
+                  "signature": "boolean open()",
+                  "skipped": false,
+                  "span": [
+                    355,
+                    355,
+                    414
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "Client.State",
+              "own": "enum_declaration(enum\u001fState\u001fenum_body({\u001f,\u001fenum_body_declarations(;\u001f)}\u001f))",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                313,
+                313,
+                420
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.chargesOnce",
+              "own": "",
+              "signature": "@Test void chargesOnce()",
+              "skipped": false,
+              "span": [
+                426,
+                426,
+                493
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(modifiers(public\u001f)class\u001fClient\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            38,
+            55,
+            495
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          14,
+          36
+        ],
+        [
+          37,
+          58
+        ]
+      ],
+      "js_tests": [],
+      "residual": "program(package_declaration(package\u001fapp\u001f;\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                103,
+                103,
+                125
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Client",
+              "own": "",
+              "signature": "public Client(int total)",
+              "skipped": false,
+              "span": [
+                131,
+                131,
+                191
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(int)",
+              "own": "",
+              "signature": "int charge(int amount)",
+              "skipped": false,
+              "span": [
+                197,
+                197,
+                262
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(long,String)",
+              "own": "",
+              "signature": "int charge(long amount, String why)",
+              "skipped": false,
+              "span": [
+                268,
+                268,
+                333
+              ]
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.OPEN",
+                  "own": "",
+                  "signature": null,
+                  "skipped": false,
+                  "span": [
+                    360,
+                    360,
+                    364
+                  ]
+                },
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.SHUT",
+                  "own": "",
+                  "signature": null,
+                  "skipped": false,
+                  "span": [
+                    366,
+                    366,
+                    370
+                  ]
+                },
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.open",
+                  "own": "",
+                  "signature": "boolean open()",
+                  "skipped": false,
+                  "span": [
+                    381,
+                    381,
+                    440
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "Client.State",
+              "own": "enum_declaration(enum\u001fState\u001fenum_body({\u001f,\u001fenum_body_declarations(;\u001f)}\u001f))",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                339,
+                339,
+                446
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.chargesOnce",
+              "own": "",
+              "signature": "@Test void chargesOnce()",
+              "skipped": false,
+              "span": [
+                452,
+                452,
+                519
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(modifiers(public\u001f)class\u001fClient\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            60,
+            77,
+            521
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          14,
+          36
+        ]
+      ],
+      "js_tests": [],
+      "residual": "program(package_declaration(package\u001fapp\u001f;\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                81,
+                81,
+                103
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.Client",
+              "own": "",
+              "signature": "public Client(int total)",
+              "skipped": false,
+              "span": [
+                109,
+                109,
+                169
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(int)",
+              "own": "",
+              "signature": "int charge(int amount)",
+              "skipped": false,
+              "span": [
+                175,
+                175,
+                236
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(long,String)",
+              "own": "",
+              "signature": "int charge(long amount, String why)",
+              "skipped": false,
+              "span": [
+                242,
+                242,
+                311
+              ]
+            },
+            {
+              "children": [
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.OPEN",
+                  "own": "",
+                  "signature": null,
+                  "skipped": false,
+                  "span": [
+                    338,
+                    338,
+                    342
+                  ]
+                },
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.SHUT",
+                  "own": "",
+                  "signature": null,
+                  "skipped": false,
+                  "span": [
+                    344,
+                    344,
+                    348
+                  ]
+                },
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Client.State.open",
+                  "own": "",
+                  "signature": "boolean open()",
+                  "skipped": false,
+                  "span": [
+                    359,
+                    359,
+                    418
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "Client.State",
+              "own": "enum_declaration(enum\u001fState\u001fenum_body({\u001f,\u001fenum_body_declarations(;\u001f)}\u001f))",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                317,
+                317,
+                424
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.refund",
+              "own": "",
+              "signature": "int refund()",
+              "skipped": false,
+              "span": [
+                430,
+                430,
+                468
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.chargesOnce",
+              "own": "",
+              "signature": "@Test @Disabled void chargesOnce()",
+              "skipped": true,
+              "span": [
+                474,
+                474,
+                555
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(modifiers(public\u001f)class\u001fClient\u001fclass_body({\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            38,
+            55,
+            557
+          ]
+        }
+      ]
+    }
+  }
+}

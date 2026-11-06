@@ -1,0 +1,636 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.kt#Client.charge(amount: Int)"
+        ],
+        "import_only_files": [
+          "src/sample.kt"
+        ],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.kt"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.kt#other"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.kt#Client.charge(amount: Long,why: String)",
+          "src/sample.kt#Client.chargesOnce",
+          "src/sample.kt#top"
+        ],
+        "import_only_files": [],
+        "lines_added": 5,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.kt"
+        ],
+        "signature_changes": [
+          "src/sample.kt#Client.chargesOnce"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 1,
+          "skipped": 1
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "package app\n\nimport java.util.UUID\nimport java.util.Date\n\n/** A client. */\nclass Client(val id: Int) {\n    val total: Int = 0\n\n    constructor() : this(0)\n\n    fun charge(amount: Int): Int {\n        return total + amount + 1\n    }\n\n    fun charge(amount: Long, why: String): Int {\n        return total - 1\n    }\n\n    companion object {\n        fun make() = Client()\n    }\n\n    @Test\n    @Ignore\n    fun chargesOnce() {\n        assert(charge(1) == 1)\n    }\n}\n\nenum class State {\n    OPEN,\n    SHUT;\n\n    fun open() = this == OPEN\n}\n\nfun top(x: Int) = x + 1\n\nfun other() = 2\n"
+  },
+  "path": "src/sample.kt",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          13,
+          34
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(package_header(package\u001fqualified_identifier(app\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                85,
+                85,
+                103
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.constructor",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                109,
+                109,
+                132
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int)",
+              "own": "",
+              "signature": "fun charge(amount: Int): Int",
+              "skipped": false,
+              "span": [
+                138,
+                138,
+                204
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Long,why: String)",
+              "own": "",
+              "signature": "fun charge(amount: Long, why: String): Int",
+              "skipped": false,
+              "span": [
+                210,
+                210,
+                281
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.make",
+              "own": "",
+              "signature": "fun make()",
+              "skipped": false,
+              "span": [
+                314,
+                314,
+                335
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.chargesOnce",
+              "own": "",
+              "signature": "@Test fun chargesOnce()",
+              "skipped": false,
+              "span": [
+                347,
+                347,
+                413
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(class\u001fClient\u001fprimary_constructor(class_parameters((\u001fclass_parameter(val\u001fid\u001f:\u001fuser_type(Int\u001f)))\u001f))class_body({\u001fcompanion_object(companion\u001fobject\u001fclass_body({\u001f}\u001f))}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            36,
+            53,
+            415
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.OPEN",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                440,
+                440,
+                444
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.SHUT",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                450,
+                450,
+                455
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.open",
+              "own": "",
+              "signature": "fun open()",
+              "skipped": false,
+              "span": [
+                461,
+                461,
+                486
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "State",
+          "own": "class_declaration(modifiers(class_modifier(enum\u001f))class\u001fState\u001fenum_class_body({\u001f,\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            417,
+            417,
+            488
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "fun top(x: Int)",
+          "skipped": false,
+          "span": [
+            490,
+            490,
+            509
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          13,
+          34
+        ],
+        [
+          35,
+          56
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(package_header(package\u001fqualified_identifier(app\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                107,
+                107,
+                125
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.constructor",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                131,
+                131,
+                154
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int)",
+              "own": "",
+              "signature": "fun charge(amount: Int): Int",
+              "skipped": false,
+              "span": [
+                160,
+                160,
+                230
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Long,why: String)",
+              "own": "",
+              "signature": "fun charge(amount: Long, why: String): Int",
+              "skipped": false,
+              "span": [
+                236,
+                236,
+                307
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.make",
+              "own": "",
+              "signature": "fun make()",
+              "skipped": false,
+              "span": [
+                340,
+                340,
+                361
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.chargesOnce",
+              "own": "",
+              "signature": "@Test fun chargesOnce()",
+              "skipped": false,
+              "span": [
+                373,
+                373,
+                439
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(class\u001fClient\u001fprimary_constructor(class_parameters((\u001fclass_parameter(val\u001fid\u001f:\u001fuser_type(Int\u001f)))\u001f))class_body({\u001fcompanion_object(companion\u001fobject\u001fclass_body({\u001f}\u001f))}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            58,
+            75,
+            441
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.OPEN",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                466,
+                466,
+                470
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.SHUT",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                476,
+                476,
+                481
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.open",
+              "own": "",
+              "signature": "fun open()",
+              "skipped": false,
+              "span": [
+                487,
+                487,
+                512
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "State",
+          "own": "class_declaration(modifiers(class_modifier(enum\u001f))class\u001fState\u001fenum_class_body({\u001f,\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            443,
+            443,
+            514
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "fun top(x: Int)",
+          "skipped": false,
+          "span": [
+            516,
+            516,
+            535
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          13,
+          34
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(package_header(package\u001fqualified_identifier(app\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.total",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                85,
+                85,
+                103
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.constructor",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                109,
+                109,
+                132
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Int)",
+              "own": "",
+              "signature": "fun charge(amount: Int): Int",
+              "skipped": false,
+              "span": [
+                138,
+                138,
+                204
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge(amount: Long,why: String)",
+              "own": "",
+              "signature": "fun charge(amount: Long, why: String): Int",
+              "skipped": false,
+              "span": [
+                210,
+                210,
+                285
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.make",
+              "own": "",
+              "signature": "fun make()",
+              "skipped": false,
+              "span": [
+                318,
+                318,
+                339
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.chargesOnce",
+              "own": "",
+              "signature": "@Test @Ignore fun chargesOnce()",
+              "skipped": true,
+              "span": [
+                351,
+                351,
+                429
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(class\u001fClient\u001fprimary_constructor(class_parameters((\u001fclass_parameter(val\u001fid\u001f:\u001fuser_type(Int\u001f)))\u001f))class_body({\u001fcompanion_object(companion\u001fobject\u001fclass_body({\u001f}\u001f))}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            36,
+            53,
+            431
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.OPEN",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                456,
+                456,
+                460
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.SHUT",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                466,
+                466,
+                471
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "State.open",
+              "own": "",
+              "signature": "fun open()",
+              "skipped": false,
+              "span": [
+                477,
+                477,
+                502
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "State",
+          "own": "class_declaration(modifiers(class_modifier(enum\u001f))class\u001fState\u001fenum_class_body({\u001f,\u001f}\u001f))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            433,
+            433,
+            504
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "fun top(x: Int)",
+          "skipped": false,
+          "span": [
+            506,
+            506,
+            529
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "other",
+          "own": "",
+          "signature": "fun other()",
+          "skipped": false,
+          "span": [
+            531,
+            531,
+            546
+          ]
+        }
+      ]
+    }
+  }
+}

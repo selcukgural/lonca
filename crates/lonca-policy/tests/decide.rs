@@ -86,7 +86,7 @@ impl H {
         // engine (here the facts are written by hand, nominally engine 0).
         if matches!(
             sub.op,
-            Op::ChangePropose { .. } | Op::ChangeIntegrate { .. }
+            Op::ChangePropose { .. } | Op::ChangeIntegrate { .. } | Op::ChangeIntegrateBatch { .. }
         ) {
             sub.symbols_engine = Some(self.engine);
         }
@@ -4936,6 +4936,101 @@ fn a_file_no_parser_reads_takes_a_lease_unless_the_policy_says_otherwise() {
     h.wrote("a", "src/a.rs");
     let d = h.propose("a", ChangeId::random(), edit("src/a.rs#f"));
     assert!(denied_with(&d, "lease_missing:src/a.rs#f"), "{d:?}");
+    h.assert_replay();
+}
+
+fn batched() -> H {
+    let config = DEFAULT_CONFIG.replace("batch_size = 1", "batch_size = 3");
+    H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap())
+}
+
+/// Three changes of observed sessions, queued in this order.
+fn three_queued(h: &mut H) -> [ChangeId; 3] {
+    ["a", "b", "c"].map(|session| {
+        let file = format!("src/{session}.rs");
+        h.start_observed(session, &["src/**"]);
+        let symbol = format!("{file}#f");
+        let set = format!("l{session}");
+        assert!(
+            h.lease(session, &set, &[(&symbol, LeaseKind::Edit)])
+                .is_allow()
+        );
+        h.wrote(session, &file);
+        let change = ChangeId::random();
+        assert!(h.propose(session, change, edit(&symbol)).is_allow());
+        change
+    })
+}
+
+fn batch(h: &mut H, merged: &[(ChangeId, GitId)], evidence: Vec<Attestation>) -> Decision {
+    let trunk_before = h.chain.state.trunk.clone().unwrap();
+    let op = Op::ChangeIntegrateBatch {
+        trunk_before,
+        merged: merged.to_vec(),
+    };
+    h.daemon(op, evidence)
+}
+
+/// A batch is the head of the queue, in order, within the policy's size, on
+/// this trunk, with the evidence a single change would need.
+#[test]
+fn a_batch_is_held_to_what_one_change_is() {
+    let mut h = batched();
+    let [a, b, c] = three_queued(&mut h);
+    let good = || vec![pass(CheckKind::Build), pass(CheckKind::Tests)];
+    let (x, y, z) = (gid('e'), gid('f'), gid('a'));
+
+    let d = batch(&mut h, &[(a, x.clone())], good());
+    assert!(denied_with(&d, "batch_size"), "one is no batch: {d:?}");
+    let four = [
+        (a, x.clone()),
+        (b, y.clone()),
+        (c, z.clone()),
+        (ChangeId::random(), gid('b')),
+    ];
+    let d = batch(&mut h, &four, good());
+    assert!(denied_with(&d, "batch_size"), "{d:?}");
+    let d = batch(&mut h, &[(b, x.clone()), (a, y.clone())], good());
+    assert!(denied_with(&d, "not_queue_head"), "{d:?}");
+    let d = batch(&mut h, &[(b, x.clone()), (c, y.clone())], good());
+    assert!(denied_with(&d, "not_queue_head"), "{d:?}");
+    let op = Op::ChangeIntegrateBatch {
+        trunk_before: gid('c'),
+        merged: vec![(a, x.clone()), (b, y.clone())],
+    };
+    assert!(denied_with(&h.daemon(op, good()), "stale_trunk"));
+    let mut failing = pass(CheckKind::Tests);
+    failing.result = CheckResult::Fail;
+    let failing = vec![failing];
+    let d = batch(&mut h, &[(a, x.clone()), (b, y.clone())], failing);
+    assert!(denied_with(&d, "verification_failed:tests"), "{d:?}");
+    assert_eq!(h.chain.state.queue, [a, b, c], "nothing moved");
+    h.assert_replay();
+}
+
+/// One entry moves trunk to the tip: the commit inside it never was trunk,
+/// and the leases of every change in it are free.
+#[test]
+fn a_batch_moves_trunk_to_its_tip_alone() {
+    let mut h = batched();
+    let [a, b, c] = three_queued(&mut h);
+    let (x, y) = (gid('e'), gid('f'));
+    let good = vec![pass(CheckKind::Build), pass(CheckKind::Tests)];
+    let d = batch(&mut h, &[(a, x.clone()), (b, y.clone())], good);
+    assert!(d.is_allow(), "{d:?}");
+    let state = &h.chain.state;
+    assert_eq!(state.trunk.as_ref(), Some(&y));
+    assert!(state.trunk_history.contains(&y));
+    assert!(!state.trunk_history.contains(&x), "never trunk");
+    assert_eq!(state.queue, [c]);
+    let integrated = |commit: &GitId| ChangeStatus::Integrated {
+        commit: commit.clone(),
+    };
+    assert_eq!(state.changes[&a].status, integrated(&x));
+    assert_eq!(state.changes[&b].status, integrated(&y));
+    assert!(held(&h, "a").is_empty());
+    assert!(held(&h, "b").is_empty());
+    assert_eq!(held(&h, "c"), ["src/c.rs#f"]);
     h.assert_replay();
 }
 

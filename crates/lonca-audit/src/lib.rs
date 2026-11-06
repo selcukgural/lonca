@@ -272,6 +272,40 @@ fn recheck_objects(store: &Store, state: &State, op: &SignedOp, rep: &mut Report
                 Err(err) => rep.find(Some(e.seq), "merge", err.to_string()),
             }
         }
+        Op::ChangeIntegrateBatch {
+            trunk_before,
+            merged,
+        } => {
+            let mut trunk = trunk_before.clone();
+            for (change, commit) in merged {
+                let Some(rec) = state.changes.get(change) else {
+                    return;
+                };
+                if !store.has_object(&rec.commit) || !store.has_object(&trunk) {
+                    rep.skip(e.seq, "merge", "integration objects not present");
+                    return;
+                }
+                match integrate(store, engine, &rec.base, &trunk, &rec.commit) {
+                    Ok(i) if i.merged.as_ref() == Some(commit) => {}
+                    Ok(i) => {
+                        let found = format!("recorded {commit:?}, recomputed {:?}", i.merged);
+                        rep.find(Some(e.seq), "merge", found);
+                        return;
+                    }
+                    Err(err) => {
+                        rep.find(Some(e.seq), "merge", err.to_string());
+                        return;
+                    }
+                }
+                trunk = commit.clone();
+            }
+            // What was verified is the tip, which is what trunk became.
+            match store.read_commit(&trunk) {
+                Ok(tip) if e.evidence.iter().all(|a| a.subject_tree == tip.tree) => {}
+                Ok(_) => rep.find(Some(e.seq), "merge", "evidence of another tree".to_string()),
+                Err(err) => rep.find(Some(e.seq), "merge", err.to_string()),
+            }
+        }
         _ => {}
     }
 }

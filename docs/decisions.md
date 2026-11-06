@@ -114,6 +114,7 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 16** adds `unread_files` to facts, which escalates a proposal (see
   "Symbol engine versions", engine 10 and "The language table"). Older entries have
   none, so nothing is gated on the format.
+- **Version 17** adds `change.integrate_batch` (see "Batches in the merge queue").
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -575,6 +576,34 @@ entry format, so they have their own version
 - **Engine 10** reads Java, Kotlin, C, C++, Ruby, PHP and Swift. Each is an entry
   in the language table with `since = 10`: engine 9 and older still see their
   files as text, and old entries recompute as they were.
+
+## Batches in the merge queue
+
+With `[queue] batch_size` above 1 (default 1, as before; at most 64) the worker
+merges the changes at the head of the queue on top of each other and verifies the
+result (issue #49). Ten changes in batches of five verify twice.
+
+- **Only the tip is verified, and trunk moves straight to it.** The promise that
+  every state that enters trunk was verified on that state holds as it stands: the
+  commits inside a batch are in history and were never trunk, so they are no base
+  for a proposal and appear in no trunk line. The owner chose this over verifying
+  each state, which keeps the same words at the cost of the CPU batches are for.
+- **One log entry integrates a batch.** With one entry per change a crash between
+  them would leave the log naming a trunk nobody verified, and `reconcile()` would
+  restore it. `change.integrate_batch` is all or nothing, and each change in it has
+  the commit it merged to, for `undo` and for the auditor, which recomputes them in
+  order and checks that the evidence is of the tip's tree.
+- **A failure halves the batch.** The longest prefix that passes goes, the rest stays
+  in the queue in its order, and a change alone goes the way it always did, so a
+  failing one is logged as before. A conflict ends a batch. What decides that a tip
+  passed is the code `decide()` uses, so a batch that would be denied is not logged.
+- **A tree that passed is not verified again.** The daemon keeps the checks that
+  passed by repository, tree and verification settings, in memory, for the last 256
+  trees: its environment is part of what passed, so the memory ends with it. A
+  failure is not kept, since it may have been the machine. What is reused is logged
+  as evidence again. Syntax is always checked: it depends on what changed.
+- **`undo` of a batch** reverts all of it, and says how many changes that is.
+  `lonca revert --actor` takes back only that actor's changes in it.
 
 ## The language table
 

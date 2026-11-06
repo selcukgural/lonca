@@ -26,7 +26,7 @@ use lonca_core::paths::{
     validate_path_pattern, validate_repo_path, validate_symbol_pattern,
 };
 
-use crate::config::{CRITICAL_ESCALATE, CVal, CedarOutcome, PolicyBundle};
+use crate::config::{CRITICAL_ESCALATE, CVal, CedarOutcome, PolicyBundle, Verification};
 use crate::state::{
     ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, INTEREST_BLOCK, LEASES_KEPT, RELEASED,
     RESERVATION_WINDOW, Session, State,
@@ -110,6 +110,7 @@ fn is_daemon_op(op: &Op) -> bool {
     matches!(
         op,
         Op::ChangeIntegrate { .. }
+            | Op::ChangeIntegrateBatch { .. }
             | Op::Observe { .. }
             | Op::Taint { .. }
             | Op::SessionBind { .. }
@@ -900,6 +901,26 @@ pub fn decide(
                 }
             }
         }
+        Op::ChangeIntegrateBatch {
+            trunk_before,
+            merged,
+        } => {
+            let size = cfg.queue.batch_size as usize;
+            if merged.len() < 2 || merged.len() > size {
+                v.deny("batch_size");
+            }
+            let changes = merged.iter().map(|(change, _)| change);
+            if !changes.eq(state.queue.iter().take(merged.len())) {
+                v.deny("not_queue_head");
+            }
+            if state.trunk.as_ref() != Some(trunk_before) {
+                v.deny("stale_trunk");
+            }
+            verify_evidence(ctx, &mut v);
+            if !cfg.leases.release_on_integrate {
+                v.info.push(LEASES_KEPT.into());
+            }
+        }
         Op::Approve { target_seq, note } => match state.pending.get(target_seq) {
             None => v.deny("nothing_pending"),
             Some(p) => {
@@ -1051,33 +1072,45 @@ pub fn decide(
 }
 
 fn verify_evidence(ctx: &Ctx, v: &mut Verdict) {
-    let vc = &ctx.policy.config.verification;
-    for a in ctx.evidence {
+    for problem in evidence_problems(&ctx.policy.config.verification, ctx.evidence) {
+        v.deny(problem);
+    }
+}
+
+/// What is wrong with `evidence` under `vc`. Also what the daemon asks before
+/// it logs a batch, so that a batch that would be denied is split instead.
+pub fn evidence_problems(vc: &Verification, evidence: &[Attestation]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for a in evidence {
         match a.result {
-            CheckResult::Fail => v.deny(format!("verification_failed:{}", check_name(a.check))),
-            CheckResult::Error => v.deny(format!("verification_error:{}", check_name(a.check))),
+            CheckResult::Fail => {
+                problems.push(format!("verification_failed:{}", check_name(a.check)))
+            }
+            CheckResult::Error => {
+                problems.push(format!("verification_error:{}", check_name(a.check)))
+            }
             CheckResult::Pass | CheckResult::Skipped => {}
         }
         if vc.require_sandbox
             && matches!(a.check, CheckKind::Build | CheckKind::Tests)
             && a.details.get("sandbox").is_none_or(|s| s == "none")
         {
-            v.deny("unsandboxed_verification");
+            problems.push("unsandboxed_verification".to_string());
         }
     }
     if vc.required {
         let passed = |k: CheckKind| {
-            ctx.evidence
-                .iter()
-                .any(|a| a.check == k && a.result == CheckResult::Pass)
+            let mut all = evidence.iter();
+            all.any(|a| a.check == k && a.result == CheckResult::Pass)
         };
         if vc.build.is_some() && !passed(CheckKind::Build) {
-            v.deny("verification_missing:build");
+            problems.push("verification_missing:build".to_string());
         }
         if vc.test.is_some() && !passed(CheckKind::Tests) {
-            v.deny("verification_missing:tests");
+            problems.push("verification_missing:tests".to_string());
         }
     }
+    problems
 }
 
 fn propose(

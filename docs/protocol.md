@@ -385,6 +385,7 @@ Operation kinds (`op.op`) and their fields:
 | `change.propose` | `change`, `commit`, `base`, `claim` |
 | `change.withdraw` | `change` |
 | `change.integrate` | `change`, `trunk_before`, `merged` (id or null), `conflicts` |
+| `change.integrate_batch` | `trunk_before`, `merged` (`[change, commit]` in queue order; the last is trunk's new head), from format 17 |
 | `approve` | `target_seq`, `note` |
 | `reject` | `target_seq`, `reason` (1–4096 bytes; the requester reads it) |
 | `observe` | `session`, `events` |

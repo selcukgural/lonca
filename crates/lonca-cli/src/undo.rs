@@ -230,12 +230,41 @@ pub fn undo(c: &mut Client, human: &str, repo: &str, seq: u64) -> Result<()> {
             crate::submit(c, human, repo, serde_json::from_value(prep["op"].clone())?)?;
             Ok(())
         }
+        Op::ChangeIntegrateBatch {
+            trunk_before,
+            merged,
+        } => {
+            let Some((_, tip)) = merged.last() else {
+                bail!("an empty batch");
+            };
+            let what = format!("{} changes", merged.len());
+            revert_change(c, human, repo, trunk_before, tip, None, &what)
+        }
         other => bail!("{} can not be undone automatically", other.kind().as_str()),
     }
 }
 
 fn matches_actor(label: &str, session: Option<&str>, want: &str) -> bool {
     label == want || label.starts_with(&format!("{want}/")) || session == Some(want)
+}
+
+/// A change of a batch: the commit in front of it, the one it came to, and
+/// which it was.
+type BatchStep = (GitId, GitId, ChangeId);
+
+/// What the changes of `mine` in a batch came to, each from the commit in
+/// front of it: an actor's changes, and no others of its batch.
+fn steps_of(
+    trunk_before: &GitId,
+    merged: &[(ChangeId, GitId)],
+    mine: &BTreeSet<ChangeId>,
+) -> Vec<BatchStep> {
+    let befores = std::iter::once(trunk_before).chain(merged.iter().map(|(_, commit)| commit));
+    let steps = befores.zip(merged);
+    let steps = steps.filter(|(_, (change, _))| mine.contains(change));
+    steps
+        .map(|(before, (change, commit))| (before.clone(), commit.clone(), *change))
+        .collect()
 }
 
 /// Plans (and with `apply` executes) undoing what `actor` did since `since`.
@@ -249,7 +278,8 @@ pub fn revert(
 ) -> Result<()> {
     let all = ops(c, 0, None)?;
     let mut mine: BTreeSet<ChangeId> = BTreeSet::new();
-    let mut plan: Vec<(u64, String)> = Vec::new();
+    // With what a change of a batch came to, which is not all of its entry.
+    let mut plan: Vec<(u64, String, Option<BatchStep>)> = Vec::new();
     for o in &all {
         let e = &o.entry;
         let by_actor = matches_actor(&e.actor.label(), e.actor.session(), actor);
@@ -268,13 +298,23 @@ pub fn revert(
                 plan.push((
                     e.seq,
                     format!("revert integrated change {}", change.short()),
+                    None,
                 ));
             }
+            Op::ChangeIntegrateBatch {
+                trunk_before,
+                merged,
+            } => {
+                for step in steps_of(trunk_before, merged, &mine) {
+                    let what = format!("revert integrated change {}", step.2.short());
+                    plan.push((e.seq, what, Some(step)));
+                }
+            }
             Op::LeaseAcquire { set, .. } if by_actor => {
-                plan.push((e.seq, format!("release lease set {set}")))
+                plan.push((e.seq, format!("release lease set {set}"), None))
             }
             Op::CapAttenuate { child, .. } if by_actor => {
-                plan.push((e.seq, format!("revoke sub-session {child}")))
+                plan.push((e.seq, format!("revoke sub-session {child}"), None))
             }
             _ => {}
         }
@@ -284,7 +324,7 @@ pub fn revert(
         println!("nothing to revert for {actor} since #{since}");
         return Ok(());
     }
-    for (seq, what) in &plan {
+    for (seq, what, _) in &plan {
         println!("#{seq}: {what}");
     }
     if !apply {
@@ -294,11 +334,36 @@ pub fn revert(
     // One refused step does not stop the others; the command still ends
     // with the refusal, so a runner sees it in the exit code.
     let mut first_failure = None;
-    for (seq, what) in plan {
-        if let Err(e) = undo(c, human, repo, seq) {
+    for (seq, what, of_batch) in plan {
+        let done = match of_batch {
+            None => undo(c, human, repo, seq),
+            Some((before, after, change)) => {
+                let label = format!("change {}", change.short());
+                revert_change(c, human, repo, &before, &after, Some(change), &label)
+            }
+        };
+        if let Err(e) = done {
             println!("#{seq} ({what}) not undone: {e:#}");
             first_failure.get_or_insert(e);
         }
     }
     first_failure.map_or(Ok(()), Err)
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    #[test]
+    fn a_batch_gives_back_only_the_changes_asked_for() {
+        let id = |c: &[u8]| GitId::of_blob(c);
+        let (trunk, one, two, three) = (id(b"t"), id(b"1"), id(b"2"), id(b"3"));
+        let (a, b, c) = (ChangeId::random(), ChangeId::random(), ChangeId::random());
+        let merged = [(a, one.clone()), (b, two.clone()), (c, three.clone())];
+        let steps = |mine: &[ChangeId]| steps_of(&trunk, &merged, &mine.iter().copied().collect());
+        assert_eq!(steps(&[]), []);
+        assert_eq!(steps(&[a]), [(trunk.clone(), one.clone(), a)]);
+        assert_eq!(steps(&[b]), [(one.clone(), two.clone(), b)]);
+        assert_eq!(steps(&[c, a]), [(trunk.clone(), one, a), (two, three, c)]);
+    }
 }

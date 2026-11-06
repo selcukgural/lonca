@@ -433,6 +433,31 @@ impl State {
     /// Notes what an integrated change renamed and which names it took
     /// again: its additions, its new keys, every name of a file it deleted
     /// or wrote from nothing. A symbol it deleted ends what led to it.
+    fn move_trunk(&mut self, commit: &GitId) {
+        self.trunk = Some(commit.clone());
+        self.trunk_history.insert(commit.clone());
+        self.trunk_line.push(commit.clone());
+    }
+
+    /// `change` is on trunk, as `commit`.
+    fn integrated(&mut self, change: ChangeId, commit: &GitId, time_ms: i64, reasons: &[String]) {
+        if let Some(c) = self.changes.get_mut(&change) {
+            c.status = ChangeStatus::Integrated {
+                commit: commit.clone(),
+            };
+            let facts = c.facts.clone();
+            if c.claim.revert_of.is_some() {
+                let mut syms = facts.edits.clone();
+                syms.extend(facts.deletes.iter().cloned());
+                syms.extend(facts.adds.iter().cloned());
+                self.reverts.push((time_ms, syms));
+            }
+            self.record_renames(&facts);
+        }
+        self.queue.retain(|q| *q != change);
+        self.unpin(change, !reasons.iter().any(|r| r == LEASES_KEPT));
+    }
+
     fn record_renames(&mut self, facts: &Facts) {
         let line = self.trunk_line.len().saturating_sub(1);
         let keys = self.symbol_keys;
@@ -1397,24 +1422,18 @@ impl State {
             }
             Op::ChangeIntegrate { change, merged, .. } => {
                 let Some(merged) = merged else { return };
-                self.trunk = Some(merged.clone());
-                self.trunk_history.insert(merged.clone());
-                self.trunk_line.push(merged.clone());
-                if let Some(c) = self.changes.get_mut(change) {
-                    c.status = ChangeStatus::Integrated {
-                        commit: merged.clone(),
-                    };
-                    let facts = c.facts.clone();
-                    if c.claim.revert_of.is_some() {
-                        let mut syms = facts.edits.clone();
-                        syms.extend(facts.deletes.iter().cloned());
-                        syms.extend(facts.adds.iter().cloned());
-                        self.reverts.push((time_ms, syms));
-                    }
-                    self.record_renames(&facts);
+                self.move_trunk(merged);
+                self.integrated(*change, merged, time_ms, reasons);
+            }
+            Op::ChangeIntegrateBatch { merged, .. } => {
+                // The commits before the last were never trunk.
+                let Some((_, tip)) = merged.last() else {
+                    return;
+                };
+                self.move_trunk(tip);
+                for (change, commit) in merged {
+                    self.integrated(*change, commit, time_ms, reasons);
                 }
-                self.queue.retain(|q| q != change);
-                self.unpin(*change, !reasons.iter().any(|r| r == LEASES_KEPT));
             }
             Op::Approve { target_seq, .. } => {
                 let Actor::Human { name } = actor else { return };

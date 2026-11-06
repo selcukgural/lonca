@@ -88,7 +88,26 @@ fn golden_repo() -> Env {
     keyed_names(&mut e);
     renames(&mut e);
     unparsed(&mut e);
+    batch(&mut e);
     e
+}
+
+/// From format 17: one entry integrates the head of the queue.
+fn batch(e: &mut Env) {
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace("batch_size = 1", "batch_size = 2");
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+    for name in ["src/one.zig", "src/two.zig"] {
+        let r = e.human_change(vec![file(name, "const a = 1;\n")], "one of two");
+        assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    }
+    assert_eq!(e.svc.process_all(), 1);
 }
 
 /// From format 15: facts list the text files no parser reads.
@@ -866,6 +885,20 @@ fn golden_v14_log_still_verifies_replays_and_audits() {
         reasons.into_iter().any(|r| r.starts_with(held)),
         "the old name met the new one"
     );
+}
+
+#[test]
+fn golden_v17_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v17.bundle",
+        "128a65ae614b1e3751bcc7f9174103cb3b9967fb8669275335742b4a21df2acc",
+        17,
+    );
+    let batches = ops.iter().filter_map(|o| match &o.entry.op {
+        Op::ChangeIntegrateBatch { merged, .. } => Some(merged.len()),
+        _ => None,
+    });
+    assert_eq!(batches.collect::<Vec<_>>(), [2]);
 }
 
 #[test]

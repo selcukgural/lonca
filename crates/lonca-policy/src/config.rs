@@ -146,6 +146,11 @@ require_presence = false
 [negotiation]
 max_rounds = 4
 
+[queue]
+# Changes at the head of the queue verified as one: the merged result of all
+# of them, with a failure bisected. 1 verifies each change on its own.
+batch_size = 1
+
 [reverts]
 window_minutes = 5
 
@@ -203,6 +208,7 @@ pub struct Config {
     pub taint: Taint,
     pub approvals: Approvals,
     pub negotiation: Negotiation,
+    pub queue: Queue,
     pub reverts: Reverts,
     pub integrity: Integrity,
     /// Harness profiles of this repository, over the built-in ones.
@@ -397,6 +403,17 @@ pub struct Negotiation {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
+pub struct Queue {
+    /// How many changes at the head of the queue are verified as one.
+    pub batch_size: u32,
+}
+
+/// The most changes one batch can hold: bisection stays short, and one log
+/// entry stays small.
+pub const MAX_BATCH_SIZE: u32 = 64;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
 pub struct Reverts {
     pub window_minutes: i64,
 }
@@ -532,6 +549,12 @@ impl Default for Negotiation {
     }
 }
 
+impl Default for Queue {
+    fn default() -> Self {
+        Queue { batch_size: 1 }
+    }
+}
+
 impl Default for Reverts {
     fn default() -> Self {
         Self { window_minutes: 5 }
@@ -602,6 +625,11 @@ impl PolicyBundle {
             if !ok {
                 return Err(format!("{CONFIG_FILE}: bad path pattern {p:?}"));
             }
+        }
+        if !(1..=MAX_BATCH_SIZE).contains(&config.queue.batch_size) {
+            return Err(format!(
+                "{CONFIG_FILE}: queue.batch_size must be 1..{MAX_BATCH_SIZE}"
+            ));
         }
         if !matches!(
             config.integrity.on_unmediated.as_str(),
@@ -798,6 +826,22 @@ impl PolicyBundle {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_batch_size_stays_within_bounds() {
+        let with = |size: u32| {
+            let line = format!("batch_size = {size}");
+            let config = DEFAULT_CONFIG.replace("batch_size = 1", &line);
+            PolicyBundle::parse(&config, DEFAULT_POLICY)
+        };
+        for good in [1, 2, MAX_BATCH_SIZE] {
+            assert!(with(good).is_ok(), "{good}");
+        }
+        for bad in [0, MAX_BATCH_SIZE + 1] {
+            let refused = with(bad).err().expect("refused");
+            assert!(refused.contains("queue.batch_size"), "{refused}");
+        }
+    }
+
     /// One agent at a time on a file no parser reads, unless a policy says
     /// otherwise. Changing this default changes what every repository allows.
     #[test]
@@ -945,6 +989,7 @@ mod tests {
         let b = PolicyBundle::parse("[leases]\nmax_ttl_minutes = 10\n", DEFAULT_POLICY).unwrap();
         assert_eq!(b.config.leases.max_ttl_minutes, 10);
         assert_eq!(b.config.leases.max_items, 64);
+        assert_eq!(b.config.queue.batch_size, 1, "one change at a time");
         assert_eq!(b.config.sessions.max_ttl_minutes, 480);
         assert!(PolicyBundle::parse("[leases]\nmax_ttl = 10\n", DEFAULT_POLICY).is_err());
     }

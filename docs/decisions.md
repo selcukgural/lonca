@@ -406,14 +406,18 @@ entry format, so they have their own version
     other side in one queue order. Containers are not paired, because their
     members hang on the key.
   - **A merge is read by origin.** Each symbol of a result came from a side, and
-    its text finds its pair there, not its place in the result. The same key
-    twice in one place is refused (`key_twice`), because each copy would pass as
-    a symbol that changed: both sides giving `M(int)` and `M(long)` the key
-    `M(bool)`, or one giving and the other adding it. In another block or in an
+    its text finds its pair there, then the order of the base, not its place in
+    the result. A key twice in one place that no side has twice is refused
+    (`key_twice`), because each copy would pass as a symbol that changed: both
+    sides giving `M(int)` and `M(long)` the key `M(bool)`, or one giving and the
+    other adding it, whether the key is new or the base has it. In another block or in an
     `impl` for other type arguments both are valid and merge. The parts of a
     `partial` type are one place, and so are two `cfg` variants of a function,
     which a merge can not tell from a duplicate: that one is refused though it
-    would compile, and it goes back to the agent.
+    would compile, and it goes back to the agent. A namespace written twice is
+    two places here, so two types of one key in it merge and fail to compile.
+    A side that does not parse has no symbols, and its line merge is held to
+    nothing of this.
   - **What is left to a number.** Exact duplicates (`init()` in Go), macro
     calls, partial types, `impl` blocks of one type and the members of generic
     inherent impls (`W.new`, `W.new~2`, because a type's members do not hang on

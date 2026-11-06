@@ -298,7 +298,7 @@ fn holds_up(
     conflicts: &[String],
 ) -> bool {
     let mut merged = parse_keyed(engine, lang, text, &naming.keyed);
-    if merged.has_error || key_twice(&merged, &naming.pairs) {
+    if merged.has_error || key_twice(&merged, [pb, po, pt]) {
         return false;
     }
     rename_aligned(&mut merged, &naming.pairs);
@@ -911,6 +911,78 @@ mod tests {
         );
         assert!(keyed("a.cs", b, &o, &t).is_err());
         assert!(keyed("a.cs", b, &t, &o).is_err());
+    }
+
+    /// A key the base already has can land beside itself, too.
+    #[test]
+    fn a_key_of_the_base_given_to_a_symbol_beside_its_new_namesake_conflicts() {
+        let b = "if X:\n    def f(a: short):\n        return 2\nelse:\n    def f(a: long):\n        return 1\n";
+        let o = b.replace(
+            "return 1\n",
+            "return 1\n    def f(a: short):\n        return 9\n",
+        );
+        let t = b
+            .replace("a: short", "a: char")
+            .replace("a: long", "a: short");
+        assert!(keyed("a.py", b, &o, &t).is_err());
+        assert!(keyed("a.py", b, &t, &o).is_err());
+    }
+
+    /// What a file has twice already is not the merge's doing.
+    #[test]
+    fn a_duplicate_of_a_side_does_not_stop_a_merge() {
+        let b = "class C {\n    void M(int a) { A(); }\n\n    void M(int b) { B(); }\n\n    void M(string s) {}\n\n    void N() {}\n}\n";
+        let o = b.replace("A();", "X();");
+        let t = b.replace("void N() {}", "void N() { Y(); }");
+        let m = keyed("a.cs", b, &o, &t).unwrap();
+        assert!(m.contains("X();") && m.contains("Y();"), "{m}");
+    }
+
+    /// One side giving both scopes a key leaves it numbered on that side.
+    #[test]
+    fn one_side_may_give_one_key_to_two_scopes() {
+        let rows = [
+            (
+                "a.py",
+                "if X:\n    def f(a: int):\n        return 1\nelse:\n    def f(a: str):\n        return 2\n\n\ndef k():\n    return 3\n",
+                ["a: int", "a: str"],
+                "a: bytes",
+                ("return 3", "return 4"),
+            ),
+            (
+                "a.rs",
+                "impl W<u8> {\n    fn f(a: u8) {}\n}\nimpl W<u16> {\n    fn f(a: u16) {}\n}\n\nfn k() {\n    a();\n}\n",
+                ["a: u8", "a: u16"],
+                "a: bool",
+                ("a();", "b();"),
+            ),
+        ];
+        for (path, b, [first, second], new, (from, to)) in rows {
+            let o = b.replace(first, new).replace(second, new);
+            let t = b.replace(from, to);
+            let want = o.replace(from, to);
+            assert_eq!(
+                keyed(path, b, &o, &t).as_deref(),
+                Ok(want.as_str()),
+                "{path}"
+            );
+            assert_eq!(
+                keyed(path, b, &t, &o).as_deref(),
+                Ok(want.as_str()),
+                "{path}"
+            );
+        }
+    }
+
+    /// With one text for two symbols, the order of the base tells them.
+    #[test]
+    fn equal_texts_keep_their_order_in_both_queue_orders() {
+        let b = "if X:\n    def f(a: int):\n        return 1\nelse:\n    def f(a: str):\n        return 1\n";
+        let o = b.replace("a: str", "a: bytes");
+        let t = b.replace("a: int", "a: bytes");
+        let want = o.replace("a: int", "a: bytes");
+        assert_eq!(keyed("a.py", b, &o, &t).as_deref(), Ok(want.as_str()));
+        assert_eq!(keyed("a.py", b, &t, &o).as_deref(), Ok(want.as_str()));
     }
 
     /// The parts of a type are one scope, for all that they are two lists.

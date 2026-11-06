@@ -430,8 +430,12 @@ fn holders_of(syms: &[Sym]) -> Vec<Holder> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pair {
     pub side: String,
+    /// `side` before its number: one side can give two scopes one key.
+    pub stem: String,
     pub base: String,
     pub own: String,
+    /// Where it stands in the base.
+    pub at: usize,
 }
 
 /// How many pairs are compared by their text, at most, in one place. Past it,
@@ -475,27 +479,40 @@ fn each_symbol<'s>(syms: &'s [Sym], out: &mut Vec<&'s Sym>) {
 /// A scope, a block in it and a name.
 type Seat<'s> = (&'s str, Option<(u32, u32)>, &'s str);
 
-/// A key a side gave a symbol stands twice in one place of `merged`: two
-/// sides gave one key to two symbols, and only one can answer to it. In
-/// another block, or in an `impl` for other type arguments, each is valid.
-pub fn key_twice(merged: &Parsed, pairs: &[Pair]) -> bool {
-    fn walk<'s>(
-        syms: &'s [Sym],
-        scope: &'s str,
-        given: &BTreeSet<&str>,
-        seen: &mut BTreeSet<Seat<'s>>,
-    ) -> bool {
-        syms.iter().any(|s| {
-            let block = s.holder.map(|h| h.block);
-            // The parts of a type are one scope, and so are the `impl`s of
-            // one type that nothing tells apart.
-            let inner = s.def_of.as_deref().filter(|_| s.plain.is_none());
-            (given.contains(s.stem.as_str()) && !seen.insert((scope, block, &s.stem)))
-                || walk(&s.children, inner.unwrap_or(&s.name), given, seen)
-        })
+/// The keyed names that stand twice in one place of `syms`.
+fn keys_twice<'s>(
+    syms: &'s [Sym],
+    scope: &'s str,
+    seen: &mut BTreeSet<Seat<'s>>,
+    out: &mut BTreeSet<(&'s str, &'s str)>,
+) {
+    for s in syms {
+        let block = s.holder.map(|h| h.block);
+        if s.plain.is_some() && !seen.insert((scope, block, &s.stem)) {
+            out.insert((scope, &s.stem));
+        }
+        // The parts of a type are one scope, and so are the `impl`s of one
+        // type that nothing tells apart.
+        let inner = s.def_of.as_deref().filter(|_| s.plain.is_none());
+        keys_twice(&s.children, inner.unwrap_or(&s.name), seen, out);
     }
-    let given: BTreeSet<&str> = pairs.iter().map(|p| p.side.as_str()).collect();
-    walk(&merged.syms, "", &given, &mut BTreeSet::new())
+}
+
+/// A key stands twice in one place of `merged` and in no such place of the
+/// sides: they gave one key to two symbols, and only one can answer to it.
+/// In another block, or in an `impl` for other type arguments, each is valid.
+pub fn key_twice(merged: &Parsed, sides: [&Parsed; 3]) -> bool {
+    let twice = |p: &'_ Parsed| {
+        let mut out = BTreeSet::new();
+        keys_twice(&p.syms, "", &mut BTreeSet::new(), &mut out);
+        out.into_iter()
+            .map(|(scope, name)| (scope.to_string(), name.to_string()))
+            .collect::<BTreeSet<_>>()
+    };
+    let before: Vec<_> = sides.iter().map(|p| twice(p)).collect();
+    twice(merged)
+        .iter()
+        .any(|k| !before.iter().any(|b| b.contains(k)))
 }
 
 /// Gives `merged` the names the sides gave its symbols. Each came from a
@@ -504,19 +521,20 @@ pub fn key_twice(merged: &Parsed, pairs: &[Pair]) -> bool {
 pub fn rename_aligned(merged: &mut Parsed, pairs: &[Pair]) {
     let mut all = Vec::new();
     each_symbol(&merged.syms, &mut all);
-    let keyed = |s: &&&Sym| !s.container && pairs.iter().any(|p| p.side == s.stem);
+    let keyed = |s: &&&Sym| !s.container && pairs.iter().any(|p| p.stem == s.stem);
     let mine: Vec<&Sym> = all.iter().filter(keyed).copied().collect();
     let mut open: Vec<&Pair> = pairs.iter().collect();
+    open.sort_by_key(|p| p.at);
     let mut names = BTreeMap::new();
     for s in &mine {
-        let same = |p: &&Pair| p.side == s.stem && p.own == s.own;
+        let same = |p: &&Pair| p.stem == s.stem && p.own == s.own;
         if let Some(at) = open.iter().position(same) {
             names.insert(s.name.clone(), open.remove(at).base.clone());
         }
     }
     for s in mine {
         if !names.contains_key(&s.name) {
-            let at = open.iter().position(|p| p.side == s.stem);
+            let at = open.iter().position(|p| p.stem == s.stem);
             let name = at.map_or(s.stem.clone(), |at| open.remove(at).base.clone());
             names.insert(s.name.clone(), name);
         }
@@ -552,8 +570,10 @@ fn pair_level(
     for (b, n) in places.into_values().flat_map(|(l, g)| closest(l, g)) {
         pairs.push(Pair {
             side: n.name.clone(),
+            stem: n.stem.clone(),
             base: b.name.clone(),
             own: n.own.clone(),
+            at: b.start,
         });
     }
     let by_name: BTreeMap<&str, &Sym> = bs.iter().map(|b| (b.name.as_str(), b)).collect();

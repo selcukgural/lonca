@@ -538,6 +538,27 @@ entry format, so they have their own version
   - **A lease someone holds on such a file does not stop another's edit.** It is
     no use to anyone under `optimistic`, and the merge is what decides.
 
+- **Engine 9** has two parts.
+  - **What engine 8 lists narrows to edits of lines:** the mode stays and is that
+    of a plain file, neither text holds a NUL, and at least half of the old text's
+    lines stay. Anything else keeps the file's lease. A link's target is no edit
+    of lines, and a change that takes away most of a file does what deleting it
+    does. The half is a line drawn, not a proof: it can not tell a rewrite from an
+    edit, and it does not try to.
+  - **Lines merge by `lines.rs`.** Changes are compared over `reach`, everywhere
+    they could stand with the same result, because among equal lines a diff can
+    only guess which line a change took. A conflict costs a look, a wrong guess
+    costs a side's work. On a corpus of Java-shaped files this agreed with
+    `git merge-file` on every input; only files of mostly equal lines conflict
+    more often than git does.
+- **A conflict in a file with no symbol merge is written out.** `lonca sync` brings
+  in the rest of trunk and leaves both sides between `<<<<<<< local` and
+  `>>>>>>> trunk`, all of each change that meets. The file is then the agent's to
+  settle, and the workspace records it: `propose` refuses while the markers stand,
+  a later sync reports it again, and a line next to the conflict is in view rather
+  than missing. This lives in the client: the daemon sees only a file. `lines.rs`
+  is the one core for this and for the merge at integration.
+
 ## The language table
 
 What a language's syntax means to the symbol engine is data (issue #114):

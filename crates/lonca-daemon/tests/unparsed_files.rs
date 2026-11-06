@@ -6,16 +6,15 @@ mod common;
 use common::*;
 
 use lonca_audit::{Options, audit};
-use lonca_core::GitId;
 use lonca_core::ops::Claim;
+use lonca_core::{FileMode, GitId};
 use lonca_policy::config::DEFAULT_CONFIG;
 use lonca_policy::config::DEFAULT_POLICY;
 use serde_json::{Value, json};
 
 const PATH: &str = "src/Main.java";
 
-/// Thirty lines with room between them, so that one-line changes do not
-/// touch: a change at line `i` is line `i * 4`.
+/// A hundred lines, so that one-line changes far apart do not touch.
 fn seed() -> String {
     (0..100).map(|i| format!("    int a{i} = {i};\n")).collect()
 }
@@ -159,4 +158,97 @@ fn by_default_status_says_file_and_preview_asks_for_the_lease() {
     );
     assert_eq!(r["no_lease"], json!([]), "{r}");
     assert_eq!(r["leases"][0]["symbol"], format!("{PATH}#<file>"), "{r}");
+}
+
+/// A proposal of `files` by a new session, and what its lease report says.
+fn asked_for(e: &mut Env, base: &GitId, files: Value) -> (Value, Value) {
+    let t = e.session("a", &["src/**"]);
+    e.bind(&t);
+    e.wrote(&t, PATH);
+    let args = json!({"base": base, "files": files});
+    let preview = e.ok("facts.preview", None, Some(&t), args.clone());
+    let claim = Claim {
+        intent: "a change".into(),
+        edits: vec![format!("{PATH}#<file>")],
+        ..Default::default()
+    };
+    let r = e.ok(
+        "change.propose",
+        None,
+        Some(&t),
+        json!({"base": base, "files": args["files"], "claim": claim}),
+    );
+    (preview, r)
+}
+
+fn needs_the_lease(preview: &Value, r: &Value) {
+    assert_eq!(preview["no_lease"], json!([]), "{preview}");
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    let reason = format!("lease_missing:{PATH}#<file>");
+    assert!(r["decision"].to_string().contains(&reason), "{r}");
+}
+
+/// The lease is waived for lines a merge can read, and for nothing that
+/// comes along with them.
+#[test]
+fn a_change_of_mode_takes_the_lease_also_with_an_edit() {
+    for mode in [FileMode::Executable, FileMode::Symlink] {
+        let (mut e, base) = repo();
+        let f = FileChange {
+            mode: Some(mode),
+            ..file(PATH, &edited(&seed(), 5, "6"))
+        };
+        let (preview, r) = asked_for(&mut e, &base, json!([f]));
+        needs_the_lease(&preview, &r);
+    }
+}
+
+#[test]
+fn a_link_that_points_elsewhere_takes_the_lease() {
+    let mut e = Env::new();
+    e.init(None);
+    optimistic(&mut e);
+    let link = |to: &str| FileChange {
+        mode: Some(FileMode::Symlink),
+        ..file(PATH, to)
+    };
+    let r = e.human_change(vec![link(&seed())], "seed");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let base = e.trunk();
+    let changed = link(&edited(&seed(), 5, "6"));
+    let (preview, r) = asked_for(&mut e, &base, json!([changed]));
+    needs_the_lease(&preview, &r);
+}
+
+/// Taking away most of a file's content does what deleting it does, and
+/// deleting takes the lease.
+#[test]
+fn a_file_emptied_or_cut_takes_the_lease() {
+    let kept: String = seed().lines().take(49).map(|l| format!("{l}\n")).collect();
+    for text in ["", "\n \n", "something else\n", "    int a0 = 0;\n", &kept] {
+        let (mut e, base) = repo();
+        let (preview, r) = asked_for(&mut e, &base, json!([file(PATH, text)]));
+        needs_the_lease(&preview, &r);
+    }
+}
+
+#[test]
+fn text_with_a_nul_is_not_lines_to_merge() {
+    let (mut e, base) = repo();
+    let text = edited(&seed(), 5, "\0");
+    let (preview, r) = asked_for(&mut e, &base, json!([file(PATH, &text)]));
+    needs_the_lease(&preview, &r);
+}
+
+/// What the agent is told at the proposal says the same as the decision.
+#[test]
+fn an_allowed_proposal_says_no_lease_was_needed() {
+    let (mut e, base) = repo();
+    let text = edited(&seed(), 5, "6");
+    let (preview, r) = asked_for(&mut e, &base, json!([file(PATH, &text)]));
+    assert_eq!(preview["no_lease"], json!([PATH]), "{preview}");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(r["details"], json!([]), "{r}");
+    assert_eq!(r["advice"], json!(null), "{r}");
 }

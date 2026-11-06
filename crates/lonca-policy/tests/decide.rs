@@ -4929,7 +4929,7 @@ fn a_file_no_parser_reads_takes_a_lease_unless_the_policy_says_otherwise() {
     h.start("a", &["src/**"]);
     h.wrote("a", "src/A.java");
     let d = h.propose("a", ChangeId::random(), on_unparsed("src/A.java"));
-    assert!(!denied_with(&d, "lease_missing"), "{d:?}");
+    assert_eq!(d.reasons, ["unobserved_session", "approvals=1"], "{d:?}");
     h.wrote("a", "src/a.bin");
     let d = h.propose("a", ChangeId::random(), edit("src/a.bin#<file>"));
     assert!(denied_with(&d, "lease_missing:src/a.bin#<file>"), "{d:?}");

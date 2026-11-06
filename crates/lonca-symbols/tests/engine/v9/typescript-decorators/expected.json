@@ -1,0 +1,257 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.ts#C.onX"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.ts"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.ts#C.f",
+          "src/sample.ts#C.other"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.ts"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "export class C {\n  @Listen('y')\n  onX(): void {}\n\n  @Input() f = 2;\n\n  // section\n\n  other(): void { go(); }\n}\n"
+  },
+  "path": "src/sample.ts",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.onX",
+              "own": "",
+              "signature": "onX(): void",
+              "skipped": false,
+              "span": [
+                19,
+                34,
+                48
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.f",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                52,
+                52,
+                67
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.other",
+              "own": "",
+              "signature": "other(): void",
+              "skipped": false,
+              "span": [
+                85,
+                85,
+                101
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fC\u001fclass_body({\u001f// section\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            7,
+            103
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.onX",
+              "own": "",
+              "signature": "onX(): void",
+              "skipped": false,
+              "span": [
+                19,
+                34,
+                48
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.f",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                52,
+                52,
+                67
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.other",
+              "own": "",
+              "signature": "other(): void",
+              "skipped": false,
+              "span": [
+                85,
+                85,
+                101
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fC\u001fclass_body({\u001f// section\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            7,
+            103
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.onX",
+              "own": "",
+              "signature": "onX(): void",
+              "skipped": false,
+              "span": [
+                19,
+                34,
+                48
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.f",
+              "own": "",
+              "signature": null,
+              "skipped": false,
+              "span": [
+                52,
+                52,
+                67
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.other",
+              "own": "",
+              "signature": "other(): void",
+              "skipped": false,
+              "span": [
+                85,
+                85,
+                108
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fC\u001fclass_body({\u001f// section\u001f}\u001f)))",
+          "signature": null,
+          "skipped": false,
+          "span": [
+            0,
+            7,
+            110
+          ]
+        }
+      ]
+    }
+  }
+}

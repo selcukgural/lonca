@@ -69,7 +69,7 @@ git diff main -- crates > /tmp/git.diff && cargo mutants --in-diff /tmp/git.diff
   diff against the base branch run over 20 shards (`mutants k/20`), each
   failing on any survivor, and the `mutants` job that the ruleset
   requires fails if any shard did; a PR waits for it. Survivors are in
-  the `mutants-diff-<k>` artifacts (`missed.txt`). Every night at 02:00 UTC,
+  the `mutants-diff-<k>` artifacts (`missed.txt`). Every night at 00:07 UTC,
   if main changed, and on demand, the whole workspace runs in 20 shards
   (`full k/20`). That run blocks nothing; any survivor fails its shard and
   is listed in the run's summary.

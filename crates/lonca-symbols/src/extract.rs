@@ -2554,6 +2554,18 @@ mod tests {
         assert!(!held.joined);
     }
 
+    /// A declarator can hold a pattern where a name would stand, and a
+    /// pattern names nothing.
+    #[test]
+    fn a_csharp_field_of_a_pattern_has_no_name() {
+        let p = parse(
+            Lang::named("csharp"),
+            "class C { int (a, b) = f(); int d; }\n",
+        );
+        let names: Vec<&str> = p.syms[0].children.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["C.d"]);
+    }
+
     #[test]
     fn syntax_errors_are_reported() {
         assert!(parse(Lang::named("rust"), "fn broken( {").has_error);

@@ -600,7 +600,7 @@ fn open_ones<'s>(list: &'s [Sym], other: &BTreeSet<String>) -> Vec<(Place, &'s S
     let block = |s: &Sym| {
         let name = s.plain.as_deref().unwrap_or_default();
         let held = s.holder.map(|h| h.block)?;
-        let rank = groups.get(name)?.iter().position(|g| *g == held.0)?;
+        let rank = groups.get(name)?.range(..held.0).count();
         Some((rank, held.1))
     };
     let mut out = Vec::new();
@@ -1794,22 +1794,57 @@ mod tests {
     }
 
     /// Past what is compared, source order pairs them: the cost of a change
-    /// is not the square of a file.
+    /// is not the square of a file. Up to it, the texts do.
     #[test]
-    fn many_changed_overloads_pair_in_source_order() {
-        let list = |ty: &str| {
-            let methods = (0..9).map(|i| format!("void M({ty}{i} a) {{ A{i}(); }} "));
-            format!(
-                "class C {{ {} void Z() {{}} }}",
-                methods.collect::<String>()
-            )
+    fn overloads_pair_by_their_text_up_to_a_limit() {
+        let list = |ty: &str, n: usize, reversed: bool| {
+            let methods = (0..n).map(|i| {
+                let j = if reversed { n - 1 - i } else { i };
+                format!("void M({ty}{i} a) {{ Run{j}(); Go{j}(); Do{j}(); }} ")
+            });
+            let methods = methods.collect::<String>();
+            format!("class C {{ {methods}void Z() {{}} }}")
         };
-        let (old, new) = (list("A"), list("B"));
-        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [&old, &new]);
-        let pairs = align(&a, &mut b);
-        assert_eq!(pairs.len(), 9);
-        let third = pairs.iter().find(|p| p.side == "C.M(B3)").unwrap();
-        assert_eq!(third.base, "C.M(A3)");
+        let first_pair = |n: usize| {
+            let (old, new) = (list("A", n, false), list("B", n, true));
+            let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [&old, &new]);
+            let pairs = align(&a, &mut b);
+            assert_eq!(pairs.len(), n);
+            let first = pairs.iter().find(|p| p.base == "C.M(A0)").unwrap();
+            first.side.clone()
+        };
+        assert_ne!(first_pair(8), "C.M(B0)", "8 x 8 is 64: compared");
+        assert_eq!(first_pair(9), "C.M(B0)", "9 x 9 is past it: source order");
+    }
+
+    /// A pair is found by its own name and text, whatever another pair has.
+    #[test]
+    fn a_symbol_of_a_merge_finds_its_own_pair() {
+        let src = "def f(a: int):\n    pass\ndef f(a: bytes):\n    pass\ndef g(a: int):\n    pass\ndef g(a: bytes):\n    pass\n";
+        let mut merged = parse_at(ENGINE_KEYS, Lang::Python, src);
+        let own = merged.syms[1].own.clone();
+        let pair = |stem: &str, base: &str, own: String, at| Pair {
+            side: stem.into(),
+            stem: stem.into(),
+            base: base.into(),
+            own,
+            at,
+        };
+        let pairs = [
+            pair("g(bytes)", "g(old)", own, 0),
+            pair("f(bytes)", "f(old)", "other text".into(), 1),
+        ];
+        rename_aligned(&mut merged, &pairs);
+        let names: Vec<&str> = merged.syms.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["f(int)", "f(old)", "g(int)", "g(old)"]);
+    }
+
+    /// A later engine reads names as this one does.
+    #[test]
+    fn keys_hold_for_later_engines() {
+        let src = "class C { void M(int a) {} void M(string s) {} }";
+        let [p] = parse_together(ENGINE_KEYS + 1, Lang::CSharp, [src]);
+        assert_eq!(p.syms[0].children[0].name, "C.M(int)");
     }
 
     /// The key is how a symbol is known among others, so nothing that can

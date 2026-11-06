@@ -109,6 +109,13 @@ unknown method: `unknown_method`, whatever the token.
   `impl` headers), apart from its methods. `path#Type` is the whole type and
   covers it. Facts report it from symbol engine 3 on; the MCP tool `symbols`
   gives it as `def`.
+- **`path#Name(key)`**: a symbol that shares its name with others in the
+  file, from symbol engine 6 on: `Client.Charge(int,int)`, `P.x[setter]`,
+  `S.From(u8).from`. A symbol alone with its name has no key, and an id can
+  hold spaces, so take ids from `symbols` or `preview` and do not build them.
+  From log format 13 `path#Name` covers each `path#Name(key)`, in leases and
+  in scopes, and the key reaches only its own symbol. What nothing tells
+  apart is numbered in file order: `init~2`.
 - **lease item**: `{"symbol": "path#Qualified.name", "kind": "edit" |
   "insert" | "rename"}`; for `insert` the symbol is the container
   (`path#Type` or `path#<file>`). Markdown, TOML, JSON and YAML files

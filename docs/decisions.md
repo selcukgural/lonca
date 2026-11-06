@@ -104,6 +104,9 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 12** adds no field: a lease or an interest needs an intent, and
   a waiting interest stops new leases that conflict with it (see "The lease
   queue"). Older entries need no intent and their interests stop nobody.
+- **Version 13** adds no field: `path#Name` stands for every `path#Name(key)`
+  (see "Symbol engine versions", engine 6). In older entries they are two
+  symbols.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -268,7 +271,8 @@ entry format, so they have their own version
   - **What this does not see.** A symbol renamed while code moves past it is
     no anchor in the facts, so the move is not reported, though the merge
     keeps it; and adding a duplicate renumbers `name~2`, which reads as a
-    move. Both wait for stable ids (#44), and the second only costs a lease.
+    move. From engine 6 only exact duplicates have a number; renames wait for
+    the rest of #44.
 
 - **Engine 5** reads declarations that hold others (issue #47). Up to engine
   4 such code was one symbol or none: an edit of `Y` in a Go `const (...)` was
@@ -346,12 +350,67 @@ entry format, so they have their own version
   - **What this does not see.** A const in a Go `iota` group means what its
     place says, so a spec added in the middle changes the ones after it with
     no fact about them; verification catches that, as for any change between
-    symbols (design §5.8). Names by order (`f~2`, `m!~2`) wait for #44.
+    symbols (design §5.8). Names by order (`f~2`, `m!~2`) stay for what has
+    no key from engine 6 on: exact duplicates, macro calls, partial types.
     Deleting the last two members of a list, or the last symbols of one, and a
     deletion that takes the blank line under a comment, are refused by the line
     merge though the leases allow it: nothing is lost, and such a change goes
     back to the agent. A new symbol beside one that `o` moved to another block
     of the same kind follows it.
+
+- **Engine 6** tells symbols of one name apart by what they take (issue #44).
+  Up to engine 5 the second `Charge` was `Charge~2`, by its place in the file,
+  so an overload added in front of it renumbered the rest: facts reported
+  edits nobody made, and two sessions could hold one overload under two names.
+  - **Only a shared name has a key.** A symbol alone with its name is that
+    name, in every language, so a change of its parameters is the edit it
+    always was and ids stay short. Once a file has two definitions of a name
+    with something to tell them apart, every one of them has a key, the first
+    included: anything else depends on which came first.
+  - **The key.** `(int,string)`: for each parameter its type, with its
+    modifiers (`ref int`), else its name, as Python has none. A name or a
+    default can change with the same symbol, so neither is in a key that has a
+    type. `[setter]`, `[get]`: an accessor is named by that word, in the syntax
+    (`get v()`) or hung on the name (`@x.setter`). A Rust `impl` takes the
+    arguments of its trait and type, `impl:S.From(u8)`, and a trait's members
+    follow: `S.From(u8).from`. It all comes from field names that hold across
+    grammars, `parameters`, `type`, `name`, `pattern`, not from a table per
+    language. A `.` in a key is written `::`, so that a `.` always separates
+    the levels of a name.
+  - **Versions read together.** Facts and merges need one name for one symbol,
+    and a second overload appears in only one of the versions. So they read
+    all versions with the names any of them needs a key for
+    (`parse_together`): a merged text too, through the same set (`parse_keyed`).
+    Names depend on a parent's name, so the set is found in rounds, with a pass
+    that only counts; it ends with the depth of the file.
+  - **A change of parameters.** A keyed symbol that changes them has a new
+    name on that side. `align` gives it the name it has in the base, pairing
+    what the base lost and the side gained under one bare name, in source
+    order. That keeps it an edit plus a `signature_change` on the name a lease
+    was taken on, and two changes of one overload a conflict instead of two
+    new methods. A wrong pair can only be between symbols that both changed.
+    Containers are not paired, because their members hang on the key.
+  - **What is left to a number.** Exact duplicates (`init()` in Go), macro
+    calls, partial types: nothing but the order tells them apart, and
+    `numbers_hold` still guards merges of those.
+  - **The `;` behind a member of a TypeScript class is the member's.** It is a
+    sibling in the tree, so it stayed in the class's own text, and adding a
+    field or an overload signature was an edit of `<def>`.
+- **A name stands for all its symbols (format 13).** A session on an older
+  base can see one `Charge` where the trunk has two, and has it as `Charge`,
+  while another has `Charge(string)`. `decide()` has no tree, so what relates
+  the two is in the strings: `Name` covers `Name(key)`, part by part
+  (`S.From.from` covers `S.From(u8).from`). The session with the bare name holds
+  all of them, which is wider than it knows and never less than it needs. A
+  scope on a name reaches its keyed symbols, and a key in a scope only that one
+  symbol. Log format 13 gates all of this, in `decide()` by `Ctx.format` and in
+  the fold by `State.symbol_keys`, because in older entries `a.md#Setup` and
+  `a.md#Setup(old)` are two headings. A new overload needs a lease on the type
+  or file around it, not on its namesakes.
+  - **What this does not do.** A lease on `Charge(string)` does not cover the
+    fact `Charge` once the other overload is gone from the base: the session is
+    told `lease_missing` and takes the name, and nobody else can hold that. A
+    rename is still a delete and an add (the rest of #44).
 
 ## Harness profiles
 

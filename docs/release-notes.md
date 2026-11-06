@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Overloads keep their identity (symbol engine 6, log format 13)
+
+Symbols that share a name are now told apart by what they take, not by their place
+in the file: `Client.Charge(int,int)`, `P.x[setter]`, `V.v[get]`,
+`impl:S.From(u8)`, instead of `Charge~2`. An overload added above another renames
+nothing, so nobody is told to lease a symbol they did not touch. A symbol alone with
+its name has no key. Exact duplicates such as Go's `init()` keep `~2`.
+
+`path#Name` now stands for every symbol of that name, in leases and scopes: a lease
+on `Client.Charge` conflicts with one on `Client.Charge(int)`, so two sessions can
+not hold one overload under two names. A `;` behind a TypeScript class member belongs
+to the member, so adding a field is an add, not an edit of `<def>`.
+
+**For clients:** symbol ids can now hold `(`, `)`, `[`, `]`, `,` and spaces: quote them
+in a shell, and take them from `symbols` or `preview` instead of building them.
+Entries already in a log keep their recorded engine and meaning.
+
 ### More of a file can be leased on its own (symbol engine 5)
 
 Each spec in a Go `const (...)`, `var (...)` or `type (...)` group is now a symbol,

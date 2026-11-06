@@ -12,7 +12,7 @@ use tree_sitter::Node;
 
 use lonca_core::ops::DEF;
 
-use crate::engine::{ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS};
+use crate::engine::{ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS};
 use crate::lang::Lang;
 
 /// Declarations with a definition of their own even with no members in the
@@ -37,6 +37,8 @@ const TYPE_KINDS: &[&str] = &[
 pub struct Sym {
     /// Qualified name within the file, e.g. `Client.charge`.
     pub name: String,
+    /// The name before its key, for a symbol that shares it with others.
+    pub plain: Option<String>,
     pub start: usize,
     pub end: usize,
     /// Start of the definition itself (after attached attributes/comments).
@@ -222,6 +224,67 @@ pub fn parse(lang: Lang, src: &str) -> Parsed {
 
 /// The symbols of `src` as `engine` reads them.
 pub fn parse_at(engine: u32, lang: Lang, src: &str) -> Parsed {
+    let [p] = read_together(engine, lang, [src]).1;
+    p
+}
+
+/// Names that more than one definition goes by in a file, with something to
+/// tell them apart.
+pub type Keyed = BTreeSet<String>;
+
+/// Versions of one file, read with the same names: a symbol is named by its
+/// key in all of them when any of them needs that, so that its name does not
+/// change with the arrival of a second symbol of that name.
+pub fn parse_together<const N: usize>(engine: u32, lang: Lang, texts: [&str; N]) -> [Parsed; N] {
+    read_together(engine, lang, texts).1
+}
+
+/// [`parse_together`], and the names read with their key, for a text that
+/// comes later: [`parse_keyed`].
+pub fn read_together<const N: usize>(
+    engine: u32,
+    lang: Lang,
+    texts: [&str; N],
+) -> (Keyed, [Parsed; N]) {
+    let keyed = keyed_names(engine, lang, &texts);
+    let parsed = texts.map(|text| parse_keyed(engine, lang, text, &keyed));
+    (keyed, parsed)
+}
+
+/// Each round names by key what the last one found to be shared, and that
+/// changes the names of its members. It ends with the depth of the file.
+fn keyed_names(engine: u32, lang: Lang, texts: &[&str]) -> Keyed {
+    let mut keyed = Keyed::new();
+    if engine < ENGINE_KEYS {
+        return keyed;
+    }
+    let trees: Vec<_> = texts.iter().map(|t| (lang.parse(t), *t)).collect();
+    loop {
+        let before = keyed.len();
+        for (tree, src) in &trees {
+            let Some(tree) = tree else { continue };
+            let ex = Extractor::new(engine, lang, src, &keyed, Some(Census::default()));
+            ex.level(
+                tree.root_node(),
+                "",
+                &mut Vec::new(),
+                None,
+                &mut BTreeMap::new(),
+                None,
+            );
+            let census = ex.census.map(RefCell::into_inner).unwrap_or_default();
+            let shared = census.into_iter().filter(|(_, keys)| keys.len() > 1);
+            let found: Vec<String> = shared.map(|(name, _)| name).collect();
+            keyed.extend(found);
+        }
+        if keyed.len() == before {
+            return keyed;
+        }
+    }
+}
+
+/// `src` with the names in `keyed` read by their key.
+pub fn parse_keyed(engine: u32, lang: Lang, src: &str, keyed: &Keyed) -> Parsed {
     let Some(tree) = lang.parse(src) else {
         return Parsed {
             syms: vec![],
@@ -234,13 +297,7 @@ pub fn parse_at(engine: u32, lang: Lang, src: &str) -> Parsed {
         };
     };
     let root = tree.root_node();
-    let ex = Extractor {
-        engine,
-        lang,
-        src,
-        scopes: RefCell::default(),
-        groups_seen: Cell::new(0),
-    };
+    let ex = Extractor::new(engine, lang, src, keyed, None);
     let mut imports = Vec::new();
     let mut syms = Vec::new();
     ex.level(
@@ -366,6 +423,44 @@ fn holders_of(syms: &[Sym]) -> Vec<Holder> {
     syms.iter().filter_map(|s| s.holder).collect()
 }
 
+/// A definition of a shared name that lost its old key and one that has a
+/// new key are one symbol whose parameters changed, as they are when no
+/// other symbol has its name: `side` takes the name `base` has it under, and
+/// the change is an edit of that. Pairs form in source order; what they
+/// mistake for each other is a change either way. Containers stay: their
+/// members hang on the key.
+pub fn align(base: &Parsed, side: &mut Parsed) {
+    align_level(&base.syms, &mut side.syms, &mut side.spots);
+}
+
+fn align_level(bs: &[Sym], ns: &mut [Sym], spots: &mut [Spot]) {
+    let names =
+        |list: &[Sym]| -> BTreeSet<String> { list.iter().map(|s| s.name.clone()).collect() };
+    let (in_base, in_side) = (names(bs), names(ns));
+    let lost = bs
+        .iter()
+        .filter(|b| !b.container && !in_side.contains(&b.name));
+    let mut lost: Vec<&Sym> = lost.collect();
+    for n in ns.iter_mut() {
+        if n.plain.is_none() || n.container || in_base.contains(&n.name) {
+            continue;
+        }
+        let Some(i) = lost.iter().position(|b| b.plain == n.plain) else {
+            continue;
+        };
+        let b = lost.remove(i);
+        for spot in spots.iter_mut().filter(|s| s.name == n.name) {
+            spot.name = b.name.clone();
+        }
+        n.name = b.name.clone();
+    }
+    for n in ns.iter_mut() {
+        if let Some(b) = bs.iter().find(|b| b.name == n.name) {
+            align_level(&b.children, &mut n.children, &mut n.spots);
+        }
+    }
+}
+
 /// Code with the symbols around it left out, and the symbols around it.
 pub type Placed<'a> = (&'a str, &'a [Spot]);
 
@@ -423,6 +518,25 @@ struct Def<'t> {
     body: Option<Node<'t>>,
     /// Where the declaration header starts (after attributes inside the node).
     header_start: usize,
+    /// What sets this declaration apart that it does not take as parameters:
+    /// the type arguments of a Rust `impl`.
+    key: Option<String>,
+}
+
+/// The text of a part of a key: `.` separates the levels of a name, and
+/// nothing a key holds may look like one.
+fn key_text(text: &str) -> String {
+    normalize(text).replace(", ", ",").replace('.', "::")
+}
+
+fn key_of<S: AsRef<str>>(parts: impl Iterator<Item = S>) -> Option<String> {
+    let parts: Vec<String> = parts.map(|p| key_text(p.as_ref())).collect();
+    (!parts.is_empty()).then(|| format!("({})", parts.join(",")))
+}
+
+/// What stands between the angle brackets of a type.
+fn type_args(ty: &str) -> Option<&str> {
+    ty.split_once('<')?.1.trim_end().strip_suffix('>')
 }
 
 /// Nodes whose members belong to the level around them.
@@ -471,6 +585,10 @@ fn blocks<'t>(n: Node<'t>, out: &mut Vec<Node<'t>>) {
     }
 }
 
+/// What tells the definitions of each name apart, without a key for one
+/// that has none.
+type Census = BTreeMap<String, BTreeSet<Option<String>>>;
+
 struct Extractor<'s> {
     engine: u32,
     lang: Lang,
@@ -478,9 +596,30 @@ struct Extractor<'s> {
     /// Where each C# type name was first seen: its namespaces.
     scopes: RefCell<BTreeMap<String, String>>,
     groups_seen: Cell<u32>,
+    keyed: &'s Keyed,
+    /// Set for a round that only counts names.
+    census: Option<RefCell<Census>>,
 }
 
 impl<'s> Extractor<'s> {
+    fn new(
+        engine: u32,
+        lang: Lang,
+        src: &'s str,
+        keyed: &'s Keyed,
+        census: Option<Census>,
+    ) -> Self {
+        Extractor {
+            engine,
+            lang,
+            src,
+            scopes: RefCell::default(),
+            groups_seen: Cell::new(0),
+            keyed,
+            census: census.map(RefCell::new),
+        }
+    }
+
     fn text(&self, n: Node) -> &'s str {
         &self.src[n.start_byte()..n.end_byte()]
     }
@@ -652,6 +791,68 @@ impl<'s> Extractor<'s> {
         s.trim().to_string()
     }
 
+    /// A parameter as a key has it: what it takes, and its name only where
+    /// nothing says what it takes. A parameter's name can change, and so
+    /// can its default, with the same symbol.
+    fn parameter_key(&self, p: Node) -> String {
+        let field = |f: &str| p.child_by_field_name(f);
+        let what = field("type").or(field("name")).or(field("pattern"));
+        let text = self.text(what.unwrap_or(p));
+        let modifiers = named(p)
+            .into_iter()
+            .filter(|c| c.kind().contains("modifier"));
+        let mut words: Vec<&str> = modifiers.map(|c| self.text(c)).collect();
+        words.push(text.trim_start_matches([':', ' ']));
+        words.join(" ")
+    }
+
+    /// The word that makes `n` one of the accessors of a name: `get` and
+    /// `set` in its syntax, or a decorator that hangs it on the name, as
+    /// `@x.setter` does. The names hold across tree-sitter grammars.
+    fn accessor(&self, n: Node, around: Node, name: &str) -> Option<String> {
+        let word = n
+            .children(&mut n.walk())
+            .find(|c| matches!(c.kind(), "get" | "set"))
+            .map(|c| c.kind().to_string());
+        word.or_else(|| {
+            let decorators = named(around).into_iter();
+            let mut decorators = decorators.filter(|c| c.kind() == "decorator");
+            decorators.find_map(|d| {
+                let text = self.text(d).trim_start_matches('@');
+                let (owner, word) = text.split_once('.')?;
+                (owner == name).then(|| word.trim().to_string())
+            })
+        })
+    }
+
+    /// What tells `n` from other definitions of its name: not its place
+    /// among them, which changes when one is added in front of it.
+    fn key(&self, n: Node, around: Node, def: &Def) -> Option<String> {
+        if let Some(word) = self.accessor(n, around, &def.name) {
+            return Some(format!("[{word}]"));
+        }
+        let Some(list) = n.child_by_field_name("parameters") else {
+            return def.key.clone();
+        };
+        let mut parts = Vec::new();
+        for i in 0..list.named_child_count() as u32 {
+            let Some(p) = list.named_child(i as _) else {
+                continue;
+            };
+            // C#'s `params` stands in the list with no parameter around it.
+            match list.field_name_for_named_child(i) {
+                Some("name") => {}
+                Some("type") => parts.push(self.text(p).to_string()),
+                _ if p.kind().contains("comment") => {}
+                _ => parts.push(self.parameter_key(p)),
+            }
+        }
+        match key_of(parts.iter()) {
+            None => Some("()".to_string()),
+            key => key,
+        }
+    }
+
     fn def<'t>(&self, n: Node<'t>) -> Option<Def<'t>> {
         let kind = n.kind();
         let name = |f: &str| self.field_text(n, f);
@@ -663,6 +864,7 @@ impl<'s> Extractor<'s> {
                 members: None,
                 body: n.child_by_field_name("body"),
                 header_start: n.start_byte(),
+                key: None,
             })
         };
         let container = |name: Option<String>, field: &str| {
@@ -673,6 +875,7 @@ impl<'s> Extractor<'s> {
                 members: n.child_by_field_name(field),
                 body: None,
                 header_start: n.start_byte(),
+                key: None,
             })
         };
         match self.lang {
@@ -705,14 +908,18 @@ impl<'s> Extractor<'s> {
                     }
                 }
                 "impl_item" => {
-                    let ty = Self::base_type_name(&name("type")?);
-                    let full = match name("trait") {
-                        Some(tr) => format!("{ty}.{}", Self::base_type_name(&tr)),
+                    let of_type = name("type")?;
+                    let ty = Self::base_type_name(&of_type);
+                    let of_trait = name("trait");
+                    let full = match &of_trait {
+                        Some(tr) => format!("{ty}.{}", Self::base_type_name(tr)),
                         None => ty.clone(),
                     };
                     let mut d = container(Some(format!("impl:{full}")), "body")?;
                     d.member_prefix = Some(full);
                     d.impl_for = Some(ty).filter(|ty| !ty.is_empty());
+                    let args = [Some(&of_type), of_trait.as_ref()].into_iter().flatten();
+                    d.key = key_of(args.filter_map(|t| type_args(t)));
                     Some(d)
                 }
                 _ => None,
@@ -921,15 +1128,28 @@ impl<'s> Extractor<'s> {
             } else {
                 format!("{prefix}.{}", def.name)
             };
-            let count = seen.entry(base.clone()).or_insert(0);
+            let key = (self.engine >= ENGINE_KEYS)
+                .then(|| self.key(def_node, child, &def))
+                .flatten();
+            if let Some(census) = &self.census {
+                let mut census = census.borrow_mut();
+                census.entry(base.clone()).or_default().insert(key.clone());
+            }
+            let shared = key.filter(|_| self.keyed.contains(&base));
+            let named = match &shared {
+                Some(key) => format!("{base}{key}"),
+                None => base.clone(),
+            };
+            let count = seen.entry(named.clone()).or_insert(0);
             *count += 1;
             let same_type = self.same_scope(&base, def_node);
             let part_of = (same_type && self.is_partial(def_node)).then(|| base.clone());
             let qualified = if *count == 1 {
-                base
+                named
             } else {
-                format!("{base}~{count}")
+                format!("{named}~{count}")
             };
+            let plain = shared.as_ref().map(|_| base);
             let under_prefix = |name: &String| match prefix {
                 "" => name.clone(),
                 _ => format!("{prefix}.{name}"),
@@ -938,10 +1158,17 @@ impl<'s> Extractor<'s> {
             if let Some(m) = def.members {
                 let member_prefix = match (&part_of, &def.member_prefix) {
                     (Some(whole), _) => whole.clone(),
+                    // A trait's members are its own, the type's are shared.
+                    (None, Some(p)) if def.impl_for.as_ref() != Some(p) => {
+                        under_prefix(&format!("{p}{}", shared.as_deref().unwrap_or_default()))
+                    }
                     (None, Some(p)) => under_prefix(p),
                     (None, None) => qualified.clone(),
                 };
                 self.level(m, &member_prefix, &mut children_syms, None, seen, None);
+            }
+            if self.census.is_some() {
+                continue;
             }
             let is_type = def.members.is_some() || TYPE_KINDS.contains(&def_node.kind());
             let def_of = match (&part_of, &def.impl_for) {
@@ -949,7 +1176,12 @@ impl<'s> Extractor<'s> {
                 (None, Some(ty)) => Some(under_prefix(ty)),
                 (None, None) => is_type.then(|| qualified.clone()),
             };
-            let end = child.end_byte();
+            // The `;` behind a member of a TypeScript class is a sibling, and
+            // it comes and goes with that member.
+            let closer = child.next_sibling().filter(|c| c.kind() == ";");
+            let end = closer
+                .filter(|_| self.engine >= ENGINE_KEYS)
+                .map_or(child.end_byte(), |c| c.end_byte());
             let around = match holder {
                 Some(h) if h.joined => (
                     children
@@ -990,6 +1222,7 @@ impl<'s> Extractor<'s> {
             let (is_test, skipped) = self.test_markers(&def, def_node, &qualified, attached);
             out.push(Sym {
                 name: qualified,
+                plain,
                 start,
                 end,
                 def_start: def_node.start_byte(),
@@ -1139,6 +1372,7 @@ fn find_descendant<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::ENGINE_KEYS;
 
     fn find<'a>(s: &'a [Sym], name: &str) -> &'a Sym {
         fn walk<'a>(s: &'a [Sym], name: &str) -> Option<&'a Sym> {
@@ -1152,6 +1386,167 @@ mod tests {
 
     /// Who has a definition: containers and types, and an `impl` has its
     /// type's, also inside a module and for a trait.
+    fn keyed_names_of(path: &str, src: &str) -> Vec<String> {
+        fn walk(syms: &[Sym], out: &mut Vec<String>) {
+            for s in syms {
+                out.push(s.name.clone());
+                walk(&s.children, out);
+            }
+        }
+        let parsed = parse(Lang::detect(path).unwrap(), src);
+        assert!(!parsed.has_error, "{src}");
+        let mut out = Vec::new();
+        walk(&parsed.syms, &mut out);
+        out
+    }
+
+    #[test]
+    fn symbols_of_one_name_are_told_apart_by_what_they_take() {
+        let src = "class C {\n void M(int a, System.String b = \"x\") {}\n void M(ref int a) {}\n void M(params int[] a) {}\n void M(Dictionary<string, int> d /* map */) {}\n public int this[int i] { get; }\n public int this[string i] { get; }\n public static C operator +(C a, C b) => a;\n public static C operator +(C a, int b) => a;\n C() {}\n C(int a) {}\n}\n";
+        assert_eq!(
+            keyed_names_of("a.cs", src),
+            [
+                "C",
+                "C.M(int,System::String)",
+                "C.M(ref int)",
+                "C.M(int[])",
+                "C.M(Dictionary<string,int>)",
+                "C.this(int)",
+                "C.this(string)",
+                "C.operator+(C,C)",
+                "C.operator+(C,int)",
+                "C.C()",
+                "C.C(int)",
+            ]
+        );
+        let src = "function f(a: string): void;\nfunction f(a: number, b?: string): void;\nfunction f(a: any) {}\nclass V {\n  get v() { return 1; }\n  set v(x: number) {}\n}\n";
+        assert_eq!(
+            keyed_names_of("a.ts", src),
+            [
+                "f(string)",
+                "f(number,string)",
+                "f(any)",
+                "V",
+                "V.v[get]",
+                "V.v[set]"
+            ]
+        );
+        let src = "class P:\n    @property\n    def x(self):\n        return 1\n    @x.setter\n    def x(self, v):\n        pass\n    @x.deleter\n    def x(self):\n        pass\n\n@o\ndef f(a: int, b: str = 'x') -> int: ...\ndef f(a, *rest, k=1, **kw): ...\n";
+        assert_eq!(
+            keyed_names_of("a.py", src),
+            [
+                "P",
+                "P.x(self)",
+                "P.x[setter]",
+                "P.x[deleter]",
+                "f(int,str)",
+                "f(a,*rest,k,**kw)",
+            ]
+        );
+        let src = "impl From<u8> for S {\n    fn from(v: u8) {}\n}\nimpl std::convert::From<a::B> for S {\n    fn from(mut v: a::B) {}\n}\nimpl W<u8> {\n    fn new(&self) {}\n}\nimpl W<u16> {\n    fn new(&self) {}\n}\n";
+        assert_eq!(
+            keyed_names_of("a.rs", src),
+            [
+                "impl:S.From(u8)",
+                "S.From(u8).from",
+                "impl:S.From(a::B)",
+                "S.From(a::B).from",
+                "impl:W(u8)",
+                "W.new",
+                "impl:W(u16)",
+                "W.new~2",
+            ]
+        );
+    }
+
+    /// The key is how a symbol is known among others, so nothing that can
+    /// change with the same symbol is in it, and nothing that would read as
+    /// a level of the name.
+    #[test]
+    fn a_key_holds_what_the_symbol_takes_and_no_dot() {
+        let names = |src: &str| keyed_names_of("a.cs", src);
+        let a = names("class C { void M(int a = 1) {} void M(N.T b) {} }");
+        let b = names("class C { void M(int z = 2) {} void M(N.T y) {} }");
+        assert_eq!(a, b);
+        assert_eq!(a, ["C", "C.M(int)", "C.M(N::T)"]);
+    }
+
+    /// A symbol alone with its name has no key, in any language.
+    #[test]
+    fn a_name_with_one_symbol_is_only_the_name() {
+        assert_eq!(
+            keyed_names_of("a.cs", "class C { void M(int a) {} }"),
+            ["C", "C.M"]
+        );
+        assert_eq!(keyed_names_of("a.py", "def f(a):\n    pass\n"), ["f"]);
+    }
+
+    #[test]
+    fn exact_duplicates_keep_their_number() {
+        let src = "package p\nfunc init() {}\nfunc init() {}\n";
+        assert_eq!(keyed_names_of("a.go", src), ["init", "init~2"]);
+        let src = "class C { void M(int a) {} void M(int b) {} void M(string s) {} }";
+        assert_eq!(
+            keyed_names_of("a.cs", src),
+            ["C", "C.M(int)", "C.M(int)~2", "C.M(string)"]
+        );
+    }
+
+    #[test]
+    fn engines_before_keys_number_by_order() {
+        let src = "class C { void M(int a) {} void M(string s) {} }";
+        let names = parse_at(ENGINE_KEYS - 1, Lang::CSharp, src).syms[0]
+            .children
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["C.M", "C.M~2"]);
+    }
+
+    /// Every version of a file reads a name the way the one that needs a
+    /// key does, and the rest of the code is none the wiser.
+    #[test]
+    fn versions_read_together_share_their_names() {
+        let one = "class C { void M(int a) {} }";
+        let two = "class C { void M(string s) {} void M(int a) {} }";
+        let [a, b] = parse_together(ENGINE_KEYS, Lang::CSharp, [one, two]);
+        assert_eq!(a.syms[0].children[0].name, "C.M(int)");
+        assert_eq!(a.syms[0].children[0].plain.as_deref(), Some("C.M"));
+        assert_eq!(b.syms[0].children[1].name, "C.M(int)");
+        assert_eq!(a.syms[0].spots, b.syms[0].spots[1..]);
+        assert_eq!(
+            parse_at(ENGINE_KEYS, Lang::CSharp, one).syms[0].children[0].plain,
+            None
+        );
+    }
+
+    #[test]
+    fn a_new_key_keeps_the_name_of_the_base() {
+        let old = "class C { void M(int a) {} void M(string s) {} void N() {} }";
+        let new = "class C { void M(long a) {} void M(string s) {} void N() {} }";
+        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [old, new]);
+        align(&a, &mut b);
+        assert_eq!(a.syms[0].children[0].name, b.syms[0].children[0].name);
+        assert_eq!(a.syms[0].spots, b.syms[0].spots);
+        // A symbol with no partner stays what it is.
+        let new = "class C { void M(long a) {} void M(short s) {} void M(byte b) {} void N() {} }";
+        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [old, new]);
+        align(&a, &mut b);
+        let names: Vec<&str> = b.syms[0].children.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["C.M(int)", "C.M(string)", "C.M(byte)", "C.N"]);
+    }
+
+    /// Containers keep their name: their members hang on the key.
+    #[test]
+    fn a_container_is_not_aligned() {
+        let old =
+            "impl From<u8> for S {\n    fn a() {}\n}\nimpl From<u16> for S {\n    fn a() {}\n}\n";
+        let new = old.replace("<u8>", "<u32>");
+        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::Rust, [old, &new]);
+        align(&a, &mut b);
+        assert_eq!(b.syms[0].name, "impl:S.From(u32)");
+    }
+
     #[test]
     fn definitions_belong_to_types() {
         let src = "struct S;\nenum E { A }\ntype T = u8;\nfn f() {}\nconst C: u8 = 1;\n\
@@ -1401,8 +1796,8 @@ mod tests {
                 "Client",
                 "Client._id",
                 "Client.Client",
-                "Client.Charge",
-                "Client.Charge~2",
+                "Client.Charge(int)",
+                "Client.Charge(int,int)",
                 "Client.Name",
                 "ClientTests",
                 "ClientTests.Works",

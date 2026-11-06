@@ -1,0 +1,328 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#a",
+          "src/sample.py#c"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.py#more"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#b",
+          "src/sample.py#c~2"
+        ],
+        "import_only_files": [],
+        "lines_added": 5,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "# Licence.\n\nimport os\n\nif TYPE_CHECKING:\n    def a():\n        return 10\nelse:\n    def b():\n        return 20\n\ntry:\n    def c():\n        return 30\nexcept ImportError:\n    def c():\n        return 40\n\nif __name__ == \"__main__\":\n    def main():\n        return 5\n\n    def more():\n        return 6\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          12,
+          21
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module(# Licence.\u001fif_statement(if\u001fTYPE_CHECKING\u001f:\u001fblock()else_clause(else\u001f:\u001fblock()))try_statement(try\u001f:\u001fblock()except_clause(except\u001fImportError\u001f:\u001fblock()))if_statement(if\u001fcomparison_operator(__name__\u001f==\u001f\"__main__\"\u001f):\u001fblock()))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "a",
+          "own": "",
+          "signature": "def a():",
+          "skipped": false,
+          "span": [
+            45,
+            45,
+            70
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "def b():",
+          "skipped": false,
+          "span": [
+            81,
+            81,
+            106
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "def c():",
+          "skipped": false,
+          "span": [
+            117,
+            117,
+            142
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c~2",
+          "own": "",
+          "signature": "def c():",
+          "skipped": false,
+          "span": [
+            167,
+            167,
+            192
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "main",
+          "own": "",
+          "signature": "def main():",
+          "skipped": false,
+          "span": [
+            225,
+            225,
+            253
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          12,
+          21
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module(# Licence.\u001fif_statement(if\u001fTYPE_CHECKING\u001f:\u001fblock()else_clause(else\u001f:\u001fblock()))try_statement(try\u001f:\u001fblock()except_clause(except\u001fImportError\u001f:\u001fblock()))if_statement(if\u001fcomparison_operator(__name__\u001f==\u001f\"__main__\"\u001f):\u001fblock()))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "a",
+          "own": "",
+          "signature": "def a():",
+          "skipped": false,
+          "span": [
+            45,
+            45,
+            71
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "def b():",
+          "skipped": false,
+          "span": [
+            82,
+            82,
+            107
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "def c():",
+          "skipped": false,
+          "span": [
+            118,
+            118,
+            144
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c~2",
+          "own": "",
+          "signature": "def c():",
+          "skipped": false,
+          "span": [
+            169,
+            169,
+            194
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "main",
+          "own": "",
+          "signature": "def main():",
+          "skipped": false,
+          "span": [
+            227,
+            227,
+            255
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          12,
+          21
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module(# Licence.\u001fif_statement(if\u001fTYPE_CHECKING\u001f:\u001fblock()else_clause(else\u001f:\u001fblock()))try_statement(try\u001f:\u001fblock()except_clause(except\u001fImportError\u001f:\u001fblock()))if_statement(if\u001fcomparison_operator(__name__\u001f==\u001f\"__main__\"\u001f):\u001fblock()))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "a",
+          "own": "",
+          "signature": "def a():",
+          "skipped": false,
+          "span": [
+            45,
+            45,
+            70
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "def b():",
+          "skipped": false,
+          "span": [
+            81,
+            81,
+            107
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "def c():",
+          "skipped": false,
+          "span": [
+            118,
+            118,
+            143
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c~2",
+          "own": "",
+          "signature": "def c():",
+          "skipped": false,
+          "span": [
+            168,
+            168,
+            194
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "main",
+          "own": "",
+          "signature": "def main():",
+          "skipped": false,
+          "span": [
+            227,
+            227,
+            255
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "more",
+          "own": "",
+          "signature": "def more():",
+          "skipped": false,
+          "span": [
+            261,
+            261,
+            289
+          ]
+        }
+      ]
+    }
+  }
+}

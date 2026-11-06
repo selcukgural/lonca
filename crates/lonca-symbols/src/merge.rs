@@ -14,7 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
 use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_PLACES, ENGINE_SECTIONS};
-use crate::extract::{Holder, Parsed, Placed, Sym, moved, normalize, parse_at, shifted};
+use crate::extract::{
+    Holder, Keyed, Parsed, Placed, Sym, align, moved, normalize, parse_keyed, read_together,
+    shifted,
+};
 
 /// Code outside symbols as an engine compares it, and its place among them.
 type Code<'a> = (&'a str, Placed<'a>);
@@ -179,7 +182,8 @@ pub fn merge_text_at(
     }
     let merged = diffy::merge(b, o, t).map_err(|_| file_conflict())?;
     if let Some(lang) = lang {
-        let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
+        let (keyed, sides) = three_sides(engine, lang, [b, o, t]);
+        let [pb, po, pt] = &sides;
         // A side that does not parse has no symbols to hold the merge to,
         // and engines before this check only asked that the result parses.
         let unread = pb.has_error || po.has_error || pt.has_error;
@@ -188,7 +192,7 @@ pub fn merge_text_at(
         } else {
             engine
         };
-        if !holds_up(engine, path, lang, &merged, [&pb, &po, &pt], &[]) {
+        if !holds_up(engine, path, lang, &merged, &keyed, [pb, po, pt], &[]) {
             return Err(file_conflict());
         }
     }
@@ -208,7 +212,7 @@ pub fn merge_around_conflicts(
     t: &str,
 ) -> Option<String> {
     let lang = Lang::detect(path)?;
-    let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
+    let (keyed, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return None;
     }
@@ -227,7 +231,7 @@ pub fn merge_around_conflicts(
         return None;
     }
     m.apply()
-        .filter(|text| holds_up(engine, path, lang, text, sides, &conflicts))
+        .filter(|text| holds_up(engine, path, lang, text, &keyed, sides, &conflicts))
 }
 
 fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
@@ -235,6 +239,14 @@ fn all_names<'s>(syms: &'s [Sym], out: &mut BTreeSet<&'s str>) {
         out.insert(&s.name);
         all_names(&s.children, out);
     }
+}
+
+/// The three sides of a merge, by one set of names: those of `base`.
+fn three_sides(engine: u32, lang: Lang, texts: [&str; 3]) -> (Keyed, [Parsed; 3]) {
+    let (keyed, [pb, mut po, mut pt]) = read_together(engine, lang, texts);
+    align(&pb, &mut po);
+    align(&pb, &mut pt);
+    (keyed, [pb, po, pt])
 }
 
 /// Each side's code stands in `m` where that side put it among its symbols.
@@ -270,10 +282,12 @@ fn holds_up(
     path: &str,
     lang: Lang,
     text: &str,
+    keyed: &Keyed,
     [pb, po, pt]: [&Parsed; 3],
     conflicts: &[String],
 ) -> bool {
-    let merged = parse_at(engine, lang, text);
+    let mut merged = parse_keyed(engine, lang, text, keyed);
+    align(pb, &mut merged);
     if merged.has_error {
         return false;
     }
@@ -698,7 +712,7 @@ impl<'a> Merger<'a> {
 }
 
 fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
-    let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
+    let (keyed, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return Sm::Fallback;
     }
@@ -728,7 +742,9 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
         // Nothing of `theirs` came through, though the files differ: only
         // the line merge sees what it changed.
         Some(text) if engine >= ENGINE_EXACT && text == o => Sm::Fallback,
-        Some(text) if holds_up(engine, path, lang, &text, [&pb, &po, &pt], &[]) => Sm::Merged(text),
+        Some(text) if holds_up(engine, path, lang, &text, &keyed, [&pb, &po, &pt], &[]) => {
+            Sm::Merged(text)
+        }
         _ => Sm::Fallback,
     }
 }
@@ -736,7 +752,8 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extract::parse;
+    use crate::engine::ENGINE_KEYS;
+    use crate::extract::{parse, parse_at};
 
     const CLASS: &str = "class A:\n    x = 1\n\n    def a(self):\n        return 1\n\n    def b(self):\n        return 2\n\n    def c(self):\n        return 3\n";
 
@@ -747,6 +764,68 @@ mod tests {
 
     /// Which side changes the header and which a method does not matter
     /// any more: the queue decides that, not the agents.
+    /// Each row: three versions of a file and what the merge gives.
+    fn keyed(path: &str, b: &str, o: &str, t: &str) -> std::result::Result<String, Vec<String>> {
+        merge_text_at(ENGINE_KEYS, path, b, o, t)
+    }
+
+    const CHARGE: &str = "class C {\n    void M(int a) {\n        A();\n    }\n}\n";
+
+    #[test]
+    fn an_overload_added_above_does_not_stop_an_edit_of_the_first() {
+        let o = CHARGE.replace(
+            "    void M(int a)",
+            "    void M(string s) {\n        B();\n    }\n\n    void M(int a)",
+        );
+        let t = CHARGE.replace("A();", "C();");
+        let m = keyed("a.cs", CHARGE, &o, &t).unwrap();
+        assert!(m.contains("void M(string s) {\n        B();"), "{m}");
+        assert!(m.contains("void M(int a) {\n        C();"), "{m}");
+        assert_eq!(keyed("a.cs", CHARGE, &t, &o).unwrap(), m);
+        // Engine 5 reads the new overload as the first one changed.
+        assert!(merge_text_at(ENGINE_KEYS - 1, "a.cs", CHARGE, &o, &t).is_err());
+    }
+
+    #[test]
+    fn two_changes_of_one_overload_conflict_on_it() {
+        let b = "class C {\n    void M(int a) { A(); }\n    void M(string s) { B(); }\n}\n";
+        let o = b.replace("M(int a)", "M(long a)");
+        let t = b.replace("M(int a)", "M(short a)");
+        assert_eq!(
+            keyed("a.cs", b, &o, &t),
+            Err(vec!["a.cs#C.M(int)".to_string()])
+        );
+        let t = b.replace("A();", "X();");
+        assert_eq!(
+            keyed("a.cs", b, &o, &t),
+            Err(vec!["a.cs#C.M(int)".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_change_of_parameters_merges_with_another_overload() {
+        let b = "class C {\n    void M(int a) { A(); }\n\n    void M(string s) { B(); }\n}\n";
+        let o = b.replace("M(int a)", "M(long a)");
+        let t = b.replace("B();", "X();");
+        let m = keyed("a.cs", b, &o, &t).unwrap();
+        assert!(
+            m.contains("M(long a) { A(); }") && m.contains("M(string s) { X(); }"),
+            "{m}"
+        );
+        assert_eq!(keyed("a.cs", b, &t, &o).unwrap(), m);
+    }
+
+    #[test]
+    fn the_members_of_a_trait_impl_follow_its_arguments() {
+        let one = "impl From<u8> for S {\n    fn from(v: u8) -> S {\n        S\n    }\n}\n";
+        let two = "impl From<u16> for S {\n    fn from(v: u16) -> S {\n        S\n    }\n}\n";
+        let o = format!("{two}\n{one}");
+        let t = one.replace("        S\n", "        S::new()\n");
+        let m = keyed("a.rs", one, &o, &t).unwrap();
+        assert!(m.contains("v: u16) -> S {\n        S\n"), "{m}");
+        assert!(m.contains("v: u8) -> S {\n        S::new()\n"), "{m}");
+    }
+
     #[test]
     fn a_header_and_a_method_merge_in_either_order() {
         let header = class("class A:", "class A(B):");
@@ -1319,8 +1398,17 @@ mod tests {
             side(&b.replace("y = 1", "y = 2")),
             side(&b.replace("z = 1", "z = 2")),
         );
-        let held =
-            |engine, text: &str| holds_up(engine, "a.py", Lang::Python, text, [&pb, &po, &pt], &[]);
+        let held = |engine, text: &str| {
+            holds_up(
+                engine,
+                "a.py",
+                Lang::Python,
+                text,
+                &Keyed::new(),
+                [&pb, &po, &pt],
+                &[],
+            )
+        };
         let fine = b.replace("y = 1", "y = 2").replace("z = 1", "z = 2");
         assert!(held(5, &fine));
         // Code of no side, outside every symbol, in a type and deeper.

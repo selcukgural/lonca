@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use lonca_core::oplog::{FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS};
+use lonca_core::oplog::{FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_SYMBOL_KEYS};
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, ENGINE_DEFS,
@@ -185,10 +185,14 @@ fn check_lease_request(s: &Session, items: &[LeaseItem], intent: &str, ctx: &Ctx
             v.deny(format!("scope_path:{path}"));
         }
         if let Some(pats) = &s.scope.symbols {
+            // Who may change a name may change every symbol of that name.
+            let bare = (ctx.format >= FORMAT_SYMBOL_KEYS).then(|| symbols::bare(name));
+            let bare = bare.as_deref().unwrap_or(name);
             let ok = if name.starts_with('<') {
                 pats.iter().any(|p| p == "*")
             } else {
-                pats.iter().any(|p| symbol_matches(p, name))
+                pats.iter()
+                    .any(|p| symbol_matches(p, name) || symbol_matches(p, bare))
             };
             if !ok {
                 v.deny(format!("scope_symbol:{}", item.symbol));
@@ -416,13 +420,13 @@ pub fn scope_within(inner: &Scope, outer: &Scope) -> Result<(), String> {
 }
 
 /// Two lease items can not be held by different sessions at the same time.
-pub fn leases_conflict(a: &LeaseItem, b: &LeaseItem) -> bool {
+pub fn leases_conflict(a: &LeaseItem, b: &LeaseItem, keys: bool) -> bool {
     use LeaseKind::*;
     match (a.kind, b.kind) {
         (Insert, Insert) => false,
-        (Insert, _) => symbols::covers(&b.symbol, &a.symbol),
-        (_, Insert) => symbols::covers(&a.symbol, &b.symbol),
-        _ => symbols::overlaps(&a.symbol, &b.symbol),
+        (Insert, _) => symbols::covers(&b.symbol, &a.symbol, keys),
+        (_, Insert) => symbols::covers(&a.symbol, &b.symbol, keys),
+        _ => symbols::overlaps(&a.symbol, &b.symbol, keys),
     }
 }
 
@@ -753,7 +757,7 @@ pub fn decide(
                 }
                 for a in items {
                     for b in &held.items {
-                        if leases_conflict(a, b) {
+                        if leases_conflict(a, b, ctx.format >= FORMAT_SYMBOL_KEYS) {
                             v.deny(format!(
                                 "lease_held:{}:{}:{}",
                                 b.symbol, held.lease.session, held.lease.intent
@@ -1162,11 +1166,14 @@ fn propose(
                     // members, did not reach it and does not.
                     let defs = ctx.symbols_engine.is_some_and(|v| v >= ENGINE_DEFS);
                     let of = symbols::def_of(name).filter(|_| defs);
+                    let of = of.unwrap_or(name);
+                    let bare = (ctx.format >= FORMAT_SYMBOL_KEYS).then(|| symbols::bare(of));
+                    let bare = bare.as_deref().unwrap_or(of);
                     let ok = if name.starts_with('<') {
                         pats.iter().any(|p| p == "*")
                     } else {
-                        let scoped = |p: &String| symbol_matches(p, of.unwrap_or(name));
-                        pats.iter().any(|p| p == name || scoped(p))
+                        pats.iter()
+                            .any(|p| p == name || symbol_matches(p, of) || symbol_matches(p, bare))
                     };
                     if !ok {
                         v.deny(format!("scope_symbol:{sym}"));
@@ -1180,7 +1187,8 @@ fn propose(
                 .collect();
             let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
             for need in symbols::lease_needs(f) {
-                if !mine.iter().any(|l| need.covered_by(l)) {
+                let keys = ctx.format >= FORMAT_SYMBOL_KEYS;
+                if !mine.iter().any(|l| need.covered_by(l, keys)) {
                     v.deny(format!("lease_missing:{}", need.symbol));
                 }
             }

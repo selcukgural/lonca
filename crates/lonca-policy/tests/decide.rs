@@ -3,7 +3,7 @@
 
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
-use lonca_core::oplog::{FORMAT_CURRENT, SignedOp, verify_chain};
+use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_SYMBOL_KEYS, SignedOp, verify_chain};
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
 use std::sync::Arc;
@@ -4563,6 +4563,132 @@ fn start_with_symbols(h: &mut H, session: &str, symbols: &[&str]) {
         scope.symbols = Some(symbols.iter().map(|s| s.to_string()).collect());
     }
     assert!(h.human("ayse", op).is_allow());
+}
+
+/// A session that saw a symbol alone has it by its name, one that sees
+/// others of that name has it by its key: the same symbol, one holder.
+#[test]
+fn a_name_stands_for_every_symbol_of_that_name() {
+    let mut h = H::new();
+    h.start("old-base", &["src/**"]);
+    h.start("trunk", &["src/**"]);
+    let (name, one, other) = ("src/a.cs#C.M", "src/a.cs#C.M(int)", "src/a.cs#C.M(string)");
+    assert!(
+        h.lease("old-base", "l1", &[(name, LeaseKind::Edit)])
+            .is_allow()
+    );
+    for keyed in [one, other] {
+        let d = h.lease("trunk", "l2", &[(keyed, LeaseKind::Edit)]);
+        assert!(
+            denied_with(&d, &format!("lease_held:{name}:old-base:")),
+            "{d:?}"
+        );
+    }
+    assert!(h.agent("old-base", release("l1")).is_allow());
+    assert!(h.lease("trunk", "l3", &[(one, LeaseKind::Edit)]).is_allow());
+    let d = h.lease("old-base", "l4", &[(name, LeaseKind::Edit)]);
+    assert!(
+        denied_with(&d, &format!("lease_held:{one}:trunk:")),
+        "{d:?}"
+    );
+    assert!(
+        h.lease("old-base", "l5", &[(other, LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.assert_replay();
+}
+
+/// A lease by the name reaches a keyed fact, and a key reaches only its own.
+#[test]
+fn a_keyed_fact_is_covered_by_its_name() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let (name, one, other) = ("src/a.cs#C.M", "src/a.cs#C.M(int)", "src/a.cs#C.M(string)");
+    assert!(h.lease("a", "l1", &[(one, LeaseKind::Edit)]).is_allow());
+    h.wrote("a", "src/a.cs");
+    let d = h.propose("a", ChangeId::random(), edit(other));
+    assert!(denied_with(&d, &format!("lease_missing:{other}")), "{d:?}");
+    assert!(h.lease("a", "l2", &[(name, LeaseKind::Edit)]).is_allow());
+    let d = h.propose("a", ChangeId::random(), edit(other));
+    assert!(!denied_with(&d, "lease_missing"), "{d:?}");
+    h.assert_replay();
+}
+
+/// Scopes go by the name: who may change a name may change each symbol of
+/// it, and a key in a scope reaches that symbol only.
+#[test]
+fn a_scope_on_a_name_reaches_its_keyed_symbols() {
+    let mut h = H::new();
+    let one = "src/a.cs#C.M(int)";
+    let inner = "src/a.rs#S.From(u8).from";
+    start_with_symbols(&mut h, "name", &["C.M", "S.From.from"]);
+    assert!(h.lease("name", "l1", &[(one, LeaseKind::Edit)]).is_allow());
+    assert!(
+        h.lease("name", "l2", &[(inner, LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.wrote("name", "src/a.cs");
+    let d = h.propose("name", ChangeId::random(), edit(one));
+    assert!(!denied_with(&d, "scope_symbol"), "{d:?}");
+
+    start_with_symbols(&mut h, "key", &["C.M(int)"]);
+    let (other, wide) = ("src/a.cs#C.M(string)", "src/a.cs#C.M");
+    for symbol in [other, wide] {
+        let d = h.lease("key", "l3", &[(symbol, LeaseKind::Edit)]);
+        assert!(denied_with(&d, &format!("scope_symbol:{symbol}")), "{d:?}");
+    }
+    h.wrote("key", "src/b.cs");
+    let d = h.propose("key", ChangeId::random(), edit("src/b.cs#C.M(string)"));
+    assert!(
+        denied_with(&d, "scope_symbol:src/b.cs#C.M(string)"),
+        "{d:?}"
+    );
+    let d = h.propose("key", ChangeId::random(), edit("src/b.cs#C.M(int)"));
+    assert!(!denied_with(&d, "scope_symbol"), "{d:?}");
+    h.assert_replay();
+}
+
+/// The meaning changed with format 13: in older entries two names are two
+/// symbols whatever they look like, as with headings in a document.
+#[test]
+fn entries_of_an_older_format_know_no_keys() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let (name, keyed) = ("src/a.md#Setup", "src/a.md#Setup(old)");
+    h.start("b", &["src/**"]);
+    assert!(h.lease("a", "l1", &[(keyed, LeaseKind::Edit)]).is_allow());
+    assert!(h.chain.state.symbol_keys);
+    let mut old = h.log.clone();
+    for o in &mut old {
+        o.entry.format = FORMAT_SYMBOL_KEYS - 1;
+    }
+    let state = State::replay(&old);
+    assert!(!state.symbol_keys);
+    let ctx = |format| Ctx {
+        format,
+        time_ms: h.now + 1,
+        policy: &h.policy,
+        facts: None,
+        evidence: &[],
+        symbols_engine: None,
+    };
+    let op = Op::LeaseAcquire {
+        set: "l2".into(),
+        items: vec![LeaseItem {
+            symbol: name.into(),
+            kind: LeaseKind::Edit,
+        }],
+        ttl_ms: 60_000,
+        intent: "work".into(),
+    };
+    let actor = Actor::Agent {
+        name: "bot-b".into(),
+        session: "b".into(),
+    };
+    let allowed = |s: &State, format| decide(s, &actor, &op, None, &ctx(format)).is_allow();
+    assert!(allowed(&state, FORMAT_SYMBOL_KEYS - 1));
+    assert!(!allowed(&h.chain.state, FORMAT_SYMBOL_KEYS));
+    h.assert_replay();
 }
 
 /// What a lease request asks for, the same for an acquire and an interest.

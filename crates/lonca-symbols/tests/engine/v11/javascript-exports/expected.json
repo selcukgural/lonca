@@ -1,0 +1,270 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.js#a",
+          "src/sample.js#c"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.js"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.js#e"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.js#b"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.js"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "exports.a = function () {\n  return 10;\n};\n\nmodule.exports.b = () => 20;\n\nmodule.exports = {\n  c() { x(); },\n  d: function () {},\n  e() {},\n};\n"
+  },
+  "path": "src/sample.js",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program(expression_statement(assignment_expression(member_expression(module\u001f.\u001fexports\u001f)=\u001fobject({\u001f}\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "a",
+          "own": "",
+          "signature": "exports.a = function ()",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            40
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "module.exports.b = () =>",
+          "skipped": false,
+          "span": [
+            42,
+            42,
+            69
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "{ c()",
+          "skipped": false,
+          "span": [
+            92,
+            92,
+            98
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "d",
+          "own": "",
+          "signature": "{ c() {}, d: function ()",
+          "skipped": false,
+          "span": [
+            102,
+            102,
+            119
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program(expression_statement(assignment_expression(member_expression(module\u001f.\u001fexports\u001f)=\u001fobject({\u001f}\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "a",
+          "own": "",
+          "signature": "exports.a = function ()",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            41
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "module.exports.b = () =>",
+          "skipped": false,
+          "span": [
+            43,
+            43,
+            70
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "{ c()",
+          "skipped": false,
+          "span": [
+            93,
+            93,
+            105
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "d",
+          "own": "",
+          "signature": "{ c() { x(); }, d: function ()",
+          "skipped": false,
+          "span": [
+            109,
+            109,
+            126
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program(expression_statement(assignment_expression(member_expression(module\u001f.\u001fexports\u001f)=\u001fobject({\u001f}\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "a",
+          "own": "",
+          "signature": "exports.a = function ()",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            40
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "module.exports.b = () =>",
+          "skipped": false,
+          "span": [
+            42,
+            42,
+            70
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "{ c()",
+          "skipped": false,
+          "span": [
+            93,
+            93,
+            99
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "d",
+          "own": "",
+          "signature": "{ c() {}, d: function ()",
+          "skipped": false,
+          "span": [
+            103,
+            103,
+            120
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "e",
+          "own": "",
+          "signature": "{ c() {}, d: function () {}, e()",
+          "skipped": false,
+          "span": [
+            124,
+            124,
+            130
+          ]
+        }
+      ]
+    }
+  }
+}

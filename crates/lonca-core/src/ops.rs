@@ -309,6 +309,26 @@ pub struct Facts {
     /// person has to agree.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unread_files: Vec<String>,
+    /// Symbols of the base that mention by name what this change gives a new
+    /// signature, renames or deletes, and that it leaves as they are. By name
+    /// only: a guess that errs towards too many, never a call graph.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected: Vec<String>,
+    /// How many more there were than `affected` holds.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub affected_more: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+impl Facts {
+    /// This change can break code it did not touch: what depends on a
+    /// signature, or something mentions a name it takes away.
+    pub fn reaches_others(&self) -> bool {
+        !self.signature_changes.is_empty() || !self.affected.is_empty() || self.affected_more > 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -321,6 +341,8 @@ pub enum CheckKind {
     Build,
     Tests,
     TestIntegrity,
+    /// `verification.on_signature_change`.
+    Extended,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

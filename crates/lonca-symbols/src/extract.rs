@@ -12,7 +12,9 @@ use tree_sitter::Node;
 
 use lonca_core::ops::DEF;
 
-use crate::engine::{ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS};
+use crate::engine::{
+    ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_SIGNATURES,
+};
 use crate::lang::{
     CallTests, DefHow, DefRule, GroupHow, GroupRule, ImportCalls, Lang, Marked, Partial, Rules,
     Tests,
@@ -35,6 +37,36 @@ const TYPE_KINDS: &[&str] = &[
     "enum_declaration",
     "record_declaration",
 ];
+
+/// Fields that hold what a declaration is set to, which hold across
+/// tree-sitter grammars as [`TYPE_KINDS`] do.
+const VALUE_FIELDS: &[&str] = &["value", "right", "default_value"];
+
+fn value_of(n: Node) -> Option<Node> {
+    VALUE_FIELDS.iter().find_map(|f| n.child_by_field_name(f))
+}
+
+/// Where what `n`, or the one declarator in it, is set to starts: for a
+/// function, where its body does.
+fn value_start(n: Node) -> Option<usize> {
+    let value = value_of(n).or_else(|| named(n).into_iter().find_map(value_of))?;
+    let body = value.child_by_field_name("body");
+    Some(body.unwrap_or(value).start_byte())
+}
+
+/// The comments in `n` in front of `end`, in order.
+fn comments_in(n: Node, end: usize, out: &mut Vec<(usize, usize)>) {
+    if n.kind().contains("comment") {
+        out.push((n.start_byte(), n.end_byte()));
+        return;
+    }
+    for c in n.children(&mut n.walk()) {
+        if c.start_byte() >= end {
+            break;
+        }
+        comments_in(c, end, out);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sym {
@@ -1473,9 +1505,7 @@ impl<'s> Extractor<'s> {
             } else {
                 normalize(&self.src[start..end])
             };
-            let signature = def
-                .body
-                .map(|b| normalize(&self.src[def.header_start..b.start_byte()]));
+            let signature = self.signature(&def, def_node, is_type, holder);
             let attached = &self.src[start..def.header_start.max(start)];
             let (is_test, skipped) = self.test_markers(&def, def_node, &qualified, attached);
             out.push(Sym {
@@ -1499,6 +1529,32 @@ impl<'s> Extractor<'s> {
                 children: children_syms,
             });
         }
+    }
+
+    /// What callers of a declaration depend on. Up to engine 10 only what has
+    /// a body had one. Now it is the header of what has members or code, all
+    /// of a type whose body is the type, and for the rest the declaration
+    /// without its value: a constant's value is not its type, and a function
+    /// held by a name keeps what it takes.
+    fn signature(&self, def: &Def, n: Node, is_type: bool, held: Option<Holder>) -> Option<String> {
+        if self.engine < ENGINE_SIGNATURES {
+            let header = |b: Node| normalize(&self.src[def.header_start..b.start_byte()]);
+            return def.body.map(header);
+        }
+        let end = match (def.members, def.body) {
+            (Some(members), _) => members.start_byte(),
+            (None, _) if is_type => n.end_byte(),
+            (None, Some(body)) => body.start_byte(),
+            (None, None) => value_start(n).unwrap_or(n.end_byte()),
+        };
+        // One of a list: `int a, b` says what `b` is in front of `a`.
+        let list = held.filter(|h| h.joined).map(|h| h.start);
+        let start = list.unwrap_or(def.header_start).min(def.header_start);
+        let mut comments = Vec::new();
+        comments_in(n, end, &mut comments);
+        comments.retain(|c| c.0 >= start);
+        let text = remove_spans(self.src, start, end, &comments);
+        Some(normalize(&text))
     }
 
     fn test_markers(&self, def: &Def, n: Node, qualified: &str, attached: &str) -> (bool, bool) {

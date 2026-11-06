@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use lonca_core::oplog::{FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS};
+use lonca_core::oplog::{FORMAT_AFFECTED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS};
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, ENGINE_DEFS,
@@ -28,8 +28,8 @@ use lonca_core::paths::{
 
 use crate::config::{CRITICAL_ESCALATE, CVal, CedarOutcome, PolicyBundle, Verification};
 use crate::state::{
-    ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, INTEREST_BLOCK, LEASES_KEPT, RELEASED,
-    RESERVATION_WINDOW, Session, State,
+    AFFECTED_LEASE, ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, INTEREST_BLOCK, LEASES_KEPT,
+    RELEASED, RESERVATION_WINDOW, Session, State,
 };
 use crate::symbols;
 
@@ -453,6 +453,7 @@ fn check_name(k: CheckKind) -> &'static str {
         CheckKind::Build => "build",
         CheckKind::Tests => "tests",
         CheckKind::TestIntegrity => "test_integrity",
+        CheckKind::Extended => "extended",
     }
 }
 
@@ -892,7 +893,7 @@ pub fn decide(
                     if !conflicts.is_empty() {
                         v.deny("conflicts_with_merge");
                     }
-                    verify_evidence(ctx, &mut v);
+                    verify_evidence(state, [change], ctx, &mut v);
                     // `State::apply` has no policy: the switch travels in
                     // the decision.
                     if !cfg.leases.release_on_integrate {
@@ -916,7 +917,8 @@ pub fn decide(
             if state.trunk.as_ref() != Some(trunk_before) {
                 v.deny("stale_trunk");
             }
-            verify_evidence(ctx, &mut v);
+            let changes = merged.iter().map(|(change, _)| change);
+            verify_evidence(state, changes, ctx, &mut v);
             if !cfg.leases.release_on_integrate {
                 v.info.push(LEASES_KEPT.into());
             }
@@ -1071,8 +1073,16 @@ pub fn decide(
     v.finish(state.humans.len(), cfg.approvals.cap_to_enrolled_humans)
 }
 
-fn verify_evidence(ctx: &Ctx, v: &mut Verdict) {
-    for problem in evidence_problems(&ctx.policy.config.verification, ctx.evidence) {
+fn verify_evidence<'a>(
+    state: &State,
+    changes: impl IntoIterator<Item = &'a lonca_core::ChangeId>,
+    ctx: &Ctx,
+    v: &mut Verdict,
+) {
+    let mut records = changes.into_iter().filter_map(|c| state.changes.get(c));
+    let reaches = records.any(|c| c.facts.reaches_others());
+    let owed = ctx.policy.config.verification.for_change(reaches);
+    for problem in evidence_problems(&owed, ctx.evidence) {
         v.deny(problem);
     }
 }
@@ -1092,7 +1102,10 @@ pub fn evidence_problems(vc: &Verification, evidence: &[Attestation]) -> Vec<Str
             CheckResult::Pass | CheckResult::Skipped => {}
         }
         if vc.require_sandbox
-            && matches!(a.check, CheckKind::Build | CheckKind::Tests)
+            && matches!(
+                a.check,
+                CheckKind::Build | CheckKind::Tests | CheckKind::Extended
+            )
             && a.details.get("sandbox").is_none_or(|s| s == "none")
         {
             problems.push("unsandboxed_verification".to_string());
@@ -1109,8 +1122,39 @@ pub fn evidence_problems(vc: &Verification, evidence: &[Attestation]) -> Vec<Str
         if vc.test.is_some() && !passed(CheckKind::Tests) {
             problems.push("verification_missing:tests".to_string());
         }
+        if vc.on_signature_change.is_some() && !passed(CheckKind::Extended) {
+            problems.push("verification_missing:extended".to_string());
+        }
     }
     problems
+}
+
+/// The lease sets of other sessions that hold what `f` lists as affected, as
+/// (session, set). `Insert` holds no code. A lease may have the name trunk
+/// has now, and `f` the one its base had.
+fn affected_holders(
+    state: &State,
+    actor: &Actor,
+    f: &Facts,
+    base: &lonca_core::GitId,
+    t: i64,
+) -> Vec<(String, String)> {
+    let keys = state.symbol_keys;
+    let reaches = |item: &&LeaseItem| {
+        let met = |a: &String| {
+            symbols::overlaps(&item.symbol, a, keys)
+                || symbols::overlaps(&item.symbol, &state.renamed_to(a, Some(base)), keys)
+        };
+        item.kind != LeaseKind::Insert && f.affected.iter().any(met)
+    };
+    let own = |l: &ActiveLease| {
+        let me = actor.session();
+        me.is_some_and(|s| state.continues(s, &l.lease.session))
+    };
+    let held = state.active_leases(t).filter(|l| !own(l));
+    let held = held.filter(|l| l.items.iter().copied().any(|i| reaches(&i)));
+    held.map(|l| (l.lease.session.clone(), l.lease.set.clone()))
+        .collect()
 }
 
 fn propose(
@@ -1329,6 +1373,28 @@ fn propose(
         Some(format!("{path}#{}", symbols::bare(s)))
     });
     let named: BTreeSet<String> = bare_ids.chain(mine.iter().map(|s| s.to_string())).collect();
+    if ctx.format >= FORMAT_AFFECTED {
+        let held = affected_holders(state, actor, f, base, t);
+        let changed = f.signature_changes.iter();
+        v.info
+            .extend(changed.map(|s| format!("signature_change:{s}")));
+        let sets = held.iter();
+        v.info
+            .extend(sets.map(|(s, set)| format!("{AFFECTED_LEASE}{s}:{set}")));
+        if f.affected_more > 0 {
+            v.info.push(format!("affected_more:{}", f.affected_more));
+        }
+        base_ctx.extend([
+            (
+                "signature_changes",
+                CVal::Long(f.signature_changes.len() as i64),
+            ),
+            (
+                "affects_others",
+                CVal::Bool(!held.is_empty() || f.affected_more > 0),
+            ),
+        ]);
+    }
     base_ctx.extend([
         ("files", CVal::Long(files.len() as i64)),
         (

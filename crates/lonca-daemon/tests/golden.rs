@@ -17,7 +17,7 @@ use common::*;
 use lonca_audit::{Options, audit};
 use lonca_core::canonical::canonical_bytes;
 use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_LEGACY};
-use lonca_core::ops::ObsKind;
+use lonca_core::ops::{CheckKind, ObsKind};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use std::collections::BTreeSet;
 
@@ -89,7 +89,40 @@ fn golden_repo() -> Env {
     renames(&mut e);
     unparsed(&mut e);
     batch(&mut e);
+    reach(&mut e);
     e
+}
+
+/// From format 18: facts say what mentions a changed signature, the decision
+/// who holds it, and the queue runs what the policy keeps for such changes.
+fn reach(e: &mut Env) {
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
+        "# on_signature_change = \"cargo test --offline --workspace --all-features\"",
+        "on_signature_change = \"true\"",
+    );
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+    let (lib, user) = ("src/reach.rs", "src/reach_user.rs");
+    let caller = "pub fn g() -> u8 {\n    reached(1)\n}\n";
+    let files = vec![
+        file(lib, "pub fn reached(a: u8) -> u8 {\n    a\n}\n"),
+        file(user, caller),
+    ];
+    let r = e.human_change(files, "reached and its caller");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let t = e.session("s-reach", &["src/**"]);
+    e.lease(&t, &format!("{user}#g"));
+    let files = vec![file(lib, "pub fn reached(a: u16) -> u16 {\n    a\n}\n")];
+    let r = e.human_change(files, "a new signature");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
 }
 
 /// From format 17: one entry integrates the head of the queue.
@@ -885,6 +918,24 @@ fn golden_v14_log_still_verifies_replays_and_audits() {
         reasons.into_iter().any(|r| r.starts_with(held)),
         "the old name met the new one"
     );
+}
+
+#[test]
+fn golden_v18_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v18.bundle",
+        "a19c7b50fe194b9149d77090dbb6705581d655a32ee316e516be55f469660ae2",
+        18,
+    );
+    let affected = ops.iter().filter_map(|o| o.entry.facts.as_ref());
+    let affected = affected.flat_map(|f| f.affected.clone());
+    assert_eq!(affected.collect::<Vec<_>>(), ["src/reach_user.rs#g"]);
+    let reasons = ops.iter().flat_map(|o| &o.entry.decision.reasons);
+    let held = reasons.filter(|r| r.starts_with("affected_lease:s-reach:"));
+    assert_eq!(held.count(), 1);
+    let extended = ops.iter().flat_map(|o| &o.entry.evidence);
+    let extended = extended.filter(|a| a.check == CheckKind::Extended);
+    assert_eq!(extended.count(), 1);
 }
 
 #[test]

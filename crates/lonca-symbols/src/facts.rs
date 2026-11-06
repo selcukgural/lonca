@@ -9,17 +9,18 @@ use lonca_core::{FileEntry, FileMap, FileMode, GitId, Result};
 use crate::engine::ENGINE_KEYS;
 use crate::engine::{
     ENGINE_EXACT, ENGINE_LINE_EDITS, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS,
-    ENGINE_UNPARSED,
+    ENGINE_SIGNATURES, ENGINE_UNPARSED,
 };
 use crate::extract::{
     MAX_COMPARED, Parsed, Sym, align, best_pairs, likeness, moved, parse_at, parse_together,
     shifted,
 };
 use crate::lang::Lang;
+use crate::mentions::{MAX_AFFECTED, mentions, used_name};
 use crate::sections::{APPEND, Format, Section, appended, sections};
 
 pub(crate) const FILE: &str = "<file>";
-const MODULE: &str = "<module>";
+pub(crate) const MODULE: &str = "<module>";
 const IMPORTS: &str = "<imports>";
 
 /// How alike a deleted and an added symbol must be, their names aside, to be
@@ -82,6 +83,8 @@ pub fn analyze(
 ) -> Result<Analysis> {
     let mut f = Facts::default();
     let mut syntax_errors = Vec::new();
+    // What a deleted file held: facts name only the file.
+    let mut gone = Vec::new();
     let paths: BTreeSet<&String> = base.keys().chain(new.keys()).collect();
     for path in paths {
         let lang = Lang::detect_at(engine, path);
@@ -110,7 +113,9 @@ pub fn analyze(
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     f.lines_removed += count_lines(text);
                     if let Some(lang) = lang {
-                        f.tests.deleted += parse_at(engine, lang, text).tests(text).len() as u32;
+                        let p = parse_at(engine, lang, text);
+                        f.tests.deleted += p.tests(text).len() as u32;
+                        names_in(path, &p.syms, &mut gone);
                     }
                 }
             }
@@ -195,10 +200,52 @@ pub fn analyze(
     }
     f.renames.sort();
     syntax_errors.sort();
+    if engine >= ENGINE_SIGNATURES {
+        let names = taken_away(&f, &gone);
+        (f.affected, f.affected_more) = affected(engine, base, &names, &f, read)?;
+    }
     Ok(Analysis {
         facts: f,
         syntax_errors,
     })
+}
+
+fn names_in(path: &str, syms: &[Sym], out: &mut Vec<String>) {
+    for s in syms {
+        out.push(sym_id(path, &s.name));
+        names_in(path, &s.children, out);
+    }
+}
+
+/// The names code uses for what a change gives a new signature, renames or
+/// deletes, the symbols of deleted files in `gone` among them.
+fn taken_away(f: &Facts, gone: &[String]) -> BTreeSet<String> {
+    let renamed = f.renames.iter().map(|[old, _]| old);
+    let all = f.signature_changes.iter().chain(&f.deletes).chain(renamed);
+    let names = all.chain(gone).filter_map(|s| used_name(s));
+    names.map(String::from).collect()
+}
+
+/// The symbols of `base` that mention `names`, sorted and cut to
+/// [`MAX_AFFECTED`], and how many were cut. What the change changes itself
+/// was looked at by whoever wrote it, and a deleted file mentions nothing.
+fn affected(
+    engine: u32,
+    base: &FileMap,
+    names: &BTreeSet<String>,
+    f: &Facts,
+    read: &dyn Fn(&GitId) -> Result<Vec<u8>>,
+) -> Result<(Vec<String>, u32)> {
+    let mut found = mentions(engine, base, names, read)?;
+    let own: BTreeSet<&String> = f.edits.iter().chain(&f.deletes).collect();
+    let deleted = |id: &String| {
+        let path = id.split_once('#').map(|(path, _)| path);
+        path.is_some_and(|p| f.deleted_files.iter().any(|d| d == p))
+    };
+    found.retain(|id| !own.contains(id) && !deleted(id));
+    let more = found.len().saturating_sub(MAX_AFFECTED);
+    let kept = found.into_iter().take(MAX_AFFECTED).collect();
+    Ok((kept, more as u32))
 }
 
 /// The sections that differ, or `false` for a file to treat whole: one
@@ -356,6 +403,16 @@ fn by_name(syms: &[Sym]) -> BTreeMap<&str, &Sym> {
     syms.iter().map(|s| (s.name.as_str(), s)).collect()
 }
 
+/// `new` gave a member a new signature in the text the type holds itself:
+/// `int a, b` has the type of `b` in front of `a`, so `b` reads the same.
+fn retyped((old, old_src): (&Sym, &str), (new, new_src): (&Sym, &str)) -> bool {
+    let olds = by_name(&old.children);
+    new.children.iter().any(|n| {
+        let b = olds.get(n.name.as_str());
+        b.is_some_and(|b| b.same(old_src, n, new_src) && b.signature != n.signature)
+    })
+}
+
 fn diff_level(
     engine: u32,
     path: &str,
@@ -377,6 +434,9 @@ fn diff_level(
                     let places = engine >= ENGINE_PLACES && shifted(b.placed(), n.placed());
                     if places || b.own_at(engine) != n.own_at(engine) {
                         f.edits.push(unit.clone());
+                        if engine >= ENGINE_SIGNATURES && retyped((b, old), (n, new)) {
+                            f.signature_changes.push(unit.clone());
+                        }
                     }
                     let (bc, nc) = (&b.children[..], &n.children[..]);
                     diff_level(engine, path, (bc, old), (nc, new), f);
@@ -1382,6 +1442,14 @@ mod tests {
         analyze(0, &b, &n, &|id| Ok(mem.0[&id.0].clone())).unwrap()
     }
 
+    fn run_now(base: &[(&str, &str)], new: &[(&str, &str)]) -> Analysis {
+        let mut mem = Mem(HashMap::new());
+        let b = tree(&mut mem, base);
+        let n = tree(&mut mem, new);
+        let read = |id: &GitId| Ok(mem.0[&id.0].clone());
+        analyze(ENGINE_SIGNATURES, &b, &n, &read).unwrap()
+    }
+
     const BASE: &str = "use std::io;\n\npub struct Client;\n\nimpl Client {\n    pub fn charge(&self, a: u64) -> u64 {\n        a\n    }\n\n    pub fn refund(&self) {}\n}\n\n#[test]\nfn charges() {}\n";
 
     #[test]
@@ -1392,6 +1460,366 @@ mod tests {
         assert!(a.facts.signature_changes.is_empty());
         assert_eq!(a.facts.modified_files, vec!["src/a.rs"]);
         assert_eq!((a.facts.lines_added, a.facts.lines_removed), (1, 1));
+    }
+
+    /// What a change of one declaration reports as a change of signature, in
+    /// each language, for what had none before engine 11.
+    #[test]
+    fn every_declaration_has_a_signature() {
+        for (path, old, new, changed) in [
+            (
+                "a.rs",
+                "trait R { fn m(&self, x: u8); }\n",
+                "trait R { fn m(&self, x: u16); }\n",
+                "a.rs#R.m",
+            ),
+            (
+                "a.rs",
+                "trait R {}\n",
+                "trait R: Clone {}\n",
+                "a.rs#R.<def>",
+            ),
+            (
+                "a.rs",
+                "pub struct S { pub a: u8 }\n",
+                "pub struct S { pub a: u16 }\n",
+                "a.rs#S.<def>",
+            ),
+            (
+                "a.rs",
+                "pub struct S { a: u8 }\n",
+                "pub struct S { pub a: u8 }\n",
+                "a.rs#S.<def>",
+            ),
+            (
+                "a.rs",
+                "enum E { A }\n",
+                "enum E { A, B }\n",
+                "a.rs#E.<def>",
+            ),
+            ("a.rs", "type T = u8;\n", "type T = u16;\n", "a.rs#T.<def>"),
+            (
+                "a.rs",
+                "const C: u8 = 1;\n",
+                "const C: u16 = 1;\n",
+                "a.rs#C",
+            ),
+            (
+                "a.ts",
+                "function f(a: string): void;\n",
+                "function f(a: number): void;\n",
+                "a.ts#f",
+            ),
+            (
+                "a.ts",
+                "export const h = async (a: number) => { return a; };\n",
+                "export const h = async (a: string) => { return a; };\n",
+                "a.ts#h",
+            ),
+            (
+                "a.ts",
+                "interface I { a: string }\n",
+                "interface I { a: number }\n",
+                "a.ts#I.<def>",
+            ),
+            (
+                "a.ts",
+                "type T = string;\n",
+                "type T = number;\n",
+                "a.ts#T.<def>",
+            ),
+            (
+                "a.ts",
+                "class C { x: number = 1; }\n",
+                "class C { x: string = 1; }\n",
+                "a.ts#C.x",
+            ),
+            (
+                "a.ts",
+                "class C {}\n",
+                "class C extends B {}\n",
+                "a.ts#C.<def>",
+            ),
+            (
+                "a.go",
+                "package p\ntype S struct { A int }\n",
+                "package p\ntype S struct { A string }\n",
+                "a.go#S.<def>",
+            ),
+            (
+                "a.go",
+                "package p\ntype I interface { M() }\n",
+                "package p\ntype I interface { M(a int) }\n",
+                "a.go#I.<def>",
+            ),
+            (
+                "a.cs",
+                "class C { public int a; }\n",
+                "class C { public long a; }\n",
+                "a.cs#C.a",
+            ),
+            (
+                "a.cs",
+                "class C { int a, b; }\n",
+                "class C { long a, b; }\n",
+                "a.cs#C.<def>",
+            ),
+            (
+                "a.cs",
+                "class C { public event E Ev; }\n",
+                "class C { public event F Ev; }\n",
+                "a.cs#C.Ev",
+            ),
+            (
+                "a.cs",
+                "class C { public delegate void D(int a); }\n",
+                "class C { public delegate void D(long a); }\n",
+                "a.cs#C.D",
+            ),
+            (
+                "a.cs",
+                "class C { public int P { get; set; } }\n",
+                "class C { public long P { get; set; } }\n",
+                "a.cs#C.P",
+            ),
+            (
+                "a.java",
+                "interface I { void m(int x); }\n",
+                "interface I { void m(long x); }\n",
+                "a.java#I.m",
+            ),
+            (
+                "a.java",
+                "class C { int a = 1; }\n",
+                "class C { long a = 1; }\n",
+                "a.java#C.a",
+            ),
+            (
+                "a.kt",
+                "interface I {\n fun m(x: Int)\n}\n",
+                "interface I {\n fun m(x: Long)\n}\n",
+                "a.kt#I.m",
+            ),
+            ("a.c", "int f(int a);\n", "int f(long a);\n", "a.c#f"),
+            (
+                "a.cpp",
+                "class C { int a; };\n",
+                "class C { long a; };\n",
+                "a.cpp#C.a",
+            ),
+            (
+                "a.php",
+                "<?php\nclass C { public int $a = 1; }\n",
+                "<?php\nclass C { public string $a = 1; }\n",
+                "a.php#C.$a",
+            ),
+            (
+                "a.swift",
+                "protocol P { func m(x: Int) }\n",
+                "protocol P { func m(x: Long) }\n",
+                "a.swift#P.m",
+            ),
+            (
+                "a.py",
+                "class C(B):\n    pass\n",
+                "class C(D):\n    pass\n",
+                "a.py#C.<def>",
+            ),
+            ("a.rb", "class C < B\nend\n", "class C < D\nend\n", "a.rb#C"),
+        ] {
+            let f = section_facts(ENGINE_SIGNATURES, path, old, new);
+            assert!(
+                f.signature_changes.iter().any(|s| s == changed),
+                "{old}: {f:?}"
+            );
+        }
+    }
+
+    /// What says nothing about how a declaration is used is no signature
+    /// change.
+    #[test]
+    fn a_value_a_body_or_a_comment_is_no_signature() {
+        for (path, old, new) in [
+            ("a.rs", "const C: u8 = 1;\n", "const C: u8 = 2;\n"),
+            ("a.rs", "static C: u8 = 1;\n", "static C: u8 = 2;\n"),
+            ("a.rs", "fn f() { a(); }\n", "fn f() { b(); }\n"),
+            (
+                "a.rs",
+                "struct S { /* one */ a: u8 }\n",
+                "struct S { /* two */ a: u8 }\n",
+            ),
+            (
+                "a.rs",
+                "fn f(a: u8 /* one */) {}\n",
+                "fn f(a: u8 /* two */) {}\n",
+            ),
+            ("a.rs", "trait R { /* one */ }\n", "trait R { /* two */ }\n"),
+            (
+                "a.ts",
+                "const h = (a: number) => { return 1; };\n",
+                "const h = (a: number) => { return 2; };\n",
+            ),
+            ("a.ts", "const o = { a: 1 };\n", "const o = { a: 2 };\n"),
+            (
+                "a.js",
+                "const h = function (a) { return 1; };\n",
+                "const h = function (a) { return 2; };\n",
+            ),
+            (
+                "a.go",
+                "package p\nconst C = 1\n",
+                "package p\nconst C = 2\n",
+            ),
+            (
+                "a.go",
+                "package p\nvar V int = 1\n",
+                "package p\nvar V int = 2\n",
+            ),
+            (
+                "a.java",
+                "class C { int a = 1; }\n",
+                "class C { int a = 2; }\n",
+            ),
+            (
+                "a.php",
+                "<?php\nclass C { public int $a = 1; }\n",
+                "<?php\nclass C { public int $a = 2; }\n",
+            ),
+            (
+                "a.swift",
+                "class C { var a: Int = 1 }\n",
+                "class C { var a: Int = 2 }\n",
+            ),
+            ("a.rb", "class C\n  X = 1\nend\n", "class C\n  X = 2\nend\n"),
+        ] {
+            let f = section_facts(ENGINE_SIGNATURES, path, old, new);
+            assert!(f.signature_changes.is_empty(), "{old}: {f:?}");
+            assert!(!f.edits.is_empty(), "{old}: {f:?}");
+        }
+    }
+
+    const CALLER: &str = "fn g() { f(1); }\nfn h() {}\n";
+
+    #[test]
+    fn what_mentions_a_changed_signature_is_affected() {
+        let [old, new] = ["fn f(a: u8) {}\n", "fn f(a: u16) {}\n"];
+        let a = run_now(
+            &[("a.rs", old), ("b.rs", CALLER)],
+            &[("a.rs", new), ("b.rs", CALLER)],
+        );
+        assert_eq!(a.facts.affected, ["b.rs#g"]);
+        assert_eq!(a.facts.affected_more, 0);
+    }
+
+    #[test]
+    fn a_change_of_the_body_affects_nobody() {
+        let [old, new] = ["fn f() { a(); }\n", "fn f() { b(); }\n"];
+        let a = run_now(
+            &[("a.rs", old), ("b.rs", CALLER)],
+            &[("a.rs", new), ("b.rs", CALLER)],
+        );
+        assert!(a.facts.affected.is_empty());
+    }
+
+    #[test]
+    fn what_mentions_a_deleted_or_renamed_symbol_is_affected() {
+        let old = "fn f() {}\nfn k() {}\n";
+        let a = run_now(
+            &[("a.rs", old), ("b.rs", CALLER)],
+            &[("a.rs", "fn k() {}\n"), ("b.rs", CALLER)],
+        );
+        assert_eq!(a.facts.deletes, ["a.rs#f"]);
+        assert_eq!(a.facts.affected, ["b.rs#g"]);
+
+        let old = "fn f() { work(1, 2, 3); }\n";
+        let new = "fn e() { work(1, 2, 3); }\n";
+        let a = run_now(
+            &[("a.rs", old), ("b.rs", CALLER)],
+            &[("a.rs", new), ("b.rs", CALLER)],
+        );
+        assert_eq!(
+            a.facts.renames,
+            [["a.rs#f".to_string(), "a.rs#e".to_string()]]
+        );
+        assert_eq!(a.facts.affected, ["b.rs#g"]);
+    }
+
+    /// With keys, a change of parameters is a rename and an edit, no delete.
+    #[test]
+    fn a_rename_alone_counts() {
+        let f = Facts {
+            renames: vec![["a.py#f(int)".into(), "a.py#f(str)".into()]],
+            ..Facts::default()
+        };
+        assert_eq!(taken_away(&f, &[]).into_iter().collect::<Vec<_>>(), ["f"]);
+    }
+
+    #[test]
+    fn what_a_deleted_file_held_is_gone() {
+        let old = "struct T;\nimpl T {\n    fn f() {}\n}\n";
+        let caller = "fn g() { T::f(); }\n";
+        let a = run_now(&[("a.rs", old), ("b.rs", caller)], &[("b.rs", caller)]);
+        assert_eq!(a.facts.affected, ["b.rs#g"]);
+        let old = "class C:\n    def f(self):\n        pass\n";
+        let caller = "def g(c):\n    c.f()\n";
+        let a = run_now(&[("a.py", old), ("b.py", caller)], &[("b.py", caller)]);
+        assert_eq!(a.facts.affected, ["b.py#g"]);
+    }
+
+    #[test]
+    fn what_the_change_touches_itself_is_not_affected() {
+        let [old, new] = ["fn f(a: u8) {}\n", "fn f(a: u16) {}\n"];
+        let edited = CALLER.replace("f(1)", "f(2)");
+        let a = run_now(
+            &[("a.rs", old), ("b.rs", CALLER)],
+            &[("a.rs", new), ("b.rs", &edited)],
+        );
+        assert!(a.facts.affected.is_empty(), "{:?}", a.facts);
+        let a = run_now(&[("a.rs", old), ("b.rs", CALLER)], &[("a.rs", new)]);
+        assert!(a.facts.affected.is_empty(), "{:?}", a.facts);
+        let gone = "fn f(a: u8) {}\nfn g() { f(1); }\n";
+        let a = run_now(&[("a.rs", gone)], &[("a.rs", "fn f(a: u16) {}\n")]);
+        assert!(a.facts.affected.is_empty(), "{:?}", a.facts);
+    }
+
+    #[test]
+    fn a_list_past_the_limit_says_how_much_it_left_out() {
+        let callers = |n: usize| {
+            (0..n)
+                .map(|i| format!("fn g{i:04}() {{ f(1); }}\n"))
+                .collect::<String>()
+        };
+        let [old, new] = ["fn f(a: u8) {}\n", "fn f(a: u16) {}\n"];
+        for (n, kept, more) in [
+            (MAX_AFFECTED, MAX_AFFECTED, 0),
+            (MAX_AFFECTED + 3, MAX_AFFECTED, 3),
+        ] {
+            let b = callers(n);
+            let a = run_now(
+                &[("a.rs", old), ("b.rs", &b)],
+                &[("a.rs", new), ("b.rs", &b)],
+            );
+            assert_eq!(a.facts.affected.len(), kept);
+            assert_eq!(a.facts.affected_more, more);
+            assert_eq!(a.facts.affected[0], "b.rs#g0000");
+        }
+    }
+
+    #[test]
+    fn engines_before_11_list_nobody() {
+        let [old, new] = [
+            "fn f(a: u8) {}\nfn g() { f(1); }\n",
+            "fn f(a: u16) {}\nfn g() { f(1); }\n",
+        ];
+        assert_eq!(
+            section_facts(ENGINE_SIGNATURES, "a.rs", old, new).affected,
+            ["a.rs#g"]
+        );
+        assert!(
+            section_facts(ENGINE_SIGNATURES - 1, "a.rs", old, new)
+                .affected
+                .is_empty()
+        );
     }
 
     #[test]

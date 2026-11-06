@@ -18,6 +18,21 @@ env_passthrough = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR"]
 env = { CARGO_NET_OFFLINE = "true" }
 ```
 
+## A change that reaches other code
+
+`on_signature_change` is a command for what is too slow to run for every
+change. The queue adds it for a change that alters a signature, or that
+renames or deletes something other code mentions, and for a batch with
+such a change in it:
+
+```toml
+on_signature_change = "cargo test --offline --workspace --all-features"
+```
+
+Its result is the check `extended`. It fails a change like `build` and
+`test` do, and with `required = true` a change that owes it can not land
+without a pass.
+
 ## The environment the commands see
 
 The verifier clears the environment and sets:

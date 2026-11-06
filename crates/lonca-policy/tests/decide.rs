@@ -3,7 +3,9 @@
 
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
-use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_SYMBOL_KEYS, SignedOp, verify_chain};
+use lonca_core::oplog::{
+    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_SYMBOL_KEYS, SignedOp, verify_chain,
+};
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
 use std::sync::Arc;
@@ -5311,4 +5313,285 @@ fn a_definition_in_the_facts_is_inside_the_scope_of_its_type() {
     let (d, _) = propose(&mut h, "old-members", "5");
     assert!(!format!("{d:?}").contains("scope_symbol"), "{d:?}");
     h.assert_replay();
+}
+
+/// Facts of a change to `src/a.rs#f` whose callers are `affected`.
+fn reaching(affected: &[&str]) -> Facts {
+    let mut f = edit("src/a.rs#f");
+    f.signature_changes = vec!["src/a.rs#f".into()];
+    f.affected = affected.iter().map(|s| s.to_string()).collect();
+    f
+}
+
+/// `a` holds `f`, and `b` holds `item` of `src/b.rs`.
+fn one_holder(item: &str, kind: LeaseKind) -> H {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    assert!(
+        h.lease("a", "la", &[("src/a.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    assert!(h.lease("b", "lb", &[(item, kind)]).is_allow());
+    h.wrote("a", "src/a.rs");
+    h
+}
+
+const HOLDER: &str = "affected_lease:b:lb";
+
+#[test]
+fn a_lease_on_what_is_affected_is_in_the_decision() {
+    for (item, kind, affected) in [
+        ("src/b.rs#g", LeaseKind::Edit, "src/b.rs#g"),
+        ("src/b.rs#g", LeaseKind::Rename, "src/b.rs#g"),
+        ("src/b.rs#<file>", LeaseKind::Edit, "src/b.rs#g"),
+        ("src/b.rs#T", LeaseKind::Edit, "src/b.rs#T.m"),
+        ("src/b.rs#T.m", LeaseKind::Edit, "src/b.rs#T"),
+    ] {
+        let mut h = one_holder(item, kind);
+        let d = h.propose("a", ChangeId::random(), reaching(&[affected]));
+        assert!(d.is_allow(), "{d:?}");
+        assert_eq!(
+            d.reasons,
+            ["signature_change:src/a.rs#f", HOLDER],
+            "{item} and {affected}"
+        );
+        h.assert_replay();
+    }
+}
+
+#[test]
+fn a_lease_elsewhere_or_for_new_code_is_not() {
+    for (item, kind) in [
+        ("src/b.rs#other", LeaseKind::Edit),
+        ("src/c.rs#g", LeaseKind::Edit),
+        ("src/b.rs#<file>", LeaseKind::Insert),
+    ] {
+        let mut h = one_holder(item, kind);
+        let d = h.propose("a", ChangeId::random(), reaching(&["src/b.rs#g"]));
+        assert_eq!(d.reasons, ["signature_change:src/a.rs#f"], "{item}");
+        h.assert_replay();
+    }
+}
+
+#[test]
+fn ones_own_lease_is_no_news() {
+    let mut h = one_holder("src/b.rs#other", LeaseKind::Edit);
+    let items = [("src/b.rs#g", LeaseKind::Edit)];
+    assert!(h.lease("a", "lc", &items).is_allow());
+    let d = h.propose("a", ChangeId::random(), reaching(&["src/b.rs#g"]));
+    assert_eq!(d.reasons, ["signature_change:src/a.rs#f"]);
+    h.assert_replay();
+}
+
+#[test]
+fn a_lease_that_ended_is_no_holder() {
+    let mut h = one_holder("src/b.rs#g", LeaseKind::Edit);
+    let set = Op::LeaseRelease { set: "lb".into() };
+    assert!(h.agent("b", set).is_allow());
+    let d = h.propose("a", ChangeId::random(), reaching(&["src/b.rs#g"]));
+    assert_eq!(d.reasons, ["signature_change:src/a.rs#f"]);
+    h.assert_replay();
+}
+
+/// A lease has the name trunk has now, and a change from an older base the
+/// one that base had.
+#[test]
+fn a_lease_under_the_new_name_is_a_holder() {
+    let mut h = one_holder("src/b.rs#g", LeaseKind::Edit);
+    let base = h.chain.state.trunk.clone().unwrap();
+    let line = h.chain.state.trunk_line.len();
+    let moved = renamed(line, "src/b.rs#old", "src/b.rs#g", None);
+    h.chain.state.renames.push(moved);
+    h.chain.state.trunk_history.insert(gid('e'));
+    h.chain.state.trunk_line.push(gid('e'));
+    h.chain.state.trunk = Some(gid('e'));
+    let facts = reaching(&["src/b.rs#old"]);
+    let op = Op::ChangePropose {
+        change: ChangeId::random(),
+        commit: gid('c'),
+        base,
+        claim: claim_of(&facts),
+    };
+    let d = h.agent_facts("a", op, Some(facts));
+    assert!(d.reasons.iter().any(|r| r == HOLDER), "{d:?}");
+}
+
+#[test]
+fn what_was_left_out_of_the_list_is_said() {
+    let mut h = one_holder("src/b.rs#g", LeaseKind::Edit);
+    let mut facts = reaching(&["src/b.rs#other"]);
+    facts.affected_more = 7;
+    let d = h.propose("a", ChangeId::random(), facts);
+    assert_eq!(
+        d.reasons,
+        ["signature_change:src/a.rs#f", "affected_more:7"]
+    );
+    h.assert_replay();
+}
+
+#[test]
+fn a_policy_can_escalate_on_what_a_change_reaches() {
+    for (rule, affected, more, escalated) in [
+        ("context.signature_changes > 0", "src/b.rs#other", 0, true),
+        ("context.signature_changes > 1", "src/b.rs#other", 0, false),
+        ("context.affects_others", "src/b.rs#g", 0, true),
+        ("context.affects_others", "src/b.rs#other", 0, false),
+        ("context.affects_others", "src/b.rs#other", 1, true),
+    ] {
+        let policy = format!(
+            "{DEFAULT_POLICY}\n@id(\"reach\")\n@escalate(\"reach\")\nforbid(principal is Lonca::Agent, action == Lonca::Action::\"change.propose\", resource)\nwhen {{ {rule} }};\n"
+        );
+        let policy = PolicyBundle::parse(DEFAULT_CONFIG, &policy).unwrap();
+        let mut h = H::with_policy(policy);
+        h.start_observed("a", &["src/**"]);
+        h.start_observed("b", &["src/**"]);
+        assert!(
+            h.lease("a", "la", &[("src/a.rs#f", LeaseKind::Edit)])
+                .is_allow()
+        );
+        assert!(
+            h.lease("b", "lb", &[("src/b.rs#g", LeaseKind::Edit)])
+                .is_allow()
+        );
+        h.wrote("a", "src/a.rs");
+        let mut facts = reaching(&[affected]);
+        facts.affected_more = more;
+        let d = h.propose("a", ChangeId::random(), facts);
+        assert_eq!(d.is_allow(), !escalated, "{rule} with {affected}: {d:?}");
+        h.assert_replay();
+    }
+}
+
+/// A verification that a change owes is met by a pass of it, and a change
+/// that owes none owes none.
+#[test]
+fn what_runs_more_is_owed_by_a_change_that_reaches_others() {
+    let vc = Verification {
+        on_signature_change: Some("more".into()),
+        required: true,
+        ..Verification::default()
+    };
+    assert!(vc.on_signature_change.is_some());
+    let missing = ["verification_missing:extended".to_string()];
+    assert_eq!(evidence_problems(&vc.for_change(true), &[]), missing);
+    assert!(evidence_problems(&vc.for_change(false), &[]).is_empty());
+    let passed = [pass(CheckKind::Extended)];
+    assert!(evidence_problems(&vc.for_change(true), &passed).is_empty());
+    let optional = Verification {
+        required: false,
+        ..vc.clone()
+    };
+    assert!(evidence_problems(&optional.for_change(true), &[]).is_empty());
+    let bare = Verification {
+        require_sandbox: true,
+        ..vc
+    };
+    let mut unsandboxed = pass(CheckKind::Extended);
+    unsandboxed.details.clear();
+    let problems = evidence_problems(&bare.for_change(true), &[unsandboxed]);
+    assert_eq!(problems, ["unsandboxed_verification"]);
+}
+
+fn extended_policy() -> PolicyBundle {
+    let config = DEFAULT_CONFIG
+        .replace("batch_size = 1", "batch_size = 3")
+        .replace("required = false", "required = true")
+        .replace(
+            "# on_signature_change = \"cargo test --offline --workspace --all-features\"",
+            "on_signature_change = \"more\"",
+        );
+    PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap()
+}
+
+#[test]
+fn the_decision_holds_the_queue_to_what_a_change_owes() {
+    for (evidence, owed) in [(vec![], false), (vec![pass(CheckKind::Extended)], true)] {
+        let mut h = H::with_policy(extended_policy());
+        h.start_observed("a", &["src/**"]);
+        let items = [("src/a.rs#f", LeaseKind::Edit)];
+        assert!(h.lease("a", "la", &items).is_allow());
+        h.wrote("a", "src/a.rs");
+        let change = ChangeId::random();
+        assert!(h.propose("a", change, reaching(&[])).is_allow());
+        let trunk_before = h.chain.state.trunk.clone().unwrap();
+        let op = Op::ChangeIntegrate {
+            change,
+            trunk_before,
+            merged: Some(gid('e')),
+            conflicts: vec![],
+        };
+        let d = h.daemon(op, evidence);
+        assert_eq!(d.is_allow(), owed, "{d:?}");
+        assert_eq!(denied_with(&d, "verification_missing:extended"), !owed);
+        h.assert_replay();
+    }
+}
+
+#[test]
+fn the_decision_holds_a_batch_to_what_a_member_owes() {
+    let mut h = H::with_policy(extended_policy());
+    for (session, facts) in [("a", edit("src/a.rs#f")), ("b", reaching(&[]))] {
+        h.start_observed(session, &["src/**"]);
+        let set = format!("l{session}");
+        let held = if session == "a" {
+            "src/a.rs#f"
+        } else {
+            "src/a.rs#g"
+        };
+        assert!(
+            h.lease(session, &set, &[(held, LeaseKind::Edit)])
+                .is_allow()
+        );
+        h.wrote(session, "src/a.rs");
+        let mut facts = facts;
+        if session == "b" {
+            facts = edit("src/a.rs#g");
+            facts.signature_changes = vec!["src/a.rs#g".into()];
+        }
+        assert!(h.propose(session, ChangeId::random(), facts).is_allow());
+    }
+    let queued: Vec<ChangeId> = h.chain.state.queue.clone();
+    let merged = [(queued[0], gid('e')), (queued[1], gid('f'))];
+    let d = batch(&mut h, &merged, vec![]);
+    assert!(denied_with(&d, "verification_missing:extended"), "{d:?}");
+    let d = batch(&mut h, &merged, vec![pass(CheckKind::Extended)]);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// An entry of an older format replays to what it decided.
+#[test]
+fn before_the_format_a_proposal_reports_nobody() {
+    let h = one_holder("src/b.rs#g", LeaseKind::Edit);
+    let facts = reaching(&["src/b.rs#g"]);
+    let claim = claim_of(&facts);
+    let op = Op::ChangePropose {
+        change: ChangeId::random(),
+        commit: gid('e'),
+        base: h.chain.state.trunk.clone().unwrap(),
+        claim,
+    };
+    let actor = Actor::Agent {
+        name: h.chain.state.sessions["a"].agent.clone(),
+        session: "a".into(),
+    };
+    let decided = |format: u32| {
+        decide(
+            &h.chain.state,
+            &actor,
+            &op,
+            None,
+            &Ctx {
+                format,
+                time_ms: h.now,
+                policy: &h.policy,
+                facts: Some(&facts),
+                evidence: &[],
+                symbols_engine: Some(0),
+            },
+        )
+    };
+    assert!(decided(FORMAT_CURRENT).reasons.iter().any(|r| r == HOLDER));
+    assert!(decided(FORMAT_AFFECTED - 1).reasons.is_empty());
 }

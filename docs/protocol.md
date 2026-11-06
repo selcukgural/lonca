@@ -127,6 +127,12 @@ unknown method: `unknown_method`, whatever the token.
   not strict that a grammar read until this change and can not read after it, or
   that a change adds and it can not read. Such a proposal escalates with the reason
   `unread_file:<path>`.
+- **`affected`** and **`affected_more`** in facts, from log format 18: symbols
+  of the base that mention by name what the change gives a new signature, renames
+  or deletes, at most 1000, and how many more there were. A guess, not a call
+  graph. A proposal's `decision.reasons` then hold `signature_change:<symbol>`
+  and `affected_lease:<session>:<set>`, and the sessions named get a
+  `symbols_changed` event.
 - **`renames`** in facts, from symbol engine 7: `[[old, new]]`, symbols that
   go on under another name. A renamed one is also in `deletes` and `adds`, so
   a claim is what it was, and one with new parameters in `edits`. A `rename`
@@ -598,7 +604,8 @@ Pass `next` as the next `from`. An event has a `kind`:
 it), `approved` (`seq`, `target_seq`), `rejected` (`seq`,
 `target_seq`, `reason`), `message` (`seq`, `thread`, `from`, `message`: what
 it says, as sent to `negotiate`; `from` is the `to_session` of an answer),
-`lease_received` (`seq`, `set`, `from`), and `reserved` (`items`,
+`lease_received` (`seq`, `set`, `from`), `symbols_changed` (`seq`, `change`,
+`from`, `sets`, `symbols`), and `reserved` (`items`,
 `until_ms`), which is the state now and is reported on every call while
 it lasts.
 
@@ -606,7 +613,7 @@ it lasts.
 
 *agent.* `params: {}`. What other sessions want of the caller and it has
 not been told: `{"events": [event], "text": string | null}`, of the kinds
-`message`, `lease_received` and `reserved`, once each. `text` is that for a
+`message`, `lease_received`, `symbols_changed` and `reserved`, once each. `text` is that for a
 model, with a message cut at 600 characters and marked as another agent's
 words. `lonca mcp` calls this after every tool and adds `text` to the answer
 as a second content item; a hook gets it through `hook.input`. An agent is not

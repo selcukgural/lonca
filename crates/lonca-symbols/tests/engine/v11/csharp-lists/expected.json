@@ -1,0 +1,406 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#C.a"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [
+          "src/sample.cs#C.a"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cs#C.c"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#C.M()",
+          "src/sample.cs#C.n"
+        ],
+        "import_only_files": [],
+        "lines_added": 3,
+        "lines_removed": 3,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [
+          "src/sample.cs#C.n"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "namespace N\n{\n    partial class C\n    {\n        int a = 1, b, c;\n        void M() { X(); }\n    }\n\n    partial class C\n    {\n        long n;\n        void M(int x) { }\n    }\n}\n"
+  },
+  "path": "src/sample.cs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit(namespace_declaration(namespace\u001fN\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.a",
+              "own": "",
+              "signature": "int a",
+              "skipped": false,
+              "span": [
+                52,
+                52,
+                53
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.b",
+              "own": "",
+              "signature": "int a, b",
+              "skipped": false,
+              "span": [
+                55,
+                55,
+                56
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.M()",
+              "own": "",
+              "signature": "void M()",
+              "skipped": false,
+              "span": [
+                66,
+                66,
+                78
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C",
+          "own": "class_declaration(modifier(partial\u001f)class\u001fC\u001fdeclaration_list({\u001ffield_declaration(variable_declaration(int\u001f);\u001f)}\u001f))",
+          "signature": "partial class C",
+          "skipped": false,
+          "span": [
+            18,
+            18,
+            84
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.n",
+              "own": "",
+              "signature": "int n;",
+              "skipped": false,
+              "span": [
+                120,
+                120,
+                126
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.M(int)",
+              "own": "",
+              "signature": "void M(int x)",
+              "skipped": false,
+              "span": [
+                135,
+                135,
+                152
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C~2",
+          "own": "class_declaration(modifier(partial\u001f)class\u001fC\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "partial class C",
+          "skipped": false,
+          "span": [
+            90,
+            90,
+            158
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit(namespace_declaration(namespace\u001fN\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.a",
+              "own": "",
+              "signature": "int a = 1",
+              "skipped": false,
+              "span": [
+                52,
+                52,
+                57
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.b",
+              "own": "",
+              "signature": "int a = 1, b",
+              "skipped": false,
+              "span": [
+                59,
+                59,
+                60
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.M()",
+              "own": "",
+              "signature": "void M()",
+              "skipped": false,
+              "span": [
+                70,
+                70,
+                82
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C",
+          "own": "class_declaration(modifier(partial\u001f)class\u001fC\u001fdeclaration_list({\u001ffield_declaration(variable_declaration(int\u001f);\u001f)}\u001f))",
+          "signature": "partial class C",
+          "skipped": false,
+          "span": [
+            18,
+            18,
+            88
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.n",
+              "own": "",
+              "signature": "int n;",
+              "skipped": false,
+              "span": [
+                124,
+                124,
+                130
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.M(int)",
+              "own": "",
+              "signature": "void M(int x)",
+              "skipped": false,
+              "span": [
+                139,
+                139,
+                156
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C~2",
+          "own": "class_declaration(modifier(partial\u001f)class\u001fC\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "partial class C",
+          "skipped": false,
+          "span": [
+            94,
+            94,
+            162
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit(namespace_declaration(namespace\u001fN\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.a",
+              "own": "",
+              "signature": "int a",
+              "skipped": false,
+              "span": [
+                52,
+                52,
+                53
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.b",
+              "own": "",
+              "signature": "int a, b",
+              "skipped": false,
+              "span": [
+                55,
+                55,
+                56
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.c",
+              "own": "",
+              "signature": "int a, b, c",
+              "skipped": false,
+              "span": [
+                58,
+                58,
+                59
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.M()",
+              "own": "",
+              "signature": "void M()",
+              "skipped": false,
+              "span": [
+                69,
+                69,
+                86
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C",
+          "own": "class_declaration(modifier(partial\u001f)class\u001fC\u001fdeclaration_list({\u001ffield_declaration(variable_declaration(int\u001f);\u001f)}\u001f))",
+          "signature": "partial class C",
+          "skipped": false,
+          "span": [
+            18,
+            18,
+            92
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.n",
+              "own": "",
+              "signature": "long n;",
+              "skipped": false,
+              "span": [
+                128,
+                128,
+                135
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.M(int)",
+              "own": "",
+              "signature": "void M(int x)",
+              "skipped": false,
+              "span": [
+                144,
+                144,
+                161
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C~2",
+          "own": "class_declaration(modifier(partial\u001f)class\u001fC\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "partial class C",
+          "skipped": false,
+          "span": [
+            98,
+            98,
+            167
+          ]
+        }
+      ]
+    }
+  }
+}

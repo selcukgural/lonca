@@ -484,6 +484,7 @@ how = { declared = { field = "declarator", wrapped = ["parenthesized_declarator"
 # Ruby
 
 [rules.ruby]
+names = ["constant"]
 attached = [{ kinds = ["comment"] }]
 import_calls = { kind = "call", field = "method", names = ["require", "require_relative", "load"], receiver = "receiver" }
 call_tests = { call = "call", callee = "method", arguments = "arguments", name = "identifier", strings = ["string"] }
@@ -517,6 +518,7 @@ how = { only = { field = "left", only = "constant" } }
 # PHP
 
 [rules.php]
+names = ["name"]
 attached = [{ kinds = ["comment"] }]
 imports = ["namespace_use_declaration"]
 attributes = ["attribute_list"]

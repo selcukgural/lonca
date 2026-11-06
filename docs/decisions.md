@@ -559,6 +559,10 @@ entry format, so they have their own version
   than missing. This lives in the client: the daemon sees only a file. `lines.rs`
   is the one core for this and for the merge at integration.
 
+- **Engine 10** reads Java, Kotlin, C, C++, Ruby, PHP and Swift. Each is an entry
+  in the language table with `since = 10`: engine 9 and older still see their
+  files as text, and old entries recompute as they were.
+
 ## The language table
 
 What a language's syntax means to the symbol engine is data (issue #114):
@@ -583,6 +587,23 @@ a table entry, not an enum.
   Loading them at run time (WebAssembly, never native code from a policy) needs a
   design for pinning them, because a grammar's hash would become part of the
   engine. Until then `[leases] unparsed_files` covers every language with none.
+- **`strict` says what a parse error means.** For a language that shipped before
+  the table it means the file is wrong, and verification fails it. For the seven
+  of engine 10 it is `false`: the error may be the grammar's, as with Kotlin's on a
+  member and `}` on one line, or a C macro. Such a file counts as one no parser
+  reads: the syntax check passes it, the merge goes by lines and facts list it, so
+  it does no worse than with no grammar at all. `syntax_errors` still reports it.
+  A language can earn `true` by a table change once its grammar has shown it reads
+  real code; that needs no engine, because verification is evidence and not a fact.
+- **`.h` goes to the C++ grammar,** which reads nearly all of C, and a file it can
+  not read falls back as above.
+- **Limits of the first entries:** declarations of several names go by the first
+  (`int a = 1, b = 2;`, Swift's `var b, c` and `case a, b`). In Ruby `private def`
+  is part of the class's text and `class A::B` keeps its `::`. A PHP function's
+  signature leaves out `function`. Reopened Ruby classes and Swift extensions of
+  one type are numbered, and a C++ method defined outside its class is `C.m`, the
+  same name as its declaration in the class, so in one file they are `~2`. Tests
+  are found by markers in the table: C has none.
 - **Heuristics that hold across grammars stay in the code:** `TYPE_KINDS`,
   `is_verbatim`, and the names `parameters` and `type_parameters` in a key.
 - **A word the table gets wrong would read as a kind that never comes,** so a

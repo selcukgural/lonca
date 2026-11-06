@@ -11,7 +11,7 @@ pub mod lang;
 pub mod merge;
 pub mod sections;
 
-pub use extract::{Parsed, Spot, Sym, parse};
+pub use extract::{Parsed, Spot, Sym, parse, parse_at};
 pub use facts::{Analysis, analyze};
 pub use lang::Lang;
 pub use lonca_core::ops::DEF;

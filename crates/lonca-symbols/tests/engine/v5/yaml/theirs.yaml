@@ -1,0 +1,6 @@
+name: ci
+jobs:
+  build:
+    runs: a
+  test:
+    runs: c

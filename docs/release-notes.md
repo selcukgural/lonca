@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### More of a file can be leased on its own (symbol engine 5)
+
+Each spec in a Go `const (...)`, `var (...)` or `type (...)` group is now a symbol,
+and so is each declarator of a C# `int a, b;`, what stands in a Rust `extern` block,
+a Rust macro call at item level (`m!`), JavaScript `exports.x =`,
+`module.exports.x =` and the methods of `module.exports = { … }`, and functions in a
+Python top-level `if` or `try` that holds only definitions. Two agents can now work
+in one such group at once. A TypeScript method's decorators belong to the method.
+The members of a second `partial class C` in a file are `C.x`, not `C~2.x`.
+
+A comment with a blank line under it no longer belongs to the next symbol: it is code
+of the file or the type, so editing a licence or a section header needs `<module>`
+(or `Type.<def>`), not a lease on an unrelated symbol. Adding a method to a Python
+class with one method is now an add, not an edit of the class. New symbols stay in
+the group, block or namespace they were written in when merged. Entries already in
+a log keep their recorded engine.
+
 ### A wide change gets its turn, and every lease says why (log format 12)
 
 A waiting `lease.interest` now goes first: for `leases.interest_block_ms`

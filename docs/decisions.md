@@ -270,6 +270,89 @@ entry format, so they have their own version
     keeps it; and adding a duplicate renumbers `name~2`, which reads as a
     move. Both wait for stable ids (#44), and the second only costs a lease.
 
+- **Engine 5** reads declarations that hold others (issue #47). Up to engine
+  4 such code was one symbol or none: an edit of `Y` in a Go `const (...)` was
+  an edit of `X`, and a function under `if TYPE_CHECKING:` could only be
+  changed under a lease on `<module>`. `parse_at` takes the engine, and
+  `parse` is the current one.
+  - **What became symbols.** One per spec in a Go group with parentheses, one
+    per declarator in a C# field with several, what stands in a Rust
+    `extern` block, a Rust macro call at item level (`m!`, then `m!~2`),
+    `exports.X =` and `module.exports.X =`, the methods and function-valued
+    keys of `module.exports = { … }`. A declaration without parentheses, or
+    with one declarator, stays whole. A Go spec with several names
+    (`const X, Y = 1, 2`) is named after the first, and `const o = { a() {} }`
+    stays one leaf: only an object that is exported lists symbols.
+  - **Python blocks.** A top-level `if` or `try` whose blocks hold nothing but
+    definitions, a comment or `pass`, with at least one definition, gives
+    symbols named as if they stood at the top level. Anything else in any of
+    its blocks, an import or a nested block included, and it stays code. This
+    is on purpose narrow: an import has one place in the merge, and a block
+    with statements can not be told apart from what they do. The same name in
+    two branches is `f` and `f~2`.
+  - **A symbol knows what holds it** (`Sym.holder`). The merge places a new
+    symbol only beside one of its own holder, on a side where that one stands
+    in the same kind of holder, and a holder's edge counts as code between
+    neighbours. Nothing to stand beside goes to the line merge. Without this a
+    new function behind a Go group could land inside it, and one for `else:`
+    in the `if` branch. It also fixes C# namespaces, where a new class could
+    land in the namespace before it. The same definition added to two blocks
+    is a conflict, not one addition.
+  - **Separators go with the member.** A list with commas (`Holder.joined`) has
+    its commas left out of `exact_text`, so a member added or removed is no
+    change of `Type.<def>` or `<module>`. So a change of only a trailing comma
+    has no facts, like any layout. The merge adds the separator the new member
+    has in `t` and removes one with a deleted member. Both are measured to the
+    next element of the list in the tree (`Sym.around`), not the next symbol:
+    `VERSION: 1` between two methods is no separator. A new member is placed
+    only beside a symbol right next to it, since order against `...base` can
+    decide what a key means; otherwise lines place it. A member that stops being
+    in a list, as in `int a, b;` to `int a;`, is a change of shape and of the
+    code around it.
+  - **A merge writes code of one side or the other** (`holds_up`). The code
+    outside symbols and every container's own text must equal `o`'s or `t`'s,
+    because code both sides changed is a conflict before this, and no merge
+    may bring a name neither side has. Failing it, a symbol merge goes to the
+    line merge, and a line merge is `<file>` in `conflicts`. So a text operation in the wrong place can not
+    drop or copy code that nobody touched. Two parts of a partial type each
+    getting a member `x` are caught this way.
+  - **Numbers in blocks.** `f~2` counts from the top of the file, so a name
+    that came to stand in another block can make the same number another
+    definition, also with as many of the name as before. So when any side
+    changes which group and block each numbered name stands in
+    (`Holder.block`), the file goes to the line merge, after the checks that
+    make code changed on both sides a conflict.
+  - **A holder stays in the compared code.** A block with one member has that
+    member's span, and `exact_text` used to cut it with the member, so a second
+    member changed the code around it. So adding a method to a Python class
+    with one method was a `Type.<def>` edit. From this engine it is an add.
+  - **Comments.** A comment attaches only when no blank line stands under it.
+    Otherwise it is code: `<module>`, or `Type.<def>` in a type. A licence or
+    section header is no longer the next symbol's. An attribute or a decorator
+    attaches across a blank line, because it is part of what follows, also
+    with a comment that stands apart behind it. A comment behind code on its
+    line is never about what follows: it belongs to a leaf symbol that ends
+    there, and otherwise it is code. In a list with separators the comma stands
+    between, so it is code there too. Where such a comment starts is layout
+    (`Sym.tail`), because `gofmt` realigns it when a longer line comes.
+  - **TS method decorators** attach to the method, as a field's already did.
+  - **C# partial types.** A later `partial` part of a type in the same file
+    keeps its own name (`C~2`) but works like a Rust `impl`: its members are
+    `C.N`, overloads across parts get one id each, and its header is
+    `C.<def>`. Parts in other files stay unrelated, because a symbol id is per
+    file, and so do parts in two different namespaces, which are two types. A
+    namespace written twice is one namespace. A new part is an add of `C~2`, as
+    a new `impl` is an add of `impl:C`.
+  - **What this does not see.** A const in a Go `iota` group means what its
+    place says, so a spec added in the middle changes the ones after it with
+    no fact about them; verification catches that, as for any change between
+    symbols (design §5.8). Names by order (`f~2`, `m!~2`) wait for #44.
+    Deleting the last two members of a list, or the last symbols of one, and a
+    deletion that takes the blank line under a comment, are refused by the line
+    merge though the leases allow it: nothing is lost, and such a change goes
+    back to the agent. A new symbol beside one that `o` moved to another block
+    of the same kind follows it.
+
 ## Harness profiles
 
 Which harnesses Lonca can read is data, not code (issue #109). A profile
@@ -1277,9 +1360,20 @@ Passing tests do not show that they would catch a flipped `>=` or a
   Per-package testing would report those as survivors. A workspace test
   run is about 10 s, so the cost is acceptable. cargo-mutants has no
   per-crate test list, so this is one setting for all crates.
-- **Timeouts** come from the measured baseline: `timeout_multiplier = 5`,
-  `minimum_test_timeout = 60` s. A mutant that hangs the daemon or a
-  socket test ends as a timeout, which counts as caught.
+- **`nextest` runs the tests of a mutant** (`test_tool`), still the whole
+  workspace. `cargo test` goes crate by crate, so a mutant in `lonca-symbols`
+  waited for the daemon's and the CLI's tests before its own could catch it.
+  nextest stops at the first failure, so only a survivor pays for a full run.
+  Doctests do not run with it; the workspace has none, and a new one would
+  need its own check.
+- **Timeouts** are at least `minimum_test_timeout = 300` s, about five times
+  a workspace test run on CI. They can not come from the measured baseline:
+  with `--in-diff` it runs `--package` of the changed crates while each mutant
+  runs `--workspace`, so a PR on one crate measured ~1 s and got the old
+  minimum of 60 s. A mutant in `lonca-symbols` was then cut off in the daemon's
+  tests, before its own, and counted as caught with no test having looked at
+  it. A mutant that hangs the daemon or a socket test ends as a timeout, which
+  counts as caught, so a shard with more timeouts than caught mutants fails.
 - **Exclusion policy.** `exclude_re` lists only mutants shown to be
   equivalent (no test could tell them apart from the original) or
   irrelevant (text that no caller reads), each with a comment giving the

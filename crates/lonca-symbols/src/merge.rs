@@ -13,8 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
-use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_PLACES, ENGINE_SECTIONS};
-use crate::extract::{Parsed, Placed, Sym, moved, normalize, parse, shifted};
+use crate::engine::{ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_PLACES, ENGINE_SECTIONS};
+use crate::extract::{Holder, Parsed, Placed, Sym, moved, normalize, parse_at, shifted};
 
 /// Code outside symbols as an engine compares it, and its place among them.
 type Code<'a> = (&'a str, Placed<'a>);
@@ -179,7 +179,7 @@ pub fn merge_text_at(
     }
     let merged = diffy::merge(b, o, t).map_err(|_| file_conflict())?;
     if let Some(lang) = lang {
-        let [pb, po, pt] = [b, o, t].map(|text| parse(lang, text));
+        let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
         // A side that does not parse has no symbols to hold the merge to,
         // and engines before this check only asked that the result parses.
         let unread = pb.has_error || po.has_error || pt.has_error;
@@ -208,7 +208,7 @@ pub fn merge_around_conflicts(
     t: &str,
 ) -> Option<String> {
     let lang = Lang::detect(path)?;
-    let (pb, po, pt) = (parse(lang, b), parse(lang, o), parse(lang, t));
+    let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
     if pb.has_error || po.has_error || pt.has_error {
         return None;
     }
@@ -223,6 +223,9 @@ pub fn merge_around_conflicts(
     }
     let conflicts = std::mem::take(&mut m.conflicts);
     let sides = [&pb, &po, &pt];
+    if !numbers_hold(sides) {
+        return None;
+    }
     m.apply()
         .filter(|text| holds_up(engine, path, lang, text, sides, &conflicts))
 }
@@ -270,7 +273,7 @@ fn holds_up(
     [pb, po, pt]: [&Parsed; 3],
     conflicts: &[String],
 ) -> bool {
-    let merged = parse(lang, text);
+    let merged = parse_at(engine, lang, text);
     if merged.has_error {
         return false;
     }
@@ -299,10 +302,58 @@ fn holds_up(
         .iter()
         .filter(|n| !in_o.contains(*n) || !in_t.contains(*n));
     let code = [pb, po, pt].map(|p| outer_code(engine, p));
-    gone.into_iter()
+    let kept = gone
+        .into_iter()
         .all(|n| !there.contains(n) || in_conflict(n))
         && places_kept(engine, code, outer_code(engine, &merged))
-        && members_kept(engine, [&pb.syms, &po.syms, &pt.syms], &merged.syms)
+        && members_kept(engine, [&pb.syms, &po.syms, &pt.syms], &merged.syms);
+    if engine < ENGINE_GROUPS {
+        return kept;
+    }
+    let known = |n: &&str| base.contains(n) || sides.contains(n);
+    let code_of = |p: &Parsed| p.residual_at(engine).to_string();
+    let from_a_side = [po, pt].map(code_of).contains(&code_of(&merged))
+        && own_from_a_side(engine, [&po.syms, &pt.syms], &merged.syms);
+    kept && there.iter().all(known) && from_a_side
+}
+
+/// A merge writes code of one side or the other, never a third: code both
+/// sides changed is a conflict before it gets here.
+fn own_from_a_side(engine: u32, [os, ts]: [&[Sym]; 2], merged: &[Sym]) -> bool {
+    let (om, tm) = (by_name(os), by_name(ts));
+    merged.iter().filter(|m| m.container).all(|m| {
+        let name = m.name.as_str();
+        let (Some(o), Some(t)) = (om.get(name), tm.get(name)) else {
+            return true;
+        };
+        [o, t].iter().any(|s| s.own_at(engine) == m.own_at(engine))
+            && own_from_a_side(engine, [&o.children, &t.children], &m.children)
+    })
+}
+
+/// Which block each name with a number stands in, at any depth.
+fn numbered_places(syms: &[Sym], out: &mut BTreeMap<String, Vec<(u32, u32)>>) {
+    for s in syms {
+        if let Some(h) = s.holder {
+            let name = s.name.split('~').next().unwrap_or(&s.name);
+            out.entry(name.to_string()).or_default().push(h.block);
+        }
+        numbered_places(&s.children, out);
+    }
+}
+
+/// A number in a name counts from the top of the file: the same number can
+/// be another definition when a name came to stand in another block, even
+/// with as many of the name as before.
+fn numbers_hold([pb, po, pt]: [&Parsed; 3]) -> bool {
+    let places = |p: &Parsed| {
+        let mut out = BTreeMap::new();
+        numbered_places(&p.syms, &mut out);
+        out.retain(|_, list: &mut Vec<_>| list.len() > 1);
+        out
+    };
+    let base = places(pb);
+    places(po) == base && places(pt) == base
 }
 
 enum Sm {
@@ -398,33 +449,58 @@ impl<'a> Merger<'a> {
             match bm.get(name) {
                 None => {
                     if let Some(o_sym) = om.get(name) {
-                        if o_sym.text(self.o) != t_text {
+                        if !o_sym.same(self.o, ts_sym, self.t)
+                            || !self.same_block(o_sym, os, ts_sym, ts)
+                        {
                             self.conflict(name);
                         }
                         continue;
                     }
-                    let sep_before = match ws_before(self.t, ts_sym.start) {
-                        "" if top => "\n\n",
-                        "" => "\n",
-                        ws => ws,
+                    // A new symbol stands next to one of its own group, on
+                    // a side where that one is in the same kind of group.
+                    let held = ts_sym.holder;
+                    let beside = |s: &&Sym| s.holder == held;
+                    let shape = |h: Option<Holder>| h.map(|h| (h.kind, h.joined));
+                    let anchor = |s: &Sym| {
+                        let o_sym = om.get(s.name.as_str()).copied();
+                        o_sym.filter(|o| shape(o.holder) == shape(held))
+                    };
+                    let (gap_start, gap_end) = ts_sym.around;
+                    let sep_before = match (gap_start, ws_before(self.t, ts_sym.start)) {
+                        (Some(from), _) => &self.t[from..ts_sym.start],
+                        (None, "") if top => "\n\n",
+                        (None, "") => "\n",
+                        (None, ws) => ws,
                     }
                     .to_string();
-                    let prev = ts[..i].iter().rev().find_map(|s| om.get(s.name.as_str()));
-                    let next = ts[i + 1..].iter().find_map(|s| om.get(s.name.as_str()));
+                    // In a list, only a symbol right next to it says where
+                    // it goes: order against other elements can matter.
+                    let touching =
+                        |gap: Option<usize>, at: Option<usize>| gap.is_none() || gap == at;
+                    let before = ts[..i].iter().rev().find(beside);
+                    let after = ts[i + 1..].iter().find(beside);
+                    let prev = ts[..i].iter().rev().filter(beside).find_map(anchor);
+                    let prev = prev.filter(|_| touching(gap_start, before.map(|p| p.end)));
+                    let next = ts[i..].iter().filter(beside).find_map(anchor);
+                    let next = next.filter(|_| touching(gap_end, after.map(|a| a.start)));
                     let after_code = self.engine >= ENGINE_PLACES && i > 0 && {
                         let gap = &self.t[ts[i - 1].end..ts_sym.start];
-                        !gap.trim_matches([' ', '\t', '\n', '\r', ';', ','])
-                            .is_empty()
+                        let code = gap.trim_matches([' ', '\t', '\n', '\r', ';', ',']);
+                        !code.is_empty() || ts[i - 1].holder != held
                     };
                     if let (Some(p), false) = (prev, after_code) {
                         self.insert(p.end, format!("{sep_before}{t_text}"));
                     } else if let Some(n) = next {
-                        let sep_after = match ws_after(self.t, ts_sym.end) {
-                            "" if top => "\n\n",
-                            "" => "\n",
-                            ws => ws,
+                        let sep_after = match (gap_end, ws_after(self.t, ts_sym.end)) {
+                            (Some(to), _) => &self.t[ts_sym.end..to],
+                            (None, "") if top => "\n\n",
+                            (None, "") => "\n",
+                            (None, ws) => ws,
                         };
                         self.insert(n.start, format!("{t_text}{sep_after}"));
+                    } else if held.is_some() {
+                        // Nothing to stand beside: only lines can place it.
+                        self.moved = true;
                     } else if let Some(c) = o_container {
                         let body = &self.o[c.start..c.end];
                         let pos = match body.rfind('}') {
@@ -438,18 +514,17 @@ impl<'a> Merger<'a> {
                     }
                 }
                 Some(b_sym) => {
-                    if b_sym.text(self.b) == t_text {
+                    if b_sym.same(self.b, ts_sym, self.t) {
                         continue;
                     }
                     let Some(o_sym) = om.get(name) else {
                         self.conflict(name);
                         continue;
                     };
-                    let o_text = o_sym.text(self.o);
-                    if o_text == t_text {
+                    if o_sym.same(self.o, ts_sym, self.t) {
                         continue;
                     }
-                    if o_text == b_sym.text(self.b) {
+                    if o_sym.same(self.o, b_sym, self.b) {
                         self.replace(o_sym.start, o_sym.end, t_text.to_string());
                         continue;
                     }
@@ -491,13 +566,42 @@ impl<'a> Merger<'a> {
                 continue;
             }
             if let Some(o_sym) = om.get(b_sym.name.as_str()) {
-                if o_sym.text(self.o) == b_sym.text(self.b) {
-                    let start = o_sym.start - ws_before(self.o, o_sym.start).len();
-                    self.replace(start, o_sym.end, String::new());
+                if o_sym.same(self.o, b_sym, self.b) {
+                    let (start, end) = self.span_to_delete(o_sym);
+                    self.replace(start, end, String::new());
                 } else {
                     self.conflict(&b_sym.name);
                 }
             }
+        }
+    }
+
+    /// The symbols of `o` and of `t` stand in one block: they share a
+    /// neighbour, or with none to compare, the file up to the block is the same.
+    fn same_block(&self, o: &Sym, os: &[Sym], t: &Sym, ts: &[Sym]) -> bool {
+        let others = |s: &Sym, list: &[Sym]| -> BTreeSet<String> {
+            let held = list.iter().filter(|x| x.holder == s.holder);
+            held.filter(|x| x.name != s.name)
+                .map(|x| x.name.clone())
+                .collect()
+        };
+        let (Some(ho), Some(ht)) = (o.holder, t.holder) else {
+            return o.holder == t.holder;
+        };
+        let (a, b) = (others(o, os), others(t, ts));
+        if a.is_empty() || b.is_empty() {
+            return self.o[..ho.start] == self.t[..ht.start];
+        }
+        !a.is_disjoint(&b)
+    }
+
+    /// What goes with `sym` of `o`: the whitespace in front of it, and in a
+    /// list with separators, one separator.
+    fn span_to_delete(&self, sym: &Sym) -> (usize, usize) {
+        match sym.around {
+            (_, Some(next)) => (sym.start, next),
+            (Some(prev), None) => (prev, sym.end),
+            (None, None) => (sym.start - ws_before(self.o, sym.start).len(), sym.end),
         }
     }
 
@@ -594,7 +698,7 @@ impl<'a> Merger<'a> {
 }
 
 fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
-    let (pb, po, pt) = (parse(lang, b), parse(lang, o), parse(lang, t));
+    let [pb, po, pt] = [b, o, t].map(|text| parse_at(engine, lang, text));
     if pb.has_error || po.has_error || pt.has_error {
         return Sm::Fallback;
     }
@@ -604,6 +708,9 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
             return Sm::Fallback;
         }
         return Sm::Conflict(vec![format!("{path}#<module>")]);
+    }
+    if !numbers_hold([&pb, &po, &pt]) {
+        return Sm::Fallback;
     }
     let mut m = Merger::new(engine, path, b, o, t);
     m.imports(&pb, &po, &pt);
@@ -629,6 +736,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::parse;
 
     const CLASS: &str = "class A:\n    x = 1\n\n    def a(self):\n        return 1\n\n    def b(self):\n        return 2\n\n    def c(self):\n        return 3\n";
 
@@ -765,6 +873,598 @@ mod tests {
         let (o, t) = (b, "fn a() { x(); }\n\nfn n() { t(); }\n");
         let kept = merge_around_conflicts(3, "a.rs", b, o, t).unwrap();
         assert_eq!(kept, t);
+    }
+
+    const GROUP: &str = "package p\n\nconst (\n\tA = 1\n\tB = 2\n)\n\nfunc F() {}\n";
+
+    /// Two agents in one `const (...)`: every spec is its own unit, and the
+    /// group's parentheses stay where they were.
+    #[test]
+    fn specs_of_a_go_group_merge_apart() {
+        let merge = |o: &str, t: &str| merge_text_at(5, "a.go", GROUP, o, t);
+        let (edit_a, edit_b) = (
+            GROUP.replace("A = 1", "A = 10"),
+            GROUP.replace("B = 2", "B = 20"),
+        );
+        let both = edit_a.replace("B = 2", "B = 20");
+        assert_eq!(merge(&edit_a, &edit_b).unwrap(), both);
+        assert_eq!(merge(&edit_b, &edit_a).unwrap(), both);
+        let same = merge(&edit_a, &GROUP.replace("A = 1", "A = 11"));
+        assert_eq!(same, Err(vec!["a.go#A".to_string()]));
+        // Additions beside the same spec, and one beside an edit.
+        let add = |n: &str| GROUP.replace("B = 2\n", &format!("B = 2\n\t{n} = 3\n"));
+        let m = merge(&add("C"), &add("D")).unwrap();
+        assert!(m.contains("\tC = 3\n") && m.contains("\tD = 3\n"), "{m}");
+        assert!(!parse_at(5, Lang::Go, &m).has_error, "{m}");
+        let want = add("C").replace("A = 1", "A = 10");
+        assert_eq!(merge(&edit_a, &add("C")).unwrap(), want);
+        // A deleted spec goes with its line.
+        let gone = GROUP.replace("\tB = 2\n", "");
+        assert_eq!(
+            merge(&edit_a, &gone).unwrap(),
+            gone.replace("A = 1", "A = 10")
+        );
+        // Added at the front, it stands before what it stood before.
+        let front = GROUP.replace("\tA = 1", "\tZ = 0\n\tA = 1");
+        let want = edit_b.replace("\tA = 1", "\tZ = 0\n\tA = 1");
+        assert_eq!(merge(&edit_b, &front).unwrap(), want);
+        // Engine 4 sees one symbol and refuses.
+        let c = merge_text_at(4, "a.go", GROUP, &edit_a, &edit_b);
+        assert_eq!(c, Err(vec!["a.go#A".to_string()]));
+    }
+
+    /// A new symbol never lands in or out of a group because of a neighbour
+    /// on the other side of its edge.
+    #[test]
+    fn a_new_symbol_stays_on_its_side_of_a_group() {
+        let merge = |o: &str, t: &str| merge_text_at(5, "a.go", GROUP, o, t);
+        let edit = GROUP.replace("A = 1", "A = 10");
+        // New function right after the group: not inside it.
+        let t = GROUP.replace(")\n\nfunc F", ")\n\nfunc N() {}\n\nfunc F");
+        assert_eq!(merge(&edit, &t).unwrap(), t.replace("A = 1", "A = 10"));
+        // New function after the group at the end of the file.
+        let b = "package p\n\nconst (\n\tA = 1\n)\n";
+        let (o, t) = (
+            b.replace("A = 1", "A = 10"),
+            format!("{b}\nfunc N() {{}}\n"),
+        );
+        let m = merge_text_at(5, "a.go", b, &o, &t).unwrap();
+        assert_eq!(m, format!("{o}\nfunc N() {{}}\n"));
+        // A new spec whose neighbour is gone in `o` has nothing to stand
+        // beside, and must not stand beside the function.
+        let o = GROUP.replace("\tA = 1\n\tB = 2\n", "");
+        let t = GROUP.replace("B = 2\n", "B = 2\n\tC = 3\n");
+        assert_eq!(merge(&o, &t), Err(vec!["a.go#<file>".to_string()]));
+        // `o` took it out of the group: the same.
+        let o = GROUP
+            .replace("\tA = 1\n\tB = 2\n", "")
+            .replace("const (\n)\n", "const A = 1\n\nconst B = 2\n");
+        assert_eq!(merge(&o, &t), Err(vec!["a.go#<file>".to_string()]));
+        // A whole new group is new code, for the line merge.
+        let t = GROUP.replace("func F", "var (\n\tv = 1\n\tw = 2\n)\n\nfunc F");
+        let m = merge(&edit, &t).unwrap();
+        assert_eq!(m, t.replace("A = 1", "A = 10"));
+    }
+
+    /// A list with separators: what is added or removed brings them along.
+    #[test]
+    fn a_list_with_separators_keeps_them() {
+        let b = "class C {\n    int a, b;\n    void M() { }\n}\n";
+        let merge = |o: &str, t: &str| merge_text_at(5, "a.cs", b, o, t);
+        let (edit, add) = (
+            b.replace("void M() { }", "void M() { X(); }"),
+            b.replace("int a, b;", "int a, b, c;"),
+        );
+        let want = add.replace("void M() { }", "void M() { X(); }");
+        assert_eq!(merge(&edit, &add).unwrap(), want);
+        let front = b.replace("int a, b;", "int z, a, b;");
+        let want = front.replace("void M() { }", "void M() { X(); }");
+        assert_eq!(merge(&edit, &front).unwrap(), want);
+
+        let b = "class C { int a, b, c; }\n";
+        let merge = |o: &str, t: &str| merge_text_at(5, "a.cs", b, o, t);
+        let (o, t) = (b.replace("a,", "a = 1,"), b.replace("a, b, c", "a, c"));
+        assert_eq!(merge(&o, &t).unwrap(), "class C { int a = 1, c; }\n");
+        let t = b.replace("a, b, c", "a, b");
+        assert_eq!(merge(&o, &t).unwrap(), "class C { int a = 1, b; }\n");
+        let t = b.replace("a, b, c", "b, c");
+        let o = b.replace(", c", ", c = 3");
+        assert_eq!(merge(&o, &t).unwrap(), "class C { int b, c = 3; }\n");
+
+        // `module.exports`, added on both sides and with a trailing comma.
+        let b = "module.exports = {\n  a() {},\n  b() {},\n};\n";
+        let add = |n: &str| b.replace("  b() {},\n", &format!("  b() {{}},\n  {n}() {{}},\n"));
+        let m = merge_text_at(5, "a.js", b, &add("c"), &add("d")).unwrap();
+        assert!(!parse_at(5, Lang::JavaScript, &m).has_error, "{m}");
+        assert_eq!(
+            names(&parse_at(5, Lang::JavaScript, &m).syms),
+            ["a", "b", "d", "c"],
+            "{m}"
+        );
+        let t = b.replace("  a() {},\n", "");
+        let o = b.replace("b() {}", "b() { x(); }");
+        let m = merge_text_at(5, "a.js", b, &o, &t).unwrap();
+        assert_eq!(m, "module.exports = {\n  b() { x(); },\n};\n");
+        // The last one takes the separator before it.
+        let b = "module.exports = { a() {}, b() {} };\n";
+        let (o, t) = (
+            b.replace("a() {}", "a() { x(); }"),
+            "module.exports = { a() {} };\n",
+        );
+        let m = merge_text_at(5, "a.js", b, &o, t).unwrap();
+        assert_eq!(m, "module.exports = { a() { x(); } };\n");
+    }
+
+    /// Blocks hold what they hold: a neighbour in another branch is no place
+    /// for a new definition.
+    #[test]
+    fn a_new_definition_stays_in_its_block() {
+        let b = "if A:\n    def f():\n        return 1\nelse:\n    def g():\n        return 2\n";
+        let merge = |o: &str, t: &str| merge_text_at(5, "a.py", b, o, t);
+        let edit = b.replace("return 1", "return 10");
+        let add = b.replace(
+            "else:\n    def g",
+            "else:\n    def h():\n        return 3\n\n    def g",
+        );
+        assert_eq!(
+            merge(&edit, &add).unwrap(),
+            add.replace("return 1", "return 10")
+        );
+        let top = format!("def n():\n    return 4\n\n{b}");
+        let m = merge(&edit, &top).unwrap();
+        assert_eq!(m, top.replace("return 1", "return 10"));
+        // An edit under `if`, with a block on each side.
+        let other = b.replace("return 2", "return 20");
+        let both = edit.replace("return 2", "return 20");
+        assert_eq!(merge(&edit, &other).unwrap(), both);
+        // A deletion that empties a block can not stay in place.
+        let b = "if A:\n    def f():\n        pass\n\ndef g():\n    return 1\n";
+        let o = b.replace("return 1", "return 10");
+        let t = "if A:\n    pass\n\ndef g():\n    return 1\n";
+        assert_eq!(
+            merge_text_at(5, "a.py", b, &o, t).unwrap(),
+            t.replace("return 1", "return 10")
+        );
+    }
+
+    /// Up to engine 4 a new class could land in the namespace before it.
+    #[test]
+    fn a_new_type_stays_in_its_namespace() {
+        let b = "namespace A {\n    class C { }\n}\nnamespace B {\n    class D { }\n}\n";
+        let t = b.replace("namespace B {\n", "namespace B {\n    class N { }\n");
+        let o = b.replace("class D { }", "class D { int x; }");
+        let want = o.replace("namespace B {\n", "namespace B {\n    class N { }\n");
+        assert_eq!(merge_text_at(5, "a.cs", b, &o, &t).unwrap(), want);
+    }
+
+    #[test]
+    fn comments_that_stand_apart_merge_as_code() {
+        let b = "// section\n\nfn a() {}\n\nfn b() {}\n";
+        let (o, t) = (
+            b.replace("section", "part"),
+            b.replace("fn a() {}", "fn a() { x(); }"),
+        );
+        let want = o.replace("fn a() {}", "fn a() { x(); }");
+        assert_eq!(merge_text_at(5, "a.rs", b, &o, &t).unwrap(), want);
+        assert_eq!(merge_text_at(5, "a.rs", b, &t, &o).unwrap(), want);
+        let c = merge_text_at(4, "a.rs", b, &o, &t);
+        assert_eq!(c, Err(vec!["a.rs#a".to_string()]));
+    }
+
+    /// A decorator is the method's: a different one conflicts on the method
+    /// and never on the class, and the method beside it is free.
+    #[test]
+    fn method_decorators_merge_with_their_method() {
+        let b = "class C {\n  @A()\n  a() {}\n\n  b() {}\n}\n";
+        let merge = |o: &str, t: &str| merge_text_at(5, "a.ts", b, o, t);
+        let deco = b.replace("@A()", "@A(1)");
+        let body = b.replace("b() {}", "b() { x(); }");
+        let want = deco.replace("b() {}", "b() { x(); }");
+        assert_eq!(merge(&deco, &body).unwrap(), want);
+        assert_eq!(merge(&body, &deco).unwrap(), want);
+        let c = merge(&deco, &b.replace("@A()", "@A(2)"));
+        assert_eq!(c, Err(vec!["a.ts#C.a".to_string()]));
+        let c = merge_text_at(4, "a.ts", b, &deco, &b.replace("@A()", "@A(2)"));
+        assert_eq!(c, Err(vec!["a.ts#C.<def>".to_string()]));
+    }
+
+    #[test]
+    fn the_parts_of_a_partial_type_conflict_as_one_definition() {
+        let b = "partial class C { int a; }\npartial class C { int b; }\n";
+        let merge = |o: &str, t: &str| merge_text_at(5, "a.cs", b, o, t);
+        let (o, t) = (b.replace("int a", "int a1"), b.replace("int b", "int b1"));
+        assert_eq!(merge(&o, &t).unwrap(), o.replace("int b", "int b1"));
+        let edit = |name: &str| {
+            let (a, c) = b.split_once('\n').unwrap();
+            format!("{a}\n{}\n", c.replace("partial class C", name))
+        };
+        let c = merge(&edit("partial class C : I"), &edit("partial class C : J"));
+        assert_eq!(c, Err(vec!["a.cs#C.<def>".to_string()]));
+    }
+
+    /// Between two symbols of a list can stand what is no symbol. It stays.
+    #[test]
+    fn a_deletion_in_a_list_takes_only_its_member() {
+        let merge = |b: &str, o: &str, t: &str| merge_text_at(5, "a.js", b, o, t).unwrap();
+        let b = "module.exports = {\n  a() {},\n  VERSION: 1,\n  b() {},\n};\n";
+        let t = b.replace("  a() {},\n", "");
+        let o = b.replace("b() {}", "b() { x(); }");
+        assert_eq!(merge(b, &o, &t), t.replace("b() {}", "b() { x(); }"));
+        let t = b.replace("  b() {},\n", "");
+        let o = b.replace("a() {}", "a() { x(); }");
+        assert_eq!(merge(b, &o, &t), t.replace("a() {}", "a() { x(); }"));
+        for keep in ["helper", "...base", "'s': 1", "[k]: 2", "// section\n"] {
+            let sep = if keep.ends_with('\n') { "" } else { "," };
+            let b = format!("module.exports = {{\n  a() {{}},\n  {keep}{sep}\n  b() {{}},\n}};\n");
+            let t = b.replace("  a() {},\n", "");
+            let o = b.replace("b() {}", "b() { x(); }");
+            assert_eq!(
+                merge(&b, &o, &t),
+                t.replace("b() {}", "b() { x(); }"),
+                "{keep}"
+            );
+        }
+        // What `o` put there is no less there.
+        let b = "module.exports = {\n  a() {},\n  b() {},\n};\n";
+        let o = "module.exports = {\n  a() {},\n  KEY: 2,\n  b() { x(); },\n};\n";
+        let t = "module.exports = {\n  b() {},\n};\n";
+        assert!(merge_text_at(5, "a.js", b, o, t).is_ok_and(|m| m.contains("KEY")));
+        let b = "class C\n{\n    int a,\n\n        // section\n\n        b,\n        c;\n}\n";
+        let t = b.replace("int a,\n\n        ", "int ");
+        let o = b.replace("c;", "c = 3;");
+        let m = merge_text_at(5, "a.cs", b, &o, &t).unwrap();
+        assert!(m.contains("section"), "{m}");
+    }
+
+    #[test]
+    fn a_new_member_of_a_list_copies_nothing() {
+        let b = "module.exports = {\n  a,\n  b,\n  c() {},\n};\n";
+        let o = b.replace("c() {}", "c() { x(); }");
+        let t = b.replace("  a,\n", "  n() {},\n  a,\n");
+        let m = merge_text_at(5, "a.js", b, &o, &t).unwrap();
+        assert_eq!(m.matches("  a,\n").count(), 1, "{m}");
+        assert_eq!(m.matches("  b,\n").count(), 1, "{m}");
+        assert!(m.contains("n() {}") && m.contains("x();"), "{m}");
+        // Between two keys no symbol marks its place: lines can, on lines.
+        let b = "module.exports = {\n  a() {},\n  g: 1,\n  h: 2,\n  b() {},\n};\n";
+        let o = b.replace("a() {}", "a() { x(); }");
+        let t = b.replace("  h: 2", "  n() {},\n  h: 2");
+        let want = o.replace("  h: 2", "  n() {},\n  h: 2");
+        assert_eq!(merge_text_at(5, "a.js", b, &o, &t).unwrap(), want);
+        let b = "module.exports = { a() {}, g: 1, h: 2, b() {} };\n";
+        let o = b.replace("a() {}", "a() { x(); }");
+        let t = b.replace("h: 2", "n() {}, h: 2");
+        let c = Err(vec!["a.js#<file>".to_string()]);
+        assert_eq!(merge_text_at(5, "a.js", b, &o, &t), c);
+    }
+
+    /// One definition, added to two different blocks, is two changes.
+    #[test]
+    fn the_same_definition_in_another_block_is_not_the_same_addition() {
+        let b = "if A:\n    def a():\n        return 1\nelse:\n    def b():\n        return 2\n";
+        let f = "\n\n    def f():\n        return 9\n";
+        let o = b.replace("if A:", "if AA:").replace(
+            "return 1",
+            &format!("return 1{f}").replacen("\n\n", "\n\n", 1),
+        );
+        let t = b
+            .replace("return 1", "return 10")
+            .replace("return 2", &format!("return 2{f}"));
+        let m = merge_text_at(5, "a.py", b, &o, &t);
+        assert!(
+            m.is_err() || m.as_ref().unwrap().matches("def f").count() == 2,
+            "{m:?}"
+        );
+        // In the same block it is one addition.
+        let t = b.replace("return 1", &format!("return 1{f}"));
+        let o = t.replace("if A:", "if AA:");
+        assert_eq!(merge_text_at(5, "a.py", b, &o, &t).unwrap(), o);
+    }
+
+    /// `f~2` is a number, and code added in front of it changes who that is.
+    #[test]
+    fn a_numbered_name_in_a_block_does_not_follow_the_number() {
+        let b = "if A:\n    def f():\n        return 1\nelse:\n    def f():\n        return 2\n";
+        let o = b.replace("else:", "elif B:\n    def f():\n        return 2\nelse:");
+        let t = b.replace(
+            "else:\n    def f():\n        return 2",
+            "else:\n    def f():\n        return 20",
+        );
+        let want = o.replace(
+            "else:\n    def f():\n        return 2",
+            "else:\n    def f():\n        return 20",
+        );
+        assert_eq!(merge_text_at(5, "a.py", b, &o, &t), Ok(want));
+    }
+
+    /// A new symbol behind a block or a list stays behind it.
+    #[test]
+    fn a_new_symbol_does_not_jump_over_a_holder() {
+        let b = "def a():\n    pass\n\nif X:\n    def deco():\n        pass\n\ndef z():\n    pass\n\nprint(1)\n";
+        let o = b.replace("print(1)", "print(2)");
+        let t = b.replace("def z", "@deco\ndef n():\n    pass\n\ndef z");
+        let want = o.replace("def z", "@deco\ndef n():\n    pass\n\ndef z");
+        assert_eq!(merge_text_at(5, "a.py", b, &o, &t).unwrap(), want);
+        let b = "class C\n{\n    void L() { }\n    // keep\n    int a, b;\n    void M() { }\n}\n";
+        let o = b.replace("// keep", "// kept");
+        let t = b.replace("    void M", "    int c;\n    void M");
+        let want = o.replace("    void M", "    int c;\n    void M");
+        assert_eq!(merge_text_at(5, "a.cs", b, &o, &t).unwrap(), want);
+        let b = "class C\n{\n    void L() { }\n    int a, b;\n    void M() { }\n}\n";
+        let o = b.replace("int a, b", "int a = 1, b");
+        let t = b.replace("    void M", "    int c;\n    void M");
+        let want = o.replace("    void M", "    int c;\n    void M");
+        assert_eq!(merge_text_at(5, "a.cs", b, &o, &t).unwrap(), want);
+    }
+
+    /// A comment behind code on its line is about that code.
+    #[test]
+    fn a_trailing_comment_stays_with_its_line() {
+        let b = "package p\n\nconst (\n\tA = 1 // first\n\tB = 2 // second\n\tC = 3\n)\n";
+        let o = b.replace("A = 1", "A = 10");
+        let t = b.replace("\tB = 2 // second\n", "");
+        let want = t.replace("A = 1", "A = 10");
+        assert_eq!(merge_text_at(5, "a.go", b, &o, &t).unwrap(), want);
+        let b = "package p\n\nconst (\n\tA = 1 // first\n)\n";
+        let o = b.replace("// first\n", "// first\n\tB = 2\n");
+        let t = b.replace("// first\n", "// first\n\tC = 3\n");
+        let m = merge_text_at(5, "a.go", b, &o, &t).unwrap();
+        assert_eq!(m.matches("first").count(), 1, "{m}");
+    }
+
+    /// One member in two parts of a type, with no side having both.
+    #[test]
+    fn a_name_no_side_has_is_no_merge() {
+        let b = "partial class C\n{\n    int a;\n}\n\npartial class C\n{\n    int b;\n}\n";
+        let o = b.replace("int a;", "int a;\n    int x;");
+        let t = b.replace("int b;", "int b;\n    long x;");
+        let c = Err(vec!["a.cs#<file>".to_string()]);
+        assert_eq!(merge_text_at(5, "a.cs", b, &o, &t), c);
+        assert_eq!(merge_text_at(5, "a.cs", b, &t, &o), c);
+    }
+
+    #[test]
+    fn a_neighbour_in_another_kind_of_group_is_no_place() {
+        let b = "package p\n\nconst (\n\tA = 1\n\tB = 2\n)\n\nvar (\n\tv = 1\n)\n";
+        let o = b
+            .replace("\tB = 2\n", "")
+            .replace("v = 1\n", "v = 1\n\tB = 2\n");
+        let t = b.replace("B = 2\n", "B = 2\n\tC = B + 1\n");
+        let m = merge_text_at(5, "a.go", b, &o, &t);
+        assert!(m.as_ref().is_err() || !m.unwrap().contains("var (\n\tv = 1\n\tB = 2\n\tC"));
+    }
+
+    /// Numbers in names do not switch off what the code around them says.
+    #[test]
+    fn a_numbered_file_still_conflicts_on_its_code() {
+        let b = "try:\n    def f():\n        return 1\nexcept E:\n    def f():\n        return 2\n\nprint(1)\n\ndef g():\n    return 3\n\ndef h():\n    return 4\n";
+        let o = b
+            .replace("print(1)\n\n", "")
+            .replace("def h", "print(1)\n\ndef h");
+        let moved_on = format!("{}\nprint(1)\n", b.replace("print(1)\n\n", ""));
+        let deleted = b.replace("print(1)\n\n", "");
+        let c = Err(vec!["a.py#<module>".to_string()]);
+        for t in [&moved_on, &deleted] {
+            assert_eq!(merge_text_at(5, "a.py", b, &o, t), c, "{t}");
+            assert_eq!(merge_text_at(5, "a.py", b, t, &o), c, "{t}");
+        }
+        // Code that only changed leaves every number as it was.
+        let b = "try:\n    def f():\n        return 1\nexcept E:\n    def f():\n        return 2\n";
+        let (o, t) = (
+            b.replace("except E", "except F"),
+            b.replace("return 1", "return 10"),
+        );
+        let want = o.replace("return 1", "return 10");
+        assert_eq!(merge_text_at(5, "a.py", b, &o, &t).unwrap(), want);
+        // The other way round the code is `t`'s, and adjacent lines refuse.
+        let c = Err(vec!["a.py#<file>".to_string()]);
+        assert_eq!(merge_text_at(5, "a.py", b, &t, &o), c);
+    }
+
+    /// A number can change meaning with as many of the name as before: what
+    /// counts is which block each one stands in.
+    #[test]
+    fn a_number_is_held_to_its_block() {
+        // To lines `o` only wrote a branch in front of the one `t` edited, so
+        // that is how it reads: the choice is the line merge's, not a number's.
+        let b = "if A:\n    def f():\n        return 1\nelse:\n    def f():\n        return 1\n";
+        let o = "if A:\n    pass\nelif B:\n    def f():\n        return 1\nelse:\n    def f():\n        return 1\n";
+        let t = b.replacen("return 1", "return 10", 1);
+        let want = o.replacen("return 1", "return 10", 1);
+        assert_eq!(merge_text_at(5, "a.py", b, o, &t).unwrap(), want);
+        assert_eq!(merge_around_conflicts(5, "a.py", b, o, &t), None);
+        // One moved to the other block: a new symbol beside it does not follow.
+        let b = "if A:\n    def f():\n        return 1\nelse:\n    def f():\n        return 2\n";
+        let o = "if A:\n    pass\nelse:\n    def f():\n        return 2\n\n    def f():\n        return 3\n";
+        let t = b.replacen(
+            "return 1\n",
+            "return 1\n\n    def h():\n        return 9\n",
+            1,
+        );
+        let m = merge_text_at(5, "a.py", b, o, &t);
+        assert!(
+            m.is_err() || m.unwrap().contains("if A:\n    pass\n\n    def h"),
+            "{t}"
+        );
+        // Deeper than the top level, and a block that went with no count to see.
+        let b = "mod q {\n    extern \"C\" {\n        fn f();\n    }\n\n    extern \"system\" {\n        fn f();\n    }\n}\n";
+        let o = b.replace(
+            "    extern \"system\"",
+            "    extern \"cdecl\" {\n        fn f();\n    }\n\n    extern \"system\"",
+        );
+        let t = b.replace(
+            "\"system\" {\n        fn f();",
+            "\"system\" {\n        fn f(x: u8);",
+        );
+        let want = o.replace(
+            "\"system\" {\n        fn f();",
+            "\"system\" {\n        fn f(x: u8);",
+        );
+        assert_eq!(merge_text_at(5, "a.rs", b, &o, &t).unwrap(), want);
+        assert_eq!(merge_around_conflicts(5, "a.rs", b, &o, &t), None);
+        let b = "extern \"C\" {\n    fn f();\n}\n\nextern \"D\" {\n    fn f();\n}\n";
+        let o = "extern \"Z\" {\n}\n\nextern \"C\" {\n    fn f();\n}\n\nextern \"D\" {\n    fn f();\n}\n";
+        let t = b.replace("\"D\" {\n    fn f();", "\"D\" {\n    fn f(x: u8);");
+        let m = merge_text_at(5, "a.rs", b, o, &t).unwrap();
+        assert!(m.contains("\"D\" {\n    fn f(x: u8);"), "{m}");
+    }
+
+    /// The checks at the end of `holds_up`, on text no merge writes now.
+    #[test]
+    fn a_result_must_hold_code_of_a_side() {
+        let side = |text| parse_at(5, Lang::Python, text);
+        let b = "x = 1\n\nclass A:\n    y = 1\n\n    class B:\n        z = 1\n";
+        let (pb, po, pt) = (
+            side(b),
+            side(&b.replace("y = 1", "y = 2")),
+            side(&b.replace("z = 1", "z = 2")),
+        );
+        let held =
+            |engine, text: &str| holds_up(engine, "a.py", Lang::Python, text, [&pb, &po, &pt], &[]);
+        let fine = b.replace("y = 1", "y = 2").replace("z = 1", "z = 2");
+        assert!(held(5, &fine));
+        // Code of no side, outside every symbol, in a type and deeper.
+        let outer = fine.replace("x = 1", "x = 3");
+        let own = fine.replace("y = 2", "y = 3");
+        let inner = fine.replace("z = 2", "z = 3");
+        for third in [&outer, &own, &inner] {
+            assert!(!held(5, third), "{third}");
+            assert!(held(4, third), "{third}");
+        }
+    }
+
+    #[test]
+    fn a_third_kind_of_code_is_seen_at_any_depth() {
+        let syms = |text: &str| parse_at(5, Lang::Python, text).syms;
+        let b = "class A:\n    y = 1\n\n    class B:\n        z = 1\n";
+        let (o, t) = (
+            syms(&b.replace("y = 1", "y = 2")),
+            syms(&b.replace("z = 1", "z = 2")),
+        );
+        let kept = |text: String| own_from_a_side(5, [&o, &t], &syms(&text));
+        assert!(kept(b.replace("y = 1", "y = 2").replace("z = 1", "z = 2")));
+        assert!(!kept(b.replace("y = 1", "y = 3")));
+        assert!(!kept(b.replace("y = 1", "y = 2").replace("z = 1", "z = 3")));
+        // A container one side has not is that side's to add.
+        assert!(kept(format!("{b}\nclass N:\n    n = 1\n")));
+    }
+
+    /// A symbol that two sides moved apart is two symbols, and no side has
+    /// the second.
+    #[test]
+    fn a_name_no_side_has_stops_a_line_merge_too() {
+        let z = "fn z() {}\n\n";
+        let b = format!("{z}fn a() {{}}\n\nfn b() {{}}\n\nfn c() {{}}\n\nfn d() {{}}\n");
+        let o = b
+            .replace(z, "")
+            .replace("fn b() {}\n\n", &format!("fn b() {{}}\n\n{z}"));
+        let t = format!("{}\n{}", b.replace(z, ""), z.trim_end());
+        let t = format!("{t}\n");
+        let m = merge_text_at(4, "a.rs", &b, &o, &t);
+        assert_eq!(
+            m.as_ref().map(|m| m.matches("fn z").count()),
+            Ok(2),
+            "{m:?}"
+        );
+        let c = Err(vec!["a.rs#<file>".to_string()]);
+        assert_eq!(merge_text_at(5, "a.rs", &b, &o, &t), c);
+    }
+
+    /// With nothing around it, a new symbol gets a line of its own: a blank
+    /// one between items, none between members.
+    #[test]
+    fn a_new_symbol_written_on_the_same_line_gets_its_own() {
+        let (b, o) = ("fn a() {}\n", "fn a() { x(); }\n");
+        let m = merge_text_at(5, "a.rs", b, o, "fn a() {}fn n() {}\n").unwrap();
+        assert_eq!(m, "fn a() { x(); }\n\nfn n() {}\n");
+        let b = "impl S {\n    fn a() {}\n}\n";
+        let o = b.replace("fn a() {}", "fn a() { x(); }");
+        let t = b.replace("fn a() {}", "fn a() {}fn n() {}");
+        let m = merge_text_at(5, "a.rs", b, &o, &t).unwrap();
+        assert_eq!(m, "impl S {\n    fn a() { x(); }\nfn n() {}\n}\n");
+        // In front of its neighbour, the same.
+        let t = b.replace("fn a() {}", "fn n() {}fn a() {}");
+        let m = merge_text_at(5, "a.rs", b, &o, &t).unwrap();
+        assert_eq!(m, "impl S {\n    fn n() {}\nfn a() { x(); }\n}\n");
+        let (b, o) = ("fn a() {}\n", "fn a() { x(); }\n");
+        let m = merge_text_at(5, "a.rs", b, o, "fn n() {}fn a() {}\n").unwrap();
+        assert_eq!(m, "fn n() {}\n\nfn a() { x(); }\n");
+    }
+
+    #[test]
+    fn the_same_addition_needs_the_same_place() {
+        // Beside nothing that holds it: one addition.
+        let b = "fn a() {}\n\nfn b() {}\n";
+        let n = "\nfn n() {}\n";
+        let o = format!("{}{n}", b.replace("fn a() {}", "fn a() { x(); }"));
+        let t = format!("{}{n}", b.replace("fn b() {}", "fn b() { y(); }"));
+        let want = o.replace("fn b() {}", "fn b() { y(); }");
+        assert_eq!(merge_text_at(5, "a.rs", b, &o, &t).unwrap(), want);
+        // In a block on one side and not on the other: two.
+        let b = "def a():\n    return 1\n\nif A:\n    def g():\n        return 2\n";
+        let o = b.replace("def a", "def f():\n    return 9\n\ndef a");
+        let t = b.replace("    def g", "    def f():\n        return 9\n\n    def g");
+        let c = merge_text_at(5, "a.py", b, &o, &t);
+        assert!(c.is_err() || c.unwrap().matches("def f").count() == 2);
+        // With a neighbour on one side only, the file up to the block decides.
+        let b = "if A:\n    pass\n";
+        let o = format!("{b}\n    def f():\n        return 9\n");
+        let t = format!("{o}\n    def g():\n        return 1\n");
+        assert_eq!(merge_text_at(5, "a.py", b, &o, &t).unwrap(), t);
+    }
+
+    /// With no neighbour to go by, two empty blocks are not one.
+    #[test]
+    fn the_same_definition_alone_in_two_blocks_is_two_changes() {
+        let b = "def z():\n    return 1\n\nif A:\n    pass\nelse:\n    pass\n";
+        let f = "    pass\n\n    def f():\n        return 9\n";
+        let o = b.replacen("    pass\n", f, 1).replace("if A:", "if AA:");
+        let i = b.rfind("    pass\n").unwrap();
+        let t = format!("{}{f}", &b[..i]).replace("return 1", "return 10");
+        let m = merge_text_at(5, "a.py", b, &o, &t);
+        assert!(
+            m.is_err() || m.as_ref().unwrap().matches("def f").count() == 2,
+            "{m:?}"
+        );
+        // The same addition in the same empty block is one addition.
+        let t = format!("{}{f}", &b[..i]);
+        let m = merge_text_at(5, "a.py", b, &t, &t.clone());
+        assert_eq!(m.unwrap(), t);
+        let b = "package p\n\nfunc Z() {}\n\nconst (\n)\n\nvar (\n)\n";
+        let o = b
+            .replace("const (\n", "const (\n\tX = 1\n")
+            .replace("Z() {}", "Z() { a() }");
+        let t = b
+            .replace("var (\n", "var (\n\tX = 1\n")
+            .replace("package p", "package q");
+        let m = merge_text_at(5, "a.go", b, &o, &t);
+        assert!(
+            m.is_err() || m.as_ref().unwrap().matches("X = 1").count() == 2,
+            "{m:?}"
+        );
+    }
+
+    /// Where a comment behind code starts is layout, as `gofmt` moves it.
+    #[test]
+    fn the_space_in_front_of_a_trailing_comment_is_layout() {
+        let b = "package p\n\nconst (\n\tA = 1  // a\n\tB = 20 // b\n)\n";
+        let o = "package p\n\nconst (\n\tA = 1   // a\n\tB = 20  // b\n\tC = 300 // c\n)\n";
+        let t = b.replace("A = 1 ", "A = 10");
+        let m = merge_text_at(5, "a.go", b, o, &t).unwrap();
+        assert!(m.contains("A = 10") && m.contains("C = 300 // c"), "{m}");
+        let m = merge_text_at(5, "a.go", b, &t, o).unwrap();
+        assert!(m.contains("A = 10") && m.contains("C = 300 // c"), "{m}");
+    }
+
+    /// In a list, order against what is no symbol can matter.
+    #[test]
+    fn a_new_member_does_not_jump_over_what_is_no_symbol() {
+        let b = "module.exports = {\n  ...base,\n  v: 1,\n  c() {},\n};\n";
+        let o = b.replace("v: 1", "v: 2");
+        let t = b.replace("  ...base", "  n() {},\n  ...base");
+        let want = o.replace("  ...base", "  n() {},\n  ...base");
+        assert_eq!(merge_text_at(5, "a.js", b, &o, &t).unwrap(), want);
+        assert_eq!(merge_text_at(5, "a.js", b, &t, &o).unwrap(), want);
     }
 
     const MODULE: &str = "a = 1\n\ndef f():\n    return 1\n\nprint(a)\n\ndef g():\n    return 2\n\ndef h():\n    return 3\n\ndef i():\n    return 4\n\ndef j():\n    return 5\n";

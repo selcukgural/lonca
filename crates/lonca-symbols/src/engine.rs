@@ -26,8 +26,8 @@ use lonca_core::{Error, Result};
 /// only a change that is an edit of lines, and merges lines by their own
 /// rules; version 10 reads Java, Kotlin, C, C++, Ruby, PHP and Swift; version
 /// 11 gives every declaration a signature and lists what mentions the names a
-/// change takes away.
-pub const ENGINE_CURRENT: u32 = 11;
+/// change takes away; version 12 reads symbols down to a depth.
+pub const ENGINE_CURRENT: u32 = 12;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -75,8 +75,12 @@ pub const ENGINE_LANGUAGES: u32 = 10;
 /// `affected` in facts.
 pub const ENGINE_SIGNATURES: u32 = 11;
 
+/// The first engine that reads symbols and tests down to a depth only, and
+/// leaves what stands deeper as text of what is around it.
+pub const ENGINE_LEVELS: u32 = 12;
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

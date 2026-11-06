@@ -13,7 +13,8 @@ use tree_sitter::Node;
 use lonca_core::ops::DEF;
 
 use crate::engine::{
-    ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_SIGNATURES,
+    ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LEVELS,
+    ENGINE_SIGNATURES,
 };
 use crate::lang::{
     CallTests, DefHow, DefRule, GroupHow, GroupRule, ImportCalls, Lang, Marked, Partial, Rules,
@@ -37,6 +38,11 @@ const TYPE_KINDS: &[&str] = &[
     "enum_declaration",
     "record_declaration",
 ];
+
+/// How deep symbols nest, and tests in `describe`s. What stands deeper is text
+/// of the symbol around it: names grow with the depth, and everything that
+/// walks symbols goes down with it. Code people write stays far above this.
+pub(crate) const MAX_LEVELS: usize = 32;
 
 /// Fields that hold what a declaration is set to, which hold across
 /// tree-sitter grammars as [`TYPE_KINDS`] do.
@@ -414,7 +420,8 @@ type Mark<'a> = (usize, usize, &'a str);
 /// indentation that means something is in the tree and whitespace in a
 /// string is in the token. A holder stays, also with one member and so the
 /// span of that member, and the commas of a list go with their members: a
-/// member added or removed changes no code around it.
+/// member added or removed changes no code around it. With a stack of its
+/// own, as [`comments_in`], where `None` closes a named node.
 fn exact_text(
     n: Node,
     src: &str,
@@ -423,36 +430,40 @@ fn exact_text(
     out: &mut String,
     spots: &mut Vec<Spot>,
 ) {
-    let (start, end) = (n.start_byte(), n.end_byte());
-    let same = |h: &&Holder| h.start == start && h.end == end && h.kind == n.kind_id();
-    let holder = holders.iter().find(same);
-    let cut_here = cut.iter().find(|&&(s, e, _)| s <= start && end <= e);
-    if let (Some(&(.., name)), None) = (cut_here, holder) {
-        if spots.last().is_none_or(|last| last.name != name) {
-            spots.push(Spot {
-                at: out.len(),
-                name: name.to_string(),
-            });
+    let mut stack = vec![Some(n)];
+    while let Some(step) = stack.pop() {
+        let Some(n) = step else {
+            out.push(')');
+            continue;
+        };
+        let (start, end) = (n.start_byte(), n.end_byte());
+        let same = |h: &&Holder| h.start == start && h.end == end && h.kind == n.kind_id();
+        let holder = holders.iter().find(same);
+        let cut_here = cut.iter().find(|&&(s, e, _)| s <= start && end <= e);
+        if let (Some(&(.., name)), None) = (cut_here, holder) {
+            if spots.last().is_none_or(|last| last.name != name) {
+                spots.push(Spot {
+                    at: out.len(),
+                    name: name.to_string(),
+                });
+            }
+            continue;
         }
-        return;
-    }
-    if n.child_count() == 0 || is_verbatim(n.kind()) {
-        out.push_str(&src[start..end]);
-        out.push('\u{1f}');
-        return;
-    }
-    if n.is_named() {
-        out.push_str(n.kind());
-        out.push('(');
-    }
-    let list = holder.is_some_and(|h| h.joined);
-    for c in n.children(&mut n.walk()) {
-        if !(list && c.kind() == ",") {
-            exact_text(c, src, cut, holders, out, spots);
+        if n.child_count() == 0 || is_verbatim(n.kind()) {
+            out.push_str(&src[start..end]);
+            out.push('\u{1f}');
+            continue;
         }
-    }
-    if n.is_named() {
-        out.push(')');
+        if n.is_named() {
+            out.push_str(n.kind());
+            out.push('(');
+            stack.push(None);
+        }
+        let list = holder.is_some_and(|h| h.joined);
+        let mut cursor = n.walk();
+        let parts: Vec<Node> = n.children(&mut cursor).collect();
+        let parts = parts.into_iter().rev();
+        stack.extend(parts.filter(|c| !(list && c.kind() == ",")).map(Some));
     }
 }
 
@@ -822,15 +833,19 @@ fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
     n.named_children(&mut n.walk()).collect()
 }
 
-/// The blocks of a statement, its clauses included.
-fn blocks<'t>(n: Node<'t>, block: &str, out: &mut Vec<Node<'t>>) {
-    for c in named(n) {
+/// The blocks of a statement, its clauses included, in order.
+fn blocks<'t>(n: Node<'t>, block: &str) -> Vec<Node<'t>> {
+    let mut out = Vec::new();
+    let mut stack = named(n);
+    stack.reverse();
+    while let Some(c) = stack.pop() {
         if c.kind() == block {
             out.push(c);
         } else {
-            blocks(c, block, out);
+            stack.extend(named(c).into_iter().rev());
         }
     }
+    out
 }
 
 /// `text`, a name with scopes, as a name of ours: a `.` for each scope, and
@@ -873,6 +888,8 @@ struct Extractor<'s> {
     /// Where each C# type name was first seen: its namespaces.
     scopes: RefCell<BTreeMap<String, String>>,
     groups_seen: Cell<u32>,
+    /// How many levels are being read.
+    levels: Cell<usize>,
     keyed: &'s Keyed,
     /// Set for a round that only counts names.
     census: Option<RefCell<Census>>,
@@ -892,9 +909,15 @@ impl<'s> Extractor<'s> {
             src,
             scopes: RefCell::default(),
             groups_seen: Cell::new(0),
+            levels: Cell::new(0),
             keyed,
             census: census.map(RefCell::new),
         }
+    }
+
+    /// Whether what stands inside the deepest of `levels` is read.
+    fn reads_below(&self, levels: usize) -> bool {
+        self.engine < ENGINE_LEVELS || levels < MAX_LEVELS
     }
 
     fn text(&self, n: Node) -> &'s str {
@@ -987,8 +1010,7 @@ impl<'s> Extractor<'s> {
                 many.then(|| Group::joined(decl))
             }
             GroupHow::Blocks { block, defs, plain } => {
-                let mut list = Vec::new();
-                blocks(n, block, &mut list);
+                let list = blocks(n, block);
                 let stated: Vec<Node> = list.iter().flat_map(|b| named(*b)).collect();
                 let is_def = |c: &Node| is_one_of(defs, c.kind());
                 let is_plain = |c: &Node| is_one_of(plain, c.kind());
@@ -1361,6 +1383,8 @@ impl<'s> Extractor<'s> {
         seen: &mut BTreeMap<String, usize>,
         holder: Option<Holder>,
     ) {
+        self.levels.set(self.levels.get() + 1);
+        let reads_below = self.reads_below(self.levels.get());
         let mut pending: Option<usize> = None;
         // The first of `pending` that a blank line does not part from it.
         let mut firm: Option<usize> = None;
@@ -1398,7 +1422,8 @@ impl<'s> Extractor<'s> {
                 imports.push((attached.unwrap_or(child.start_byte()), child.end_byte()));
                 continue;
             }
-            if let Some(group) = self.group(child, prefix.is_empty()) {
+            let group = self.group(child, prefix.is_empty());
+            if let Some(group) = group.filter(|_| reads_below) {
                 let nth = self.groups_seen.replace(self.groups_seen.get() + 1);
                 for (i, members) in (0u32..).zip(group.members) {
                     let held = self
@@ -1444,8 +1469,9 @@ impl<'s> Extractor<'s> {
                 "" => name.clone(),
                 _ => format!("{prefix}.{name}"),
             };
+            let members = def.members.filter(|_| reads_below);
             let mut children_syms = Vec::new();
-            if let Some(m) = def.members {
+            if let Some(m) = members {
                 let member_prefix = match (&part_of, &def.member_prefix) {
                     (Some(whole), _) => whole.clone(),
                     // A trait's members are its own, the type's are shared.
@@ -1490,10 +1516,10 @@ impl<'s> Extractor<'s> {
             let marks: Vec<Mark> = marks.map(|s| (s.start, s.end, s.name.as_str())).collect();
             let mut own_exact = String::new();
             let mut spots = Vec::new();
-            let own = if def.members.is_some() {
+            let own = if members.is_some() {
                 own_exact.push_str(&self.src[start..child.start_byte()]);
                 let mut holders = holders_of(&children_syms);
-                let body = def.members.filter(|_| self.groups());
+                let body = members.filter(|_| self.groups());
                 holders.extend(body.map(|m| holder_of(m, false, (0, 0))));
                 exact_text(
                     child,
@@ -1529,10 +1555,11 @@ impl<'s> Extractor<'s> {
                 tail: None,
                 is_test,
                 skipped,
-                container: def.members.is_some(),
+                container: members.is_some(),
                 children: children_syms,
             });
         }
+        self.levels.set(self.levels.get() - 1);
     }
 
     /// What callers of a declaration depend on. Up to engine 10 only what has
@@ -1614,61 +1641,59 @@ impl<'s> Extractor<'s> {
     }
 
     /// `it("..")` / `test("..")` calls, named by their `describe` path.
+    /// With a stack of its own, as [`comments_in`], where `None` leaves a
+    /// `describe`.
     fn js_tests(&self, root: Node, calls: &CallTests) -> Vec<JsTest> {
         let mut out = Vec::new();
-        self.walk_calls(root, calls, &mut Vec::new(), false, &mut out);
-        out
-    }
-
-    fn walk_calls(
-        &self,
-        n: Node,
-        calls: &CallTests,
-        path: &mut Vec<String>,
-        skipped: bool,
-        out: &mut Vec<JsTest>,
-    ) {
-        if n.kind() == calls.call
-            && let Some((callee, modifier)) = self.callee(n, calls)
-        {
-            let title = n
-                .child_by_field_name(&calls.arguments)
-                .and_then(|a| a.named_children(&mut a.walk()).next())
-                .filter(|a| is_one_of(&calls.strings, a.kind()))
-                .map(|a| {
-                    self.text(a)
-                        .trim_matches(|c| c == '"' || c == '\'' || c == '`')
-                        .to_string()
-                });
-            let skip_here = callee.starts_with('x')
-                || matches!(modifier.as_deref(), Some("skip") | Some("todo"));
-            if let Some(title) = title {
-                match callee.trim_start_matches('x') {
-                    "describe" | "context" => {
-                        path.push(title);
-                        for c in n.named_children(&mut n.walk()) {
-                            self.walk_calls(c, calls, path, skipped || skip_here, out);
+        let mut path: Vec<String> = Vec::new();
+        let mut stack = vec![Some((root, false))];
+        while let Some(step) = stack.pop() {
+            let Some((n, skipped)) = step else {
+                path.pop();
+                continue;
+            };
+            let mut inside = skipped;
+            if n.kind() == calls.call
+                && let Some((callee, modifier)) = self.callee(n, calls)
+            {
+                let title = n
+                    .child_by_field_name(&calls.arguments)
+                    .and_then(|a| a.named_children(&mut a.walk()).next())
+                    .filter(|a| is_one_of(&calls.strings, a.kind()))
+                    .map(|a| {
+                        self.text(a)
+                            .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+                            .to_string()
+                    });
+                let skip_here = callee.starts_with('x')
+                    || matches!(modifier.as_deref(), Some("skip") | Some("todo"));
+                if let Some(title) = title {
+                    match callee.trim_start_matches('x') {
+                        "describe" | "context" => {
+                            inside = skipped || skip_here;
+                            if self.reads_below(path.len()) {
+                                path.push(title);
+                                stack.push(None);
+                            }
                         }
-                        path.pop();
-                        return;
+                        "it" | "test" => {
+                            let mut name = path.clone();
+                            name.push(title);
+                            out.push(JsTest {
+                                name: name.join(" > "),
+                                text: normalize(self.text(n)),
+                                skipped: skipped || skip_here,
+                            });
+                            continue;
+                        }
+                        _ => {}
                     }
-                    "it" | "test" => {
-                        let mut name = path.clone();
-                        name.push(title);
-                        out.push(JsTest {
-                            name: name.join(" > "),
-                            text: normalize(self.text(n)),
-                            skipped: skipped || skip_here,
-                        });
-                        return;
-                    }
-                    _ => {}
                 }
             }
+            let parts = named(n).into_iter().rev();
+            stack.extend(parts.map(|c| Some((c, inside))));
         }
-        for c in n.named_children(&mut n.walk()) {
-            self.walk_calls(c, calls, path, skipped, out);
-        }
+        out
     }
 
     fn callee(&self, call: Node, calls: &CallTests) -> Option<(String, Option<String>)> {
@@ -1691,11 +1716,14 @@ impl<'s> Extractor<'s> {
 }
 
 fn find_descendant<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
-    if n.kind() == kind {
-        return Some(n);
+    let mut stack = vec![n];
+    while let Some(n) = stack.pop() {
+        if n.kind() == kind {
+            return Some(n);
+        }
+        stack.extend(named(n).into_iter().rev());
     }
-    let children: Vec<Node> = n.named_children(&mut n.walk()).collect();
-    children.into_iter().find_map(|c| find_descendant(c, kind))
+    None
 }
 
 #[cfg(test)]
@@ -1919,6 +1947,205 @@ mod tests {
     }
 
     /// A later engine reads names as this one does.
+    /// `run` on a stack of the size the daemon's threads have.
+    fn on_a_daemon_stack<F: FnOnce() + Send + 'static>(run: F) {
+        let thread = std::thread::Builder::new().stack_size(2 << 20);
+        thread.spawn(run).unwrap().join().unwrap();
+    }
+
+    fn nested(open: &str, close: &str, depth: usize) -> String {
+        format!("{}{}", open.repeat(depth), close.repeat(depth))
+    }
+
+    /// How many levels of symbols `syms` hold, down its first members.
+    fn levels_of(syms: &[Sym]) -> usize {
+        let mut levels = 0;
+        let mut at = syms;
+        while let Some(first) = at.first() {
+            levels += 1;
+            at = &first.children;
+        }
+        levels
+    }
+
+    /// Files as deep as they can be made in each language's own way. The
+    /// depth is far past what recursion over symbols survives on this stack.
+    #[test]
+    fn a_deep_file_does_not_end_the_process() {
+        let python: String = (0..1000)
+            .map(|i| format!("{}class A:\n", " ".repeat(i)))
+            .chain([format!("{}pass\n", " ".repeat(1000))])
+            .collect();
+        let cases = [
+            ("a.cs", nested("class A { ", "}", 3000)),
+            ("a.cs", nested("namespace A { ", "}", 3000)),
+            ("a.java", nested("class A { ", "}", 3000)),
+            ("a.kt", nested("class A { ", "}", 1000)),
+            ("a.swift", nested("class A { ", "}", 3000)),
+            ("a.cpp", nested("namespace a { ", "}", 3000)),
+            ("a.rs", nested("mod a { ", "}", 3000)),
+            ("a.rb", nested("class A\n", "end\n", 3000)),
+            (
+                "a.php",
+                format!("<?php {}", nested("class A { ", "}", 3000)),
+            ),
+            ("a.ts", nested("namespace a { ", "}", 3000)),
+            (
+                "a.go",
+                format!("package a\nvar x = {}", nested("(", ")", 3000)),
+            ),
+            ("a.py", python),
+        ];
+        on_a_daemon_stack(move || {
+            for (path, src) in cases {
+                let p = parse(Lang::detect(path).unwrap(), &src);
+                assert!(levels_of(&p.syms) <= MAX_LEVELS, "{path}");
+            }
+        });
+    }
+
+    fn tree_depth(root: Node) -> usize {
+        let mut deepest = 0;
+        let mut stack = vec![(root, 1)];
+        while let Some((n, depth)) = stack.pop() {
+            deepest = deepest.max(depth);
+            let mut cursor = n.walk();
+            stack.extend(n.children(&mut cursor).map(|c| (c, depth + 1)));
+        }
+        deepest
+    }
+
+    /// Depth in code that is no symbol: only the walks over the tree meet it.
+    #[test]
+    fn a_deep_tree_does_not_end_the_process() {
+        let depth = 20_000;
+        let sum = format!("1{}", " + 1".repeat(depth));
+        let cases = [
+            ("a.js", format!("{};\n", nested("[", "]", depth))),
+            ("a.js", format!("{sum};\n")),
+            ("a.php", format!("<?php {sum};\n")),
+            ("a.py", format!("{sum}\n")),
+            (
+                "a.py",
+                format!(
+                    "if {}:\n    def f():\n        pass\n",
+                    nested("(", ")", depth)
+                ),
+            ),
+        ];
+        on_a_daemon_stack(move || {
+            for (path, src) in cases {
+                let lang = Lang::detect(path).unwrap();
+                let tree = lang.parse(&src).unwrap();
+                assert!(tree_depth(tree.root_node()) > depth, "{path}");
+                assert!(!parse(lang, &src).has_error, "{path}");
+            }
+        });
+    }
+
+    #[test]
+    fn tests_in_deep_describes_do_not_end_the_process() {
+        let src = nested("describe('a', () => { ", "});", 3000);
+        let src = src.replacen("});", "it('b', () => {}); });", 1);
+        on_a_daemon_stack(move || {
+            let p = parse(Lang::named("javascript"), &src);
+            let name = &p.js_tests[0].name;
+            assert_eq!(name.matches(" > ").count(), MAX_LEVELS, "{name}");
+        });
+    }
+
+    /// One level more than is read, and one less.
+    #[test]
+    fn symbols_are_read_down_to_the_limit() {
+        let lang = Lang::named("csharp");
+        let within = nested("class A { ", "}", MAX_LEVELS);
+        let past = nested("class A { ", "}", MAX_LEVELS + 1);
+        assert_eq!(levels_of(&parse(lang, &within).syms), MAX_LEVELS);
+        let p = parse(lang, &past);
+        assert_eq!(levels_of(&p.syms), MAX_LEVELS);
+        // Earlier engines stay as they were: entries are recomputed.
+        let old = parse_at(ENGINE_LEVELS - 1, lang, &past);
+        assert_eq!(levels_of(&old.syms), MAX_LEVELS + 1);
+    }
+
+    /// What is not read is the text of the last symbol that is, which keeps
+    /// a type's definition and a signature of its header.
+    #[test]
+    fn what_stands_below_the_limit_is_text_of_the_symbol_around_it() {
+        let inner = "class B { int deep; }";
+        let open = "class A { ".repeat(MAX_LEVELS - 1);
+        let src = format!("{open}class C {{ {inner} }}{}", "}".repeat(MAX_LEVELS - 1));
+        let p = parse(Lang::named("csharp"), &src);
+        let mut last = &p.syms[0];
+        while let Some(next) = last.children.first() {
+            last = next;
+        }
+        assert_eq!(last.name.matches('.').count(), MAX_LEVELS - 1);
+        assert!(last.name.ends_with(".C"), "{}", last.name);
+        assert!(!last.container && last.children.is_empty());
+        assert_eq!(last.own, format!("class C {{ {inner} }}"));
+        assert!(last.own_exact.is_empty() && last.spots.is_empty());
+        assert_eq!(last.def_of.as_ref(), Some(&last.name));
+        let read = parse(Lang::named("csharp"), &format!("class C {{ {inner} }}"));
+        assert_eq!(last.signature, read.syms[0].signature);
+    }
+
+    /// Levels with no name of their own count too.
+    #[test]
+    fn groups_count_as_levels() {
+        let spaces = |depth| {
+            let open = "namespace N { ".repeat(depth);
+            format!("{open}class C {{ }}{}", "}".repeat(depth))
+        };
+        let lang = Lang::named("csharp");
+        assert_eq!(names(&parse(lang, &spaces(MAX_LEVELS - 1))), ["C"]);
+        assert!(parse(lang, &spaces(MAX_LEVELS)).syms.is_empty());
+        let old = parse_at(ENGINE_LEVELS - 1, lang, &spaces(MAX_LEVELS));
+        assert_eq!(names(&old), ["C"]);
+    }
+
+    /// The limit is on a path down, not on what a file holds: what stands
+    /// after a deep part is read as if that part was not there.
+    #[test]
+    fn a_deep_part_leaves_what_follows_it_alone() {
+        let deep = nested("class A { ", "}", MAX_LEVELS + 1);
+        let after = nested("class B { ", "}", MAX_LEVELS);
+        let p = parse(Lang::named("csharp"), &format!("{deep}\n{after}\n"));
+        assert_eq!(levels_of(&p.syms[1..]), MAX_LEVELS);
+    }
+
+    #[test]
+    fn tests_are_read_down_to_the_limit() {
+        let describes = |depth| {
+            let src = nested("describe('a', () => { ", "});", depth);
+            src.replacen("});", "it('b', () => {}); });", 1)
+        };
+        let js = Lang::named("javascript");
+        let parts = |p: Parsed| p.js_tests[0].name.matches(" > ").count();
+        assert_eq!(parts(parse(js, &describes(MAX_LEVELS))), MAX_LEVELS);
+        assert_eq!(parts(parse(js, &describes(MAX_LEVELS + 1))), MAX_LEVELS);
+        let old = parse_at(ENGINE_LEVELS - 1, js, &describes(MAX_LEVELS + 1));
+        assert_eq!(parts(old), MAX_LEVELS + 1);
+    }
+
+    /// A `describe` that is not read keeps what it holds, and what it skips.
+    #[test]
+    fn a_skipped_describe_counts_also_past_the_limit() {
+        let src = nested("describe('a', () => { ", "});", MAX_LEVELS);
+        let src = src.replacen(
+            "});",
+            "describe.skip('b', () => { it('c', () => {}); }); it('d', () => {}); });",
+            1,
+        );
+        let p = parse(Lang::named("javascript"), &src);
+        let tests: Vec<(usize, bool)> = p
+            .js_tests
+            .iter()
+            .map(|t| (t.name.matches(" > ").count(), t.skipped))
+            .collect();
+        assert_eq!(tests, [(MAX_LEVELS, true), (MAX_LEVELS, false)]);
+    }
+
     #[test]
     fn keys_hold_for_later_engines() {
         let src = "class C { void M(int a) {} void M(string s) {} }";

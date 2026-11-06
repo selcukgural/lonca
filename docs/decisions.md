@@ -554,8 +554,9 @@ entry format, so they have their own version
     or place a line elsewhere among equal lines, with both sides' changes in. The
     same line added at one place by both is one change, and comes in once.
 - **A conflict is written out.** `lonca sync` brings in the rest of trunk and
-  leaves both sides between `<<<<<<< local` and `>>>>>>> trunk`: a symbol whole, or
-  by lines where there is no symbol to name. The file is then the agent's to settle.
+  leaves both sides between `<<<<<<< local` and `>>>>>>> trunk`: a symbol whole when
+  both sides have it by that name, else by lines, which show a deletion, a rename
+  and a change of key alike. The file is then the agent's to settle.
   - **A proposal goes by the text, not by a list of paths.** The markers carry a tag
     of the workspace, kept in `conflict_tag` while any stand, and `propose` looks for
     each of the three in every changed file: a new name settles nothing, half a

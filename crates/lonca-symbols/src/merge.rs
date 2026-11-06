@@ -243,7 +243,8 @@ fn find_sym<'s>(syms: &'s [Sym], name: &str) -> Option<&'s Sym> {
 /// [`merge_around_conflicts`] with each conflicting symbol written out, both
 /// sides between markers, so that the text shows what trunk did to it and a
 /// proposal can not take that back unseen. `None` also when a conflict has no
-/// symbol to write out on the lines of both sides.
+/// symbol of its name on both sides: a symbol trunk does not have under that
+/// name may be gone or may go by another, and only its lines can show which.
 pub fn marked_around_conflicts(
     engine: u32,
     path: &str,
@@ -258,9 +259,8 @@ pub fn marked_around_conflicts(
     for id in &conflicts {
         let name = id.strip_prefix(&prefix)?;
         let mine = lines_of(&kept, find_sym(&ours.syms, name)?);
-        let other = find_sym(&theirs.syms, name).map(|s| lines_of(t, s));
-        let trunk = other.map_or("", |at| &t[at]);
-        let block = lines::conflict_block(&kept[mine.clone()], trunk, tag);
+        let other = lines_of(t, find_sym(&theirs.syms, name)?);
+        let block = lines::conflict_block(&kept[mine.clone()], &t[other], tag);
         blocks.push((mine, block));
     }
     blocks.sort_by_key(|(at, _)| at.start);
@@ -2750,15 +2750,35 @@ mod tests {
         );
     }
 
+    /// What trunk has no symbol of that name for: deleted, renamed, or given
+    /// another key. Its lines show which, an empty side could only say gone.
     #[test]
-    fn a_symbol_trunk_deleted_has_an_empty_side() {
+    fn a_symbol_trunk_has_under_no_such_name_goes_by_lines() {
+        let at = |path, b: &str, o: &str, t: &str| {
+            let block = marked_around_conflicts(ENGINE_CURRENT, path, [b, o, t], "k");
+            assert_eq!(block, None, "{path}: {t}");
+            let text = lines::with_markers(b, o, t, "k");
+            assert!(lines::has_markers(&text, "k"), "{text}");
+            text
+        };
         let b = "fn a() {\n    1\n}\n\nfn b() {\n    2\n}\n";
         let o = b.replace("    1", "    10");
-        let t = "fn b() {\n    2\n}\n";
-        let text = marked_around_conflicts(ENGINE_CURRENT, "a.rs", [b, &o, t], "k").unwrap();
+        let gone = at("a.rs", b, &o, "fn b() {\n    2\n}\n");
+        assert!(gone.contains("    10"), "{gone}");
+        let t = b.replace("fn a", "fn renamed").replace("    1", "    11");
+        let renamed = at("a.rs", b, &o, &t);
         assert!(
-            text.starts_with("<<<<<<< local k\nfn a() {\n    10\n}\n======= k\n>>>>>>> trunk k\n"),
-            "{text}"
+            renamed.contains("    10") && renamed.contains("    11"),
+            "{renamed}"
+        );
+        let b = "class C {\n    void M(int a) {\n        A();\n    }\n\n    void M(string a) {\n    }\n}\n";
+        let o = b.replace("A()", "LOCAL()");
+        let t = b.replace("M(int a)", "M(long a)").replace("A()", "TRUNK()");
+        let keyed = at("a.cs", b, &o, &t);
+        assert!(keyed.contains("LOCAL()"), "{keyed}");
+        assert!(
+            keyed.contains("M(long a)") && keyed.contains("TRUNK()"),
+            "{keyed}"
         );
     }
 

@@ -1883,15 +1883,26 @@ came of it (issue #43).
   variable or a macro mentions nothing. Precise analysis is still a later phase.
 - **A mention** is a token that names something: `identifier` in its kind, or
   `names` in the language table (`constant` in Ruby, `name` in PHP). Comments,
-  strings and imports are none, and neither is a declaration's own name. It is
-  reported as the unit a lease names: the innermost symbol, `Type.<def>` for a
-  type's own text, `<module>` for code outside symbols.
-- **What the change touches itself is left out**, and so are deleted files: its
-  author looked at those, and leases keep anyone else out of them.
+  strings and imports are none. A declaration of the name is one: an implementation
+  of a trait method has to follow it, and telling that from an unrelated `run` takes
+  a resolver. It is reported as the unit a lease names: the innermost symbol,
+  `Type.<def>` for a type's own text, `<module>` for code outside symbols.
+- **A name is looked for as code writes it.** `constructors` in the table are reached
+  by their type (`__init__`, `constructor`, `initialize`, `__construct`, `init`), and
+  `marks` are what a name has around its token (`$a` is `a`, Ruby's `x=` is `x`).
+- **A file that can not be read for symbols counts whole.** One with a parse error,
+  over 1 MiB or not UTF-8 is `path#<file>` if it holds the name as a word: otherwise
+  a grammar's gap would read as "nothing mentions this", and the change would owe
+  nothing and tell nobody.
+- **What the change touches itself is left out**, and so are what it deletes, the
+  members of that and deleted files: its author looked at those, and leases keep
+  anyone else out of them. By name without keys, since one file can tell two
+  symbols of a name apart on one side only. So a sibling overload of a changed
+  symbol is left out too.
 - **Cost.** A change that takes a name away reads the blobs of every source file
   of the base tree, under the daemon's lock, and parses only those that hold a name
-  as bytes (Aho-Corasick, so the number of names does not matter). Files over 1 MiB
-  are left out. Any other change reads nothing more.
+  as a word (Aho-Corasick, so the number of names does not matter). Any other change
+  reads nothing more.
 - **Facts are capped at 1000** symbols, sorted, because they are in the log.
   `affected_more` says how many fell off, the decision repeats it, and
   `affects_others` is then true, since nobody can say it is false. Holders past the
@@ -1920,8 +1931,9 @@ came of it (issue #43).
   settings a run is keyed on differ. A policy from before the key has none, so
   old entries replay as they were.
 - **Limits.** A deleted type's members are not looked for, only its name, which
-  whoever uses them nearly always mentions; a deleted file's are. A top-level
-  `var a, b int` that changes type is an edit of `<module>`, not a signature. The
+  whoever uses them nearly always mentions; a deleted file's are. Files no grammar
+  reads are not searched. A top-level `var a, b int` or C `int a, b;` that changes
+  type is an edit of `<module>` or of the first name alone, not of the others. The
   modifiers in front of `public int a, b` are not in the fields' signatures. A value
   nested deeper than one declarator stays in the signature (C# `int a = 1;`,
   Kotlin), and a Rust macro call is all signature: both err towards one notice more.

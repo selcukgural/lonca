@@ -89,6 +89,12 @@ pub(crate) struct Rules {
     /// their kind.
     #[serde(default)]
     pub names: Vec<String>,
+    /// Methods that callers reach by the name of their type.
+    #[serde(default)]
+    pub constructors: Vec<String>,
+    /// What a symbol's name has around the token that uses it: PHP's `$a`.
+    #[serde(default)]
+    pub marks: Vec<String>,
     /// Parameters a grammar has no `parameters` field for.
     #[serde(default)]
     pub parameters: Vec<Parameters>,

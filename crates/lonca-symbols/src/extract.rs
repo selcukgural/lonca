@@ -54,17 +54,19 @@ fn value_start(n: Node) -> Option<usize> {
     Some(body.unwrap_or(value).start_byte())
 }
 
-/// The comments in `n` in front of `end`, in order.
+/// The comments in `n` in front of `end`, in order. With a stack of its own:
+/// a tree can be as deep as a file is long.
 fn comments_in(n: Node, end: usize, out: &mut Vec<(usize, usize)>) {
-    if n.kind().contains("comment") {
-        out.push((n.start_byte(), n.end_byte()));
-        return;
-    }
-    for c in n.children(&mut n.walk()) {
-        if c.start_byte() >= end {
-            break;
+    let mut stack = vec![n];
+    while let Some(n) = stack.pop() {
+        if n.kind().contains("comment") {
+            out.push((n.start_byte(), n.end_byte()));
+            continue;
         }
-        comments_in(c, end, out);
+        let mut cursor = n.walk();
+        let parts = n.children(&mut cursor);
+        let parts: Vec<Node> = parts.take_while(|c| c.start_byte() < end).collect();
+        stack.extend(parts.into_iter().rev());
     }
 }
 
@@ -1550,8 +1552,9 @@ impl<'s> Extractor<'s> {
         // One of a list: `int a, b` says what `b` is in front of `a`.
         let list = held.filter(|h| h.joined).map(|h| h.start);
         let start = list.unwrap_or(def.header_start).min(def.header_start);
+        let list_node = list.and_then(|_| n.parent());
         let mut comments = Vec::new();
-        comments_in(n, end, &mut comments);
+        comments_in(list_node.unwrap_or(n), end, &mut comments);
         comments.retain(|c| c.0 >= start);
         let text = remove_spans(self.src, start, end, &comments);
         Some(normalize(&text))

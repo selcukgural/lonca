@@ -236,3 +236,27 @@ fn a_batch_that_fails_what_it_owes_is_halved() {
     assert!(reasons[0] == "verification_failed:extended", "{reasons:?}");
     audited(&e);
 }
+
+/// A deleted file says what went: its symbols have no list of their own.
+#[test]
+fn a_deleted_file_is_named_in_what_a_holder_hears() {
+    let (mut e, base) = repo(1, "true");
+    let b = agent(&mut e, "b", "src/uses.rs");
+    e.lease(&b, "src/uses.rs#g");
+    let a = agent(&mut e, "a", "src/lib.rs");
+    let items = json!([{"symbol": "src/lib.rs#<file>", "kind": "rename"}]);
+    let args = json!({"items": items, "intent": "remove it", "ttl_ms": 600_000});
+    e.ok("lease.acquire", None, Some(&a), args);
+    let claim = Claim {
+        intent: "remove the file".into(),
+        deleted_files: vec!["src/lib.rs".into()],
+        ..Default::default()
+    };
+    let files = json!([{"path": "src/lib.rs", "content_b64": null}]);
+    let args = json!({"base": base, "files": files, "claim": claim});
+    let r = e.ok("change.propose", None, Some(&a), args);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let heard = events(&mut e, &b);
+    let heard = heard.iter().find(|x| x["kind"] == "symbols_changed");
+    assert_eq!(heard.unwrap()["symbols"], json!(["src/lib.rs"]));
+}

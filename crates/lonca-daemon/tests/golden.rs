@@ -924,12 +924,15 @@ fn golden_v14_log_still_verifies_replays_and_audits() {
 fn golden_v18_log_still_verifies_replays_and_audits() {
     let ops = check_golden(
         "oplog-v18.bundle",
-        "a19c7b50fe194b9149d77090dbb6705581d655a32ee316e516be55f469660ae2",
+        "42fb4e5933c7a8a295ab5d35e61a72692c67c96726ba7b9da4b8305a30a0f3d6",
         18,
     );
     let affected = ops.iter().filter_map(|o| o.entry.facts.as_ref());
     let affected = affected.flat_map(|f| f.affected.clone());
-    assert_eq!(affected.collect::<Vec<_>>(), ["src/reach_user.rs#g"]);
+    assert_eq!(
+        affected.collect::<Vec<_>>(),
+        ["src/lib.rs#charge", "src/reach_user.rs#g"]
+    );
     let reasons = ops.iter().flat_map(|o| &o.entry.decision.reasons);
     let held = reasons.filter(|r| r.starts_with("affected_lease:s-reach:"));
     assert_eq!(held.count(), 1);

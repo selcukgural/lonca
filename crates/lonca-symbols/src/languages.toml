@@ -158,6 +158,7 @@ how = { implementation = { of_type = "type", of_trait = "trait", members = "body
 # Python
 
 [rules.python]
+constructors = ["__init__"]
 attached = [{ kinds = ["comment"] }]
 imports = ["import_statement", "import_from_statement", "future_import_statement"]
 wrappers = [{ kind = "decorated_definition", field = "definition" }]
@@ -185,6 +186,7 @@ how = { members = { name = "name", members = "body" } }
 # TypeScript, TSX, JavaScript
 
 [rules.ecmascript]
+constructors = ["constructor"]
 attached = [{ kinds = ["comment"] }, { kinds = ["decorator"], since = 5 }]
 imports = ["import_statement"]
 wrappers = [{ kind = "export_statement", field = "declaration" }]
@@ -485,6 +487,8 @@ how = { declared = { field = "declarator", wrapped = ["parenthesized_declarator"
 
 [rules.ruby]
 names = ["constant"]
+constructors = ["initialize"]
+marks = ["="]
 attached = [{ kinds = ["comment"] }]
 import_calls = { kind = "call", field = "method", names = ["require", "require_relative", "load"], receiver = "receiver" }
 call_tests = { call = "call", callee = "method", arguments = "arguments", name = "identifier", strings = ["string"] }
@@ -519,6 +523,8 @@ how = { only = { field = "left", only = "constant" } }
 
 [rules.php]
 names = ["name"]
+constructors = ["__construct"]
+marks = ["$"]
 attached = [{ kinds = ["comment"] }]
 imports = ["namespace_use_declaration"]
 attributes = ["attribute_list"]
@@ -565,6 +571,7 @@ how = { inner = { child = ["const_element"], field = "name", or_child = "name" }
 # here, and a `func` has several `name` fields, the first being its own.
 
 [rules.swift]
+constructors = ["init"]
 attached = [{ kinds = ["comment", "multiline_comment"] }]
 imports = ["import_declaration"]
 types = ["typealias_declaration"]

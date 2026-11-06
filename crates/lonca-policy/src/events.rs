@@ -97,7 +97,7 @@ fn sets_reached(state: &State, session: &str, reasons: &[String]) -> Vec<String>
 fn taken_away(f: &Facts) -> Vec<String> {
     let renamed = f.renames.iter().map(|[old, _]| old);
     let all = f.signature_changes.iter().chain(&f.deletes).chain(renamed);
-    let all: BTreeSet<&String> = all.collect();
+    let all: BTreeSet<&String> = all.chain(&f.deleted_files).collect();
     all.into_iter().cloned().collect()
 }
 

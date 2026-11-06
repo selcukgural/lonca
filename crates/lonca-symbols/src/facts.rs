@@ -16,7 +16,7 @@ use crate::extract::{
     shifted,
 };
 use crate::lang::Lang;
-use crate::mentions::{MAX_AFFECTED, mentions, used_name};
+use crate::mentions::{MAX_AFFECTED, bare, mentions, used_names};
 use crate::sections::{APPEND, Format, Section, appended, sections};
 
 pub(crate) const FILE: &str = "<file>";
@@ -201,7 +201,7 @@ pub fn analyze(
     f.renames.sort();
     syntax_errors.sort();
     if engine >= ENGINE_SIGNATURES {
-        let names = taken_away(&f, &gone);
+        let names = taken_away(engine, &f, &gone);
         (f.affected, f.affected_more) = affected(engine, base, &names, &f, read)?;
     }
     Ok(Analysis {
@@ -219,16 +219,31 @@ fn names_in(path: &str, syms: &[Sym], out: &mut Vec<String>) {
 
 /// The names code uses for what a change gives a new signature, renames or
 /// deletes, the symbols of deleted files in `gone` among them.
-fn taken_away(f: &Facts, gone: &[String]) -> BTreeSet<String> {
+fn taken_away(engine: u32, f: &Facts, gone: &[String]) -> BTreeSet<String> {
     let renamed = f.renames.iter().map(|[old, _]| old);
     let all = f.signature_changes.iter().chain(&f.deletes).chain(renamed);
-    let names = all.chain(gone).filter_map(|s| used_name(s));
+    let names = all.chain(gone).flat_map(|s| used_names(engine, s));
     names.map(String::from).collect()
+}
+
+/// `id` or a container of it is in `list`.
+fn within(id: &str, list: &BTreeSet<String>) -> bool {
+    let mut name = id;
+    loop {
+        if list.contains(name) {
+            return true;
+        }
+        match name.rsplit_once('.') {
+            Some((outer, _)) if outer.contains('#') => name = outer,
+            _ => return false,
+        }
+    }
 }
 
 /// The symbols of `base` that mention `names`, sorted and cut to
 /// [`MAX_AFFECTED`], and how many were cut. What the change changes itself
-/// was looked at by whoever wrote it, and a deleted file mentions nothing.
+/// was looked at by whoever wrote it, what it deletes is gone with what is
+/// in it, and so is a deleted file.
 fn affected(
     engine: u32,
     base: &FileMap,
@@ -237,12 +252,17 @@ fn affected(
     read: &dyn Fn(&GitId) -> Result<Vec<u8>>,
 ) -> Result<(Vec<String>, u32)> {
     let mut found = mentions(engine, base, names, read)?;
-    let own: BTreeSet<&String> = f.edits.iter().chain(&f.deletes).collect();
-    let deleted = |id: &String| {
+    let renamed = f.renames.iter().flatten();
+    let own: BTreeSet<String> = f.edits.iter().chain(renamed).map(|s| bare(s)).collect();
+    let gone: BTreeSet<String> = f.deletes.iter().map(|s| bare(s)).collect();
+    let in_deleted_file = |id: &String| {
         let path = id.split_once('#').map(|(path, _)| path);
         path.is_some_and(|p| f.deleted_files.iter().any(|d| d == p))
     };
-    found.retain(|id| !own.contains(id) && !deleted(id));
+    found.retain(|id| {
+        let name = bare(id);
+        !own.contains(&name) && !within(&name, &gone) && !in_deleted_file(id)
+    });
     let more = found.len().saturating_sub(MAX_AFFECTED);
     let kept = found.into_iter().take(MAX_AFFECTED).collect();
     Ok((kept, more as u32))
@@ -1751,7 +1771,122 @@ mod tests {
             renames: vec![["a.py#f(int)".into(), "a.py#f(str)".into()]],
             ..Facts::default()
         };
-        assert_eq!(taken_away(&f, &[]).into_iter().collect::<Vec<_>>(), ["f"]);
+        assert_eq!(
+            taken_away(ENGINE_SIGNATURES, &f, &[])
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["f"]
+        );
+    }
+
+    /// The new parameters name it otherwise on one side only.
+    #[test]
+    fn a_symbol_under_another_key_is_still_the_changes_own() {
+        let old = "class C { void M(int a) { } }\n";
+        let new = "class C { void M(long a) { } }\n";
+        let a = run_now(&[("a.cs", old)], &[("a.cs", new)]);
+        assert!(!a.facts.signature_changes.is_empty(), "{:?}", a.facts);
+        assert!(a.facts.affected.is_empty(), "{:?}", a.facts);
+    }
+
+    #[test]
+    fn what_a_deleted_type_held_is_gone_with_it() {
+        let old = "class T:\n    def f(self):\n        pass\n    def g(self):\n        self.f()\n\nclass U:\n    pass\n";
+        let new = "class U:\n    pass\n";
+        let a = run_now(&[("a.py", old)], &[("a.py", new)]);
+        assert_eq!(a.facts.deletes, ["a.py#T"]);
+        assert!(a.facts.affected.is_empty(), "{:?}", a.facts);
+    }
+
+    #[test]
+    fn a_container_of_a_name_holds_it_up_to_the_path() {
+        let list: BTreeSet<String> = ["a.rs#T".to_string()].into();
+        assert!(within("a.rs#T", &list));
+        assert!(within("a.rs#T.m", &list));
+        assert!(within("a.rs#T.m.n", &list));
+        assert!(!within("a.rs#U.m", &list));
+        assert!(!within("a.rs#Tx", &list));
+        let dotted: BTreeSet<String> = ["x.y".to_string()].into();
+        assert!(!within("x.y.rs#f.g", &dotted), "a path is not a container");
+    }
+
+    /// Reported only at the level of a tree a parser can follow: this must
+    /// not take the daemon down.
+    #[test]
+    fn a_deep_declaration_does_not_end_the_process() {
+        let depth = 20_000;
+        let src = format!("type T = {}u8{};\n", "(".repeat(depth), ")".repeat(depth));
+        let run = move || section_facts(ENGINE_SIGNATURES, "a.rs", &src, "type T = u16;\n");
+        let on_a_daemon_stack = std::thread::Builder::new().stack_size(2 << 20).spawn(run);
+        on_a_daemon_stack.unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn a_comment_in_a_list_is_no_signature() {
+        let old = "class C { int /* one */ a, b; }\n";
+        let new = "class C { int /* two */ a, b; }\n";
+        let f = section_facts(ENGINE_SIGNATURES, "a.cs", old, new);
+        assert!(f.signature_changes.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn a_constructor_reaches_those_who_call_the_type() {
+        for (path, old, new, user, caller) in [
+            (
+                "a.py",
+                "class C:\n    def __init__(self, a):\n        pass\n",
+                "class C:\n    def __init__(self, a, b):\n        pass\n",
+                "b.py",
+                "def g():\n    C(1)\n",
+            ),
+            (
+                "a.ts",
+                "class C { constructor(a: number) {} }\n",
+                "class C { constructor(a: string) {} }\n",
+                "b.ts",
+                "function g() { new C(1); }\n",
+            ),
+            (
+                "a.rb",
+                "class C\n  def initialize(a)\n    x\n  end\nend\n",
+                "class C\n  def initialize(a, b)\n    x\n  end\nend\n",
+                "b.rb",
+                "def g\n  C.new(1)\nend\n",
+            ),
+            (
+                "a.php",
+                "<?php\nclass C { public function __construct(int $a) {} }\n",
+                "<?php\nclass C { public function __construct(string $a) {} }\n",
+                "b.php",
+                "<?php\nfunction g() { new C(1); }\n",
+            ),
+            (
+                "a.swift",
+                "class C { init(a: Int) { } }\n",
+                "class C { init(a: Long) { } }\n",
+                "b.swift",
+                "func g() { C(a: 1) }\n",
+            ),
+        ] {
+            let a = run_now(
+                &[(path, old), (user, caller)],
+                &[(path, new), (user, caller)],
+            );
+            let caller = format!("{user}#g");
+            assert!(a.facts.affected.contains(&caller), "{old}: {:?}", a.facts);
+        }
+    }
+
+    #[test]
+    fn a_marked_name_reaches_those_who_use_it_bare() {
+        let old = "<?php\nclass C { public int $a = 1; }\n";
+        let new = "<?php\nclass C { public string $a = 1; }\n";
+        let user = "<?php\nfunction g($c) { return $c->a; }\n";
+        let a = run_now(
+            &[("a.php", old), ("b.php", user)],
+            &[("a.php", new), ("b.php", user)],
+        );
+        assert_eq!(a.facts.affected, ["b.php#g"]);
     }
 
     #[test]

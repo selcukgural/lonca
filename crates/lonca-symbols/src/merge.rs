@@ -501,23 +501,31 @@ impl<'a> Merger<'a> {
         // it among the symbols both have.
         let t_renames = renames_between(self.engine, bs, ts);
         let o_renames = renames_between(self.engine, bs, os);
-        let around = |list: &[Sym], name: &str| {
-            let at = list.iter().position(|s| s.name == name);
-            let (before, after) = list.split_at(at.unwrap_or(0));
-            let kept =
-                |s: &&Sym| bm.contains_key(s.name.as_str()) && tm.contains_key(s.name.as_str());
-            let prev = before.iter().rev().find(kept).map(|s| s.name.clone());
-            (prev, after.iter().find(kept).map(|s| s.name.clone()))
+        // The symbols both have and the renamed ones, in `t`'s names.
+        let order = |list: &[Sym]| -> Vec<String> {
+            let both =
+                |s: &Sym| bm.contains_key(s.name.as_str()) && tm.contains_key(s.name.as_str());
+            let as_in_t = |s: &Sym| {
+                let pair = t_renames
+                    .iter()
+                    .find(|[old, new]| *old == s.name || *new == s.name);
+                let renamed = pair.map(|[_, new]| new.to_string());
+                renamed.or(both(s).then(|| s.name.clone()))
+            };
+            list.iter().filter_map(as_in_t).collect()
         };
         let mut in_place: BTreeMap<&str, (&str, &Sym)> = BTreeMap::new();
-        for [old, new] in &t_renames {
+        for [old, new] in t_renames.iter().filter(|_| order(bs) == order(ts)) {
             if let (Some(b_sym), Some(o_sym)) = (bm.get(old), om.get(old))
                 && o_sym.same(self.o, b_sym, self.b)
-                && around(bs, old) == around(ts, new)
             {
                 in_place.insert(new, (old, o_sym));
             }
         }
+        // Where `o` has what it gave another name.
+        let o_has: BTreeMap<&str, &Sym> = (o_renames.iter())
+            .filter_map(|[old, new]| Some((*old, *om.get(new)?)))
+            .collect();
         let mut renamed = BTreeSet::new();
         for (i, ts_sym) in ts.iter().enumerate() {
             let name = ts_sym.name.as_str();
@@ -553,6 +561,7 @@ impl<'a> Merger<'a> {
                         let name = s.name.as_str();
                         let o_sym = om.get(name).copied();
                         let o_sym = o_sym.or(in_place.get(name).map(|(_, o)| *o));
+                        let o_sym = o_sym.or(o_has.get(name).copied());
                         o_sym.filter(|o| shape(o.holder) == shape(held))
                     };
                     let (gap_start, gap_end) = ts_sym.around;
@@ -1271,6 +1280,57 @@ mod tests {
         let m = merge_text_at(ENGINE_RENAMES, "a.py", &b, &o, &t).unwrap();
         assert!(m.find("def d").unwrap() < m.find("def n").unwrap(), "{m}");
         assert!(m.contains("return 4"), "{m}");
+    }
+
+    /// Two renamed symbols that changed places: the order is `t`'s, or code
+    /// that needs it breaks in silence.
+    #[test]
+    fn two_renames_that_swapped_keep_their_order() {
+        let def = |name: &str, tag: &str| {
+            format!(
+                "def {name}(f):\n    one = {tag}\n    two = one + 1\n    three = two + 1\n    four = three + 1\n    return four\n"
+            )
+        };
+        let b = format!(
+            "{}\n\n{}\n\ndef z():\n    return 1\n",
+            def("a", "1"),
+            def("b", "2")
+        );
+        let t = format!(
+            "{}\n\n{}\n\ndef z():\n    return 1\n",
+            def("y", "2"),
+            def("x", "1")
+        );
+        let o = b.replace("return 1\n", "return 9\n");
+        let f = merge_text_at(ENGINE_RENAMES, "a.py", &b, &o, &t).unwrap();
+        assert!(f.find("def y").unwrap() < f.find("def x").unwrap(), "{f}");
+        assert!(f.contains("return 9"), "{f}");
+    }
+
+    /// An addition behind what `o` renamed stays behind it.
+    #[test]
+    fn an_addition_behind_what_ours_renamed_stays_behind_it() {
+        let def = |name: &str, n: u32| {
+            format!("def {name}():\n    a = {n}\n    b = a + 1\n    c = b + 1\n    return c\n\n\n")
+        };
+        let b = format!("{}{}{}", def("base0", 0), def("base1", 1), def("base2", 2));
+        let o = format!("{}{}{}", def("base0", 0), def("ro1", 1), def("base2", 2));
+        let t = format!(
+            "{}{}{}{}",
+            def("rt0", 0),
+            def("base1", 1),
+            def("addt", 7),
+            def("base2", 2)
+        );
+        let m = merge_text_at(ENGINE_RENAMES, "a.py", &b, &o, &t).unwrap();
+        assert!(
+            m.find("def ro1").unwrap() < m.find("def addt").unwrap(),
+            "{m}"
+        );
+        assert!(
+            m.find("def rt0").unwrap() < m.find("def ro1").unwrap(),
+            "{m}"
+        );
     }
 
     /// Each row: what one side does, against a rename on the other. Nothing

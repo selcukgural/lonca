@@ -4837,26 +4837,42 @@ fn item(symbol: &str) -> LeaseItem {
     }
 }
 
-/// `C.M` holds every `C.M(key)`, so also the one that went on as `C.N`, and
-/// the others have nothing to do with it.
+/// Taken twice: a name that went on as `d` and was taken again says nothing
+/// of the symbol that took it, for a base from before either.
 #[test]
-fn a_name_holds_what_its_overloads_became() {
+fn a_name_taken_again_starts_no_chain_from_an_older_base() {
+    let base = gid('0');
+    let mut s = State::new();
+    s.trunk_line = vec![base.clone(), gid('1'), gid('2'), gid('3')];
+    s.renames = vec![
+        renamed(1, "a#a", "a#d", Some(2)),
+        renamed(3, "a#a", "a#f", None),
+    ];
+    assert_eq!(s.renamed_to("a#a", Some(&base)), "a#a");
+    assert_eq!(s.renamed_to("a#a", None), "a#a");
+}
+
+/// Two entries for one file: the lease by the old name and the lease by the
+/// new one are one symbol, and a name is not held by what left it.
+#[test]
+fn a_lease_meets_its_symbol_by_either_name() {
     let mut s = State::new();
     s.symbol_keys = true;
     s.renames = vec![
         renamed(1, "a.cs#C.M(string)", "a.cs#C.N", None),
         renamed(1, "a.cs#C.P(long)", "a.cs#C.Q", Some(2)),
     ];
-    assert!(s.conflict(&item("a.cs#C.M"), &item("a.cs#C.N")));
-    assert!(s.conflict(&item("a.cs#C.N"), &item("a.cs#C.M")));
     assert!(s.conflict(&item("a.cs#C.M(string)"), &item("a.cs#C.N")));
+    assert!(s.conflict(&item("a.cs#C.N"), &item("a.cs#C.M(string)")));
+    assert!(
+        !s.conflict(&item("a.cs#C.M"), &item("a.cs#C.N")),
+        "the one left"
+    );
     assert!(!s.conflict(&item("a.cs#C.M(int)"), &item("a.cs#C.N")));
     assert!(
-        !s.conflict(&item("a.cs#C.P"), &item("a.cs#C.Q")),
+        !s.conflict(&item("a.cs#C.P(long)"), &item("a.cs#C.Q")),
         "taken again"
     );
-    s.symbol_keys = false;
-    assert!(!s.conflict(&item("a.cs#C.M"), &item("a.cs#C.N")));
     s.renames.clear();
     assert!(!s.conflict(&item("a.cs#C.M(string)"), &item("a.cs#C.N")));
 }

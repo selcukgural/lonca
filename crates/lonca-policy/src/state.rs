@@ -372,42 +372,36 @@ impl State {
     }
 
     /// What `symbol` is called on the trunk. With `base`, only by the renames
-    /// that trunk had not seen. A name taken again is that new symbol, so it
-    /// starts no chain, though a chain that passed it goes on: what was
-    /// renamed before the name was taken stays on its way.
+    /// that trunk had not seen. A name taken again, or a symbol that was then
+    /// deleted, ends there: it is not what the name says now. A chain that
+    /// passed such a name goes on, since what was renamed before the name was
+    /// taken stays on its way.
     pub fn renamed_to(&self, symbol: &str, base: Option<&GitId>) -> String {
         let line = base.and_then(|b| self.trunk_line.iter().rposition(|t| t == b));
         let later = |r: &&Renamed| line.is_none_or(|at| r.line > at);
         let mut name = symbol.to_string();
         let mut moved = false;
         for r in self.renames.iter().filter(later) {
-            if r.reused.is_some() && !moved {
+            let Some(member) = name.strip_prefix(r.old.as_str()) else {
+                continue;
+            };
+            if !member.is_empty() && !member.starts_with('.') {
                 continue;
             }
-            if let Some(member) = name.strip_prefix(r.old.as_str())
-                && (member.is_empty() || member.starts_with('.'))
-            {
-                name = format!("{}{member}", r.new);
-                moved = true;
+            if r.reused.is_some() && !moved {
+                break;
             }
+            name = format!("{}{member}", r.new);
+            moved = true;
         }
         name
     }
 
-    /// Every name `item` reaches on the trunk: its own, and those of what its
-    /// name stands for, since `C.M` holds an overload that became `C.N`.
-    fn renamed_items(&self, item: &LeaseItem) -> Vec<LeaseItem> {
-        let named = |symbol: String| LeaseItem {
-            symbol,
+    fn renamed_item(&self, item: &LeaseItem) -> LeaseItem {
+        LeaseItem {
+            symbol: self.renamed_to(&item.symbol, None),
             kind: item.kind,
-        };
-        let mut out = vec![named(self.renamed_to(&item.symbol, None))];
-        let stood_for = self.renames.iter().filter(|r| {
-            let live = r.reused.is_none();
-            live && self.symbol_keys && symbols::stands_for(&item.symbol, &r.old)
-        });
-        out.extend(stood_for.map(|r| named(self.renamed_to(&r.old, None))));
-        out
+        }
     }
 
     /// `a` and `b` can not be held by two sessions, as they are named or as
@@ -415,15 +409,9 @@ impl State {
     /// by its old name.
     pub fn conflict(&self, a: &LeaseItem, b: &LeaseItem) -> bool {
         let keys = self.symbol_keys;
-        if leases_conflict(a, b, keys) {
-            return true;
-        }
-        if self.renames.is_empty() {
-            return false;
-        }
-        let (a, b) = (self.renamed_items(a), self.renamed_items(b));
-        a.iter()
-            .any(|x| b.iter().any(|y| leases_conflict(x, y, keys)))
+        leases_conflict(a, b, keys)
+            || (!self.renames.is_empty()
+                && leases_conflict(&self.renamed_item(a), &self.renamed_item(b), keys))
     }
 
     /// Something in `a` conflicts with something in `b`.
@@ -443,8 +431,8 @@ impl State {
     }
 
     /// Notes what an integrated change renamed and which names it took
-    /// again: its additions, its new keys, and every name of a file it
-    /// deleted or wrote from nothing.
+    /// again: its additions, its new keys, every name of a file it deleted
+    /// or wrote from nothing. A symbol it deleted ends what led to it.
     fn record_renames(&mut self, facts: &Facts) {
         let line = self.trunk_line.len().saturating_sub(1);
         let keys = self.symbol_keys;
@@ -455,8 +443,12 @@ impl State {
             .iter()
             .chain(&facts.added_files)
             .collect();
+        let renamed = |name: &String| facts.renames.iter().any(|[old, _]| old == name);
         for r in self.renames.iter_mut().filter(|r| r.reused.is_none()) {
             let path = symbols::split(&r.old).map(|(path, _)| path);
+            if facts.deletes.iter().any(|d| *d == r.new && !renamed(d)) {
+                r.reused = Some(line);
+            }
             let again =
                 |name: &&String| r.old == **name || (keys && symbols::stands_for(&r.old, name));
             if taken.iter().any(again) || files.iter().any(|f| Some(f.as_str()) == path) {

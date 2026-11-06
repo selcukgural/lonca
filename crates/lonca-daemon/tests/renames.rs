@@ -348,3 +348,49 @@ fn a_proposal_from_an_older_base_pins_the_new_name() {
     let d = lease(&mut e, &other, "bill", LeaseKind::Edit);
     assert_eq!(d["outcome"], "deny", "{d}");
 }
+
+/// What was renamed and then deleted leads nowhere: a new symbol of that
+/// name is free of the old name.
+#[test]
+fn a_symbol_deleted_after_its_rename_ends_the_chain() {
+    let (mut e, base) = seeded(SEED);
+    rename_on_trunk(&mut e, &base);
+    let gone = "def other():\n    return 1\n";
+    e.human_change(vec![file(PATH, gone)], "gone");
+    assert_eq!(e.svc.process_all(), 1);
+    let back = format!("{gone}\n\ndef bill(x):\n    return x\n");
+    e.human_change(vec![file(PATH, &back)], "new");
+    assert_eq!(e.svc.process_all(), 1);
+    let (a, b) = (agent(&mut e, "a"), agent(&mut e, "b"));
+    let d = lease(&mut e, &a, "charge", LeaseKind::Edit);
+    assert_eq!(d["outcome"], "allow", "{d}");
+    let d = lease(&mut e, &b, "bill", LeaseKind::Edit);
+    assert_eq!(d["outcome"], "allow", "{d}");
+}
+
+/// The overload that stays has the bare name again, and a rename of its
+/// namesake is no reason to wait.
+#[test]
+fn the_overload_left_behind_a_rename_is_free_of_it() {
+    const CS: &str = "src/pay.cs";
+    let seed = "class C\n{\n    void M(int a)\n    {\n        A();\n    }\n\n    void M(string s)\n    {\n        B();\n        B1();\n    }\n}\n";
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file(CS, seed)], "seed");
+    assert_eq!(e.svc.process_all(), 1);
+    let renamed = seed.replace("void M(string s)", "void N(string s)");
+    e.human_change(vec![file(CS, &renamed)], "a name");
+    assert_eq!(e.svc.process_all(), 1);
+    let (x, y) = (e.session("x", &["src/**"]), e.session("y", &["src/**"]));
+    let acquire = |e: &mut Env, token: &str, name: &str| {
+        let items = vec![LeaseItem {
+            symbol: format!("{CS}#C.{name}"),
+            kind: LeaseKind::Edit,
+        }];
+        let args = json!({"items": items, "intent": "work", "ttl_ms": 600_000});
+        e.ok("lease.acquire", None, Some(token), args)["decision"]["outcome"].clone()
+    };
+    assert_eq!(acquire(&mut e, &y, "N"), "allow");
+    assert_eq!(acquire(&mut e, &x, "M"), "allow");
+    audited(&e);
+}

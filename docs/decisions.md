@@ -477,7 +477,8 @@ entry format, so they have their own version
     owner, which one list does not promise, as Go methods stand beside the
     types. A guess there would let a rename lease on one type reach another. So
     a Go type renamed along with a method's name reads as a rename of the type
-    and a delete and an add of the method: its old name follows to `U.Old`.
+    and a delete and an add of the method: its old name follows to `U.Old`, and
+    what goes into the renamed type needs no lease of its own.
   - **Facts.** `renames: [[old, new]]`, beside the `deletes` and `adds` that
     stay. So `Claim` does not change and no client has to, and an auditor of
     an old log has nothing new to read. A change of parameters that `align`
@@ -494,18 +495,22 @@ entry format, so they have their own version
     compared as they are and as they are called on the trunk
     (`State.conflict`). A session on an older base asks for a name a lease on
     the new one meets, and a proposal from an older base has its facts mapped by
-    the renames that base had not seen. A member follows its type, and `C.M`
-    reaches what its overloads became. A name taken again (an addition, a new
-    key, a file deleted or written anew) is that new symbol: it starts no chain,
-    for a lease or for a proposal, so nothing holds it by the name it left
-    behind. A symbol already on its way passes it, so `a` to `b` to `c` holds
-    after a new `b`. An external import has no facts, so a name it takes stays
+    the renames that base had not seen. A member follows its type. A name taken
+    again (an addition, a new key, a file deleted or written anew) is that new
+    symbol: it starts no chain, for a lease or for a proposal, so nothing holds
+    it by the name it left behind. A symbol already on its way passes it, so `a`
+    to `b` to `c` holds after a new `b`; a symbol that was then deleted ends what
+    led to it. A bare `C.M` does not reach an overload that went on as `C.N`: the
+    overload left behind has that bare name again, and it would wait for `C.N`
+    for good. So a session that holds `C.M` from where it stood alone and one
+    that holds `C.N` meet only in the merge. An external import has no facts, so a name it takes stays
     linked to the rename, and two sessions on those names wait for each other
     until one lets go: safe, and rare enough to leave.
   - **The merge** leaves a symbol `t` renamed where `o` has it, instead of a
     delete here and an add there, and what `t` added behind it stays behind it:
-    the order of definitions can be what the code needs. If `t` also moved it
-    among the symbols both have, that is the delete and the add it always was.
+    the order of definitions can be what the code needs. If `t` moved anything
+    among the symbols of that list, renamed ones included, these are the delete
+    and the add they always were, so that the order is `t`'s.
     An edit of what the other side renamed is a conflict, as is a delete of it
     or a second name for it: `o` deleted, `t` renamed, or both renamed
     differently, each conflict on the old name. The edit does not follow the name.

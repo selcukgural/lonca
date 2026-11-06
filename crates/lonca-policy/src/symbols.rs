@@ -138,9 +138,10 @@ pub fn lease_needs(f: &Facts) -> Vec<LeaseNeed> {
     // while the symbol stays where it was.
     let in_place = |old: &str, new: &str| container(old) == container(new);
     let renamed = |s: &&String| {
+        let into = |new: &String| container(s).as_ref() == Some(new);
         f.renames
             .iter()
-            .any(|[old, new]| new == *s && in_place(old, new))
+            .any(|[old, new]| (new == *s && in_place(old, new)) || into(new))
     };
     let adds = f.adds.iter().filter(|s| !renamed(s));
     let adds = adds.filter_map(|s| container(s));
@@ -274,6 +275,19 @@ mod tests {
     fn the_container_of_an_overload_is_the_type() {
         assert_eq!(container("a.cs#C.M(int)"), Some("a.cs#C".to_string()));
         assert_eq!(container("a.cs#M(int)"), Some("a.cs#<file>".to_string()));
+    }
+
+    /// What goes into a type under its new name goes with the type.
+    #[test]
+    fn a_member_of_a_renamed_type_needs_no_more_than_the_type() {
+        let f = Facts {
+            deletes: vec!["a.go#T".into(), "a.go#T.Old".into()],
+            adds: vec!["a.go#U".into(), "a.go#U.Old".into()],
+            renames: vec![["a.go#T".into(), "a.go#U".into()]],
+            ..Default::default()
+        };
+        let needs = lease_needs(&f);
+        assert!(needs.iter().all(|n| n.kinds == DELETE_KINDS), "{needs:?}");
     }
 
     /// Facts do not name such a pair, and the lease rule does not rest on it.

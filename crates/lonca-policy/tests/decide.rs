@@ -4774,18 +4774,21 @@ when { context.symbols.contains("src/a.cs#C.M") };
     }
 }
 
+fn renamed(line: usize, old: &str, new: &str, reused: Option<usize>) -> Renamed {
+    Renamed {
+        line,
+        old: old.into(),
+        new: new.into(),
+        reused,
+    }
+}
+
 /// What a symbol is called now, from a state written by hand.
 #[test]
 fn a_name_follows_its_renames() {
     let (first, second) = (gid('1'), gid('2'));
     let mut s = State::new();
     s.trunk_line = vec![gid('0'), first.clone(), second.clone()];
-    let renamed = |line, old: &str, new: &str, reused| Renamed {
-        line,
-        old: old.into(),
-        new: new.into(),
-        reused,
-    };
     s.renames = vec![
         renamed(1, "a#m", "a#n", None),
         renamed(2, "a#n", "a#o", None),
@@ -4799,20 +4802,63 @@ fn a_name_follows_its_renames() {
     assert_eq!(s.renamed_to("a#z", None), "a#z");
     assert_eq!(s.renamed_to("a#gone", None), "a#gone", "the name is taken");
 
+    let old_base = gid('0');
     assert_eq!(
-        s.renamed_to("a#gone", Some(&gid('0'))),
-        "a#kept",
-        "not on that base"
+        s.renamed_to("a#gone", Some(&old_base)),
+        "a#gone",
+        "and stays so"
     );
     assert_eq!(
-        s.renamed_to("a#m", Some(&gid('0'))),
+        s.renamed_to("a#m", Some(&old_base)),
         "a#o",
         "both are later"
     );
     assert_eq!(s.renamed_to("a#m", Some(&first)), "a#m", "that base had it");
     assert_eq!(s.renamed_to("a#n", Some(&first)), "a#o");
     assert_eq!(s.renamed_to("a#n", Some(&second)), "a#n");
-    assert_eq!(s.renamed_to("a#m", Some(&gid('9'))), "a#o", "never trunk");
+}
+
+/// a to b to c, and then a new `b`: `a` is on its way to `c`, `b` is new.
+#[test]
+fn a_chain_goes_on_past_a_name_taken_again() {
+    let mut s = State::new();
+    s.renames = vec![
+        renamed(1, "a#a", "a#b", None),
+        renamed(2, "a#b", "a#c", Some(3)),
+    ];
+    assert_eq!(s.renamed_to("a#a", None), "a#c");
+    assert_eq!(s.renamed_to("a#b", None), "a#b");
+}
+
+fn item(symbol: &str) -> LeaseItem {
+    LeaseItem {
+        symbol: symbol.into(),
+        kind: LeaseKind::Edit,
+    }
+}
+
+/// `C.M` holds every `C.M(key)`, so also the one that went on as `C.N`, and
+/// the others have nothing to do with it.
+#[test]
+fn a_name_holds_what_its_overloads_became() {
+    let mut s = State::new();
+    s.symbol_keys = true;
+    s.renames = vec![
+        renamed(1, "a.cs#C.M(string)", "a.cs#C.N", None),
+        renamed(1, "a.cs#C.P(long)", "a.cs#C.Q", Some(2)),
+    ];
+    assert!(s.conflict(&item("a.cs#C.M"), &item("a.cs#C.N")));
+    assert!(s.conflict(&item("a.cs#C.N"), &item("a.cs#C.M")));
+    assert!(s.conflict(&item("a.cs#C.M(string)"), &item("a.cs#C.N")));
+    assert!(!s.conflict(&item("a.cs#C.M(int)"), &item("a.cs#C.N")));
+    assert!(
+        !s.conflict(&item("a.cs#C.P"), &item("a.cs#C.Q")),
+        "taken again"
+    );
+    s.symbol_keys = false;
+    assert!(!s.conflict(&item("a.cs#C.M"), &item("a.cs#C.N")));
+    s.renames.clear();
+    assert!(!s.conflict(&item("a.cs#C.M(string)"), &item("a.cs#C.N")));
 }
 
 /// The meaning changed with format 13: in older entries two names are two

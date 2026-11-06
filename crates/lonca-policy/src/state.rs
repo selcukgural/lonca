@@ -19,7 +19,7 @@ use lonca_core::ops::{
 use serde::Serialize;
 
 use crate::decide::leases_conflict;
-use crate::symbols;
+use crate::symbols::{self, LeaseNeed};
 
 /// When a session last reported itself alive, and for how long that holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -371,31 +371,43 @@ impl State {
         self.session_active(id, now_ms) && !self.session_lost(id, now_ms)
     }
 
-    /// What `symbol` is called on the trunk. With `base`, after the renames
-    /// that trunk had not seen, whatever came of the old name later. Without
-    /// one, a name that was taken again is that new symbol.
+    /// What `symbol` is called on the trunk. With `base`, only by the renames
+    /// that trunk had not seen. A name taken again is that new symbol, so it
+    /// starts no chain, though a chain that passed it goes on: what was
+    /// renamed before the name was taken stays on its way.
     pub fn renamed_to(&self, symbol: &str, base: Option<&GitId>) -> String {
         let line = base.and_then(|b| self.trunk_line.iter().rposition(|t| t == b));
-        let applies = |r: &&Renamed| match (base, line) {
-            (None, _) => r.reused.is_none(),
-            (Some(_), at) => at.is_none_or(|at| r.line > at),
-        };
+        let later = |r: &&Renamed| line.is_none_or(|at| r.line > at);
         let mut name = symbol.to_string();
-        for r in self.renames.iter().filter(applies) {
+        let mut moved = false;
+        for r in self.renames.iter().filter(later) {
+            if r.reused.is_some() && !moved {
+                continue;
+            }
             if let Some(member) = name.strip_prefix(r.old.as_str())
                 && (member.is_empty() || member.starts_with('.'))
             {
                 name = format!("{}{member}", r.new);
+                moved = true;
             }
         }
         name
     }
 
-    fn renamed_item(&self, item: &LeaseItem) -> LeaseItem {
-        LeaseItem {
-            symbol: self.renamed_to(&item.symbol, None),
+    /// Every name `item` reaches on the trunk: its own, and those of what its
+    /// name stands for, since `C.M` holds an overload that became `C.N`.
+    fn renamed_items(&self, item: &LeaseItem) -> Vec<LeaseItem> {
+        let named = |symbol: String| LeaseItem {
+            symbol,
             kind: item.kind,
-        }
+        };
+        let mut out = vec![named(self.renamed_to(&item.symbol, None))];
+        let stood_for = self.renames.iter().filter(|r| {
+            let live = r.reused.is_none();
+            live && self.symbol_keys && symbols::stands_for(&item.symbol, &r.old)
+        });
+        out.extend(stood_for.map(|r| named(self.renamed_to(&r.old, None))));
+        out
     }
 
     /// `a` and `b` can not be held by two sessions, as they are named or as
@@ -403,9 +415,15 @@ impl State {
     /// by its old name.
     pub fn conflict(&self, a: &LeaseItem, b: &LeaseItem) -> bool {
         let keys = self.symbol_keys;
-        leases_conflict(a, b, keys)
-            || (!self.renames.is_empty()
-                && leases_conflict(&self.renamed_item(a), &self.renamed_item(b), keys))
+        if leases_conflict(a, b, keys) {
+            return true;
+        }
+        if self.renames.is_empty() {
+            return false;
+        }
+        let (a, b) = (self.renamed_items(a), self.renamed_items(b));
+        a.iter()
+            .any(|x| b.iter().any(|y| leases_conflict(x, y, keys)))
     }
 
     /// Something in `a` conflicts with something in `b`.
@@ -413,12 +431,35 @@ impl State {
         a.iter().any(|x| b.iter().any(|y| self.conflict(x, y)))
     }
 
-    /// Notes what an integrated change renamed and what it took back.
+    /// `item` covers `need`, by the name in the facts or by what that is
+    /// called now. A change from an older base has the old name.
+    pub fn covers_need(&self, need: &LeaseNeed, item: &LeaseItem, base: Option<&GitId>) -> bool {
+        let keys = self.symbol_keys;
+        let renamed = LeaseNeed {
+            symbol: self.renamed_to(&need.symbol, base),
+            kinds: need.kinds,
+        };
+        need.covered_by(item, keys) || renamed.covered_by(item, keys)
+    }
+
+    /// Notes what an integrated change renamed and which names it took
+    /// again: its additions, its new keys, and every name of a file it
+    /// deleted or wrote from nothing.
     fn record_renames(&mut self, facts: &Facts) {
         let line = self.trunk_line.len().saturating_sub(1);
-        for added in &facts.adds {
-            let again = self.renames.iter_mut().filter(|r| r.old == *added);
-            for r in again.filter(|r| r.reused.is_none()) {
+        let keys = self.symbol_keys;
+        let new_names = facts.renames.iter().map(|[_, new]| new);
+        let taken: Vec<&String> = facts.adds.iter().chain(new_names).collect();
+        let files: Vec<&String> = facts
+            .deleted_files
+            .iter()
+            .chain(&facts.added_files)
+            .collect();
+        for r in self.renames.iter_mut().filter(|r| r.reused.is_none()) {
+            let path = symbols::split(&r.old).map(|(path, _)| path);
+            let again =
+                |name: &&String| r.old == **name || (keys && symbols::stands_for(&r.old, name));
+            if taken.iter().any(|n| again(n)) || files.iter().any(|f| Some(f.as_str()) == path) {
                 r.reused = Some(line);
             }
         }
@@ -834,14 +875,13 @@ impl State {
 
     /// Pins the items of the session that the facts need to the change.
     fn pin(&mut self, session: &str, change: ChangeId, facts: Option<&Facts>, now_ms: i64) {
-        let keys = self.symbol_keys;
         let needs = facts.map(symbols::lease_needs).unwrap_or_default();
         let pinned: Vec<(String, Vec<LeaseItem>)> = self
             .active_leases(now_ms)
             .filter(|l| l.lease.session == session)
             .map(|l| {
                 let items = l.items.iter().copied();
-                let items = items.filter(|i| needs.iter().any(|n| n.covered_by(i, keys)));
+                let items = items.filter(|i| needs.iter().any(|n| self.covers_need(n, i, None)));
                 (l.lease.set.clone(), items.cloned().collect())
             })
             .collect();
@@ -1426,9 +1466,12 @@ impl State {
                     self.queue.retain(|q| q != change);
                     self.unpin(*change, false);
                     if let Some(session) = p.actor.session() {
+                        let now: Vec<String> =
+                            symbols.iter().map(|s| self.renamed_to(s, None)).collect();
                         let covers = |l: &LeaseSet| {
                             l.items.iter().any(|i| {
-                                symbols.iter().any(|s| symbols::covers(&i.symbol, s, keys))
+                                let all = symbols.iter().chain(&now);
+                                all.into_iter().any(|s| symbols::covers(&i.symbol, s, keys))
                             })
                         };
                         let sets = self.leases.values();

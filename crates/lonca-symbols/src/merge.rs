@@ -497,13 +497,27 @@ impl<'a> Merger<'a> {
         let (bm, om, tm) = (by_name(bs), by_name(os), by_name(ts));
         let top = o_container.is_none();
         self.note_moves(&names(bs), &names(ts));
-        // A symbol `t` renamed stays where `o` has it.
-        let renames = renames_between(self.engine, bs, ts);
-        let in_place = |new: &str| {
-            let old = renames.iter().find(|[_, n]| *n == new).map(|[o, _]| *o)?;
-            let (b_sym, o_sym) = (bm.get(old)?, om.get(old)?);
-            o_sym.same(self.o, b_sym, self.b).then_some((old, *o_sym))
+        // A symbol `t` renamed stays where `o` has it, unless `t` also moved
+        // it among the symbols both have.
+        let t_renames = renames_between(self.engine, bs, ts);
+        let o_renames = renames_between(self.engine, bs, os);
+        let around = |list: &[Sym], name: &str| {
+            let at = list.iter().position(|s| s.name == name);
+            let (before, after) = list.split_at(at.unwrap_or(0));
+            let kept =
+                |s: &&Sym| bm.contains_key(s.name.as_str()) && tm.contains_key(s.name.as_str());
+            let prev = before.iter().rev().find(kept).map(|s| s.name.clone());
+            (prev, after.iter().find(kept).map(|s| s.name.clone()))
         };
+        let mut in_place: BTreeMap<&str, (&str, &Sym)> = BTreeMap::new();
+        for [old, new] in &t_renames {
+            if let (Some(b_sym), Some(o_sym)) = (bm.get(old), om.get(old))
+                && o_sym.same(self.o, b_sym, self.b)
+                && around(bs, old) == around(ts, new)
+            {
+                in_place.insert(new, (old, o_sym));
+            }
+        }
         let mut renamed = BTreeSet::new();
         for (i, ts_sym) in ts.iter().enumerate() {
             let name = ts_sym.name.as_str();
@@ -518,9 +532,16 @@ impl<'a> Merger<'a> {
                         }
                         continue;
                     }
-                    if let Some((old, o_sym)) = in_place(name) {
-                        renamed.insert(old);
+                    if let Some((old, o_sym)) = in_place.get(name) {
+                        renamed.insert(*old);
                         self.replace(o_sym.start, o_sym.end, t_text.to_string());
+                        continue;
+                    }
+                    // `o` deleted it or called it something else: that can
+                    // not be done to it as well.
+                    let was = t_renames.iter().find(|[_, new]| *new == name);
+                    if let Some([old, _]) = was.filter(|[old, _]| !om.contains_key(old)) {
+                        self.conflict(old);
                         continue;
                     }
                     // A new symbol stands next to one of its own group, on
@@ -529,7 +550,9 @@ impl<'a> Merger<'a> {
                     let beside = |s: &&Sym| s.holder == held;
                     let shape = |h: Option<Holder>| h.map(|h| (h.kind, h.joined));
                     let anchor = |s: &Sym| {
-                        let o_sym = om.get(s.name.as_str()).copied();
+                        let name = s.name.as_str();
+                        let o_sym = om.get(name).copied();
+                        let o_sym = o_sym.or(in_place.get(name).map(|(_, o)| *o));
                         o_sym.filter(|o| shape(o.holder) == shape(held))
                     };
                     let (gap_start, gap_end) = ts_sym.around;
@@ -637,6 +660,12 @@ impl<'a> Merger<'a> {
                     let (start, end) = self.span_to_delete(o_sym);
                     self.replace(start, end, String::new());
                 } else {
+                    self.conflict(&b_sym.name);
+                }
+            } else {
+                // `t` deleted what `o` renamed: the symbol must not live on.
+                let was = |list: &[[&str; 2]]| list.iter().any(|[old, _]| *old == b_sym.name);
+                if was(&o_renames) && !was(&t_renames) {
                     self.conflict(&b_sym.name);
                 }
             }
@@ -1210,6 +1239,60 @@ mod tests {
                 assert_eq!(m.as_deref(), Ok(want.as_str()), "{path}");
             }
         }
+    }
+
+    /// What `t` wrote behind a renamed symbol stays behind it: the order of
+    /// definitions can be what the code needs.
+    #[test]
+    fn code_added_behind_a_renamed_symbol_stays_behind_it() {
+        let b = "class A:\n    pass\n\n\nclass Old:\n    def m(self):\n        return 1\n\n    def n(self):\n        return 2\n\n\ndef last():\n    return 3\n";
+        let t = b
+            .replace("class Old:", "class New:")
+            .replace("def last", "class Child(New):\n    pass\n\n\ndef last");
+        let o = b.replace("return 3", "return 4");
+        let m = merge_text_at(ENGINE_RENAMES, "a.py", b, &o, &t).unwrap();
+        let (new, child) = (m.find("class New").unwrap(), m.find("class Child").unwrap());
+        assert!(new < child, "{m}");
+        assert!(m.contains("return 4"), "{m}");
+    }
+
+    /// A rename and a move are both done, or a conflict, never half.
+    #[test]
+    fn a_rename_that_also_moved_keeps_the_move() {
+        let (a, c, d) = (
+            "def a():\n    return 1\n",
+            "def c():\n    return 2\n",
+            "def d():\n    return 3\n",
+        );
+        let b = format!("{a}\n\n{c}\n\n{d}");
+        let n = a.replace("def a", "def n");
+        let t = format!("{c}\n\n{d}\n\n{n}");
+        let o = b.replace("return 3", "return 4");
+        let m = merge_text_at(ENGINE_RENAMES, "a.py", &b, &o, &t).unwrap();
+        assert!(m.find("def d").unwrap() < m.find("def n").unwrap(), "{m}");
+        assert!(m.contains("return 4"), "{m}");
+    }
+
+    /// Each row: what one side does, against a rename on the other. Nothing
+    /// passes in silence: the symbol can not be gone and alive.
+    #[test]
+    fn a_rename_conflicts_with_a_delete_or_another_rename() {
+        let b = "def old():\n    a()\n    b()\n    c()\n\n\ndef k():\n    return 1\n";
+        let rename = |to: &str| b.replace("def old", &format!("def {to}"));
+        let k = |text: &str| text.replace("return 1", "return 2");
+        let delete = k(&b.replace("def old():\n    a()\n    b()\n    c()\n\n\n", ""));
+        let want = Err(vec!["a.py#old".to_string()]);
+        for (o, t) in [(rename("new"), delete.clone()), (delete, rename("new"))] {
+            assert_eq!(merge_text_at(ENGINE_RENAMES, "a.py", b, &o, &t), want);
+        }
+        let (o, t) = (rename("fresh"), rename("new"));
+        assert_eq!(merge_text_at(ENGINE_RENAMES, "a.py", b, &o, &t), want);
+        // The same rename on both sides is one change.
+        let (o, t) = (rename("new"), k(&rename("new")));
+        assert_eq!(
+            merge_text_at(ENGINE_RENAMES, "a.py", b, &o, &t).as_deref(),
+            Ok(t.as_str())
+        );
     }
 
     /// An edit of what the other side renamed reaches no symbol.

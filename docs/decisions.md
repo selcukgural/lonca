@@ -471,16 +471,21 @@ entry format, so they have their own version
     alike by at least 0.8, word by word. The number is engine data: it decides
     facts. A type also needs half its members in both, because two shells say
     nothing. Past 64 comparisons in one list a rename stays a delete and an add.
-    `impl` blocks are not renamed, since they stand for their type. A move to
-    another type or file is not detected: nothing in a list says it, and a
-    wrong guess there would free a lease on a symbol that was only deleted.
+    `impl` blocks are not renamed, since they stand for their type, so a Rust
+    type's rename also takes a lease for its new `impl`, as `lease_needed` says.
+    A move to another type or file is not detected: both names must have one
+    owner, which one list does not promise, as Go methods stand beside the
+    types. A guess there would let a rename lease on one type reach another. So
+    a Go type renamed along with a method's name reads as a rename of the type
+    and a delete and an add of the method: its old name follows to `U.Old`.
   - **Facts.** `renames: [[old, new]]`, beside the `deletes` and `adds` that
     stay. So `Claim` does not change and no client has to, and an auditor of
     an old log has nothing new to read. A change of parameters that `align`
     paired is in `renames` too, though it stays an edit: the old key and the
     new one are one symbol, and no string says that.
   - **Leases.** A `rename` lease on the old name covers the whole change: the
-    new name needs no lease on its container.
+    new name needs no lease on its container, and `lease_needs` asks again that
+    the two have one, so that this rests on no fact alone.
   - **What the issue proposed and this does not do.** It proposed resolving
     lease items against the trunk and recording the trunk in the set. That
     takes a tree in `decide()` or a value the daemon computes and the auditor
@@ -489,12 +494,21 @@ entry format, so they have their own version
     compared as they are and as they are called on the trunk
     (`State.conflict`). A session on an older base asks for a name a lease on
     the new one meets, and a proposal from an older base has its facts mapped by
-    the renames that base had not seen. A name taken again is that new symbol
-    for a new lease, though not for a proposal from before the rename. A
-    member follows its type.
+    the renames that base had not seen. A member follows its type, and `C.M`
+    reaches what its overloads became. A name taken again (an addition, a new
+    key, a file deleted or written anew) is that new symbol: it starts no chain,
+    for a lease or for a proposal, so nothing holds it by the name it left
+    behind. A symbol already on its way passes it, so `a` to `b` to `c` holds
+    after a new `b`. An external import has no facts, so a name it takes stays
+    linked to the rename, and two sessions on those names wait for each other
+    until one lets go: safe, and rare enough to leave.
   - **The merge** leaves a symbol `t` renamed where `o` has it, instead of a
-    delete here and an add there. An edit of what the other side renamed is a
-    conflict, as with a delete: the edit does not follow the name.
+    delete here and an add there, and what `t` added behind it stays behind it:
+    the order of definitions can be what the code needs. If `t` also moved it
+    among the symbols both have, that is the delete and the add it always was.
+    An edit of what the other side renamed is a conflict, as is a delete of it
+    or a second name for it: `o` deleted, `t` renamed, or both renamed
+    differently, each conflict on the old name. The edit does not follow the name.
   - **What this does not do.** A rename does not change the code that calls the
     symbol, so a caller is what verification finds (design §5.8). The list of
     tests counts a renamed test as deleted and added, and escalates: renaming

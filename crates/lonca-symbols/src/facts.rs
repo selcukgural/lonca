@@ -238,10 +238,19 @@ fn written(name: &str) -> &str {
     &last[..end.unwrap_or(last.len())]
 }
 
+/// What a name is a member of. One list is not one owner: a Go method stands
+/// beside the types, named after its own.
+fn owner(name: &str) -> Option<&str> {
+    name.rsplit_once('.').map(|(owner, _)| owner)
+}
+
 /// `own` with its name left out, also where the body calls it. Whole words
 /// only: `d` is not in `def`.
 fn nameless(s: &Sym) -> String {
     let name = written(&s.name);
+    if name.is_empty() {
+        return s.own.clone();
+    }
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::new();
     let mut rest = s.own.as_str();
@@ -293,6 +302,7 @@ fn renamed<'s>(lost: &[&'s Sym], gained: &[&'s Sym]) -> Vec<[&'s str; 2]> {
     let like = |b: &&Sym, n: &&Sym| {
         let (x, y) = (nameless(b), nameless(n));
         let shape = b.container == n.container && (!b.container || same_members(b, n));
+        let shape = shape && owner(&b.name) == owner(&n.name);
         match shape {
             true if x == y => 1.0,
             true => likeness(&x, &y),
@@ -597,6 +607,43 @@ mod tests {
         assert!(f.renames.is_empty(), "{f:?}");
         let f = section_facts(ENGINE_RENAMES, "a.ts", "class A {}\n", "class B {}\n");
         assert!(f.renames.is_empty(), "{f:?}");
+    }
+
+    /// A name with nothing written in it: a JavaScript `1.` is a method name.
+    #[test]
+    fn a_name_that_ends_in_a_dot_is_compared_and_ends() {
+        let old = "class C {\n  1.() {\n    return 1;\n  }\n}\n";
+        let new = "class C {\n  fresh() {\n    return 1;\n  }\n}\n";
+        let f = section_facts(ENGINE_RENAMES, "a.js", old, new);
+        assert_eq!(f.deletes.len(), 1, "{f:?}");
+        assert_eq!(f.adds, ["a.js#C.fresh"]);
+    }
+
+    /// A Go method stands in the file's list, so one list says nothing about
+    /// the owner.
+    #[test]
+    fn a_method_that_moved_to_another_owner_is_no_rename() {
+        let text = |recv: &str, name: &str| {
+            format!(
+                "package p\n\nfunc {recv}{name}(a int) int {{\n\tx := a + 1\n\ty := x * 2\n\treturn y\n}}\n"
+            )
+        };
+        for (old, new) in [
+            (text("(t T) ", "Old"), text("(u U) ", "New")),
+            (text("", "Helper"), text("(u U) ", "New")),
+            (text("(t T) ", "Old"), text("", "Helper")),
+        ] {
+            let f = section_facts(ENGINE_RENAMES, "a.go", &old, &new);
+            assert!(f.renames.is_empty(), "{f:?}");
+            assert_eq!((f.deletes.len(), f.adds.len()), (1, 1), "{f:?}");
+        }
+        let f = section_facts(
+            ENGINE_RENAMES,
+            "a.go",
+            &text("(t T) ", "Old"),
+            &text("(t T) ", "New"),
+        );
+        assert_eq!(f.renames.len(), 1, "{f:?}");
     }
 
     /// A function does not turn into a type, and members of a `impl` block

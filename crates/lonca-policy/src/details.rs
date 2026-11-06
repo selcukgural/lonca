@@ -155,12 +155,7 @@ pub fn lease_report(state: &State, session: &str, facts: &Facts, now_ms: i64) ->
     let mut out = Vec::new();
     for need in symbols::lease_needs(facts) {
         let kind = need.kinds[0];
-        let keys = state.symbol_keys;
-        let renamed = symbols::LeaseNeed {
-            symbol: state.renamed_to(&need.symbol, None),
-            kinds: need.kinds,
-        };
-        if mine().any(|i| need.covered_by(i, keys) || renamed.covered_by(i, keys)) {
+        if mine().any(|i| state.covers_need(&need, i, None)) {
             out.push(Detail::free(HELD_BY_YOU, &need.symbol, kind));
             continue;
         }

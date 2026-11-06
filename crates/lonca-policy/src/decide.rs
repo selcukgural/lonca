@@ -1209,16 +1209,7 @@ fn propose(
                 .collect();
             let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
             for need in symbols::lease_needs(f) {
-                // From an older base the fact has the old name of what the
-                // session may hold by the new one.
-                let keys = state.symbol_keys;
-                let renamed = symbols::LeaseNeed {
-                    symbol: state.renamed_to(&need.symbol, Some(base)),
-                    kinds: need.kinds,
-                };
-                let covered =
-                    |l: &&LeaseItem| need.covered_by(l, keys) || renamed.covered_by(l, keys);
-                if !mine.iter().any(covered) {
+                if !mine.iter().any(|l| state.covers_need(&need, l, Some(base))) {
                     v.deny(format!("lease_missing:{}", need.symbol));
                 }
             }
@@ -1282,12 +1273,14 @@ fn propose(
     // A revert of `Name` is one of `Name(key)`, and the other way around,
     // and it follows the symbol to its new name.
     let reverted = |s: &String| {
-        let s = &state.renamed_to(s, None);
-        mine.contains(s)
-            || (state.symbol_keys
-                && mine
-                    .iter()
-                    .any(|m| symbols::stands_for(s, m) || symbols::stands_for(m, s)))
+        let same = |s: &String| {
+            mine.contains(s)
+                || (state.symbol_keys
+                    && mine
+                        .iter()
+                        .any(|m| symbols::stands_for(s, m) || symbols::stands_for(m, s)))
+        };
+        same(s) || same(&state.renamed_to(s, None))
     };
     let recent_reverts = state
         .reverts

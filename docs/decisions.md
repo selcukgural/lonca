@@ -616,9 +616,16 @@ result (issue #49). Ten changes in batches of five verify twice.
   none and verifies everything as before. A failure is not kept, since it may have
   been the machine. What is reused is logged again with `reused = true` in its
   details. Syntax is always checked: it depends on what changed.
-- **`undo` of a batch** reverts each change in it, the last first, as a revert of that
-  change, so `revert-storm` counts them. `lonca revert --actor` takes back only that
-  actor's changes.
+- **`undo` of a batch** is one revert of all of it, from the trunk before it to its
+  tip, naming its last change in `revert_of`. Only the batch whole was verified, so a
+  tree between two of its changes may fail, and two reverts could leave trunk there:
+  the worker takes the first alone, and the second is refused after the command has
+  said it is done. So an undo goes whole or, when a later change is in the way, not at
+  all. `revert-storm` counts it once, over every symbol it touched, because one person
+  undid one entry. It is one change to the limits too, so a batch larger than
+  `max_files` can not be undone in one step. `lonca revert --actor` takes back only
+  that actor's changes, each its own revert as it is outside a batch, and goes on past
+  a refused one.
 
 ## The language table
 

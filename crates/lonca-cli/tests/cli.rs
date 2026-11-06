@@ -4349,13 +4349,23 @@ fn a_file_may_hold_what_reads_like_a_marker() {
 }
 
 fn a_batch_landed(e: &Env) -> (u64, Vec<PathBuf>) {
+    a_batch_under(e, "sleep 2")
+}
+
+/// Three changes adding `src/f<i>.txt`, the last two landing as a batch, all
+/// verified with `test`.
+fn a_batch_under(e: &Env, test: &str) -> (u64, Vec<PathBuf>) {
     agent_workspace(e);
     let r = &e.root;
     let shown = e.run(r, &["policy", "show", "--repo", "demo"]);
     assert!(shown.contains("batch_size = 1"), "{shown}");
     let cfg = lonca_policy::config::DEFAULT_CONFIG
         .replace("batch_size = 1", "batch_size = 2")
-        .replace("# test = \"cargo test --offline\"", "test = \"sleep 2\"");
+        .replace("required = false", "required = true")
+        .replace(
+            "# test = \"cargo test --offline\"",
+            &format!("test = \"{test}\""),
+        );
     std::fs::write(r.join("c.toml"), cfg).unwrap();
     std::fs::write(r.join("p.cedar"), lonca_policy::config::DEFAULT_POLICY).unwrap();
     e.run(
@@ -4399,18 +4409,58 @@ fn undo_claims(e: &Env) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// `undo` of a batch is a revert of each change in it, so that what counts
-/// reverts counts them.
+fn on_trunk(e: &Env, path: &str) -> bool {
+    let hws = e.root.join("hws");
+    e.run(&hws, &["sync"]);
+    hws.join(path).exists()
+}
+
+/// `undo` of a batch is one revert, and it counts as one.
 #[test]
-fn undoing_a_batch_reverts_each_change() {
+fn undoing_a_batch_is_one_revert_of_all_of_it() {
     let e = Env::new();
     let (seq, _) = a_batch_landed(&e);
     e.run(&e.root, &["undo", &seq.to_string(), "--repo", "demo"]);
     e.settle();
     let claims = undo_claims(&e);
-    assert_eq!(claims.len(), 2, "{claims:?}");
-    assert!(
-        claims.iter().all(|c| !c["revert_of"].is_null()),
-        "{claims:?}"
-    );
+    assert_eq!(claims.len(), 1, "{claims:?}");
+    assert!(!claims[0]["revert_of"].is_null(), "{claims:?}");
+    assert!(on_trunk(&e, "src/f0.txt"), "before the batch");
+    assert!(!on_trunk(&e, "src/f1.txt"));
+    assert!(!on_trunk(&e, "src/f2.txt"));
+}
+
+/// Only the batch whole was verified: `f1` without `f2` fails, and an undo
+/// must not have to pass through it.
+#[test]
+fn undoing_a_batch_goes_through_no_tree_nobody_verified() {
+    let e = Env::new();
+    let check = "sleep 1; test ! -e src/f1.txt || test -e src/f2.txt";
+    let (seq, _) = a_batch_under(&e, check);
+    e.run(&e.root, &["undo", &seq.to_string(), "--repo", "demo"]);
+    e.settle();
+    assert!(!on_trunk(&e, "src/f1.txt"));
+    assert!(!on_trunk(&e, "src/f2.txt"));
+}
+
+/// A later change to either file refuses the undo of the whole batch: none of
+/// it goes, whichever change the later one touched.
+#[test]
+fn a_later_change_refuses_all_of_a_batchs_undo() {
+    for file in ["src/f1.txt", "src/f2.txt"] {
+        let e = Env::new();
+        let (seq, _) = a_batch_under(&e, "sleep 1");
+        let hws = e.root.join("hws");
+        e.run(&hws, &["sync"]);
+        std::fs::write(hws.join(file), "changed later\n").unwrap();
+        land(&e, &hws, "later");
+        let args = ["undo", &seq.to_string(), "--repo", "demo"];
+        let out = e.cmd(&e.root, &args).output().unwrap();
+        assert!(!out.status.success(), "{file}");
+        assert!(text(&out.stderr).contains(file), "{}", text(&out.stderr));
+        e.settle();
+        assert_eq!(undo_claims(&e), [] as [serde_json::Value; 0], "{file}");
+        assert!(on_trunk(&e, "src/f1.txt"), "{file}");
+        assert!(on_trunk(&e, "src/f2.txt"), "{file}");
+    }
 }

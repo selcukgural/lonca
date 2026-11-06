@@ -92,7 +92,7 @@
               "is_test": false,
               "name": "C.b",
               "own": "",
-              "signature": "int a, b",
+              "signature": "int b",
               "skipped": false,
               "span": [
                 55,
@@ -200,7 +200,7 @@
               "is_test": false,
               "name": "C.b",
               "own": "",
-              "signature": "int a = 1, b",
+              "signature": "int b",
               "skipped": false,
               "span": [
                 59,
@@ -308,7 +308,7 @@
               "is_test": false,
               "name": "C.b",
               "own": "",
-              "signature": "int a, b",
+              "signature": "int b",
               "skipped": false,
               "span": [
                 55,
@@ -322,7 +322,7 @@
               "is_test": false,
               "name": "C.c",
               "own": "",
-              "signature": "int a, b, c",
+              "signature": "int c",
               "skipped": false,
               "span": [
                 58,

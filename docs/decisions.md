@@ -592,7 +592,8 @@ entry format, so they have their own version
     takes. The fields of a value (`VALUE_FIELDS`) hold across grammars, as
     `TYPE_KINDS` do. Comments are left out of every signature.
   - The type of `int a, b` stands in the class's own text, so neither field
-    changes: the signature change is `C.<def>`.
+    changes: the signature change is `C.<def>`. Each item's signature holds what
+    stands in front of the first item, not of itself, so a list stays linear.
 
 ## Batches in the merge queue
 
@@ -1889,7 +1890,8 @@ came of it (issue #43).
   `Type.<def>` for a type's own text, `<module>` for code outside symbols.
 - **A name is looked for as code writes it.** `constructors` in the table are reached
   by their type (`__init__`, `constructor`, `initialize`, `__construct`, `init`), and
-  `marks` are what a name has around its token (`$a` is `a`, Ruby's `x=` is `x`).
+  `marks` are what a name has around its token (`$a` is `a`, Ruby's `x=` is `x`,
+  Swift's `` `class` `` is `class`). An operator is no name anyone can search for.
 - **A file that can not be read for symbols counts whole.** One with a parse error,
   over 1 MiB or not UTF-8 is `path#<file>` if it holds the name as a word: otherwise
   a grammar's gap would read as "nothing mentions this", and the change would owe

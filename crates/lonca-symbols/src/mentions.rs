@@ -32,14 +32,26 @@ fn spelled<'a>(part: &'a str, rules: Option<&Rules>) -> Option<&'a str> {
         used = used.trim_start_matches(mark.as_str());
         used = used.trim_end_matches(mark.as_str());
     }
-    (!used.is_empty() && !used.starts_with('<')).then_some(used)
+    let word = used.chars().any(|c| c.is_alphanumeric() || c == '_');
+    (word && !used.starts_with('<')).then_some(used)
+}
+
+/// `symbol` as path and name. A path can hold a `#` and so can a name, as
+/// Rust's `r#type` does: the path is the first that means something here.
+fn split_symbol(engine: u32, symbol: &str) -> Option<(&str, &str)> {
+    let splits = symbol.match_indices('#').map(|(at, _)| at);
+    let splits = splits.map(|at| (&symbol[..at], &symbol[at + 1..]));
+    let known = |(path, _): &(&str, &str)| {
+        names_are_headings(path) || Lang::detect_at(engine, path).is_some()
+    };
+    splits.clone().find(known).or(splits.clone().next())
 }
 
 /// The names code uses for `symbol`: its last part, for `Type.<def>` the
 /// type, and for a constructor the type too. None for a heading or a part of
 /// a file that is no declaration.
 pub(crate) fn used_names(engine: u32, symbol: &str) -> Vec<&str> {
-    let Some((path, name)) = symbol.split_once('#') else {
+    let Some((path, name)) = split_symbol(engine, symbol) else {
         return vec![];
     };
     if names_are_headings(path) {
@@ -128,9 +140,10 @@ fn in_file(
     true
 }
 
-/// A byte that can be part of a name, in any of the languages.
+/// A byte that is part of a name. What is not ASCII can be, or can be a BOM
+/// or a space: parsing tells, so such a neighbour does not rule a word out.
 fn in_word(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_' || !b.is_ascii()
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// The bytes hold one of the names as a word of its own.
@@ -215,6 +228,11 @@ mod tests {
             ("a.php#C.$a", vec!["a"]),
             ("a.rb#C.x=", vec!["x"]),
             ("a.rb#C.valid?", vec!["valid?"]),
+            ("a.rb#C.+", vec![]),
+            ("a.rb#C.>=", vec![]),
+            ("a.swift#C.`class`", vec!["class"]),
+            ("C#/a.php#C.$a", vec!["a"]),
+            ("a.rs#r#type", vec!["r#type"]),
             ("a.rs#<file>", vec![]),
             ("a.rs#<module>", vec![]),
             ("a.rs#T.<module>", vec![]),
@@ -233,6 +251,7 @@ mod tests {
             ("a.rb#C.initialize", vec!["initialize", "C"]),
             ("a.php#C.__construct", vec!["__construct", "C"]),
             ("a.swift#C.init", vec!["init", "C"]),
+            ("a.kt#C.constructor", vec!["constructor", "C"]),
             ("a.py#constructor", vec!["constructor"]),
             ("a.rs#C.init", vec!["init"]),
             ("a.py#__init__", vec!["__init__"]),
@@ -395,8 +414,9 @@ mod tests {
             ("ffx", false),
             ("xf", false),
             ("x_f", false),
-            ("éf", false),
-            ("fé", false),
+            ("éf", true),
+            ("fé", true),
+            ("\u{feff}f", true),
             ("g", false),
             ("xf f", true),
         ] {

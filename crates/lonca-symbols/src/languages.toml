@@ -390,6 +390,7 @@ how = { inner = { child = ["variable_declarator"], field = "name" } }
 # Kotlin. Its grammar has no fields for a class body or for parameters.
 
 [rules.kotlin]
+constructors = ["constructor"]
 attached = [{ kinds = ["line_comment", "block_comment"] }]
 imports = ["import"]
 bodies = ["function_body"]
@@ -572,6 +573,7 @@ how = { inner = { child = ["const_element"], field = "name", or_child = "name" }
 
 [rules.swift]
 constructors = ["init"]
+marks = ["`"]
 attached = [{ kinds = ["comment", "multiline_comment"] }]
 imports = ["import_declaration"]
 types = ["typealias_declaration"]

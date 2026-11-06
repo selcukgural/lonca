@@ -1507,7 +1507,9 @@ impl<'s> Extractor<'s> {
             } else {
                 normalize(&self.src[start..end])
             };
-            let signature = self.signature(&def, def_node, is_type, holder);
+            let front = holder.filter(|h| h.joined && self.engine >= ENGINE_SIGNATURES);
+            let front = front.map_or(String::new(), |h| self.list_front(&h, &children, child));
+            let signature = self.signature(&def, def_node, is_type, &front);
             let attached = &self.src[start..def.header_start.max(start)];
             let (is_test, skipped) = self.test_markers(&def, def_node, &qualified, attached);
             out.push(Sym {
@@ -1538,7 +1540,7 @@ impl<'s> Extractor<'s> {
     /// of a type whose body is the type, and for the rest the declaration
     /// without its value: a constant's value is not its type, and a function
     /// held by a name keeps what it takes.
-    fn signature(&self, def: &Def, n: Node, is_type: bool, held: Option<Holder>) -> Option<String> {
+    fn signature(&self, def: &Def, n: Node, is_type: bool, front: &str) -> Option<String> {
         if self.engine < ENGINE_SIGNATURES {
             let header = |b: Node| normalize(&self.src[def.header_start..b.start_byte()]);
             return def.body.map(header);
@@ -1549,15 +1551,26 @@ impl<'s> Extractor<'s> {
             (None, Some(body)) => body.start_byte(),
             (None, None) => value_start(n).unwrap_or(n.end_byte()),
         };
-        // One of a list: `int a, b` says what `b` is in front of `a`.
-        let list = held.filter(|h| h.joined).map(|h| h.start);
-        let start = list.unwrap_or(def.header_start).min(def.header_start);
-        let list_node = list.and_then(|_| n.parent());
         let mut comments = Vec::new();
-        comments_in(list_node.unwrap_or(n), end, &mut comments);
-        comments.retain(|c| c.0 >= start);
-        let text = remove_spans(self.src, start, end, &comments);
+        comments_in(n, end, &mut comments);
+        comments.retain(|c| c.0 >= def.header_start);
+        let text = remove_spans(self.src, def.header_start, end, &comments);
+        let text = format!("{front} {text}");
         Some(normalize(&text))
+    }
+
+    /// What every item of a list has in front of it: `int a, b` says what
+    /// `b` is in front of `a`. Up to the first item, so that a list costs
+    /// each of its items the same.
+    fn list_front(&self, list: &Holder, items: &[Node], item: Node) -> String {
+        let first = items.iter().position(|c| c.kind() == item.kind());
+        let first = first.unwrap_or(0);
+        let mut comments = Vec::new();
+        let end = items[first].start_byte();
+        items[..first]
+            .iter()
+            .for_each(|c| comments_in(*c, end, &mut comments));
+        remove_spans(self.src, list.start, end, &comments)
     }
 
     fn test_markers(&self, def: &Def, n: Node, qualified: &str, attached: &str) -> (bool, bool) {

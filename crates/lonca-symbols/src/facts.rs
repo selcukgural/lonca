@@ -256,8 +256,11 @@ fn affected(
     let own: BTreeSet<String> = f.edits.iter().chain(renamed).map(|s| bare(s)).collect();
     let gone: BTreeSet<String> = f.deletes.iter().map(|s| bare(s)).collect();
     let in_deleted_file = |id: &String| {
-        let path = id.split_once('#').map(|(path, _)| path);
-        path.is_some_and(|p| f.deleted_files.iter().any(|d| d == p))
+        let mut files = f.deleted_files.iter();
+        files.any(|d| {
+            id.strip_prefix(d.as_str())
+                .is_some_and(|n| n.starts_with('#'))
+        })
     };
     found.retain(|id| {
         let name = bare(id);
@@ -1819,6 +1822,24 @@ mod tests {
         let run = move || section_facts(ENGINE_SIGNATURES, "a.rs", &src, "type T = u16;\n");
         let on_a_daemon_stack = std::thread::Builder::new().stack_size(2 << 20).spawn(run);
         on_a_daemon_stack.unwrap().join().unwrap();
+    }
+
+    /// Every item says what stands in front of the first, and no more.
+    #[test]
+    fn a_long_list_costs_each_item_the_same() {
+        let items: Vec<String> = (0..2000).map(|i| format!("a{i}")).collect();
+        let src = format!("class C {{ int {}; }}\n", items.join(", "));
+        let lang = Lang::detect("a.cs").unwrap();
+        let p = parse_at(ENGINE_SIGNATURES, lang, &src);
+        let last = p.syms[0].children.last().unwrap();
+        assert_eq!(last.signature.as_deref(), Some("int a1999"));
+    }
+
+    #[test]
+    fn a_file_under_a_path_with_a_hash_is_deleted_like_another() {
+        let old = "fn f() {}\nfn g() { f(); }\n";
+        let a = run_now(&[("C#/a.rs", old)], &[]);
+        assert!(a.facts.affected.is_empty(), "{:?}", a.facts);
     }
 
     #[test]

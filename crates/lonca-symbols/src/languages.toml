@@ -1,0 +1,289 @@
+# What each language's syntax means to the symbol engine.
+#
+# This file is part of the engine: the auditor recomputes facts and merges
+# from it, so a change to what it says about a language that shipped is a new
+# engine version (`src/engine.rs`) with the change gated by `since`, and a new
+# language carries the first engine that reads it. `tests/engine.rs` pins the
+# output; `lang.rs` has a test that every node kind and field named here exists
+# in a grammar.
+#
+# A rule's `how` says how a node names a symbol. Rules are tried in order, the
+# first that fits decides. `since` is the first engine a rule holds in.
+
+[[language]]
+name = "rust"
+grammar = "rust"
+extensions = ["rs"]
+rules = "rust"
+
+[[language]]
+name = "python"
+grammar = "python"
+extensions = ["py", "pyi"]
+rules = "python"
+
+[[language]]
+name = "typescript"
+grammar = "typescript"
+extensions = ["ts", "mts", "cts"]
+rules = "ecmascript"
+
+[[language]]
+name = "tsx"
+grammar = "tsx"
+extensions = ["tsx"]
+rules = "ecmascript"
+
+[[language]]
+name = "javascript"
+grammar = "javascript"
+extensions = ["js", "mjs", "cjs", "jsx"]
+rules = "ecmascript"
+
+[[language]]
+name = "csharp"
+grammar = "c_sharp"
+extensions = ["cs"]
+rules = "csharp"
+
+[[language]]
+name = "go"
+grammar = "go"
+extensions = ["go"]
+rules = "go"
+
+# Rust
+
+[rules.rust]
+attached = [{ kinds = ["attribute_item", "line_comment", "block_comment"] }]
+imports = ["use_declaration", "extern_crate_declaration"]
+
+[rules.rust.tests]
+kinds = ["function_item"]
+marks = ["#[test", "::test", "#[rstest"]
+skips = ["#[ignore"]
+
+[[rules.rust.groups]]
+kinds = ["foreign_mod_item"]
+since = 5
+how = { field = "body" }
+
+[[rules.rust.defs]]
+kinds = [
+    "function_item",
+    "function_signature_item",
+    "struct_item",
+    "enum_item",
+    "union_item",
+    "type_item",
+    "const_item",
+    "static_item",
+    "macro_definition",
+]
+how = { leaf = "name" }
+
+[[rules.rust.defs]]
+kinds = ["macro_invocation", "expression_statement"]
+since = 5
+how = { macro_call = { call = "macro_invocation", field = "macro", suffix = "!" } }
+
+[[rules.rust.defs]]
+kinds = ["trait_item"]
+how = { members = { name = "name", members = "body" } }
+
+[[rules.rust.defs]]
+kinds = ["mod_item"]
+how = { members_if_any = { name = "name", members = "body" } }
+
+[[rules.rust.defs]]
+kinds = ["impl_item"]
+how = { implementation = { of_type = "type", of_trait = "trait", members = "body", prefix = "impl:" } }
+
+# Python
+
+[rules.python]
+attached = [{ kinds = ["comment"] }]
+imports = ["import_statement", "import_from_statement", "future_import_statement"]
+wrappers = [{ kind = "decorated_definition", field = "definition" }]
+
+[rules.python.tests]
+kinds = ["function_definition"]
+name_prefix = "test"
+owner_prefix = "Test"
+skips = ["skip"]
+
+[[rules.python.groups]]
+kinds = ["if_statement", "try_statement"]
+since = 5
+top = true
+how = { blocks = { block = "block", defs = ["function_definition", "class_definition", "decorated_definition"], plain = ["comment", "pass_statement"] } }
+
+[[rules.python.defs]]
+kinds = ["function_definition"]
+how = { leaf = "name" }
+
+[[rules.python.defs]]
+kinds = ["class_definition"]
+how = { members = { name = "name", members = "body" } }
+
+# TypeScript, TSX, JavaScript
+
+[rules.ecmascript]
+attached = [{ kinds = ["comment"] }, { kinds = ["decorator"], since = 5 }]
+imports = ["import_statement"]
+wrappers = [{ kind = "export_statement", field = "declaration" }]
+call_tests = true
+
+[[rules.ecmascript.groups]]
+kinds = ["expression_statement"]
+since = 5
+how = { object_set_to = { set = "assignment_expression", target = "module.exports", object = "object" } }
+
+[[rules.ecmascript.defs]]
+kinds = [
+    "function_declaration",
+    "generator_function_declaration",
+    "function_signature",
+    "method_definition",
+    "method_signature",
+    "abstract_method_signature",
+    "interface_declaration",
+    "type_alias_declaration",
+    "enum_declaration",
+    "public_field_definition",
+]
+how = { leaf = "name" }
+
+[[rules.ecmascript.defs]]
+kinds = ["class_declaration", "abstract_class_declaration", "internal_module", "module"]
+how = { members = { name = "name", members = "body" } }
+
+[[rules.ecmascript.defs]]
+kinds = ["field_definition"]
+how = { leaf = "property" }
+
+[[rules.ecmascript.defs]]
+kinds = ["lexical_declaration", "variable_declaration"]
+how = { inner = { child = ["variable_declarator"], field = "name", only = "identifier" } }
+
+[[rules.ecmascript.defs]]
+kinds = ["expression_statement"]
+since = 5
+how = { assigned = { set = "assignment_expression", objects = ["exports", "module.exports"] } }
+
+[[rules.ecmascript.defs]]
+kinds = ["pair"]
+how = { function_pair = { key = "property_identifier", values = ["function_expression", "arrow_function", "generator_function"] } }
+
+# C#
+
+[rules.csharp]
+attached = [{ kinds = ["comment"] }]
+imports = ["using_directive"]
+attributes = ["attribute_list"]
+partial = { kind = "modifier", word = "partial" }
+
+[rules.csharp.tests]
+in = "attributes"
+marks = [
+    "[Fact",
+    "[Theory",
+    "[Test",
+    "[TestMethod",
+    "[TestCase",
+    "[DataTestMethod",
+    ", Fact",
+    ", Test",
+]
+skips = ["Skip", "Ignore"]
+skips_in = "attributes"
+
+[[rules.csharp.groups]]
+kinds = ["namespace_declaration"]
+how = { field = "body" }
+
+[[rules.csharp.groups]]
+kinds = ["field_declaration", "event_field_declaration"]
+since = 5
+how = { list = { list = "variable_declaration", item = "variable_declarator" } }
+
+[[rules.csharp.defs]]
+kinds = [
+    "class_declaration",
+    "struct_declaration",
+    "interface_declaration",
+    "record_declaration",
+]
+how = { members = { name = "name", members = "body" } }
+
+[[rules.csharp.defs]]
+kinds = [
+    "enum_declaration",
+    "delegate_declaration",
+    "property_declaration",
+    "event_declaration",
+    "method_declaration",
+    "constructor_declaration",
+    "destructor_declaration",
+    "local_function_statement",
+    "variable_declarator",
+]
+how = { leaf = "name" }
+
+[[rules.csharp.defs]]
+kinds = ["operator_declaration"]
+how = { prefixed = { prefix = "operator", field = "operator" } }
+
+[[rules.csharp.defs]]
+kinds = ["conversion_operator_declaration"]
+how = { fixed = "operator_conversion" }
+
+[[rules.csharp.defs]]
+kinds = ["indexer_declaration"]
+how = { fixed = "this" }
+
+[[rules.csharp.defs]]
+kinds = ["field_declaration", "event_field_declaration"]
+how = { inner = { descendant = ["variable_declarator"], field = "name", or_child = "identifier" } }
+
+# Go
+
+[rules.go]
+attached = [{ kinds = ["comment"] }]
+imports = ["import_declaration"]
+
+[rules.go.tests]
+kinds = ["function_declaration"]
+name_prefix = "Test"
+skips = [".Skip("]
+skips_in = "text"
+
+[[rules.go.groups]]
+kinds = ["const_declaration", "type_declaration"]
+since = 5
+how = { parens = "(" }
+
+[[rules.go.groups]]
+kinds = ["var_declaration"]
+since = 5
+how = { child = "var_spec_list" }
+
+[[rules.go.defs]]
+kinds = ["function_declaration", "const_spec", "var_spec", "type_spec", "type_alias"]
+how = { leaf = "name" }
+
+[[rules.go.defs]]
+kinds = ["method_declaration"]
+how = { method_of = { receiver = "receiver", kind = "type_identifier", name = "name" } }
+
+[[rules.go.defs]]
+kinds = ["type_declaration"]
+how = { inner = { child = ["type_spec", "type_alias"], field = "name" } }
+
+[[rules.go.defs]]
+kinds = ["const_declaration"]
+how = { inner = { descendant = ["const_spec"], field = "name" } }
+
+[[rules.go.defs]]
+kinds = ["var_declaration"]
+how = { inner = { descendant = ["var_spec"], field = "name" } }

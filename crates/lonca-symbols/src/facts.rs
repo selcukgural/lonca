@@ -67,7 +67,7 @@ pub fn analyze(
     let mut syntax_errors = Vec::new();
     let paths: BTreeSet<&String> = base.keys().chain(new.keys()).collect();
     for path in paths {
-        let lang = Lang::detect(path);
+        let lang = Lang::detect_at(engine, path);
         match (base.get(path), new.get(path)) {
             (None, None) => {}
             (None, Some(n)) => {

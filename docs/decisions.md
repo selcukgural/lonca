@@ -538,6 +538,35 @@ entry format, so they have their own version
   - **A lease someone holds on such a file does not stop another's edit.** It is
     no use to anyone under `optimistic`, and the merge is what decides.
 
+## The language table
+
+What a language's syntax means to the symbol engine is data (issue #114):
+`crates/lonca-symbols/src/languages.toml` says which grammar reads which
+extension and which nodes are definitions, imports, attachments, groups and
+tests. `extract.rs` has no arm per language any more, and `Lang` is a handle on
+a table entry, not an enum.
+
+- **The table is part of the engine.** The auditor recomputes from it, so it is
+  built in with `include_str!`, never taken from a policy or a file beside the
+  binary, and a change to what it says about a language that shipped is a new
+  engine with the rule gated by `since`. A new language has `since` of its own:
+  `Lang::detect_at(engine, path)` leaves it unread by older engines, so an old
+  entry's facts come out as they were.
+- **A rule's `how` is mostly data, and a few are shapes.** `leaf`, `members`,
+  `inner` and the like work for any grammar. `implementation`, `macro_call`,
+  `assigned`, `function_pair`, `blocks` and `object_set_to` are syntax one family
+  has, written once as code and chosen by the table. They are named for the
+  syntax, not the language, so another grammar can use them.
+- **The grammar is the hard limit.** A tree-sitter grammar is compiled code, so
+  `lang::grammar` has one line per grammar and a new grammar needs a release.
+  Loading them at run time (WebAssembly, never native code from a policy) needs a
+  design for pinning them, because a grammar's hash would become part of the
+  engine. Until then `[leases] unparsed_files` covers every language with none.
+- **Heuristics that hold across grammars stay in the code:** `TYPE_KINDS`,
+  `is_verbatim`, and the names `parameters` and `type_parameters` in a key.
+- **A word the table gets wrong would read as a kind that never comes,** so a
+  test checks every kind and field in it against the grammars that use it.
+
 ## Harness profiles
 
 Which harnesses Lonca can read is data, not code (issue #109). A profile

@@ -175,7 +175,7 @@ pub fn merge_text_at(
         return r;
     }
     let file_conflict = || vec![format!("{path}#<file>")];
-    let lang = Lang::detect(path);
+    let lang = Lang::detect_at(engine, path);
     if let Some(lang) = lang {
         match symbol_merge(engine, path, lang, b, o, t) {
             Sm::Merged(s) => return Ok(s),
@@ -214,7 +214,7 @@ pub fn merge_around_conflicts(
     o: &str,
     t: &str,
 ) -> Option<String> {
-    let lang = Lang::detect(path)?;
+    let lang = Lang::detect_at(engine, path)?;
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return None;
@@ -1526,7 +1526,7 @@ mod tests {
         let add = |n: &str| GROUP.replace("B = 2\n", &format!("B = 2\n\t{n} = 3\n"));
         let m = merge(&add("C"), &add("D")).unwrap();
         assert!(m.contains("\tC = 3\n") && m.contains("\tD = 3\n"), "{m}");
-        assert!(!parse_at(5, Lang::Go, &m).has_error, "{m}");
+        assert!(!parse_at(5, Lang::named("go"), &m).has_error, "{m}");
         let want = add("C").replace("A = 1", "A = 10");
         assert_eq!(merge(&edit_a, &add("C")).unwrap(), want);
         // A deleted spec goes with its line.
@@ -1606,9 +1606,9 @@ mod tests {
         let b = "module.exports = {\n  a() {},\n  b() {},\n};\n";
         let add = |n: &str| b.replace("  b() {},\n", &format!("  b() {{}},\n  {n}() {{}},\n"));
         let m = merge_text_at(5, "a.js", b, &add("c"), &add("d")).unwrap();
-        assert!(!parse_at(5, Lang::JavaScript, &m).has_error, "{m}");
+        assert!(!parse_at(5, Lang::named("javascript"), &m).has_error, "{m}");
         assert_eq!(
-            names(&parse_at(5, Lang::JavaScript, &m).syms),
+            names(&parse_at(5, Lang::named("javascript"), &m).syms),
             ["a", "b", "d", "c"],
             "{m}"
         );
@@ -1943,7 +1943,7 @@ mod tests {
     /// The checks at the end of `holds_up`, on text no merge writes now.
     #[test]
     fn a_result_must_hold_code_of_a_side() {
-        let side = |text| parse_at(5, Lang::Python, text);
+        let side = |text| parse_at(5, Lang::named("python"), text);
         let b = "x = 1\n\nclass A:\n    y = 1\n\n    class B:\n        z = 1\n";
         let (pb, po, pt) = (
             side(b),
@@ -1954,7 +1954,7 @@ mod tests {
             holds_up(
                 engine,
                 "a.py",
-                Lang::Python,
+                Lang::named("python"),
                 text,
                 &Naming::default(),
                 [&pb, &po, &pt],
@@ -1975,7 +1975,7 @@ mod tests {
 
     #[test]
     fn a_third_kind_of_code_is_seen_at_any_depth() {
-        let syms = |text: &str| parse_at(5, Lang::Python, text).syms;
+        let syms = |text: &str| parse_at(5, Lang::named("python"), text).syms;
         let b = "class A:\n    y = 1\n\n    class B:\n        z = 1\n";
         let (o, t) = (
             syms(&b.replace("y = 1", "y = 2")),
@@ -2423,7 +2423,7 @@ mod tests {
         let t = "class C:\n    def a(self):\n        return 1\n\n    def theirs(self):\n        return 3\n";
         let m = merge_text("x.py", b, o, t).unwrap();
         assert!(m.contains("def ours") && m.contains("def theirs"), "{m}");
-        assert!(!parse(Lang::Python, &m).has_error);
+        assert!(!parse(Lang::named("python"), &m).has_error);
     }
 
     #[test]
@@ -2667,7 +2667,7 @@ mod tests {
             trunk = merge_text("lib.rs", &base, &trunk, &theirs)
                 .unwrap_or_else(|c| panic!("agent {i}: {c:?}"));
         }
-        let p = parse(Lang::Rust, &trunk);
+        let p = parse(Lang::named("rust"), &trunk);
         assert!(!p.has_error);
         for i in 0..20 {
             assert!(

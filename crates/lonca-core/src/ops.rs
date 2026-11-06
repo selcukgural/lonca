@@ -90,6 +90,8 @@ pub enum OpKind {
     ChangeWithdraw,
     #[serde(rename = "change.integrate")]
     ChangeIntegrate,
+    #[serde(rename = "change.integrate_batch")]
+    ChangeIntegrateBatch,
     #[serde(rename = "approve")]
     Approve,
     #[serde(rename = "reject")]
@@ -138,6 +140,7 @@ impl OpKind {
             OpKind::ChangePropose => "change.propose",
             OpKind::ChangeWithdraw => "change.withdraw",
             OpKind::ChangeIntegrate => "change.integrate",
+            OpKind::ChangeIntegrateBatch => "change.integrate_batch",
             OpKind::Approve => "approve",
             OpKind::Reject => "reject",
             OpKind::Observe => "observe",
@@ -551,6 +554,16 @@ pub enum Op {
         merged: Option<GitId>,
         conflicts: Vec<String>,
     },
+    /// Changes at the head of the queue, integrated at once. One entry, so
+    /// that a crash can not leave trunk at a state nothing verified: the
+    /// evidence is of the last commit, and trunk moves straight to it. The
+    /// commits before it are in its history and were never trunk.
+    #[serde(rename = "change.integrate_batch")]
+    ChangeIntegrateBatch {
+        trunk_before: GitId,
+        /// Each change, in queue order, with the commit it merged to.
+        merged: Vec<(ChangeId, GitId)>,
+    },
     #[serde(rename = "approve")]
     Approve { target_seq: u64, note: String },
     /// A human declines an escalated operation; the reason is for the
@@ -621,6 +634,7 @@ impl Op {
             Op::ChangePropose { .. } => OpKind::ChangePropose,
             Op::ChangeWithdraw { .. } => OpKind::ChangeWithdraw,
             Op::ChangeIntegrate { .. } => OpKind::ChangeIntegrate,
+            Op::ChangeIntegrateBatch { .. } => OpKind::ChangeIntegrateBatch,
             Op::Approve { .. } => OpKind::Approve,
             Op::Reject { .. } => OpKind::Reject,
             Op::Observe { .. } => OpKind::Observe,

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Batches in the merge queue (log format 17)
+
+`[queue] batch_size` in a signed policy, default 1, verifies the changes at the head of the queue
+as one and bisects a failure: `change.integrate_batch` integrates them with one entry, and trunk
+moves straight to the verified tip. A tree that passed is not verified again while the daemon runs.
+
 ### Seven more languages (symbol engine 10)
 
 Java, Kotlin, C, C++, Ruby, PHP and Swift have symbols: leases, merges and facts by method, and

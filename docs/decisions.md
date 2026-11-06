@@ -114,6 +114,7 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 16** adds `unread_files` to facts, which escalates a proposal (see
   "Symbol engine versions", engine 10 and "The language table"). Older entries have
   none, so nothing is gated on the format.
+- **Version 17** adds `change.integrate_batch` (see "Batches in the merge queue").
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -575,6 +576,56 @@ entry format, so they have their own version
 - **Engine 10** reads Java, Kotlin, C, C++, Ruby, PHP and Swift. Each is an entry
   in the language table with `since = 10`: engine 9 and older still see their
   files as text, and old entries recompute as they were.
+
+## Batches in the merge queue
+
+With `[queue] batch_size` above 1 (default 1, as before; at most 64) the worker
+merges the changes at the head of the queue on top of each other and verifies the
+result (issue #49). Ten changes in batches of five verify twice.
+
+- **Only the tip is verified, and trunk moves straight to it.** The promise that
+  every state that enters trunk was verified on that state holds as it stands: the
+  commits inside a batch are in history and were never trunk, so they are no base
+  for a proposal and appear in no trunk line. The owner chose this over verifying
+  each state, which keeps the same words at the cost of the CPU batches are for.
+- **One log entry integrates a batch.** With one entry per change a crash between
+  them would leave the log naming a trunk nobody verified, and `reconcile()` would
+  restore it. `change.integrate_batch` is all or nothing, and each change in it has
+  the commit it merged to, for `undo` and for the auditor, which recomputes them in
+  order and checks that the evidence is of the tip's tree.
+- **A failure halves the batch.** A prefix of half the size is tried next, down to a
+  change alone, which goes the way it always did, so a failing one is logged as
+  before. What a failed batch leaves stays in the queue in its order. This finds
+  a prefix that passes, not the longest: a bad fifth change lands two, and the next
+  pass goes on from there. A conflict ends a batch, and so does a change that can
+  not be merged or verified at all: the changes ahead of it do not wait for it. What
+  decides that a tip passed is the code `decide()` uses, so a batch that would be
+  denied is not logged.
+- **A change is the proposal it was when work on it began.** While the worker verifies
+  off the lock a change can be withdrawn and proposed again with the same id. Its
+  commit and base are compared too before anything is logged.
+- **A path that would be both a file and a directory is a conflict** on that file:
+  two changes can each be fine and leave it, no tree can hold it, and with no entry to
+  record it the queue would stop there. No older entry can hold such a case, since
+  none could be written, so this takes no engine.
+- **With batches on, a tree that passed is not verified again.** The daemon keeps the
+  checks that passed by repository, tree and verification settings, in memory, for
+  the last 256 trees and for an hour at most: what a check ran on is more than its
+  tree, and a toolchain can change under a daemon that runs on. So this trades some
+  of that for the runs bisection would repeat, which is why `batch_size = 1` keeps
+  none and verifies everything as before. A failure is not kept, since it may have
+  been the machine. What is reused is logged again with `reused = true` in its
+  details. Syntax is always checked: it depends on what changed.
+- **`undo` of a batch** is one revert of all of it, from the trunk before it to its
+  tip, naming its last change in `revert_of`. Only the batch whole was verified, so a
+  tree between two of its changes may fail, and two reverts could leave trunk there:
+  the worker takes the first alone, and the second is refused after the command has
+  said it is done. So an undo goes whole or, when a later change is in the way, not at
+  all. `revert-storm` counts it once, over every symbol it touched, because one person
+  undid one entry. It is one change to the limits too, so a batch larger than
+  `max_files` can not be undone in one step. `lonca revert --actor` takes back only
+  that actor's changes, each its own revert as it is outside a batch, and goes on past
+  a refused one.
 
 ## The language table
 

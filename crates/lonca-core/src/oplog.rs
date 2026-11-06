@@ -39,8 +39,8 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// say why and lets a waiting interest go first; version 13 lets a name
 /// stand for every symbol of that name; version 14 adds `renames` to facts
 /// and follows them in leases; version 15 adds `unparsed_files` to facts;
-/// version 16 adds `unread_files`.
-pub const FORMAT_CURRENT: u32 = 16;
+/// version 16 adds `unread_files`; version 17 adds `change.integrate_batch`.
+pub const FORMAT_CURRENT: u32 = 17;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -83,6 +83,8 @@ pub const FORMAT_UNPARSED: u32 = 15;
 /// The first format with `unread_files` in facts. Older entries have none,
 /// so nothing is gated on it.
 pub const FORMAT_UNREAD: u32 = 16;
+/// The first format with `change.integrate_batch`.
+pub const FORMAT_BATCH: u32 = 17;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -130,7 +132,7 @@ impl OpEntry {
     pub fn uses_symbols_engine(&self) -> bool {
         matches!(
             self.op,
-            Op::ChangePropose { .. } | Op::ChangeIntegrate { .. }
+            Op::ChangePropose { .. } | Op::ChangeIntegrate { .. } | Op::ChangeIntegrateBatch { .. }
         )
     }
 
@@ -143,6 +145,7 @@ impl OpEntry {
             | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
             Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
             Op::Reject { .. } => FORMAT_REJECT,
+            Op::ChangeIntegrateBatch { .. } => FORMAT_BATCH,
             Op::Observe { ref events, .. }
                 if events
                     .iter()
@@ -406,6 +409,7 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ChangeId;
     use crate::ops::{Continuation, Decision, HumanKey, Scope};
 
     fn genesis(key: &KeyPair, store: &Store) -> OpEntry {
@@ -781,6 +785,31 @@ mod tests {
         for op in [negotiate(None), attenuate(vec![])] {
             assert_eq!(at(&op, 2).min_format(), FORMAT_LEGACY, "{op:?}");
         }
+    }
+
+    #[test]
+    fn a_batch_needs_its_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let tip = GitId::of_blob(b"tip");
+        let op = Op::ChangeIntegrateBatch {
+            trunk_before: tip.clone(),
+            merged: vec![(ChangeId::random(), tip)],
+        };
+        let at = |format| OpEntry {
+            format,
+            op: op.clone(),
+            symbols_engine: Some(1),
+            ..next(&g, 2000)
+        };
+        assert_eq!(at(FORMAT_BATCH).min_format(), FORMAT_BATCH);
+        let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(format), &key)]);
+        assert!(chain(FORMAT_BATCH).is_ok());
+        let err = chain(FORMAT_BATCH - 1).unwrap_err();
+        let needs = format!("needs log format {FORMAT_BATCH}");
+        assert!(err.to_string().contains(&needs), "{err}");
     }
 
     #[test]

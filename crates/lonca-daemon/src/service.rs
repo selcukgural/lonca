@@ -1,30 +1,31 @@
 //! Request handling: authentication, the single writer, side effects and
 //! the merge queue.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use lonca_core::canonical::random_id;
+use lonca_core::canonical::{digest_of, random_id};
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp};
 use lonca_core::ops::{
-    Actor, BindChecks, Claim, HumanKey, LeaseItem, MAX_UNPROPOSED_PATHS, ObsKind, Observation, Op,
-    Phase,
+    Actor, Attestation, BindChecks, CheckResult, Claim, HumanKey, LeaseItem, MAX_UNPROPOSED_PATHS,
+    ObsKind, Observation, Op, Phase,
 };
 use lonca_core::store::CommitSpec;
-use lonca_core::{ChangeId, Error, GitId, Result, Store};
+use lonca_core::{ChangeId, Error, FileMap, GitId, Result, Store};
 use lonca_policy::chain::Submission;
-use lonca_policy::config::UnparsedFiles;
-use lonca_policy::decide::{level_for, valid_token};
+use lonca_policy::config::{UnparsedFiles, Verification};
+use lonca_policy::decide::{evidence_problems, level_for, valid_token};
 use lonca_policy::details;
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
-use lonca_policy::state::ChangeStatus;
+use lonca_policy::state::{ChangeStatus, State};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate};
 use lonca_verify::Verifier;
@@ -411,10 +412,66 @@ struct Inner {
     workspaces: BTreeMap<(String, String), PathBuf>,
 }
 
+/// How many trees the daemon remembers as verified.
+const VERIFIED_TREES: usize = 256;
+
+/// For how long: what a check ran on is more than its tree, a toolchain under
+/// a long-lived daemon for one.
+const VERIFIED_FOR_MS: i64 = 3_600_000;
+
+type VerifiedKey = (String, GitId, String);
+
+/// Checks that passed: evidence, so logged again, marked as reused.
+#[derive(Default)]
+struct Verified {
+    runs: BTreeMap<VerifiedKey, (i64, Vec<Attestation>)>,
+    /// In the order they came, the oldest goes first.
+    order: VecDeque<VerifiedKey>,
+}
+
+impl Verified {
+    fn get(&self, key: &VerifiedKey, now: i64) -> Option<Vec<Attestation>> {
+        let fresh = self
+            .runs
+            .get(key)
+            .filter(|(at, _)| now - at < VERIFIED_FOR_MS);
+        fresh.map(|(_, run)| run.clone())
+    }
+
+    fn insert(&mut self, key: VerifiedKey, run: &[Attestation], now: i64) {
+        let entry = (now, run.to_vec());
+        if self.runs.insert(key.clone(), entry).is_none() {
+            self.order.push_back(key);
+        }
+        if self.order.len() > VERIFIED_TREES
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.runs.remove(&oldest);
+        }
+    }
+}
+
+/// `a` as logged for a run that did not happen.
+fn reused(mut a: Attestation) -> Attestation {
+    a.details.insert("reused".into(), "true".into());
+    a
+}
+
+/// The change is still the proposal `commit` on `base`: withdrawn and
+/// proposed again, it can stand at the same place with other content.
+fn same_proposal(state: &State, change: ChangeId, commit: &GitId, base: &GitId) -> bool {
+    let rec = state.changes.get(&change);
+    rec.is_some_and(|c| c.commit == *commit && c.base == *base)
+}
+
 pub struct Service {
     pub home: Home,
     clock: Clock,
     verifier: Verifier,
+    /// Checks that passed, by repository, tree and configuration. It lives
+    /// as long as the daemon: its environment is part of what passed.
+    verified: Mutex<Verified>,
+    verification_runs: AtomicU64,
     settings: Settings,
     inner: Mutex<Inner>,
     wake: (Mutex<u64>, Condvar),
@@ -453,6 +510,8 @@ impl Service {
         }
         let svc = Arc::new(Self {
             verifier: Verifier::new(home.scratch()),
+            verified: Mutex::default(),
+            verification_runs: AtomicU64::new(0),
             home,
             clock,
             settings,
@@ -1300,9 +1359,12 @@ impl Service {
         drop(inner);
         let mut out = json!(rec);
         let ops = OpLog::new(&store).read_all().or_fail()?;
-        let last = ops.iter().rev().find(
-            |o| matches!(&o.entry.op, Op::ChangeIntegrate { change, .. } if *change == c.change),
-        );
+        let names_it = |o: &&SignedOp| match &o.entry.op {
+            Op::ChangeIntegrate { change, .. } => *change == c.change,
+            Op::ChangeIntegrateBatch { merged, .. } => merged.iter().any(|m| m.0 == c.change),
+            _ => false,
+        };
+        let last = ops.iter().rev().find(names_it);
         let evidence: Vec<Value> = match last {
             Some(o) => o
                 .entry
@@ -2722,7 +2784,143 @@ impl Service {
     /// verification run without the lock; the result is only logged if the
     /// queue head and trunk are unchanged.
     pub fn process_one(&self, repo: &str) -> Result<Option<SignedOp>> {
-        let (store, change, commit, base, trunk, vcfg) = {
+        match self.process_batch(repo)? {
+            Some(done) => Ok(Some(done)),
+            None => self.process_head(repo),
+        }
+    }
+
+    /// Syntax over what changed, and the configured checks of the tree.
+    fn verify(
+        &self,
+        repo: &str,
+        store: &Store,
+        vcfg: &Verification,
+        (files, touched): (&FileMap, &[String]),
+        tip: &GitId,
+        reuse: bool,
+    ) -> Result<Vec<Attestation>> {
+        let tree = store.read_commit(tip)?.tree;
+        let mut evidence = vec![self.verifier.syntax(store, files, touched, &tree)?];
+        let key = (repo.to_string(), tree.clone(), digest_of(vcfg));
+        let now = self.now();
+        let known = self.verified_lock().get(&key, now).filter(|_| reuse);
+        if let Some(known) = known {
+            evidence.extend(known.into_iter().map(reused));
+            return Ok(evidence);
+        }
+        self.verification_runs.fetch_add(1, Ordering::Relaxed);
+        let run = self.verifier.run(store, files, &tree, vcfg)?;
+        if reuse && !run.is_empty() && run.iter().all(|a| a.result == CheckResult::Pass) {
+            self.verified_lock().insert(key, &run, now);
+        }
+        evidence.extend(run);
+        Ok(evidence)
+    }
+
+    /// The changes at the head of the queue as one, if the policy says so:
+    /// merged in order off the lock, and a prefix whose tip passes is
+    /// integrated by one entry. Halving finds it, and the head alone is
+    /// left to [`Self::process_head`], which logs a failure as it always did.
+    /// The tree of a prefix seen before is not verified again. What can not
+    /// be merged or verified here ends the stack in front of it: it is not
+    /// the changes ahead of it that wait for that.
+    fn process_batch(&self, repo: &str) -> Result<Option<SignedOp>> {
+        let (store, jobs, trunk, vcfg) = {
+            let mut inner = self.lock();
+            let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
+                return Ok(None);
+            };
+            if r.chain.state.frozen.is_some() {
+                return Ok(None);
+            }
+            let policy = r.policy()?;
+            let vcfg = policy.config.verification.clone();
+            let size = policy.config.queue.batch_size as usize;
+            let state = &r.chain.state;
+            let job = |c: &ChangeId| {
+                (
+                    *c,
+                    state.changes[c].commit.clone(),
+                    state.changes[c].base.clone(),
+                )
+            };
+            let jobs: Vec<_> = state.queue.iter().take(size).map(job).collect();
+            let trunk = state.trunk.clone().expect("initialized");
+            (r.store.clone(), jobs, trunk, vcfg)
+        };
+        // At most the policy's size, so never two under the default.
+        if jobs.len() < 2 {
+            return Ok(None);
+        }
+        // Merged in order, up to the first that conflicts.
+        let mut stack: Vec<(ChangeId, GitId, FileMap, Vec<String>)> = Vec::new();
+        let mut tip = trunk.clone();
+        for (change, commit, base) in &jobs {
+            let i = integrate(&store, ENGINE_CURRENT, base, &tip, commit);
+            let Some((merged, i)) = i.ok().and_then(|i| Some((i.merged.clone()?, i))) else {
+                break;
+            };
+            tip = merged.clone();
+            stack.push((*change, merged, i.files, i.touched));
+        }
+        let mut length = stack.len();
+        while length >= 2 {
+            let prefix = &stack[..length];
+            let (_, tip, files, _) = &prefix[length - 1];
+            let touched: BTreeSet<String> =
+                prefix.iter().flat_map(|p| p.3.iter().cloned()).collect();
+            let touched: Vec<String> = touched.into_iter().collect();
+            let evidence = self.verify(repo, &store, &vcfg, (files, &touched), tip, true);
+            if let Some(evidence) = evidence
+                .ok()
+                .filter(|e| evidence_problems(&vcfg, e).is_empty())
+            {
+                let merged = prefix.iter().map(|p| (p.0, p.1.clone())).collect();
+                return self.log_batch(repo, trunk, merged, &jobs, evidence);
+            }
+            length /= 2;
+        }
+        Ok(None)
+    }
+
+    fn log_batch(
+        &self,
+        repo: &str,
+        trunk: GitId,
+        merged: Vec<(ChangeId, GitId)>,
+        jobs: &[(ChangeId, GitId, GitId)],
+        evidence: Vec<Attestation>,
+    ) -> Result<Option<SignedOp>> {
+        let mut inner = self.lock();
+        let r = inner.repos.get_mut(repo).expect("exists");
+        let state = &r.chain.state;
+        let still = jobs.iter().take(merged.len()).zip(&state.queue);
+        let same = still.filter(|(job, queued)| job.0 == **queued);
+        let same = same.filter(|(job, _)| same_proposal(state, job.0, &job.1, &job.2));
+        if same.count() != merged.len() || state.trunk.as_ref() != Some(&trunk) {
+            return Ok(None);
+        }
+        let tip = merged.last().map(|(_, tip)| tip.clone()).expect("a batch");
+        let op = Op::ChangeIntegrateBatch {
+            trunk_before: trunk.clone(),
+            merged,
+        };
+        let mut sub = Submission::new(Actor::Daemon, op);
+        sub.evidence = evidence;
+        sub.symbols_engine = Some(ENGINE_CURRENT);
+        let signed = r.submit(sub, self.now())?;
+        if signed.entry.decision.is_allow() {
+            r.store.ref_cas(TRUNK_REF, &tip, Some(&trunk))?;
+        }
+        drop(inner);
+        self.notify_appended();
+        Ok(Some(signed))
+    }
+
+    /// The change at the head of the queue, alone.
+    fn process_head(&self, repo: &str) -> Result<Option<SignedOp>> {
+        let (store, change, commit, base, trunk, vcfg, reuse) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
                 return Ok(None);
@@ -2736,22 +2934,21 @@ impl Service {
             let rec = &r.chain.state.changes[&change];
             let (commit, base) = (rec.commit.clone(), rec.base.clone());
             let trunk = r.chain.state.trunk.clone().expect("initialized");
-            let vcfg = r.policy()?.config.verification.clone();
-            (r.store.clone(), change, commit, base, trunk, vcfg)
+            let policy = r.policy()?;
+            let vcfg = policy.config.verification.clone();
+            let reuse = policy.config.queue.batch_size > 1;
+            (r.store.clone(), change, commit, base, trunk, vcfg, reuse)
         };
         let integ = integrate(&store, ENGINE_CURRENT, &base, &trunk, &commit)?;
         let mut evidence = Vec::new();
         if let Some(m) = &integ.merged {
-            let tree = store.read_commit(m)?.tree;
-            evidence.push(
-                self.verifier
-                    .syntax(&store, &integ.files, &integ.touched, &tree)?,
-            );
-            evidence.extend(self.verifier.run(&store, &integ.files, &tree, &vcfg)?);
+            let changed = (&integ.files, integ.touched.as_slice());
+            evidence = self.verify(repo, &store, &vcfg, changed, m, reuse)?;
         }
         let mut inner = self.lock();
         let r = inner.repos.get_mut(repo).expect("exists");
         if r.chain.state.queue.first() != Some(&change)
+            || !same_proposal(&r.chain.state, change, &commit, &base)
             || r.chain.state.trunk.as_ref() != Some(&trunk)
         {
             return Ok(None);
@@ -2777,14 +2974,26 @@ impl Service {
     }
 
     /// Drains every queue. Returns the number of integration attempts.
+    /// How often the configured checks of a tree ran.
+    pub fn verification_runs(&self) -> u64 {
+        self.verification_runs.load(Ordering::Relaxed)
+    }
+
+    fn verified_lock(&self) -> std::sync::MutexGuard<'_, Verified> {
+        self.verified.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn process_all(&self) -> usize {
         let names: Vec<String> = self.lock().repos.keys().cloned().collect();
         let mut n = 0;
         let mut work: VecDeque<String> = names.into();
         while let Some(name) = work.pop_front() {
             match self.process_one(&name) {
-                Ok(Some(_)) => {
-                    n += 1;
+                Ok(Some(done)) => {
+                    n += match &done.entry.op {
+                        Op::ChangeIntegrateBatch { merged, .. } => merged.len(),
+                        _ => 1,
+                    };
                     work.push_back(name);
                 }
                 Ok(None) => {}
@@ -2936,6 +3145,35 @@ pub fn is_ancestor(store: &Store, ancestor: &GitId, commit: &GitId) -> Result<bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn verified_key(i: usize) -> VerifiedKey {
+        let tree = GitId::of_blob(i.to_string().as_bytes());
+        ("demo".to_string(), tree, "checks".to_string())
+    }
+
+    /// A result is gone at the hour, not a tick after it.
+    #[test]
+    fn a_verified_tree_is_known_until_the_hour() {
+        let mut verified = Verified::default();
+        verified.insert(verified_key(0), &[], 1_000);
+        let at = |ms| verified.get(&verified_key(0), 1_000 + ms).is_some();
+        assert!(at(VERIFIED_FOR_MS - 1));
+        assert!(!at(VERIFIED_FOR_MS));
+    }
+
+    /// As many as it says it keeps, then the oldest goes first.
+    #[test]
+    fn the_oldest_verified_tree_goes_first() {
+        let mut verified = Verified::default();
+        for i in 0..VERIFIED_TREES {
+            verified.insert(verified_key(i), &[], 0);
+        }
+        let known = |v: &Verified, i| v.get(&verified_key(i), 0).is_some();
+        assert!((0..VERIFIED_TREES).all(|i| known(&verified, i)));
+        verified.insert(verified_key(VERIFIED_TREES), &[], 0);
+        assert!(!known(&verified, 0));
+        assert!((1..=VERIFIED_TREES).all(|i| known(&verified, i)));
+    }
 
     /// The rows of the method table in docs/decisions.md.
     fn documented_methods() -> BTreeMap<String, String> {

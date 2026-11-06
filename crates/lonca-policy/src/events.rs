@@ -89,6 +89,15 @@ pub fn for_session(
         let e = &o.entry;
         let seq = e.seq;
         // A failed integration is logged as a denial: that is the news.
+        if let Op::ChangeIntegrateBatch { merged, .. } = &e.op
+            && e.decision.is_allow()
+        {
+            let own = merged.iter().filter(|(c, _)| own_change(state, session, c));
+            out.extend(own.map(|(change, _)| Event::Integrated {
+                seq,
+                change: *change,
+            }));
+        }
         if let Op::ChangeIntegrate {
             change,
             merged,

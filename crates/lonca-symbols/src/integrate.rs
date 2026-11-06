@@ -15,7 +15,7 @@ use lonca_core::store::CommitSpec;
 use lonca_core::{FileMap, GitId, Result, Store};
 
 use crate::engine;
-use crate::facts::{Analysis, analyze};
+use crate::facts::{Analysis, FILE, analyze};
 use crate::merge::merge3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +49,18 @@ pub fn integrate(
             touched: vec![],
         });
     }
+    // Two changes can each be fine and leave a path both a file and a
+    // directory, which no tree can hold: that is their conflict, and without
+    // this no entry could record it, so the queue would stop here.
+    let clashes = file_and_directory(&r.files);
+    if !clashes.is_empty() {
+        return Ok(Integration {
+            merged: None,
+            conflicts: clashes,
+            files: ours,
+            touched: vec![],
+        });
+    }
     let tree = store.write_tree(&r.files)?;
     let info = store.read_commit(change)?;
     let merged = store.write_commit(&CommitSpec {
@@ -72,6 +84,16 @@ pub fn integrate(
         files: r.files,
         touched,
     })
+}
+
+/// Files that other files stand under, as conflicts.
+fn file_and_directory(files: &FileMap) -> Vec<String> {
+    let parents = files.keys().flat_map(|path| {
+        let cuts = path.match_indices('/').map(|(at, _)| &path[..at]);
+        cuts.collect::<Vec<_>>()
+    });
+    let clashes: BTreeSet<&str> = parents.filter(|p| files.contains_key(*p)).collect();
+    clashes.iter().map(|p| format!("{p}#{FILE}")).collect()
 }
 
 /// Facts of a proposal: its commit against its base.

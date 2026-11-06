@@ -8,6 +8,7 @@ pub mod extract;
 pub mod facts;
 pub mod integrate;
 pub mod lang;
+pub mod lines;
 pub mod merge;
 pub mod sections;
 

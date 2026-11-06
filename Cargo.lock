@@ -2322,6 +2322,7 @@ version = "0.1.0"
 dependencies = [
  "diffy",
  "lonca-core",
+ "serde",
  "serde_json",
  "similar",
  "tempfile",

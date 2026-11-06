@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
 use crate::engine::{
-    ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_PLACES, ENGINE_SECTIONS,
+    ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LINE_MERGE, ENGINE_PLACES,
+    ENGINE_SECTIONS,
 };
 use crate::extract::{
     Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_keyed,
@@ -36,16 +37,10 @@ fn outer_code(engine: u32, p: &Parsed) -> Code<'_> {
 fn differs(engine: u32, a: Code, b: Code) -> bool {
     a.0 != b.0 || engine >= ENGINE_PLACES && shifted(a.1, b.1)
 }
-use std::ops::Range;
-
-use similar::DiffTag;
-
 use crate::facts::renames_between;
 use crate::lang::Lang;
+use crate::lines;
 use crate::sections::{self, Format};
-
-/// The lines of the base that go, and the text that stands there instead.
-type LineChange = (Range<usize>, String);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeResult {
@@ -182,7 +177,7 @@ pub fn merge_text_at(
         return r;
     }
     let file_conflict = || vec![format!("{path}#<file>")];
-    let lang = Lang::detect(path);
+    let lang = Lang::detect_at(engine, path);
     if let Some(lang) = lang {
         match symbol_merge(engine, path, lang, b, o, t) {
             Sm::Merged(s) => return Ok(s),
@@ -190,7 +185,11 @@ pub fn merge_text_at(
             Sm::Fallback => {}
         }
     }
-    let merged = diffy::merge(b, o, t).map_err(|_| file_conflict())?;
+    let merged = if engine >= ENGINE_LINE_MERGE {
+        lines::merge(b, o, t).ok_or_else(file_conflict)?
+    } else {
+        diffy::merge(b, o, t).map_err(|_| file_conflict())?
+    };
     if let Some(lang) = lang {
         let (naming, sides) = three_sides(engine, lang, [b, o, t]);
         let [pb, po, pt] = &sides;
@@ -209,44 +208,6 @@ pub fn merge_text_at(
     Ok(merged)
 }
 
-/// The lines of `b`, and one side's changes to them.
-fn line_changes(b: &str, side: &str) -> (Vec<String>, Vec<LineChange>) {
-    let diff = similar::TextDiff::from_lines(b, side);
-    let base = diff.iter_old_slices().map(str::to_string).collect();
-    let new: Vec<&str> = diff.iter_new_slices().collect();
-    let changed = diff.ops().iter().filter(|op| op.tag() != DiffTag::Equal);
-    let text = |at: Range<usize>| new[at].concat();
-    (
-        base,
-        changed
-            .map(|op| (op.old_range(), text(op.new_range())))
-            .collect(),
-    )
-}
-
-/// [`merge_around_conflicts`] for a file it has no answer for, by lines:
-/// every change of `t` applied, except those that meet a change of `o`, whose
-/// text stays. What `t` changed elsewhere must come in, or the next proposal
-/// from this text would take it back.
-pub fn lines_around_conflicts(b: &str, o: &str, t: &str) -> String {
-    let (base, ours) = line_changes(b, o);
-    let (_, theirs) = line_changes(b, t);
-    let meets = |a: &Range<usize>, c: &Range<usize>| a.start <= c.end && c.start <= a.end;
-    let clean = theirs.into_iter();
-    let clean = clean.filter(|(at, _)| !ours.iter().any(|(mine, _)| meets(at, mine)));
-    let mut changes: Vec<LineChange> = ours.iter().cloned().chain(clean).collect();
-    changes.sort_by_key(|(at, _)| (at.start, at.end));
-    let mut out = String::new();
-    let mut done = 0;
-    for (at, text) in changes {
-        out.push_str(&base[done..at.start].concat());
-        out.push_str(&text);
-        done = at.end;
-    }
-    out.push_str(&base[done..].concat());
-    out
-}
-
 /// What is left of a file whose merge has conflicts: every change of `t`
 /// applied, except the conflicting symbols, which keep the text of `o`.
 /// `None` when the file has no such middle: no symbol merge, code outside
@@ -259,7 +220,7 @@ pub fn merge_around_conflicts(
     o: &str,
     t: &str,
 ) -> Option<String> {
-    let lang = Lang::detect(path)?;
+    let lang = Lang::detect_at(engine, path)?;
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return None;
@@ -1571,7 +1532,7 @@ mod tests {
         let add = |n: &str| GROUP.replace("B = 2\n", &format!("B = 2\n\t{n} = 3\n"));
         let m = merge(&add("C"), &add("D")).unwrap();
         assert!(m.contains("\tC = 3\n") && m.contains("\tD = 3\n"), "{m}");
-        assert!(!parse_at(5, Lang::Go, &m).has_error, "{m}");
+        assert!(!parse_at(5, Lang::named("go"), &m).has_error, "{m}");
         let want = add("C").replace("A = 1", "A = 10");
         assert_eq!(merge(&edit_a, &add("C")).unwrap(), want);
         // A deleted spec goes with its line.
@@ -1651,9 +1612,9 @@ mod tests {
         let b = "module.exports = {\n  a() {},\n  b() {},\n};\n";
         let add = |n: &str| b.replace("  b() {},\n", &format!("  b() {{}},\n  {n}() {{}},\n"));
         let m = merge_text_at(5, "a.js", b, &add("c"), &add("d")).unwrap();
-        assert!(!parse_at(5, Lang::JavaScript, &m).has_error, "{m}");
+        assert!(!parse_at(5, Lang::named("javascript"), &m).has_error, "{m}");
         assert_eq!(
-            names(&parse_at(5, Lang::JavaScript, &m).syms),
+            names(&parse_at(5, Lang::named("javascript"), &m).syms),
             ["a", "b", "d", "c"],
             "{m}"
         );
@@ -1988,7 +1949,7 @@ mod tests {
     /// The checks at the end of `holds_up`, on text no merge writes now.
     #[test]
     fn a_result_must_hold_code_of_a_side() {
-        let side = |text| parse_at(5, Lang::Python, text);
+        let side = |text| parse_at(5, Lang::named("python"), text);
         let b = "x = 1\n\nclass A:\n    y = 1\n\n    class B:\n        z = 1\n";
         let (pb, po, pt) = (
             side(b),
@@ -1999,7 +1960,7 @@ mod tests {
             holds_up(
                 engine,
                 "a.py",
-                Lang::Python,
+                Lang::named("python"),
                 text,
                 &Naming::default(),
                 [&pb, &po, &pt],
@@ -2020,7 +1981,7 @@ mod tests {
 
     #[test]
     fn a_third_kind_of_code_is_seen_at_any_depth() {
-        let syms = |text: &str| parse_at(5, Lang::Python, text).syms;
+        let syms = |text: &str| parse_at(5, Lang::named("python"), text).syms;
         let b = "class A:\n    y = 1\n\n    class B:\n        z = 1\n";
         let (o, t) = (
             syms(&b.replace("y = 1", "y = 2")),
@@ -2468,7 +2429,7 @@ mod tests {
         let t = "class C:\n    def a(self):\n        return 1\n\n    def theirs(self):\n        return 3\n";
         let m = merge_text("x.py", b, o, t).unwrap();
         assert!(m.contains("def ours") && m.contains("def theirs"), "{m}");
-        assert!(!parse(Lang::Python, &m).has_error);
+        assert!(!parse(Lang::named("python"), &m).has_error);
     }
 
     #[test]
@@ -2695,28 +2656,21 @@ mod tests {
         assert!(kept.contains("long a") && kept.contains("int b"), "{kept}");
     }
 
-    /// Line numbers in the names: a change only a side made comes in, one
-    /// that meets a change of `o` stays as `o` wrote it.
+    /// Among equal lines a change could be at any of them. From engine 9 on
+    /// that is a conflict; older entries keep the merge they recorded.
     #[test]
-    fn lines_around_a_conflict() {
-        let b = "a\nb\nc\nd\ne\nf\ng\n";
-        let around = |o: &str, t: &str| lines_around_conflicts(b, o, t);
-        // `b` conflicts, `f` comes in.
-        let (o, t) = ("a\nO\nc\nd\ne\nf\ng\n", "a\nT\nc\nd\ne\nT\ng\n");
-        assert_eq!(around(o, t), "a\nO\nc\nd\ne\nT\ng\n");
-        // Next to a change of `o` is at it: the lines meet.
-        let (o, t) = ("a\nO\nc\nd\ne\nf\ng\n", "a\nb\nT\nd\ne\nf\ng\n");
-        assert_eq!(around(o, t), o);
-        // One line between them is apart.
-        let t = "a\nb\nc\nT\ne\nf\ng\n";
-        assert_eq!(around(o, t), "a\nO\nc\nT\ne\nf\ng\n");
-        // Lines added on either side of the file, and lines deleted.
-        let (o, t) = ("o\na\nb\nc\nd\ne\nf\ng\n", "a\nb\nc\ne\nf\ng\nt\n");
-        assert_eq!(around(o, t), "o\na\nb\nc\ne\nf\ng\nt\n");
-        assert_eq!(around(b, b), b);
-        assert_eq!(around(o, o), o);
-        assert_eq!(lines_around_conflicts("", "o\n", "t\n"), "o\n");
-        assert_eq!(lines_around_conflicts("a", "a", "b"), "b");
+    fn engines_merge_equal_lines_as_they_did() {
+        let (b, o, t) = (
+            "retry\nretry\nretry\n",
+            "abort\nretry\nretry\n",
+            "retry\nretry\n",
+        );
+        let at = |engine| merge_text_at(engine, "a.zig", b, o, t);
+        assert_eq!(at(ENGINE_LINE_MERGE), Err(vec!["a.zig#<file>".to_string()]));
+        assert_eq!(at(ENGINE_LINE_MERGE - 1).as_deref(), Ok(o));
+        let (from, one, two) = ("a\nb\nc\nd\n", "A\nb\nc\nd\n", "a\nb\nc\nD\n");
+        let merged = merge_text_at(ENGINE_LINE_MERGE, "a.zig", from, one, two);
+        assert_eq!(merged.as_deref(), Ok("A\nb\nc\nD\n"));
     }
 
     #[test]
@@ -2736,7 +2690,7 @@ mod tests {
             trunk = merge_text("lib.rs", &base, &trunk, &theirs)
                 .unwrap_or_else(|c| panic!("agent {i}: {c:?}"));
         }
-        let p = parse(Lang::Rust, &trunk);
+        let p = parse(Lang::named("rust"), &trunk);
         assert!(!p.has_error);
         for i in 0..20 {
             assert!(

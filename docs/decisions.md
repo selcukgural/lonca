@@ -538,13 +538,55 @@ entry format, so they have their own version
   - **A lease someone holds on such a file does not stop another's edit.** It is
     no use to anyone under `optimistic`, and the merge is what decides.
 
-- **Engine 9** narrows what engine 8 lists to edits of lines: the mode stays and
-  is that of a plain file, neither text holds a NUL, and at least one line of the
-  old text is left. Anything else keeps the file's lease. A link's target is one
-  line of text and a change of it is no edit of lines; a change that leaves
-  nothing of a file takes it away as deleting it would, and deleting takes the
-  lease. A file with no line left in common and a rewrite are the same to this
-  rule, on purpose: it can not tell them apart.
+- **Engine 9** has two parts.
+  - **What engine 8 lists narrows to edits of lines:** the mode stays and is that
+    of a plain file, neither text holds a NUL, and at least half of the old text's
+    lines stay. Anything else keeps the file's lease. A link's target is no edit
+    of lines, and a change that takes away most of a file does what deleting it
+    does. The half is a line drawn, not a proof: it can not tell a rewrite from an
+    edit, and it does not try to.
+  - **Lines merge by `lines.rs`.** Changes are compared over `reach`, everywhere
+    they could stand with the same result, because among equal lines a diff can
+    only guess which line a change took. A conflict costs a look, a wrong guess
+    costs a side's work. On a corpus of Java-shaped files this agreed with
+    `git merge-file` on every input; only files of mostly equal lines conflict
+    more often than git does.
+- **A conflict in a file with no symbol merge is written out.** `lonca sync` brings
+  in the rest of trunk and leaves both sides between `<<<<<<< local` and
+  `>>>>>>> trunk`, all of each change that meets. The file is then the agent's to
+  settle, and the workspace records it: `propose` refuses while the markers stand,
+  a later sync reports it again, and a line next to the conflict is in view rather
+  than missing. This lives in the client: the daemon sees only a file. `lines.rs`
+  is the one core for this and for the merge at integration.
+
+## The language table
+
+What a language's syntax means to the symbol engine is data (issue #114):
+`crates/lonca-symbols/src/languages.toml` says which grammar reads which
+extension and which nodes are definitions, imports, attachments, groups and
+tests. `extract.rs` has no arm per language any more, and `Lang` is a handle on
+a table entry, not an enum.
+
+- **The table is part of the engine.** The auditor recomputes from it, so it is
+  built in with `include_str!`, never taken from a policy or a file beside the
+  binary, and a change to what it says about a language that shipped is a new
+  engine with the rule gated by `since`. A new language has `since` of its own:
+  `Lang::detect_at(engine, path)` leaves it unread by older engines, so an old
+  entry's facts come out as they were.
+- **A rule's `how` is mostly data, and a few are shapes.** `leaf`, `members`,
+  `inner` and the like work for any grammar. `implementation`, `macro_call`,
+  `assigned`, `function_pair`, `blocks` and `object_set_to` are syntax one family
+  has, written once as code and chosen by the table. They are named for the
+  syntax, not the language, so another grammar can use them.
+- **The grammar is the hard limit.** A tree-sitter grammar is compiled code, so
+  `lang::grammar` has one line per grammar and a new grammar needs a release.
+  Loading them at run time (WebAssembly, never native code from a policy) needs a
+  design for pinning them, because a grammar's hash would become part of the
+  engine. Until then `[leases] unparsed_files` covers every language with none.
+- **Heuristics that hold across grammars stay in the code:** `TYPE_KINDS`,
+  `is_verbatim`, and the names `parameters` and `type_parameters` in a key.
+- **A word the table gets wrong would read as a kind that never comes,** so a
+  test checks every kind and field in it against the grammars that use it.
 
 ## Harness profiles
 

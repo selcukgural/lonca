@@ -471,6 +471,7 @@ impl Server {
                 )
             }
             "propose" => {
+                self.ws.check_settled()?;
                 let changes = self.ws.changes()?;
                 if changes.is_empty() {
                     bail!("no local changes");

@@ -13,7 +13,7 @@ use tree_sitter::Node;
 use lonca_core::ops::DEF;
 
 use crate::engine::{ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS};
-use crate::lang::Lang;
+use crate::lang::{DefHow, DefRule, GroupHow, GroupRule, Lang, Marked, Partial, Rules};
 
 /// Declarations with a definition of their own even with no members in the
 /// file's tree: a Rust `struct` or a Go `type`, whose methods stand beside
@@ -329,7 +329,7 @@ pub fn parse_keyed(engine: u32, lang: Lang, src: &str, keyed: &Keyed) -> Parsed 
     let mut spots = Vec::new();
     let holders = holders_of(&syms);
     exact_text(root, src, &marks, &holders, &mut residual_exact, &mut spots);
-    let js_tests = if lang.is_js_family() {
+    let js_tests = if lang.rules().call_tests {
         ex.js_tests(root)
     } else {
         vec![]
@@ -786,14 +786,20 @@ fn named<'t>(n: Node<'t>) -> Vec<Node<'t>> {
     n.named_children(&mut n.walk()).collect()
 }
 
-/// The blocks of a Python `if` or `try`, its clauses included.
-fn blocks<'t>(n: Node<'t>, out: &mut Vec<Node<'t>>) {
+/// The blocks of a statement, its clauses included.
+fn blocks<'t>(n: Node<'t>, block: &str, out: &mut Vec<Node<'t>>) {
     for c in named(n) {
-        match c.kind() {
-            "block" => out.push(c),
-            _ => blocks(c, out),
+        if c.kind() == block {
+            out.push(c);
+        } else {
+            blocks(c, block, out);
         }
     }
+}
+
+/// `kind` is one of `kinds`.
+fn is_one_of(kinds: &[String], kind: &str) -> bool {
+    kinds.iter().any(|k| k == kind)
 }
 
 /// What tells the definitions of each name apart, without a key for one
@@ -802,7 +808,7 @@ type Census = BTreeMap<String, BTreeSet<Option<String>>>;
 
 struct Extractor<'s> {
     engine: u32,
-    lang: Lang,
+    rules: &'static Rules,
     src: &'s str,
     /// Where each C# type name was first seen: its namespaces.
     scopes: RefCell<BTreeMap<String, String>>,
@@ -822,7 +828,7 @@ impl<'s> Extractor<'s> {
     ) -> Self {
         Extractor {
             engine,
-            lang,
+            rules: lang.rules(),
             src,
             scopes: RefCell::default(),
             groups_seen: Cell::new(0),
@@ -841,16 +847,9 @@ impl<'s> Extractor<'s> {
     }
 
     fn is_attachable(&self, n: Node) -> bool {
-        match self.lang {
-            Lang::Rust => matches!(
-                n.kind(),
-                "attribute_item" | "line_comment" | "block_comment"
-            ),
-            Lang::TypeScript | Lang::Tsx | Lang::JavaScript => {
-                n.kind() == "comment" || self.groups() && n.kind() == "decorator"
-            }
-            Lang::Python | Lang::Go | Lang::CSharp => n.kind() == "comment",
-        }
+        let rules = self.rules.attached.iter();
+        let mut rules = rules.filter(|a| self.engine >= a.since);
+        rules.any(|a| is_one_of(&a.kinds, n.kind()))
     }
 
     /// A comment behind other code on its line, maybe behind another such
@@ -890,68 +889,54 @@ impl<'s> Extractor<'s> {
     }
 
     fn is_import(&self, n: Node) -> bool {
-        match self.lang {
-            Lang::Rust => matches!(n.kind(), "use_declaration" | "extern_crate_declaration"),
-            Lang::Python => matches!(
-                n.kind(),
-                "import_statement" | "import_from_statement" | "future_import_statement"
-            ),
-            Lang::TypeScript | Lang::Tsx | Lang::JavaScript => n.kind() == "import_statement",
-            Lang::CSharp => n.kind() == "using_directive",
-            Lang::Go => n.kind() == "import_declaration",
-        }
+        is_one_of(&self.rules.imports, n.kind())
     }
 
     /// Nodes whose members belong to the enclosing level are flattened: their
     /// names do not appear in symbol names. `top` is the file's own level.
     fn group<'t>(&self, n: Node<'t>, top: bool) -> Option<Group<'t>> {
-        match (self.lang, n.kind()) {
-            (Lang::CSharp, "namespace_declaration") => {
-                n.child_by_field_name("body").map(|b| Group::of(vec![b]))
-            }
-            _ if !self.groups() => None,
-            (Lang::Go, "const_declaration" | "type_declaration") => {
-                let parens = n.children(&mut n.walk()).any(|c| c.kind() == "(");
+        let fits = |r: &&GroupRule| self.engine >= r.since && is_one_of(&r.kinds, n.kind());
+        let rule = self
+            .rules
+            .groups
+            .iter()
+            .find(fits)
+            .filter(|r| top || !r.top)?;
+        match &rule.how {
+            GroupHow::Field(field) => n.child_by_field_name(field).map(|b| Group::of(vec![b])),
+            GroupHow::Parens(token) => {
+                let parens = n.children(&mut n.walk()).any(|c| c.kind() == token);
                 parens.then(|| Group::of(vec![n]))
             }
-            (Lang::Go, "var_declaration") => {
-                let lists = named(n).into_iter();
-                let mut lists = lists.filter(|c| c.kind() == "var_spec_list");
+            GroupHow::Child(kind) => {
+                let mut lists = named(n).into_iter().filter(|c| c.kind() == kind);
                 lists.next().map(|l| Group::of(vec![l]))
             }
-            (Lang::CSharp, "field_declaration" | "event_field_declaration") => {
-                let decl = find_descendant(n, "variable_declaration")?;
+            GroupHow::List { list, item } => {
+                let decl = find_descendant(n, list)?;
                 let parts = named(decl).into_iter();
-                let many = parts.filter(|c| c.kind() == "variable_declarator").count() > 1;
+                let many = parts.filter(|c| c.kind() == item).count() > 1;
                 many.then(|| Group::joined(decl))
             }
-            (Lang::Rust, "foreign_mod_item") => {
-                n.child_by_field_name("body").map(|b| Group::of(vec![b]))
-            }
-            (Lang::Python, "if_statement" | "try_statement") if top => {
+            GroupHow::Blocks { block, defs, plain } => {
                 let mut list = Vec::new();
-                blocks(n, &mut list);
+                blocks(n, block, &mut list);
                 let stated: Vec<Node> = list.iter().flat_map(|b| named(*b)).collect();
-                let is_def = |c: &Node| {
-                    matches!(
-                        c.kind(),
-                        "function_definition" | "class_definition" | "decorated_definition"
-                    )
-                };
-                let plain = |c: &Node| matches!(c.kind(), "comment" | "pass_statement");
-                let only = stated.iter().all(|c| is_def(c) || plain(c));
+                let is_def = |c: &Node| is_one_of(defs, c.kind());
+                let is_plain = |c: &Node| is_one_of(plain, c.kind());
+                let only = stated.iter().all(|c| is_def(c) || is_plain(c));
                 (only && stated.iter().any(is_def)).then(|| Group::of(list))
             }
-            (Lang::TypeScript | Lang::Tsx | Lang::JavaScript, "expression_statement") => {
-                let set = n
-                    .named_child(0)
-                    .filter(|c| c.kind() == "assignment_expression")?;
-                let left = set.child_by_field_name("left")?;
-                let right = set.child_by_field_name("right")?;
-                (self.text(left) == "module.exports" && right.kind() == "object")
-                    .then(|| Group::joined(right))
+            GroupHow::ObjectSetTo {
+                set,
+                target,
+                object,
+            } => {
+                let write = n.named_child(0).filter(|c| c.kind() == set)?;
+                let left = write.child_by_field_name("left")?;
+                let right = write.child_by_field_name("right")?;
+                (self.text(left) == target && right.kind() == object).then(|| Group::joined(right))
             }
-            _ => None,
         }
     }
 
@@ -974,24 +959,21 @@ impl<'s> Extractor<'s> {
         *first == scope
     }
 
-    /// A later part of a C# `partial` type.
+    /// A later part of a type, as C#'s `partial` writes one.
     fn is_partial(&self, n: Node) -> bool {
-        let mut parts = named(n).into_iter();
-        self.groups()
-            && self.lang == Lang::CSharp
-            && parts.any(|c| c.kind() == "modifier" && self.text(c) == "partial")
+        let word = |p: &Partial| {
+            let mut parts = named(n).into_iter();
+            parts.any(|c| c.kind() == p.kind && self.text(c) == p.word)
+        };
+        self.groups() && self.rules.partial.as_ref().is_some_and(word)
     }
 
     /// Unwraps `export ...` and `@decorator def ...` to the definition.
     fn unwrap_def<'t>(&self, n: Node<'t>) -> Node<'t> {
-        match (self.lang, n.kind()) {
-            (Lang::Python, "decorated_definition") => {
-                n.child_by_field_name("definition").unwrap_or(n)
-            }
-            (Lang::TypeScript | Lang::Tsx | Lang::JavaScript, "export_statement") => {
-                n.child_by_field_name("declaration").unwrap_or(n)
-            }
-            _ => n,
+        let mut wrappers = self.rules.wrappers.iter();
+        match wrappers.find(|w| w.kind == n.kind()) {
+            Some(w) => n.child_by_field_name(&w.field).unwrap_or(n),
+            None => n,
         }
     }
 
@@ -1103,7 +1085,18 @@ impl<'s> Extractor<'s> {
     }
 
     fn def<'t>(&self, n: Node<'t>) -> Option<Def<'t>> {
-        let kind = n.kind();
+        let fits = |r: &&DefRule| self.engine >= r.since && is_one_of(&r.kinds, n.kind());
+        let rule = self.rules.defs.iter().find(fits)?;
+        let mut d = self.named_by(n, &rule.how)?;
+        if !self.rules.attributes.is_empty() {
+            let mut parts = named(n).into_iter();
+            let header = parts.find(|c| !is_one_of(&self.rules.attributes, c.kind()));
+            d.header_start = header.map_or(n.start_byte(), |c| c.start_byte());
+        }
+        Some(d)
+    }
+
+    fn named_by<'t>(&self, n: Node<'t>, how: &DefHow) -> Option<Def<'t>> {
         let name = |f: &str| self.field_text(n, f);
         let leaf = |name: Option<String>| {
             name.map(|name| Def {
@@ -1127,186 +1120,106 @@ impl<'s> Extractor<'s> {
                 key: None,
             })
         };
-        match self.lang {
-            Lang::Rust => match kind {
-                "function_item"
-                | "function_signature_item"
-                | "struct_item"
-                | "enum_item"
-                | "union_item"
-                | "type_item"
-                | "const_item"
-                | "static_item"
-                | "macro_definition" => leaf(name("name")),
-                "macro_invocation" | "expression_statement" if self.groups() => {
-                    let call = match kind {
-                        "macro_invocation" => n,
-                        _ => n
-                            .named_child(0)
-                            .filter(|c| c.kind() == "macro_invocation")?,
-                    };
-                    let called = self.field_text(call, "macro")?;
-                    leaf(Some(format!("{called}!")))
+        match how {
+            DefHow::Leaf(field) => leaf(name(field)),
+            DefHow::Members { name: id, members } => container(name(id), members),
+            DefHow::MembersIfAny { name: id, members } => {
+                if n.child_by_field_name(members).is_some() {
+                    container(name(id), members)
+                } else {
+                    leaf(name(id))
                 }
-                "trait_item" => container(name("name"), "body"),
-                "mod_item" => {
-                    if n.child_by_field_name("body").is_some() {
-                        container(name("name"), "body")
-                    } else {
-                        leaf(name("name"))
-                    }
+            }
+            DefHow::Fixed(fixed) => leaf(Some(fixed.clone())),
+            DefHow::Prefixed { prefix, field } => {
+                let word = name(field).unwrap_or_default();
+                leaf(Some(format!("{prefix}{word}")))
+            }
+            DefHow::Inner {
+                child,
+                descendant,
+                field,
+                or_child,
+                only,
+            } => {
+                let mut parts = named(n).into_iter();
+                let inner = parts
+                    .find(|c| is_one_of(child, c.kind()))
+                    .or_else(|| descendant.iter().find_map(|k| find_descendant(n, k)))?;
+                let id = inner.child_by_field_name(field).or_else(|| {
+                    let mut parts = named(inner).into_iter();
+                    parts.find(|c| or_child.as_ref().is_some_and(|k| c.kind() == k))
+                })?;
+                if only.as_ref().is_some_and(|k| id.kind() != k) {
+                    return None;
                 }
-                "impl_item" => {
-                    let of_type = name("type")?;
-                    let ty = Self::base_type_name(&of_type);
-                    let of_trait = name("trait");
-                    let full = match &of_trait {
-                        Some(tr) => format!("{ty}.{}", Self::base_type_name(tr)),
-                        None => ty.clone(),
-                    };
-                    let mut d = container(Some(format!("impl:{full}")), "body")?;
-                    d.member_prefix = Some(full);
-                    d.impl_for = Some(ty).filter(|ty| !ty.is_empty());
-                    let args = [Some(&of_type), of_trait.as_ref()].into_iter().flatten();
-                    d.key = key_of(args.filter_map(|t| type_args(t)));
-                    Some(d)
-                }
-                _ => None,
-            },
-            Lang::Python => match kind {
-                "function_definition" => leaf(name("name")),
-                "class_definition" => container(name("name"), "body"),
-                _ => None,
-            },
-            Lang::TypeScript | Lang::Tsx | Lang::JavaScript => match kind {
-                "function_declaration"
-                | "generator_function_declaration"
-                | "function_signature"
-                | "method_definition"
-                | "method_signature"
-                | "abstract_method_signature" => leaf(name("name")),
-                "class_declaration" | "abstract_class_declaration" => {
-                    container(name("name"), "body")
-                }
-                "interface_declaration" | "type_alias_declaration" | "enum_declaration" => {
-                    leaf(name("name"))
-                }
-                "internal_module" | "module" => container(name("name"), "body"),
-                "public_field_definition" => leaf(name("name")),
-                "field_definition" => leaf(name("property")),
-                "lexical_declaration" | "variable_declaration" => {
-                    let decl = n
-                        .named_children(&mut n.walk())
-                        .find(|c| c.kind() == "variable_declarator")?;
-                    let id = decl.child_by_field_name("name")?;
-                    if id.kind() != "identifier" {
-                        return None;
-                    }
-                    leaf(Some(self.text(id).to_string()))
-                }
-                "expression_statement" if self.groups() => {
-                    let set = n
-                        .named_child(0)
-                        .filter(|c| c.kind() == "assignment_expression")?;
-                    let left = set.child_by_field_name("left")?;
-                    let object = left.child_by_field_name("object").map(|o| self.text(o));
-                    if !matches!(object, Some("exports" | "module.exports")) {
-                        return None;
-                    }
-                    let mut d = leaf(self.field_text(left, "property"))?;
-                    d.body = set
-                        .child_by_field_name("right")?
-                        .child_by_field_name("body");
-                    Some(d)
-                }
-                "pair" => {
-                    let key = n.child_by_field_name("key")?;
-                    let value = n.child_by_field_name("value")?;
-                    let is_fn = matches!(
-                        value.kind(),
-                        "function_expression" | "arrow_function" | "generator_function"
-                    );
-                    if key.kind() != "property_identifier" || !is_fn {
-                        return None;
-                    }
-                    let mut d = leaf(Some(self.text(key).to_string()))?;
-                    d.body = value.child_by_field_name("body");
-                    Some(d)
-                }
-                _ => None,
-            },
-            Lang::CSharp => {
-                let header_start = n
-                    .named_children(&mut n.walk())
-                    .find(|c| c.kind() != "attribute_list")
-                    .map(|c| c.start_byte())
-                    .unwrap_or(n.start_byte());
-                let mut d = match kind {
-                    "class_declaration"
-                    | "struct_declaration"
-                    | "interface_declaration"
-                    | "record_declaration" => container(name("name"), "body"),
-                    "enum_declaration"
-                    | "delegate_declaration"
-                    | "property_declaration"
-                    | "event_declaration" => leaf(name("name")),
-                    "method_declaration"
-                    | "constructor_declaration"
-                    | "destructor_declaration"
-                    | "local_function_statement"
-                    | "variable_declarator" => leaf(name("name")),
-                    "operator_declaration" => leaf(Some(format!(
-                        "operator{}",
-                        name("operator").unwrap_or_default()
-                    ))),
-                    "conversion_operator_declaration" => leaf(Some("operator_conversion".into())),
-                    "indexer_declaration" => leaf(Some("this".into())),
-                    "field_declaration" | "event_field_declaration" => {
-                        let decl = find_descendant(n, "variable_declarator")?;
-                        let id = decl.child_by_field_name("name").or_else(|| {
-                            decl.named_children(&mut decl.walk())
-                                .find(|c| c.kind() == "identifier")
-                        })?;
-                        leaf(Some(self.text(id).to_string()))
-                    }
-                    _ => None,
-                }?;
-                d.header_start = header_start;
+                leaf(Some(self.text(id).to_string()))
+            }
+            DefHow::MethodOf {
+                receiver,
+                kind,
+                name: id,
+            } => {
+                let recv = n.child_by_field_name(receiver)?;
+                let ty = find_descendant(recv, kind)?;
+                let m = name(id)?;
+                leaf(Some(format!("{}.{m}", self.text(ty))))
+            }
+            DefHow::Implementation {
+                of_type,
+                of_trait,
+                members,
+                prefix,
+            } => {
+                let of_type = name(of_type)?;
+                let ty = Self::base_type_name(&of_type);
+                let of_trait = name(of_trait);
+                let full = match &of_trait {
+                    Some(tr) => format!("{ty}.{}", Self::base_type_name(tr)),
+                    None => ty.clone(),
+                };
+                let mut d = container(Some(format!("{prefix}{full}")), members)?;
+                d.member_prefix = Some(full);
+                d.impl_for = Some(ty).filter(|ty| !ty.is_empty());
+                let args = [Some(&of_type), of_trait.as_ref()].into_iter().flatten();
+                d.key = key_of(args.filter_map(|t| type_args(t)));
                 Some(d)
             }
-            Lang::Go => match kind {
-                "function_declaration" | "const_spec" | "var_spec" | "type_spec" | "type_alias" => {
-                    leaf(name("name"))
+            DefHow::MacroCall {
+                call,
+                field,
+                suffix,
+            } => {
+                let at = match n.kind() == call {
+                    true => n,
+                    false => n.named_child(0).filter(|c| c.kind() == call)?,
+                };
+                let called = self.field_text(at, field)?;
+                leaf(Some(format!("{called}{suffix}")))
+            }
+            DefHow::Assigned { set, objects } => {
+                let write = n.named_child(0).filter(|c| c.kind() == set)?;
+                let left = write.child_by_field_name("left")?;
+                let object = left.child_by_field_name("object")?;
+                if !is_one_of(objects, self.text(object)) {
+                    return None;
                 }
-                "method_declaration" => {
-                    let recv = n.child_by_field_name("receiver")?;
-                    let ty = find_descendant(recv, "type_identifier")?;
-                    let m = name("name")?;
-                    leaf(Some(format!("{}.{m}", self.text(ty))))
+                let mut d = leaf(self.field_text(left, "property"))?;
+                d.body = write
+                    .child_by_field_name("right")?
+                    .child_by_field_name("body");
+                Some(d)
+            }
+            DefHow::FunctionPair { key, values } => {
+                let id = n.child_by_field_name("key")?;
+                let value = n.child_by_field_name("value")?;
+                if id.kind() != key || !is_one_of(values, value.kind()) {
+                    return None;
                 }
-                "type_declaration" => {
-                    let spec = n
-                        .named_children(&mut n.walk())
-                        .find(|c| matches!(c.kind(), "type_spec" | "type_alias"))?;
-                    leaf(
-                        spec.child_by_field_name("name")
-                            .map(|c| self.text(c).to_string()),
-                    )
-                }
-                "const_declaration" | "var_declaration" => {
-                    let spec = find_descendant(
-                        n,
-                        if kind == "const_declaration" {
-                            "const_spec"
-                        } else {
-                            "var_spec"
-                        },
-                    )?;
-                    let id = spec.child_by_field_name("name")?;
-                    leaf(Some(self.text(id).to_string()))
-                }
-                _ => None,
-            },
+                let mut d = leaf(Some(self.text(id).to_string()))?;
+                d.body = value.child_by_field_name("body");
+                Some(d)
+            }
         }
     }
 
@@ -1494,51 +1407,35 @@ impl<'s> Extractor<'s> {
 
     fn test_markers(&self, def: &Def, n: Node, qualified: &str, attached: &str) -> (bool, bool) {
         let leaf_name = qualified.rsplit('.').next().unwrap_or(qualified);
-        if def.members.is_some() {
+        let Some(tests) = self.rules.tests.as_ref().filter(|_| def.members.is_none()) else {
             return (false, false);
-        }
-        match self.lang {
-            Lang::Rust => {
-                let is_fn = n.kind() == "function_item";
-                let t = is_fn
-                    && (attached.contains("#[test")
-                        || attached.contains("::test")
-                        || attached.contains("#[rstest"));
-                (t, t && attached.contains("#[ignore"))
-            }
-            Lang::Python => {
-                let in_test_class = match qualified.rsplit_once('.') {
-                    Some((cls, _)) => cls.rsplit('.').next().unwrap_or(cls).starts_with("Test"),
-                    None => true,
-                };
-                let t = n.kind() == "function_definition"
-                    && leaf_name.starts_with("test")
-                    && in_test_class;
-                // Decorators live between the span start and the `def`.
-                (t, t && attached.contains("skip"))
-            }
-            Lang::CSharp => {
-                let attrs = &self.src[n.start_byte()..def.header_start];
-                let t = [
-                    "[Fact",
-                    "[Theory",
-                    "[Test",
-                    "[TestMethod",
-                    "[TestCase",
-                    "[DataTestMethod",
-                    ", Fact",
-                    ", Test",
-                ]
-                .iter()
-                .any(|m| attrs.contains(m));
-                (t, t && (attrs.contains("Skip") || attrs.contains("Ignore")))
-            }
-            Lang::Go => {
-                let t = n.kind() == "function_declaration" && leaf_name.starts_with("Test");
-                (t, t && self.text(n).contains(".Skip("))
-            }
-            Lang::TypeScript | Lang::Tsx | Lang::JavaScript => (false, false),
-        }
+        };
+        let text = |marked: Marked| match marked {
+            Marked::Attached => attached,
+            Marked::Attributes => &self.src[n.start_byte()..def.header_start],
+            Marked::Text => self.text(n),
+        };
+        let owner_fits = |prefix: &String| match qualified.rsplit_once('.') {
+            Some((owner, _)) => owner
+                .rsplit('.')
+                .next()
+                .unwrap_or(owner)
+                .starts_with(prefix),
+            None => true,
+        };
+        let marked = text(tests.marks_in);
+        let is_test = (tests.kinds.is_empty() || is_one_of(&tests.kinds, n.kind()))
+            && tests
+                .name_prefix
+                .as_ref()
+                .is_none_or(|p| leaf_name.starts_with(p))
+            && tests.owner_prefix.as_ref().is_none_or(owner_fits)
+            && (tests.marks.is_empty() || tests.marks.iter().any(|m| marked.contains(m)));
+        let skips = text(tests.skips_in);
+        (
+            is_test,
+            is_test && tests.skips.iter().any(|s| skips.contains(s)),
+        )
     }
 
     /// `it("..")` / `test("..")` calls, named by their `describe` path.
@@ -1807,7 +1704,7 @@ mod tests {
         };
         let first_pair = |n: usize| {
             let (old, new) = (list("A", n, false), list("B", n, true));
-            let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [&old, &new]);
+            let [a, mut b] = parse_together(ENGINE_KEYS, Lang::named("csharp"), [&old, &new]);
             let pairs = align(&a, &mut b);
             assert_eq!(pairs.len(), n);
             let first = pairs.iter().find(|p| p.base == "C.M(A0)").unwrap();
@@ -1821,7 +1718,7 @@ mod tests {
     #[test]
     fn a_symbol_of_a_merge_finds_its_own_pair() {
         let src = "def f(a: int):\n    pass\ndef f(a: bytes):\n    pass\ndef g(a: int):\n    pass\ndef g(a: bytes):\n    pass\n";
-        let mut merged = parse_at(ENGINE_KEYS, Lang::Python, src);
+        let mut merged = parse_at(ENGINE_KEYS, Lang::named("python"), src);
         let own = merged.syms[1].own.clone();
         let pair = |stem: &str, base: &str, own: String, at| Pair {
             side: stem.into(),
@@ -1843,7 +1740,7 @@ mod tests {
     #[test]
     fn keys_hold_for_later_engines() {
         let src = "class C { void M(int a) {} void M(string s) {} }";
-        let [p] = parse_together(ENGINE_KEYS + 1, Lang::CSharp, [src]);
+        let [p] = parse_together(ENGINE_KEYS + 1, Lang::named("csharp"), [src]);
         assert_eq!(p.syms[0].children[0].name, "C.M(int)");
     }
 
@@ -1883,7 +1780,7 @@ mod tests {
     #[test]
     fn engines_before_keys_number_by_order() {
         let src = "class C { void M(int a) {} void M(string s) {} }";
-        let names = parse_at(ENGINE_KEYS - 1, Lang::CSharp, src).syms[0]
+        let names = parse_at(ENGINE_KEYS - 1, Lang::named("csharp"), src).syms[0]
             .children
             .iter()
             .map(|s| s.name.clone())
@@ -1897,13 +1794,13 @@ mod tests {
     fn versions_read_together_share_their_names() {
         let one = "class C { void M(int a) {} }";
         let two = "class C { void M(string s) {} void M(int a) {} }";
-        let [a, b] = parse_together(ENGINE_KEYS, Lang::CSharp, [one, two]);
+        let [a, b] = parse_together(ENGINE_KEYS, Lang::named("csharp"), [one, two]);
         assert_eq!(a.syms[0].children[0].name, "C.M(int)");
         assert_eq!(a.syms[0].children[0].plain.as_deref(), Some("C.M"));
         assert_eq!(b.syms[0].children[1].name, "C.M(int)");
         assert_eq!(a.syms[0].spots, b.syms[0].spots[1..]);
         assert_eq!(
-            parse_at(ENGINE_KEYS, Lang::CSharp, one).syms[0].children[0].plain,
+            parse_at(ENGINE_KEYS, Lang::named("csharp"), one).syms[0].children[0].plain,
             None
         );
     }
@@ -1912,13 +1809,13 @@ mod tests {
     fn a_new_key_keeps_the_name_of_the_base() {
         let old = "class C { void M(int a) {} void M(string s) {} void N() {} }";
         let new = "class C { void M(long a) {} void M(string s) {} void N() {} }";
-        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [old, new]);
+        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::named("csharp"), [old, new]);
         align(&a, &mut b);
         assert_eq!(a.syms[0].children[0].name, b.syms[0].children[0].name);
         assert_eq!(a.syms[0].spots, b.syms[0].spots);
         // A symbol with no partner stays what it is.
         let new = "class C { void M(long a) {} void M(short s) {} void M(byte b) {} void N() {} }";
-        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::CSharp, [old, new]);
+        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::named("csharp"), [old, new]);
         let pairs = align(&a, &mut b);
         assert_eq!(pairs.len(), 2);
         let names: Vec<&str> = b.syms[0].children.iter().map(|s| s.name.as_str()).collect();
@@ -1934,7 +1831,7 @@ mod tests {
         let old =
             "impl From<u8> for S {\n    fn a() {}\n}\nimpl From<u16> for S {\n    fn a() {}\n}\n";
         let new = old.replace("<u8>", "<u32>");
-        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::Rust, [old, &new]);
+        let [a, mut b] = parse_together(ENGINE_KEYS, Lang::named("rust"), [old, &new]);
         align(&a, &mut b);
         assert_eq!(b.syms[0].name, "impl:S.From(u32)");
     }
@@ -1944,7 +1841,7 @@ mod tests {
         let src = "struct S;\nenum E { A }\ntype T = u8;\nfn f() {}\nconst C: u8 = 1;\n\
                    trait R {}\nimpl S {}\nimpl From<u8> for S {}\n\
                    mod m {\n    struct S;\n    impl S {}\n    impl R for S {}\n}\n";
-        let p = parse(Lang::Rust, src);
+        let p = parse(Lang::named("rust"), src);
         for (name, want) in [
             ("S", Some("S")),
             ("E", Some("E")),
@@ -1962,7 +1859,7 @@ mod tests {
             assert_eq!(find(&p.syms, name).def_of.as_deref(), want, "{name}");
         }
         let g = parse(
-            Lang::Go,
+            Lang::named("go"),
             "package p\ntype T struct{}\nfunc (t T) M() {}\nfunc F() {}\n",
         );
         assert_eq!(find(&g.syms, "T").def_of.as_deref(), Some("T"));
@@ -1973,7 +1870,10 @@ mod tests {
     /// One name for one change, and a symbol that changed shape is whole.
     #[test]
     fn a_change_is_of_the_definition_only_for_the_same_shape() {
-        let p = parse(Lang::Rust, "struct S;\nfn f() {}\nmod m {}\nimpl S {}\n");
+        let p = parse(
+            Lang::named("rust"),
+            "struct S;\nfn f() {}\nmod m {}\nimpl S {}\n",
+        );
         let [s, f, m, i] = ["S", "f", "m", "impl:S"].map(|n| find(&p.syms, n));
         assert_eq!(s.changed_unit(s, 3), "S.<def>");
         assert_eq!(s.changed_unit(s, 2), "S");
@@ -1982,15 +1882,15 @@ mod tests {
         assert_eq!(i.changed_unit(i, 3), "S.<def>");
         assert_eq!(i.changed_unit(i, 2), "impl:S");
         // Same name, other shape: a `mod m;` and a `mod m {}`.
-        let q = parse(Lang::Rust, "mod m;\nfn S() {}\n");
+        let q = parse(Lang::named("rust"), "mod m;\nfn S() {}\n");
         let (m2, s2) = (find(&q.syms, "m"), find(&q.syms, "S"));
         assert_eq!(m.changed_unit(m2, 3), "m");
         assert_eq!(m2.changed_unit(m, 3), "m");
         assert_eq!(s.changed_unit(s2, 3), "S");
         assert_eq!(s2.changed_unit(s, 3), "S");
         // A `record` with no body is a type and no container.
-        let c = parse(Lang::CSharp, "class R { }\n");
-        let d = parse(Lang::CSharp, "record R(int A);\n");
+        let c = parse(Lang::named("csharp"), "class R { }\n");
+        let d = parse(Lang::named("csharp"), "record R(int A);\n");
         let (cr, dr) = (find(&c.syms, "R"), find(&d.syms, "R"));
         assert_eq!(dr.changed_unit(dr, 3), "R.<def>");
         assert_eq!(cr.changed_unit(dr, 3), "R");
@@ -2000,7 +1900,7 @@ mod tests {
     /// What counts as code changing places, and what does not.
     #[test]
     fn code_shifts_against_symbols_both_sides_have() {
-        let py = |src| parse(Lang::Python, src);
+        let py = |src| parse(Lang::named("python"), src);
         let moved = |a, b| shifted(py(a).placed(), py(b).placed());
         let base = "x = 1\ndef a(): pass\ny = 2\ndef b(): pass\n";
         assert!(!moved(base, base));
@@ -2029,7 +1929,7 @@ mod tests {
         let p = py("# about\n# a\ndef a(): pass\n");
         assert_eq!(p.spots.len(), 1);
         // Inside a container, members are the symbols.
-        let cls = |src| parse(Lang::Python, src).syms.remove(0);
+        let cls = |src| parse(Lang::named("python"), src).syms.remove(0);
         let a = cls("class A:\n    x = 1\n    def a(self): pass\n");
         let b = cls("class A:\n    def a(self): pass\n    x = 1\n");
         assert!(shifted(a.placed(), b.placed()));
@@ -2039,7 +1939,7 @@ mod tests {
     /// A type with no plain name has no definition to share.
     #[test]
     fn an_impl_of_a_projected_type_is_its_own_definition() {
-        let p = parse(Lang::Rust, "impl R for <T as X>::Y {}\n");
+        let p = parse(Lang::named("rust"), "impl R for <T as X>::Y {}\n");
         let i = &p.syms[0];
         assert_eq!(i.def_of.as_ref(), Some(&i.name));
         assert_eq!(i.impl_of(3), None);
@@ -2047,7 +1947,7 @@ mod tests {
 
     #[test]
     fn only_an_impl_stands_for_another_type() {
-        let p = parse(Lang::Rust, "struct S;\nimpl S {}\nfn f() {}\n");
+        let p = parse(Lang::named("rust"), "struct S;\nimpl S {}\nfn f() {}\n");
         assert_eq!(find(&p.syms, "impl:S").impl_of(3), Some("S"));
         assert_eq!(find(&p.syms, "impl:S").impl_of(2), None);
         assert_eq!(find(&p.syms, "S").impl_of(3), None);
@@ -2096,7 +1996,7 @@ mod tests {
     fn slow() {}
 }
 "#;
-        let p = parse(Lang::Rust, src);
+        let p = parse(Lang::named("rust"), src);
         assert!(!p.has_error);
         assert_eq!(
             names(&p),
@@ -2133,7 +2033,7 @@ mod tests {
     #[test]
     fn python() {
         let src = "import os\nfrom x import y\n\nCONST = 1\n\n@decorator\ndef top(a):\n    return a\n\nclass TestThing:\n    def test_one(self):\n        pass\n\n    @pytest.mark.skip\n    def test_two(self):\n        pass\n\n    def helper(self):\n        pass\n";
-        let p = parse(Lang::Python, src);
+        let p = parse(Lang::named("python"), src);
         assert!(!p.has_error);
         assert_eq!(
             names(&p),
@@ -2156,7 +2056,7 @@ mod tests {
     #[test]
     fn typescript() {
         let src = "import { a } from './a';\n\nexport function charge(x: number): number { return x; }\n\nexport class Client {\n  private id = 1;\n  refund(): void {}\n  static make() { return new Client(); }\n}\n\nconst helper = () => 1;\nexport interface Shape { w: number }\ntype Id = string;\n\ndescribe('Client', () => {\n  it('refunds', () => {});\n  it.skip('slow', () => {});\n});\n";
-        let p = parse(Lang::TypeScript, src);
+        let p = parse(Lang::named("typescript"), src);
         assert!(!p.has_error);
         assert_eq!(
             names(&p),
@@ -2180,7 +2080,7 @@ mod tests {
     #[test]
     fn csharp() {
         let src = "using System;\nusing Xunit;\n\nnamespace Billing\n{\n    public class Client\n    {\n        private int _id;\n        public Client(int id) { _id = id; }\n        public int Charge(int a) => a;\n        public int Charge(int a, int b) => a + b;\n        public string Name { get; set; }\n    }\n\n    public class ClientTests\n    {\n        [Fact]\n        public void Works() { }\n\n        [Fact(Skip = \"slow\")]\n        public void Slow() { }\n    }\n}\n";
-        let p = parse(Lang::CSharp, src);
+        let p = parse(Lang::named("csharp"), src);
         assert!(!p.has_error, "{src}");
         assert_eq!(
             names(&p),
@@ -2211,7 +2111,7 @@ mod tests {
     #[test]
     fn go() {
         let src = "package billing\n\nimport \"fmt\"\n\ntype Client struct{ id int }\n\nfunc (c *Client) Charge(a int) int { return a }\n\nfunc New() *Client { return &Client{} }\n\nfunc TestNew(t *testing.T) { t.Skip(\"x\") }\n\nconst Limit = 3\n";
-        let p = parse(Lang::Go, src);
+        let p = parse(Lang::named("go"), src);
         assert!(!p.has_error);
         assert_eq!(
             names(&p),
@@ -2241,50 +2141,53 @@ mod tests {
     fn exact_text_ignores_layout_and_keeps_what_the_program_means() {
         let py = "X = 1\nif X:\n    a = 1\n    b = 2\n";
         assert_eq!(
-            exact(Lang::Python, py),
-            exact(Lang::Python, &py.replace("X = 1", "X  =  1"))
+            exact(Lang::named("python"), py),
+            exact(Lang::named("python"), &py.replace("X = 1", "X  =  1"))
         );
         assert_eq!(
-            exact(Lang::Python, py),
-            exact(Lang::Python, &py.replace("a = 1\n", "a = 1\n\n"))
+            exact(Lang::named("python"), py),
+            exact(Lang::named("python"), &py.replace("a = 1\n", "a = 1\n\n"))
         );
         // Indentation that means something, and both ends of a block.
         assert_ne!(
-            exact(Lang::Python, py),
-            exact(Lang::Python, &py.replace("    b = 2", "b = 2"))
+            exact(Lang::named("python"), py),
+            exact(Lang::named("python"), &py.replace("    b = 2", "b = 2"))
         );
         assert_ne!(
-            exact(Lang::Python, py),
-            exact(Lang::Python, &py.replace("X = 1", "X = 2"))
+            exact(Lang::named("python"), py),
+            exact(Lang::named("python"), &py.replace("X = 1", "X = 2"))
         );
         // Whitespace in a token, also around an escape inside the string.
         let s = "X = \"a  \\n b\"\n";
         assert_ne!(
-            exact(Lang::Python, s),
-            exact(Lang::Python, &s.replace("a  ", "a "))
+            exact(Lang::named("python"), s),
+            exact(Lang::named("python"), &s.replace("a  ", "a "))
         );
         let r = "const fn f() {}\nstatic S: &str = \"\";\nm!(\"a  b\");\n";
         // Engine 5 reads the macro call as a symbol: its text is compared.
-        let old = |src: &str| parse_at(4, Lang::Rust, src).residual_exact;
+        let old = |src: &str| parse_at(4, Lang::named("rust"), src).residual_exact;
         assert_ne!(old(r), old(&r.replace("a  b", "a b")));
         let c = "# one  two\nX = 1\n";
         assert_ne!(
-            exact(Lang::Python, c),
-            exact(Lang::Python, &c.replace("one  two", "one two"))
+            exact(Lang::named("python"), c),
+            exact(Lang::named("python"), &c.replace("one  two", "one two"))
         );
     }
 
     #[test]
     fn exact_text_leaves_symbols_and_imports_out() {
         let src = "import os\nX = 1\ndef f():\n    return 1\nY = 2\n";
-        let base = exact(Lang::Python, src);
+        let base = exact(Lang::named("python"), src);
         assert_eq!(
             base,
-            exact(Lang::Python, &src.replace("return 1", "return 2"))
+            exact(Lang::named("python"), &src.replace("return 1", "return 2"))
         );
         assert_eq!(
             base,
-            exact(Lang::Python, &src.replace("import os", "import sys"))
+            exact(
+                Lang::named("python"),
+                &src.replace("import os", "import sys")
+            )
         );
         assert!(base.contains('X') && base.contains('Y'), "{base}");
         assert!(!base.contains("return") && !base.contains("os"), "{base}");
@@ -2293,7 +2196,7 @@ mod tests {
     #[test]
     fn each_engine_reads_its_own_text() {
         let p = parse(
-            Lang::Python,
+            Lang::named("python"),
             "class C:\n    x  =  1\n    def m(self):\n        pass\nY  =  2\n",
         );
         assert_eq!(p.residual_at(1), "Y = 2");
@@ -2314,7 +2217,7 @@ mod tests {
     #[test]
     fn a_comment_attached_to_a_container_is_part_of_its_own_text() {
         let src = "// one\nimpl C {\n    fn a() {}\n}\n";
-        let own = |s: &str| parse(Lang::Rust, s).syms[0].own_exact.clone();
+        let own = |s: &str| parse(Lang::named("rust"), s).syms[0].own_exact.clone();
         assert_ne!(own(src), own(&src.replace("one", "two")));
     }
 
@@ -2329,31 +2232,31 @@ mod tests {
     fn engine_5_reads_what_engine_4_left_out() {
         let rows: &[(Lang, &str, &[&str], &[&str])] = &[
             (
-                Lang::Go,
+                Lang::named("go"),
                 "package p\ntype (\n\tA struct{}\n\tB = int\n)\nconst (\n\tX = 1\n\tY = 2\n)\nvar (\n\ta = 1\n\tb = 2\n)\n",
                 &["A", "B", "X", "Y", "a", "b"],
                 &["A", "X", "a"],
             ),
             (
-                Lang::CSharp,
+                Lang::named("csharp"),
                 "class C {\n    int a, b;\n    event E x, y;\n    int one;\n}\n",
                 &["C", "C.a", "C.b", "C.x", "C.y", "C.one"],
                 &["C", "C.a", "C.x", "C.one"],
             ),
             (
-                Lang::JavaScript,
+                Lang::named("javascript"),
                 "exports.a = function () {};\nmodule.exports.b = () => 1;\nthing.c = 1;\nmodule.exports = {\n  d() {},\n  e: function () {},\n  f: () => 1,\n  g: 1,\n  'h': function () {},\n  i,\n};\n",
                 &["a", "b", "d", "e", "f"],
                 &[],
             ),
             (
-                Lang::Python,
+                Lang::named("python"),
                 "if TYPE_CHECKING:\n    def a(): pass\nelse:\n    class B: pass\ntry:\n    def c(): pass\nexcept E:\n    pass\nif __name__ == \"__main__\":\n    @d\n    def e(): pass\n",
                 &["a", "B", "c", "e"],
                 &[],
             ),
             (
-                Lang::Rust,
+                Lang::named("rust"),
                 "extern \"C\" {\n    fn a(x: u8);\n    static B: u8;\n}\nm!(x);\nm! { y }\nn::o!(z);\nmod q {\n    r!();\n}\n",
                 &["a", "B", "m!", "m!~2", "n::o!", "q", "q.r!"],
                 &["q"],
@@ -2368,7 +2271,7 @@ mod tests {
     /// What a block holds decides whether it is read at all.
     #[test]
     fn a_python_block_counts_only_when_it_holds_nothing_but_definitions() {
-        let py = |src| names_at(5, Lang::Python, src);
+        let py = |src| names_at(5, Lang::named("python"), src);
         assert!(py("if A:\n    def a(): pass\n    x = 1\n").is_empty());
         assert!(py("if A:\n    from b import c\n    def a(): pass\n").is_empty());
         assert!(py("if A:\n    def a(): pass\nelse:\n    x = 1\n").is_empty());
@@ -2391,13 +2294,13 @@ mod tests {
     #[test]
     fn go_declarations_without_parentheses_stay_whole() {
         let src = "package p\ntype T struct{}\nconst X, Y = 1, 2\nvar v = 1\n";
-        let p = parse_at(5, Lang::Go, src);
+        let p = parse_at(5, Lang::named("go"), src);
         assert_eq!(names(&p), ["T", "X", "v"]);
         assert_eq!(p.syms[0].holder, None);
         assert!(p.syms[1].text(src).starts_with("const"));
         // In a group, a spec is the symbol and a type keeps its definition.
         let src = "package p\ntype (\n\t// about\n\tT struct{}\n)\n";
-        let p = parse_at(5, Lang::Go, src);
+        let p = parse_at(5, Lang::named("go"), src);
         let t = &p.syms[0];
         assert_eq!(t.text(src), "// about\n\tT struct{}");
         assert_eq!(t.def_of.as_deref(), Some("T"));
@@ -2408,12 +2311,12 @@ mod tests {
     #[test]
     fn a_csharp_field_with_one_declarator_is_the_whole_field() {
         let src = "class C { private int a = 1; }\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         let a = &p.syms[0].children[0];
         assert_eq!(a.text(src), "private int a = 1;");
         assert_eq!(a.holder, None);
         let src = "class C { private int a = 1, b; }\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         let c = &p.syms[0];
         assert_eq!(c.children[0].text(src), "a = 1");
         assert_eq!(c.children[1].text(src), "b");
@@ -2424,7 +2327,7 @@ mod tests {
     #[test]
     fn exports_keep_their_signature() {
         let src = "exports.a = function (x) { return x; };\nmodule.exports = { b: function (y) { return y; }, c(z) {} };\n";
-        let p = parse_at(5, Lang::JavaScript, src);
+        let p = parse_at(5, Lang::named("javascript"), src);
         let sig = |i: usize| p.syms[i].signature.as_deref();
         assert_eq!(sig(0), Some("exports.a = function (x)"));
         assert_eq!(sig(1), Some("b: function (y)"));
@@ -2436,13 +2339,13 @@ mod tests {
     #[test]
     fn a_method_decorator_belongs_to_the_method() {
         let src = "class C {\n  @Listen('x')\n  @Other()\n  onX() {}\n\n  @Input() f = 1;\n}\n";
-        let p = parse_at(5, Lang::TypeScript, src);
+        let p = parse_at(5, Lang::named("typescript"), src);
         let m = &p.syms[0].children[0];
         assert!(m.text(src).starts_with("@Listen"), "{}", m.text(src));
         assert_eq!(m.signature.as_deref(), Some("onX()"));
         assert_eq!(m.def_start, src.find("onX").unwrap());
         assert!(!p.syms[0].own_exact.contains("Listen"));
-        let p = parse_at(4, Lang::TypeScript, src);
+        let p = parse_at(4, Lang::named("typescript"), src);
         assert!(p.syms[0].children[0].text(src).starts_with("onX"));
         assert!(p.syms[0].own_exact.contains("Listen"));
     }
@@ -2451,62 +2354,62 @@ mod tests {
     #[test]
     fn a_comment_attaches_across_no_blank_line() {
         let py = "# licence\n\n# doc\ndef f(): pass\n\n# section\n\ndef g(): pass\n";
-        let p = parse_at(5, Lang::Python, py);
+        let p = parse_at(5, Lang::named("python"), py);
         assert_eq!(p.syms[0].text(py), "# doc\ndef f(): pass");
         assert_eq!(p.syms[1].text(py), "def g(): pass");
         assert!(p.residual_exact.contains("# licence"));
         assert!(p.residual_exact.contains("# section"));
         assert!(!p.residual_exact.contains("# doc"));
         assert!(
-            parse_at(4, Lang::Python, py).syms[0]
+            parse_at(4, Lang::named("python"), py).syms[0]
                 .text(py)
                 .starts_with("# licence")
         );
         // A Rust doc comment holds its own line end.
         let rs = "//! crate\n\n/// doc\nfn f() {}\n\n/// apart\n\nfn g() {}\n";
-        let p = parse_at(5, Lang::Rust, rs);
+        let p = parse_at(5, Lang::named("rust"), rs);
         assert_eq!(p.syms[0].text(rs), "/// doc\nfn f() {}");
         assert_eq!(p.syms[1].text(rs), "fn g() {}");
         // Line ends of another system, and an import.
         let crlf = "// apart\r\n\r\n// doc\r\nfn f() {}\r\n";
-        let p = parse_at(5, Lang::Rust, crlf);
+        let p = parse_at(5, Lang::named("rust"), crlf);
         assert_eq!(p.syms[0].text(crlf), "// doc\r\nfn f() {}");
         let py = "# licence\n\nimport os\n# about\nimport sys\n";
-        let p = parse_at(5, Lang::Python, py);
+        let p = parse_at(5, Lang::named("python"), py);
         assert_eq!(&py[p.imports[0].0..p.imports[0].1], "import os");
         assert!(py[p.imports[1].0..p.imports[1].1].starts_with("# about"));
         // An attribute is no comment: a blank line does not part it.
         let rs = "#[derive(Debug)]\n\nstruct S;\n";
-        let p = parse_at(5, Lang::Rust, rs);
+        let p = parse_at(5, Lang::named("rust"), rs);
         assert_eq!(p.syms[0].start, 0);
     }
 
     #[test]
     fn a_comment_behind_code_is_not_about_what_follows() {
         let src = "package p\n\nconst (\n\tA = 1 // first\n\tB = 2\n)\n\nfunc F() {} // done\nfunc G() {}\n";
-        let p = parse_at(5, Lang::Go, src);
+        let p = parse_at(5, Lang::named("go"), src);
         assert_eq!(p.syms[0].text(src), "A = 1 // first");
         assert_eq!(p.syms[1].text(src), "B = 2");
         assert_eq!(p.syms[2].text(src), "func F() {} // done");
         assert_eq!(p.syms[3].text(src), "func G() {}");
         // A container's own text ends at the node: the comment is code.
         let src = "class C { } // done\nclass D { }\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         assert_eq!(p.syms[1].text(src), "class D { }");
         assert_eq!(p.syms[0].text(src), "class C { }");
         assert!(p.residual_exact.contains("done"), "{}", p.residual_exact);
         // Behind an opening brace or a comma it belongs to nobody.
         let src = "class C { // about\n    int a;\n}\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         assert_eq!(p.syms[0].children[0].text(src), "int a;");
         let src = "module.exports = {\n  a() {}, // first\n  b() {},\n};\n";
-        let p = parse_at(5, Lang::JavaScript, src);
+        let p = parse_at(5, Lang::named("javascript"), src);
         assert_eq!(p.syms[0].text(src), "a() {}");
         assert_eq!(p.syms[1].text(src), "b() {}");
         // Engine 4 attaches it to what follows.
         let src = "fn f() {} // done\nfn g() {}\n";
         assert_eq!(
-            parse_at(4, Lang::Rust, src).syms[1].text(src),
+            parse_at(4, Lang::named("rust"), src).syms[1].text(src),
             "// done\nfn g() {}"
         );
     }
@@ -2515,11 +2418,11 @@ mod tests {
     #[test]
     fn an_attribute_outlives_a_comment_that_stands_apart() {
         let src = "#[test]\n// note\n\nfn t() {}\n";
-        let p = parse_at(5, Lang::Rust, src);
+        let p = parse_at(5, Lang::named("rust"), src);
         assert_eq!(p.syms[0].start, 0);
         assert!(p.tests(src)["t"].0.starts_with("#[test]"));
         let src = "class C {\n  @A()\n  // note\n\n  m() {}\n}\n";
-        let p = parse_at(5, Lang::TypeScript, src);
+        let p = parse_at(5, Lang::named("typescript"), src);
         assert!(p.syms[0].children[0].text(src).starts_with("@A()"));
     }
 
@@ -2528,14 +2431,14 @@ mod tests {
     #[test]
     fn a_comment_behind_a_separator_is_not_the_symbols() {
         let src = "class C {\n  a = 1; // semi\n  b = 2;\n}\n";
-        let p = parse_at(5, Lang::TypeScript, src);
+        let p = parse_at(5, Lang::named("typescript"), src);
         assert_eq!(p.syms[0].children[0].text(src), "a = 1");
         assert_eq!(p.syms[0].children[1].text(src), "b = 2");
     }
 
     #[test]
     fn only_an_object_set_on_module_exports_is_a_list() {
-        let js = |src| names_at(5, Lang::JavaScript, src);
+        let js = |src| names_at(5, Lang::named("javascript"), src);
         assert_eq!(js("exports.x = { a() {} };\n"), ["x"]);
         assert!(js("other = { a() {} };\n").is_empty());
         assert!(js("module.exports = function () {};\n").is_empty());
@@ -2545,7 +2448,7 @@ mod tests {
     #[test]
     fn a_public_type_twice_is_not_partial() {
         let src = "public class C { int a; }\npublic class C { int b; }\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C~2"));
         assert!(names(&p).contains(&"C~2.b".to_string()));
     }
@@ -2554,7 +2457,7 @@ mod tests {
     #[test]
     fn partial_types_in_two_namespaces_are_two_types() {
         let src = "namespace A { partial class C { int a; } }\nnamespace B { partial class C { int b; } }\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C~2"));
         assert!(names(&p).contains(&"C~2.b".to_string()));
     }
@@ -2563,23 +2466,23 @@ mod tests {
     #[test]
     fn partial_types_in_one_scope_are_one_type() {
         let src = "partial class A\n{\n    partial class C { int x; }\n}\n\npartial class A\n{\n    partial class C { int y; }\n}\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         assert_eq!(find(&p.syms, "A.C~2").def_of.as_deref(), Some("A.C"));
         assert!(names(&p).contains(&"A.C.y".to_string()));
         let src = "namespace N { partial class C { int x; } }\nnamespace N { partial class C { int y; } }\nnamespace M { partial class C { int z; } }\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C"));
         assert_eq!(find(&p.syms, "C~3").def_of.as_deref(), Some("C~3"));
         assert_eq!(names(&p), ["C", "C.x", "C~2", "C.y", "C~3", "C~3.z"]);
         let src = "namespace N;\npartial class C { int x; }\npartial class C { int y; }\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         assert_eq!(find(&p.syms, "C~2").def_of.as_deref(), Some("C"));
     }
 
     #[test]
     fn every_comment_behind_code_stays_behind_it() {
         let src = "fn f() {} /* a */ /* b */\nfn g() {}\n";
-        let p = parse_at(5, Lang::Rust, src);
+        let p = parse_at(5, Lang::named("rust"), src);
         assert_eq!(p.syms[0].text(src), "fn f() {} /* a */ /* b */");
         assert_eq!(p.syms[1].text(src), "fn g() {}");
     }
@@ -2589,7 +2492,11 @@ mod tests {
     fn a_test_keeps_its_text_when_its_comment_is_realigned() {
         let a = "#[test]\nfn t() {} // c\n";
         let b = "#[test]\nfn t() {}   // c\n";
-        let text = |src| parse_at(5, Lang::Rust, src).tests(src)["t"].0.clone();
+        let text = |src| {
+            parse_at(5, Lang::named("rust"), src).tests(src)["t"]
+                .0
+                .clone()
+        };
         assert_eq!(text(a), text(b));
         assert_ne!(text(a), text(&a.replace("// c", "// d")));
     }
@@ -2598,12 +2505,15 @@ mod tests {
     #[test]
     fn a_holder_knows_its_group_and_its_block() {
         let src = "if A:\n    def a(): pass\nelse:\n    def b(): pass\nif B:\n    def c(): pass\n";
-        let p = parse_at(5, Lang::Python, src);
+        let p = parse_at(5, Lang::named("python"), src);
         let at: Vec<_> = p.syms.iter().map(|s| s.holder.map(|h| h.block)).collect();
         assert_eq!(at, [Some((0, 0)), Some((0, 1)), Some((1, 0))]);
         let src = "package p\nconst (\n)\nvar (\n\tv = 1\n)\n";
         assert_eq!(
-            parse_at(5, Lang::Go, src).syms[0].holder.unwrap().block,
+            parse_at(5, Lang::named("go"), src).syms[0]
+                .holder
+                .unwrap()
+                .block,
             (1, 0)
         );
     }
@@ -2613,23 +2523,23 @@ mod tests {
     fn the_parts_of_a_partial_type_share_its_names() {
         let src = "partial class C { int a; void M() {} }\npartial class C { int b; void M(int x) {} }\nclass D { }\nclass D { int z; }\n";
         assert_eq!(
-            names_at(5, Lang::CSharp, src),
+            names_at(5, Lang::named("csharp"), src),
             [
                 "C", "C.a", "C.M", "C~2", "C.b", "C.M~2", "D", "D~2", "D~2.z"
             ]
         );
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         let part = find(&p.syms, "C~2");
         assert_eq!(part.def_of.as_deref(), Some("C"));
         assert_eq!(part.impl_of(5), Some("C"));
         assert_eq!(part.changed_unit(part, 5), "C.<def>");
         assert_eq!(find(&p.syms, "C").impl_of(5), None);
         assert_eq!(find(&p.syms, "D~2").def_of.as_deref(), Some("D~2"));
-        let old = names_at(4, Lang::CSharp, src);
+        let old = names_at(4, Lang::named("csharp"), src);
         assert!(old.contains(&"C~2.b".to_string()), "{old:?}");
         // Inside a namespace or a class, the name stays whole.
         let src = "class A { partial class C { } partial class C { int b; } }\n";
-        let p = parse_at(5, Lang::CSharp, src);
+        let p = parse_at(5, Lang::named("csharp"), src);
         assert_eq!(find(&p.syms, "A.C~2").def_of.as_deref(), Some("A.C"));
         assert!(names(&p).contains(&"A.C.b".to_string()));
     }
@@ -2637,16 +2547,28 @@ mod tests {
     #[test]
     fn a_namespace_is_a_holder_from_engine_5() {
         let src = "namespace A { class C { } }\nnamespace B { class D { } }\n";
-        let at = |engine: u32| parse_at(engine, Lang::CSharp, src).syms[1].holder;
+        let at = |engine: u32| parse_at(engine, Lang::named("csharp"), src).syms[1].holder;
         assert_eq!(at(4), None);
         let held = at(5).unwrap();
         assert_eq!(&src[held.start..held.end], "{ class D { } }");
         assert!(!held.joined);
     }
 
+    /// A declarator can hold a pattern where a name would stand, and a
+    /// pattern names nothing.
+    #[test]
+    fn a_csharp_field_of_a_pattern_has_no_name() {
+        let p = parse(
+            Lang::named("csharp"),
+            "class C { int (a, b) = f(); int d; }\n",
+        );
+        let names: Vec<&str> = p.syms[0].children.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["C.d"]);
+    }
+
     #[test]
     fn syntax_errors_are_reported() {
-        assert!(parse(Lang::Rust, "fn broken( {").has_error);
-        assert!(parse(Lang::Python, "def x(:\n  pass").has_error);
+        assert!(parse(Lang::named("rust"), "fn broken( {").has_error);
+        assert!(parse(Lang::named("python"), "def x(:\n  pass").has_error);
     }
 }

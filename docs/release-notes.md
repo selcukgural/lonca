@@ -11,9 +11,13 @@ line merge at integration decides, and a real overlap is `conflicted`. The defau
 `preview` and `lease_needed` list such files under `no_lease`.
 
 Only an edit of lines goes without a lease: a change of mode or of a link, text with a NUL and a
-change that leaves no line of the file keep the file's lease (symbol engine 9). `lonca status` and
-`lonca lease needed` say so too. After a conflict `lonca sync` brings in what trunk changed in the
-rest of a file with no symbols, as it does for symbols, and keeps only the lines that meet.
+change that takes away more than half of a file keep the file's lease (symbol engine 9). Lines
+now merge by their own rules, and a change among equal lines is a conflict rather than a guess.
+`lonca status` and `lonca lease needed` say what the setting does.
+
+After a conflict in a file with no symbols, `lonca sync` brings in the rest of trunk and leaves
+both sides between `<<<<<<< local` and `>>>>>>> trunk`. `propose` refuses until the markers are
+gone.
 
 ### Renames are tracked (symbol engine 7, log format 14)
 

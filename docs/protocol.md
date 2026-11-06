@@ -122,7 +122,7 @@ unknown method: `unknown_method`, whatever the token.
   `facts.preview` lists them in `no_lease`. `status` has the setting as
   `unparsed_files`.
   From engine 9 only edits of lines are listed: the mode stays and is that of a
-  plain file, no NUL, and a line of the old text is left.
+  plain file, no NUL, and at least half of the old text's lines stay.
 - **`renames`** in facts, from symbol engine 7: `[[old, new]]`, symbols that
   go on under another name. A renamed one is also in `deletes` and `adds`, so
   a claim is what it was, and one with new parameters in `edits`. A `rename`

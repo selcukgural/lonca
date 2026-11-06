@@ -83,7 +83,7 @@ fn run_case(engine: u32, dir: &Path) -> Value {
     let (_, ours) = side(dir, "ours");
     let (_, theirs) = side(dir, "theirs");
     let path = format!("src/sample.{ext}");
-    let lang = Lang::detect(&path);
+    let lang = Lang::detect_at(engine, &path);
     let format = Format::detect(&path);
     assert!(lang.is_some() || format.is_some(), "nothing reads {path}");
     let symbols = |text: &str| match lang {

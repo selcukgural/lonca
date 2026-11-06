@@ -1726,6 +1726,7 @@ fn run(cmd: Cmd) -> Result<()> {
         } => {
             let intent = intent.context("pass --intent (-i): what the change does and why")?;
             let mut ws = Workspace::current()?;
+            ws.check_settled()?;
             let changes = ws.changes()?;
             if changes.is_empty() {
                 bail!("no local changes");
@@ -2174,9 +2175,7 @@ fn print_status(s: &Value) {
     }
     let q = s["queue"].as_array().map(|a| a.len()).unwrap_or(0);
     println!("queue  {q} change(s)");
-    if s["unparsed_files"] == "optimistic" {
-        println!("files no parser reads need no lease: the merge decides");
-    }
+    println!("{}", unparsed_note(s));
     let now = s["now_ms"].as_i64().unwrap_or(0);
     println!("sessions:");
     for x in s["sessions"]
@@ -2258,15 +2257,28 @@ fn lease_need_lines(report: &Value) -> Vec<String> {
     needs.iter().map(line).collect()
 }
 
+/// What `status` says of the files no parser reads.
+fn unparsed_note(status: &Value) -> &'static str {
+    match status["unparsed_files"] == "optimistic" {
+        true => "unparsed files: no lease, the merge decides",
+        false => "unparsed files: one lease a file",
+    }
+}
+
+fn no_lease_lines(report: &Value) -> Vec<String> {
+    let paths = report["no_lease"].as_array().into_iter().flatten();
+    let paths = paths.filter_map(Value::as_str);
+    paths
+        .map(|p| format!("{p}: no lease, the merge decides"))
+        .collect()
+}
+
 fn print_lease_needs(report: &Value) {
     for l in lease_need_lines(report) {
         println!("{l}");
     }
-    for path in report["no_lease"].as_array().into_iter().flatten() {
-        println!(
-            "{}: no lease, the merge decides",
-            path.as_str().unwrap_or("")
-        );
+    for l in no_lease_lines(report) {
+        println!("{l}");
     }
     if let Some(advice) = report["advice"].as_str() {
         println!("{advice}");
@@ -2283,7 +2295,30 @@ fn pin_note(lease: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{claim_of, lease_need_lines, pin_note, source, split_ids};
+    use super::{
+        claim_of, lease_need_lines, no_lease_lines, pin_note, source, split_ids, unparsed_note,
+    };
+
+    #[test]
+    fn what_is_said_of_files_no_parser_reads() {
+        let say = |v: serde_json::Value| unparsed_note(&v);
+        let optimistic = serde_json::json!({"unparsed_files": "optimistic"});
+        assert_eq!(
+            say(optimistic),
+            "unparsed files: no lease, the merge decides"
+        );
+        let file = serde_json::json!({"unparsed_files": "file"});
+        assert_eq!(say(file), "unparsed files: one lease a file");
+        let report = serde_json::json!({"no_lease": ["a.zig", "b.zig"]});
+        assert_eq!(
+            no_lease_lines(&report),
+            [
+                "a.zig: no lease, the merge decides",
+                "b.zig: no lease, the merge decides"
+            ]
+        );
+        assert!(no_lease_lines(&serde_json::json!({})).is_empty());
+    }
 
     #[test]
     fn each_option_of_a_claim_goes_to_its_list() {

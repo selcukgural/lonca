@@ -40,12 +40,13 @@ fn sym_id(path: &str, name: &str) -> String {
 
 /// A change a line merge can stand in for a lease on: lines of one file that
 /// stays what it was. A change of mode or of where a link points is none,
-/// bytes with a NUL are no lines, and a change that leaves no line of the
-/// file takes it away as deleting it would.
+/// bytes with a NUL are no lines, and a change that takes away more than
+/// half of a file does what deleting it does.
 fn edits_lines(b: &FileEntry, n: &FileEntry, old: &str, new: &str, removed: u32) -> bool {
     let plain = matches!(n.mode, FileMode::Regular | FileMode::Executable);
     let text = !old.contains('\0') && !new.contains('\0');
-    b.mode == n.mode && plain && text && (removed as usize) < old.lines().count()
+    let lines = old.lines().count();
+    b.mode == n.mode && plain && text && lines > 0 && removed as usize * 2 <= lines
 }
 
 fn line_counts(old: &str, new: &str) -> (u32, u32) {
@@ -78,7 +79,7 @@ pub fn analyze(
     let mut syntax_errors = Vec::new();
     let paths: BTreeSet<&String> = base.keys().chain(new.keys()).collect();
     for path in paths {
-        let lang = Lang::detect(path);
+        let lang = Lang::detect_at(engine, path);
         match (base.get(path), new.get(path)) {
             (None, None) => {}
             (None, Some(n)) => {
@@ -713,7 +714,11 @@ mod tests {
         assert!(!lists((Regular, two), (Regular, "")));
         assert!(!lists((Regular, two), (Regular, "x\ny\n")));
         assert!(!lists((Regular, ""), (Regular, two)));
-        assert!(lists((Regular, two), (Regular, "a\n")), "one line stays");
+        assert!(lists((Regular, two), (Regular, "a\n")), "half stays");
+        let four = "a\nb\nc\nd\n";
+        assert!(lists((Regular, four), (Regular, "a\nb\n")));
+        assert!(!lists((Regular, four), (Regular, "a\n")), "less than half");
+        assert!(!lists((Regular, "a\n"), (Regular, "b\n")), "the one line");
     }
 
     #[test]

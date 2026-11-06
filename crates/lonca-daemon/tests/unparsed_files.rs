@@ -212,19 +212,21 @@ fn a_link_that_points_elsewhere_takes_the_lease() {
         mode: Some(FileMode::Symlink),
         ..file(PATH, to)
     };
-    let r = e.human_change(vec![link("../a")], "seed");
+    let r = e.human_change(vec![link(&seed())], "seed");
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     assert_eq!(e.svc.process_all(), 1);
     let base = e.trunk();
-    let (preview, r) = asked_for(&mut e, &base, json!([link("../b")]));
+    let changed = link(&edited(&seed(), 5, "6"));
+    let (preview, r) = asked_for(&mut e, &base, json!([changed]));
     needs_the_lease(&preview, &r);
 }
 
-/// Text with nothing of the file left in it, or that holds no lines at all:
-/// taking a file's content away is deleting it, which takes the lease.
+/// Taking away most of a file's content does what deleting it does, and
+/// deleting takes the lease.
 #[test]
-fn a_file_emptied_or_replaced_takes_the_lease() {
-    for text in ["", "\n \n", "something else\n"] {
+fn a_file_emptied_or_cut_takes_the_lease() {
+    let kept: String = seed().lines().take(49).map(|l| format!("{l}\n")).collect();
+    for text in ["", "\n \n", "something else\n", "    int a0 = 0;\n", &kept] {
         let (mut e, base) = repo();
         let (preview, r) = asked_for(&mut e, &base, json!([file(PATH, text)]));
         needs_the_lease(&preview, &r);

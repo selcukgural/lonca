@@ -4131,45 +4131,134 @@ fn unparsed_land(e: &Env, ws: &Path, intent: &str) -> String {
     out
 }
 
-/// A conflict in a file with no symbols holds back only the lines that meet:
-/// what trunk gained elsewhere comes in, so it can not look like a local
-/// edit that takes it back.
-#[test]
-fn settling_a_conflict_in_an_unparsed_file_keeps_what_others_landed() {
-    let e = Env::new();
-    agent_workspace(&e);
-    unparsed_optimistic(&e);
+const MAIN: &str = "src/Main.java";
+
+fn numbered() -> String {
+    (0..40).map(|i| format!("    int a{i} = {i};\n")).collect()
+}
+
+fn line(s: &str, i: usize, to: &str) -> String {
+    s.replace(&format!("a{i} = {i};"), &format!("a{i} = {to};"))
+}
+
+/// Three agents on a file of forty lines, under `optimistic`.
+fn three_agents(e: &Env) -> [PathBuf; 3] {
+    agent_workspace(e);
+    unparsed_optimistic(e);
     let hws = e.root.join("hws");
     e.run(&hws, &["sync"]);
-    let seed: String = (0..40).map(|i| format!("    int a{i} = {i};\n")).collect();
-    std::fs::write(hws.join("src/Main.java"), &seed).unwrap();
-    land(&e, &hws, "seed");
+    std::fs::write(hws.join(MAIN), numbered()).unwrap();
+    land(e, &hws, "seed");
+    ["wa", "wb", "wc"].map(|name| unparsed_agent(e, name))
+}
 
-    let (a, b, c) = (
-        unparsed_agent(&e, "wa"),
-        unparsed_agent(&e, "wb"),
-        unparsed_agent(&e, "wc"),
-    );
-    let main = "src/Main.java";
-    let line =
-        |i: usize, to: &str, s: &str| s.replace(&format!("a{i} = {i};"), &format!("a{i} = {to};"));
-    std::fs::write(c.join(main), line(30, "3000", &seed)).unwrap();
+fn trunk_text(e: &Env) -> String {
+    let hws = e.root.join("hws");
+    e.run(&hws, &["sync"]);
+    std::fs::read_to_string(hws.join(MAIN)).unwrap()
+}
+
+/// `text` with the conflict settled by `settled`, markers gone.
+fn settle(text: &str, settled: &str) -> String {
+    let (head, rest) = text.split_once("<<<<<<< local\n").unwrap();
+    let (_, tail) = rest.split_once(">>>>>>> trunk\n").unwrap();
+    format!("{head}{settled}{tail}")
+}
+
+/// What trunk gained elsewhere comes in, what meets is written out, and
+/// nothing can be proposed until it is settled.
+#[test]
+fn a_conflict_in_an_unparsed_file_keeps_what_others_landed() {
+    let e = Env::new();
+    let [a, b, c] = three_agents(&e);
+    let seed = numbered();
+    std::fs::write(c.join(MAIN), line(&seed, 30, "3000")).unwrap();
     unparsed_land(&e, &c, "line 30");
-    std::fs::write(a.join(main), line(10, "1000", &seed)).unwrap();
+    std::fs::write(a.join(MAIN), line(&seed, 10, "1000")).unwrap();
     unparsed_land(&e, &a, "line 10");
-    std::fs::write(b.join(main), line(10, "2000", &seed)).unwrap();
+    std::fs::write(b.join(MAIN), line(&seed, 10, "2000")).unwrap();
     unparsed_land(&e, &b, "line 10 too");
 
     e.run(&b, &["sync", "--json"]);
-    let local = std::fs::read_to_string(b.join(main)).unwrap();
-    assert!(local.contains("a10 = 2000;"), "the conflict stays: {local}");
+    let local = std::fs::read_to_string(b.join(MAIN)).unwrap();
     assert!(local.contains("a30 = 3000;"), "trunk comes in: {local}");
-    let settled = local.replace("a10 = 2000;", "a10 = 1500;");
-    std::fs::write(b.join(main), &settled).unwrap();
-    unparsed_land(&e, &b, "settle line 10");
+    assert!(local.contains("a10 = 1000;"), "their side: {local}");
+    assert!(local.contains("a10 = 2000;"), "our side: {local}");
+    let refused = fails(&e, &b, &["propose", "-i", "too soon", "--accept-facts"]);
+    assert!(
+        refused.contains("conflict not settled in src/Main.java"),
+        "{refused}"
+    );
 
-    e.run(&hws, &["sync"]);
-    let trunk = std::fs::read_to_string(hws.join(main)).unwrap();
+    let settled = settle(&local, "    int a10 = 1500;\n");
+    std::fs::write(b.join(MAIN), &settled).unwrap();
+    unparsed_land(&e, &b, "settle line 10");
+    let trunk = trunk_text(&e);
     assert!(trunk.contains("a10 = 1500;"), "{trunk}");
     assert!(trunk.contains("a30 = 3000;"), "{trunk}");
+}
+
+/// A line next to another's is shown, so it is not taken back unseen.
+#[test]
+fn a_neighbours_line_is_seen_and_kept() {
+    let e = Env::new();
+    let [a, b, _] = three_agents(&e);
+    let seed = numbered();
+    std::fs::write(a.join(MAIN), line(&seed, 10, "1000")).unwrap();
+    unparsed_land(&e, &a, "line 10");
+    std::fs::write(b.join(MAIN), line(&seed, 9, "900")).unwrap();
+    unparsed_land(&e, &b, "line 9");
+
+    e.run(&b, &["sync", "--json"]);
+    let local = std::fs::read_to_string(b.join(MAIN)).unwrap();
+    assert!(local.contains("a10 = 1000;"), "{local}");
+    let both = "    int a9 = 900;\n    int a10 = 1000;\n";
+    std::fs::write(b.join(MAIN), settle(&local, both)).unwrap();
+    unparsed_land(&e, &b, "both lines");
+    let trunk = trunk_text(&e);
+    assert!(trunk.contains(both), "{trunk}");
+}
+
+/// All of another's hunk is in view, not the line that met it alone.
+#[test]
+fn all_of_a_change_that_meets_is_shown() {
+    let e = Env::new();
+    let [a, b, _] = three_agents(&e);
+    let seed = numbered();
+    let three = line(&line(&line(&seed, 10, "1000"), 11, "1100"), 12, "1200");
+    std::fs::write(a.join(MAIN), &three).unwrap();
+    unparsed_land(&e, &a, "lines 10 to 12");
+    std::fs::write(b.join(MAIN), line(&seed, 10, "2000")).unwrap();
+    unparsed_land(&e, &b, "line 10");
+
+    e.run(&b, &["sync", "--json"]);
+    let local = std::fs::read_to_string(b.join(MAIN)).unwrap();
+    for shown in ["a10 = 2000;", "a10 = 1000;", "a11 = 1100;", "a12 = 1200;"] {
+        assert!(local.contains(shown), "{shown}: {local}");
+    }
+}
+
+/// A conflict stays open through a sync with nothing to do with it.
+#[test]
+fn a_second_sync_keeps_an_open_conflict() {
+    let e = Env::new();
+    let [a, b, c] = three_agents(&e);
+    let seed = numbered();
+    std::fs::write(a.join(MAIN), line(&seed, 10, "1000")).unwrap();
+    unparsed_land(&e, &a, "line 10");
+    std::fs::write(b.join(MAIN), line(&seed, 10, "2000")).unwrap();
+    unparsed_land(&e, &b, "line 10 too");
+    e.run(&b, &["sync", "--json"]);
+
+    std::fs::write(c.join(MAIN), line(&seed, 35, "3500")).unwrap();
+    unparsed_land(&e, &c, "line 35");
+    let synced = parse(&e.run(&b, &["sync", "--json"]));
+    assert_eq!(synced["conflicts"][0]["path"], MAIN, "{synced}");
+    let copy = std::fs::read_to_string(b.join("src/Main.java.trunk")).unwrap();
+    assert!(copy.contains("a35 = 3500;"), "{copy}");
+    let local = std::fs::read_to_string(b.join(MAIN)).unwrap();
+    assert!(local.contains("a35 = 3500;"), "{local}");
+    assert!(local.contains("a10 = 1000;"), "{local}");
+    let refused = fails(&e, &b, &["propose", "-i", "too soon", "--accept-facts"]);
+    assert!(refused.contains("conflict not settled"), "{refused}");
 }

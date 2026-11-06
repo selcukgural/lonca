@@ -135,7 +135,7 @@ fn twenty_agents_one_file_no_lost_updates() {
             "addition of agent {i} lost"
         );
     }
-    let parsed = lonca_symbols::parse(lonca_symbols::Lang::Rust, &text);
+    let parsed = lonca_symbols::parse(lonca_symbols::Lang::named("rust"), &text);
     assert!(!parsed.has_error);
     assert_eq!(parsed.syms.len(), 2 * AGENTS);
 

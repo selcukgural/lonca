@@ -84,22 +84,28 @@ impl Row {
     }
 }
 
-fn facts(engine: u32, path: &str, old: &str, new: &str) -> Facts {
-    let map = |text: &str| -> FileMap {
-        let entry = FileEntry {
+fn facts_of(engine: u32, path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> Facts {
+    let map = |bytes: Option<&[u8]>| -> FileMap {
+        let entry = |text: &[u8]| FileEntry {
             mode: FileMode::Regular,
-            blob: GitId::of_blob(text.as_bytes()),
+            blob: GitId::of_blob(text),
         };
-        BTreeMap::from([(path.to_string(), entry)])
+        let one = bytes.map(|text| (path.to_string(), entry(text)));
+        one.into_iter()
+            .collect::<BTreeMap<_, _>>()
             .into_iter()
             .collect()
     };
-    let texts = [old.as_bytes().to_vec(), new.as_bytes().to_vec()];
+    let texts: Vec<&[u8]> = [old, new].into_iter().flatten().collect();
     let read = |id: &GitId| {
         let found = texts.iter().find(|t| GitId::of_blob(t) == *id);
-        Ok(found.cloned().unwrap_or_default())
+        Ok(found.map(|t| t.to_vec()).unwrap_or_default())
     };
     analyze(engine, &map(old), &map(new), &read).unwrap().facts
+}
+
+fn facts(engine: u32, path: &str, old: &str, new: &str) -> Facts {
+    facts_of(engine, path, Some(old.as_bytes()), Some(new.as_bytes()))
 }
 
 #[test]
@@ -384,6 +390,52 @@ fn numbered_names_do_not_hold_a_merge_back() {
         merge_text_at(ENGINE_CURRENT, "a.c", b, &o, &t).as_deref(),
         Ok(want.as_str())
     );
+}
+
+/// However a file comes to be one nothing reads, a person has agreed.
+#[test]
+fn no_file_becomes_unread_unseen() {
+    let at = |old: Option<&[u8]>, new: Option<&[u8]>| {
+        facts_of(ENGINE_CURRENT, "a.java", old, new).unread_files
+    };
+    let (good, bad) = ("class C {\n}\n".as_bytes(), "class C {\n@@@\n".as_bytes());
+    let bytes = b"class C {\n}\n// \xff\n".as_slice();
+    assert_eq!(at(Some(good), Some(bytes)), ["a.java"], "bytes");
+    assert_eq!(at(None, Some(bad)), ["a.java"], "added broken");
+    assert_eq!(at(None, Some(bytes)), ["a.java"], "added as bytes");
+    assert!(at(None, Some(good)).is_empty(), "added and read");
+    assert!(at(Some(bad), Some(bytes)).is_empty(), "unread already");
+    assert!(at(Some(bytes), Some(bad)).is_empty(), "unread already");
+    assert!(at(Some(good), None).is_empty(), "deleted");
+    let f = facts_of(ENGINE_CURRENT, "a.rs", None, Some(bad));
+    assert!(
+        f.unread_files.is_empty(),
+        "the syntax check has a strict language"
+    );
+    let f = facts_of(ENGINE_CURRENT, "a.zig", None, Some(bad));
+    assert!(f.unread_files.is_empty(), "no grammar to stop reading");
+}
+
+/// A stale base that does not read is no way to break a trunk that does.
+#[test]
+fn a_base_that_does_not_read_can_not_break_a_trunk_that_does() {
+    let path = "a.java";
+    let trunk = "class C {\n    int a = 1;\n\n\n\n\n    int b = 2;\n}\n";
+    let base = trunk.replace("int b = 2;", "@@@");
+    let side = base.replace("int a = 1;", "int a = 2; %%%");
+    let conflict = Err(vec!["a.java#<file>".to_string()]);
+    assert_eq!(
+        merge_text_at(ENGINE_CURRENT, path, &base, trunk, &side),
+        conflict
+    );
+    // Nothing reads before or after: lines decide.
+    let o = base.replace("int a = 1;", "int a = 3;\n@@@");
+    let t = base.replace("@@@", "@@@ @@@");
+    assert!(merge_text_at(ENGINE_CURRENT, path, &base, &o, &t).is_ok());
+    // The side repairs the file: the result reads, and it lands.
+    let repaired = trunk.replace("int a = 1;", "int a = 1;\n    int c = 3;");
+    let merged = merge_text_at(ENGINE_CURRENT, path, &base, trunk, &repaired);
+    assert_eq!(merged.as_deref(), Ok(repaired.as_str()));
 }
 
 /// The same with blocks or definitions of one name that a side takes away.

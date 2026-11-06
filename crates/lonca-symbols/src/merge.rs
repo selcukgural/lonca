@@ -18,8 +18,8 @@ use crate::engine::{
     ENGINE_PLACES, ENGINE_SECTIONS,
 };
 use crate::extract::{
-    Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_keyed,
-    parse_together, read_together, rename_aligned, shifted,
+    Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_at,
+    parse_keyed, parse_together, read_together, rename_aligned, shifted,
 };
 
 /// Code outside symbols as an engine compares it, and its place among them.
@@ -199,8 +199,12 @@ pub fn merge_text_at(
         // and engines before this check only asked that the result parses.
         let unread = pb.has_error || po.has_error || pt.has_error;
         // A grammar that could not read the file before says nothing now,
-        // and with one side changed there is nothing for it to judge.
-        if !lang.is_strict() && (pb.has_error || b == o || b == t) {
+        // unless trunk reads and the result would not: a base that does not
+        // read is no way to break what does. With one side changed there is
+        // nothing for it to judge.
+        let reads = || !parse_at(engine, lang, &merged).has_error;
+        let was_unread = pb.has_error && (po.has_error || reads());
+        if !lang.is_strict() && (was_unread || b == o || b == t) {
             return Ok(merged);
         }
         let engine = if unread || engine < ENGINE_PLACES {

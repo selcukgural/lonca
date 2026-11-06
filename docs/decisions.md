@@ -606,12 +606,16 @@ a table entry, not an enum.
   member and `}` on one line, or a C macro. Such a file counts as one no parser
   reads: the syntax check passes it, the merge goes by lines and facts list it, so
   it does no worse than with no grammar at all. `syntax_errors` still reports it.
-  Only a file the grammar could not read before counts. A proposal that leaves a
-  file unreadable that read until then is listed in `unread_files` (log format 16)
-  and escalates, as `tests_weakened` does: from then on facts can not see into the
-  file, its symbols need no lease under `optimistic`, and a deleted test does not
-  show, so a person has to agree. It takes the `<file>` lease as well. Valid code the
-  grammar can not read goes through the same door, which is the price of the rule.
+  Only a file the grammar could not read before counts. No file gets there unseen:
+  a proposal that leaves unreadable a file that read until then, by a syntax error
+  or by bytes that are no text, or that adds such a file, is listed in `unread_files`
+  (log format 16) and escalates, as `tests_weakened` does. From then on facts can not
+  see into the file, its symbols need no lease under `optimistic` and a deleted test
+  does not show, so a person has to agree. An edit also takes the `<file>` lease.
+  Valid code the grammar can not read goes through the same door, which is the price
+  of the rule. At integration a trunk that reads must still read: a proposal on an
+  older base that did not is a conflict unless the result reads. A repair on such
+  a base has no facts to go by, and a person agreed to that base once.
   `strict` decides facts and merges, so changing it for a language is a new engine.
 - **`.h` goes to the C++ grammar,** which reads nearly all of C, and a file it can
   not read falls back as above.

@@ -268,6 +268,9 @@ pub fn approvals_from(reasons: &[String]) -> u32 {
 pub const RELEASED: &str = "released";
 /// On an integration's decision: `leases.release_on_integrate` is off, the
 /// items pinned to the change go back to the TTL of their set.
+/// A reason of a proposal: `affected_lease:<session>:<set>`, a set of another
+/// session that holds code the change's facts list as affected.
+pub const AFFECTED_LEASE: &str = "affected_lease:";
 pub const LEASES_KEPT: &str = "leases_kept";
 /// On a heartbeat's decision, followed by `leases.heartbeat_timeout_ms`.
 pub const HEARTBEAT_TIMEOUT: &str = "heartbeat_timeout=";

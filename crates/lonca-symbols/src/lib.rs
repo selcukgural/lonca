@@ -9,6 +9,7 @@ pub mod facts;
 pub mod integrate;
 pub mod lang;
 pub mod lines;
+mod mentions;
 pub mod merge;
 pub mod sections;
 

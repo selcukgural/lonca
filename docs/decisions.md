@@ -115,6 +115,9 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   "Symbol engine versions", engine 10 and "The language table"). Older entries have
   none, so nothing is gated on the format.
 - **Version 17** adds `change.integrate_batch` (see "Batches in the merge queue").
+- **Version 18** adds `affected` and `affected_more` to facts, left out of the
+  encoding when empty, and a proposal reports the lease sets they reach (see
+  "Signature changes"). Older entries report none and replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -576,6 +579,21 @@ entry format, so they have their own version
 - **Engine 10** reads Java, Kotlin, C, C++, Ruby, PHP and Swift. Each is an entry
   in the language table with `since = 10`: engine 9 and older still see their
   files as text, and old entries recompute as they were.
+
+- **Engine 11** gives every declaration a signature and lists what mentions
+  the names a change takes away (issue #43; see "Signature changes").
+  - Up to engine 10 only what has a `body` had a signature, and that was the
+    text in front of it. So a trait method, a field, a type alias or a change
+    of a struct's fields was no change of signature.
+  - Now a container has its header, a declaration whose body is the type (a
+    Rust `struct`, an `enum`) all of it, and anything else without a body the
+    declaration in front of its value. For a function held by a name that is
+    in front of the function's body, so `const h = (a) => {...}` keeps what it
+    takes. The fields of a value (`VALUE_FIELDS`) hold across grammars, as
+    `TYPE_KINDS` do. Comments are left out of every signature.
+  - The type of `int a, b` stands in the class's own text, so neither field
+    changes: the signature change is `C.<def>`. Each item's signature holds what
+    stands in front of the first item, not of itself, so a list stays linear.
 
 ## Batches in the merge queue
 
@@ -1850,6 +1868,77 @@ The rounds of a thread are a limit with nothing behind it: step 3 of the ladder
 in the design (a policy) does not exist, and `negotiation_exhausted` is only a
 denial. The rules send the agent to what is free and to say what is left in its
 final answer, for a person.
+
+## Signature changes
+
+A change can break code it never touches. Facts found some of that, and nothing
+came of it (issue #43).
+
+- **What is a change of signature:** see engine 11. All declarations count, public
+  or not: visibility is a matter of each language, and the mistake to prefer is one
+  more notice.
+- **`affected` is a guess, and says so.** Facts list the symbols of the base that
+  mention by name what the change gives a new signature, renames or deletes.
+  Tree-sitter, no resolver, so the auditor recomputes it and a language needs no
+  rules of scope: a mention of `run` may be another `run`, and a call through a
+  variable or a macro mentions nothing. Precise analysis is still a later phase.
+- **A mention** is a token that names something: `identifier` in its kind, or
+  `names` in the language table (`constant` in Ruby, `name` in PHP). Comments,
+  strings and imports are none. A declaration of the name is one: an implementation
+  of a trait method has to follow it, and telling that from an unrelated `run` takes
+  a resolver. It is reported as the unit a lease names: the innermost symbol,
+  `Type.<def>` for a type's own text, `<module>` for code outside symbols.
+- **A name is looked for as code writes it.** `constructors` in the table are reached
+  by their type (`__init__`, `constructor`, `initialize`, `__construct`, `init`), and
+  `marks` are what a name has around its token (`$a` is `a`, Ruby's `x=` is `x`,
+  Swift's `` `class` `` is `class`). An operator is no name anyone can search for.
+- **A file that can not be read for symbols counts whole.** One with a parse error,
+  over 1 MiB or not UTF-8 is `path#<file>` if it holds the name as a word: otherwise
+  a grammar's gap would read as "nothing mentions this", and the change would owe
+  nothing and tell nobody.
+- **What the change touches itself is left out**, and so are what it deletes, the
+  members of that and deleted files: its author looked at those, and leases keep
+  anyone else out of them. By name without keys, since one file can tell two
+  symbols of a name apart on one side only. So a sibling overload of a changed
+  symbol is left out too.
+- **Cost.** A change that takes a name away reads the blobs of every source file
+  of the base tree, under the daemon's lock, and parses only those that hold a name
+  as a word (Aho-Corasick, so the number of names does not matter). Any other change
+  reads nothing more.
+- **Facts are capped at 1000** symbols, sorted, because they are in the log.
+  `affected_more` says how many fell off, the decision repeats it, and
+  `affects_others` is then true, since nobody can say it is false. Holders past the
+  cap are not told.
+- **The decision says who holds it.** `signature_change:<symbol>` and
+  `affected_lease:<session>:<set>` for each active set of another session with an
+  `edit` or `rename` item that overlaps an affected symbol. An `insert` lease holds
+  no code. Facts come from the objects alone; who holds what comes from the state,
+  so it belongs in `decide()` and the replay checks it. Cedar sees
+  `context.signature_changes` and `context.affects_others`.
+- **The holder hears at the proposal, not at the integration.** That is when
+  a person or an agent can still answer, and an escalated proposal counts. Being
+  told is derived from the log like every other event (`symbols_changed`), and
+  pushed like a message: the agent is working on code that may stop compiling. Symbol
+  names are written by another agent, so they go out as JSON, cut, under the same
+  warning. A lease taken after the proposal hears nothing, and neither does code
+  added to trunk after the change's base: verification on the merged tree is what
+  stands behind both.
+- **`on_signature_change`, not `full_on_signature_change`.** The issue asked for a
+  switch that runs the full suite. The queue already runs all of `test` for every
+  change, so a switch would have nothing to turn on. What a project can want is a
+  command too slow for every change, so that is what it sets. It runs for a change
+  with a signature change or with something affected, a batch owes it when one
+  member does, `decide()` holds the queue to it (`verification_missing:extended`
+  under `required`), and the cached runs of a batch are kept apart because the
+  settings a run is keyed on differ. A policy from before the key has none, so
+  old entries replay as they were.
+- **Limits.** A deleted type's members are not looked for, only its name, which
+  whoever uses them nearly always mentions; a deleted file's are. Files no grammar
+  reads are not searched. A top-level `var a, b int` or C `int a, b;` that changes
+  type is an edit of `<module>` or of the first name alone, not of the others. The
+  modifiers in front of `public int a, b` are not in the fields' signatures. A value
+  nested deeper than one declarator stays in the signature (C# `int a = 1;`,
+  Kotlin), and a Rust macro call is all signature: both err towards one notice more.
 
 ## Open questions (carried from the design)
 

@@ -2320,6 +2320,7 @@ dependencies = [
 name = "lonca-symbols"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "diffy",
  "lonca-core",
  "serde",

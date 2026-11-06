@@ -156,6 +156,7 @@ impl Verifier {
         let steps: Vec<(CheckKind, &String)> = [
             (CheckKind::Build, &cfg.build),
             (CheckKind::Tests, &cfg.test),
+            (CheckKind::Extended, &cfg.on_signature_change),
         ]
         .into_iter()
         .filter_map(|(k, c)| c.as_ref().map(|c| (k, c)))

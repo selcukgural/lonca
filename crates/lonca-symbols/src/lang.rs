@@ -85,6 +85,16 @@ pub(crate) struct Rules {
     /// Declarations with a definition of their own, besides `TYPE_KINDS`.
     #[serde(default)]
     pub types: Vec<String>,
+    /// Tokens that name something, besides those with `identifier` in
+    /// their kind.
+    #[serde(default)]
+    pub names: Vec<String>,
+    /// Methods that callers reach by the name of their type.
+    #[serde(default)]
+    pub constructors: Vec<String>,
+    /// What a symbol's name has around the token that uses it: PHP's `$a`.
+    #[serde(default)]
+    pub marks: Vec<String>,
     /// Parameters a grammar has no `parameters` field for.
     #[serde(default)]
     pub parameters: Vec<Parameters>,
@@ -432,6 +442,7 @@ mod tests {
         out.extend(r.partial.iter().map(|p| p.kind.as_str()));
         out.extend(r.tests.iter().flat_map(|t| &t.kinds).map(String::as_str));
         out.extend(r.bodies.iter().chain(&r.types).map(String::as_str));
+        out.extend(r.names.iter().map(String::as_str));
         out.extend(r.import_calls.iter().map(|i| i.kind.as_str()));
         for p in &r.parameters {
             out.extend(p.kinds.iter().map(String::as_str));

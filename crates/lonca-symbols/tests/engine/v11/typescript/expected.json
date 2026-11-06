@@ -1,0 +1,471 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.ts#charge"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.ts"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.ts#added"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.ts#gone"
+        ],
+        "edits": [
+          "src/sample.ts#<module>",
+          "src/sample.ts#Ledger.add",
+          "src/sample.ts#sig"
+        ],
+        "import_only_files": [
+          "src/sample.ts"
+        ],
+        "lines_added": 8,
+        "lines_removed": 5,
+        "modified_files": [
+          "src/sample.ts"
+        ],
+        "signature_changes": [
+          "src/sample.ts#sig"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 1,
+          "skipped": 1
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "import { readFileSync } from \"fs\";\nimport { join } from \"path\";\n\nexport function charge(amount: number): number {\n  return amount * 2;\n}\n\nexport function sig(a: number, b: number): number {\n  return a + b;\n}\n\nexport function added(): string {\n  return join(\"a\", \"b\");\n}\n\nexport class Ledger {\n  private entries = new Map<string, number>();\n\n  add(k: string, v: number): void {\n    if (!this.entries.has(k)) this.entries.set(k, v);\n  }\n\n  total(): number {\n    let t = 0;\n    for (const v of this.entries.values()) t += v;\n    return t;\n  }\n}\n\nexport const rate = (x: number): number => x * 0.5;\n\ndescribe(\"charge\", () => {\n  it.skip(\"charges\", () => {\n    expect(charge(2)).toBe(2);\n  });\n});\n"
+  },
+  "path": "src/sample.ts",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          34
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "charge > charges",
+          "skipped": false,
+          "text": "it(\"charges\", () => { expect(charge(2)).toBe(2); })"
+        }
+      ],
+      "residual": "program(expression_statement(call_expression(describe\u001farguments((\u001f\"charge\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(it\u001farguments((\u001f\"charges\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(member_expression(call_expression(expect\u001farguments((\u001fcall_expression(charge\u001farguments((\u001f2\u001f)\u001f)))\u001f)).\u001ftoBe\u001f)arguments((\u001f2\u001f)\u001f));\u001f)}\u001f)))\u001f));\u001f)}\u001f)))\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "function charge(amount: number): number",
+          "skipped": false,
+          "span": [
+            36,
+            43,
+            103
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "gone",
+          "own": "",
+          "signature": "function gone(): void",
+          "skipped": false,
+          "span": [
+            105,
+            112,
+            136
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "",
+          "signature": "function sig(a: number): number",
+          "skipped": false,
+          "span": [
+            138,
+            145,
+            196
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": "private entries =",
+              "skipped": false,
+              "span": [
+                222,
+                222,
+                266
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "",
+              "signature": "add(k: string, v: number): void",
+              "skipped": false,
+              "span": [
+                270,
+                270,
+                335
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "total(): number",
+              "skipped": false,
+              "span": [
+                339,
+                339,
+                440
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fLedger\u001fclass_body({\u001f}\u001f)))",
+          "signature": "class Ledger",
+          "skipped": false,
+          "span": [
+            198,
+            205,
+            442
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "rate",
+          "own": "",
+          "signature": "const rate = (x: number): number =>",
+          "skipped": false,
+          "span": [
+            444,
+            451,
+            495
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          34
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "charge > charges",
+          "skipped": false,
+          "text": "it(\"charges\", () => { expect(charge(2)).toBe(2); })"
+        }
+      ],
+      "residual": "program(expression_statement(call_expression(describe\u001farguments((\u001f\"charge\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(it\u001farguments((\u001f\"charges\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(member_expression(call_expression(expect\u001farguments((\u001fcall_expression(charge\u001farguments((\u001f2\u001f)\u001f)))\u001f)).\u001ftoBe\u001f)arguments((\u001f2\u001f)\u001f));\u001f)}\u001f)))\u001f));\u001f)}\u001f)))\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "function charge(amount: number): number",
+          "skipped": false,
+          "span": [
+            36,
+            43,
+            107
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "gone",
+          "own": "",
+          "signature": "function gone(): void",
+          "skipped": false,
+          "span": [
+            109,
+            116,
+            140
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "",
+          "signature": "function sig(a: number): number",
+          "skipped": false,
+          "span": [
+            142,
+            149,
+            200
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": "private entries =",
+              "skipped": false,
+              "span": [
+                226,
+                226,
+                270
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "",
+              "signature": "add(k: string, v: number): void",
+              "skipped": false,
+              "span": [
+                274,
+                274,
+                339
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "total(): number",
+              "skipped": false,
+              "span": [
+                343,
+                343,
+                444
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fLedger\u001fclass_body({\u001f}\u001f)))",
+          "signature": "class Ledger",
+          "skipped": false,
+          "span": [
+            202,
+            209,
+            446
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "rate",
+          "own": "",
+          "signature": "const rate = (x: number): number =>",
+          "skipped": false,
+          "span": [
+            448,
+            455,
+            499
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          34
+        ],
+        [
+          35,
+          63
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "charge > charges",
+          "skipped": true,
+          "text": "it.skip(\"charges\", () => { expect(charge(2)).toBe(2); })"
+        }
+      ],
+      "residual": "program(expression_statement(call_expression(describe\u001farguments((\u001f\"charge\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(member_expression(it\u001f.\u001fskip\u001f)arguments((\u001f\"charges\"\u001f,\u001farrow_function(formal_parameters((\u001f)\u001f)=>\u001fstatement_block({\u001fexpression_statement(call_expression(member_expression(call_expression(expect\u001farguments((\u001fcall_expression(charge\u001farguments((\u001f2\u001f)\u001f)))\u001f)).\u001ftoBe\u001f)arguments((\u001f2\u001f)\u001f));\u001f)}\u001f)))\u001f));\u001f)}\u001f)))\u001f));\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "function charge(amount: number): number",
+          "skipped": false,
+          "span": [
+            65,
+            72,
+            132
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sig",
+          "own": "",
+          "signature": "function sig(a: number, b: number): number",
+          "skipped": false,
+          "span": [
+            134,
+            141,
+            203
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "added",
+          "own": "",
+          "signature": "function added(): string",
+          "skipped": false,
+          "span": [
+            205,
+            212,
+            265
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": "private entries =",
+              "skipped": false,
+              "span": [
+                291,
+                291,
+                335
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.add",
+              "own": "",
+              "signature": "add(k: string, v: number): void",
+              "skipped": false,
+              "span": [
+                339,
+                339,
+                430
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "total(): number",
+              "skipped": false,
+              "span": [
+                434,
+                434,
+                535
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "export_statement(export\u001fclass_declaration(class\u001fLedger\u001fclass_body({\u001f}\u001f)))",
+          "signature": "class Ledger",
+          "skipped": false,
+          "span": [
+            267,
+            274,
+            537
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "rate",
+          "own": "",
+          "signature": "const rate = (x: number): number =>",
+          "skipped": false,
+          "span": [
+            539,
+            546,
+            590
+          ]
+        }
+      ]
+    }
+  }
+}

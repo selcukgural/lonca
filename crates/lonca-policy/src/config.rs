@@ -85,6 +85,9 @@ untrusted = ["vendor/**", "third_party/**", "node_modules/**"]
 # Commands run by the verifier in a sandbox on the merged tree.
 # build = "cargo build --offline"
 # test = "cargo test --offline"
+# Also run for a change that alters a signature, or takes away a name
+# something else mentions.
+# on_signature_change = "cargo test --offline --workspace --all-features"
 required = false
 require_sandbox = false
 timeout_seconds = 900
@@ -280,6 +283,9 @@ pub struct Paths {
 pub struct Verification {
     pub build: Option<String>,
     pub test: Option<String>,
+    /// Also runs for a change that alters a signature, or that takes away
+    /// a name something else mentions: what is too slow for every change.
+    pub on_signature_change: Option<String>,
     pub required: bool,
     pub require_sandbox: bool,
     pub timeout_seconds: u64,
@@ -289,6 +295,17 @@ pub struct Verification {
     pub env_passthrough: Vec<String>,
     /// Environment variables with fixed values.
     pub env: std::collections::BTreeMap<String, String>,
+}
+
+impl Verification {
+    /// What a change owes: `reaches_others` is what its facts say of it.
+    pub fn for_change(&self, reaches_others: bool) -> Self {
+        let extended = self.on_signature_change.as_ref();
+        Self {
+            on_signature_change: extended.filter(|_| reaches_others).cloned(),
+            ..self.clone()
+        }
+    }
 }
 
 /// Environment names (exact, or a prefix ending in `*`) that could change
@@ -499,6 +516,7 @@ impl Default for Verification {
         Self {
             build: None,
             test: None,
+            on_signature_change: None,
             required: false,
             require_sandbox: false,
             timeout_seconds: 900,

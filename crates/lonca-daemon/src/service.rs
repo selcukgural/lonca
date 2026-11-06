@@ -2826,7 +2826,7 @@ impl Service {
     /// be merged or verified here ends the stack in front of it: it is not
     /// the changes ahead of it that wait for that.
     fn process_batch(&self, repo: &str) -> Result<Option<SignedOp>> {
-        let (store, jobs, trunk, vcfg) = {
+        let (store, jobs, reaches, trunk, vcfg) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
                 return Ok(None);
@@ -2845,9 +2845,11 @@ impl Service {
                     state.changes[c].base.clone(),
                 )
             };
+            let reach = |c: &ChangeId| state.changes[c].facts.reaches_others();
             let jobs: Vec<_> = state.queue.iter().take(size).map(job).collect();
+            let reaches: Vec<_> = state.queue.iter().take(size).map(reach).collect();
             let trunk = state.trunk.clone().expect("initialized");
-            (r.store.clone(), jobs, trunk, vcfg)
+            (r.store.clone(), jobs, reaches, trunk, vcfg)
         };
         // At most the policy's size, so never two under the default.
         if jobs.len() < 2 {
@@ -2871,10 +2873,11 @@ impl Service {
             let touched: BTreeSet<String> =
                 prefix.iter().flat_map(|p| p.3.iter().cloned()).collect();
             let touched: Vec<String> = touched.into_iter().collect();
-            let evidence = self.verify(repo, &store, &vcfg, (files, &touched), tip, true);
+            let owed = vcfg.for_change(reaches[..length].contains(&true));
+            let evidence = self.verify(repo, &store, &owed, (files, &touched), tip, true);
             if let Some(evidence) = evidence
                 .ok()
-                .filter(|e| evidence_problems(&vcfg, e).is_empty())
+                .filter(|e| evidence_problems(&owed, e).is_empty())
             {
                 let merged = prefix.iter().map(|p| (p.0, p.1.clone())).collect();
                 return self.log_batch(repo, trunk, merged, &jobs, evidence);
@@ -2933,9 +2936,10 @@ impl Service {
             };
             let rec = &r.chain.state.changes[&change];
             let (commit, base) = (rec.commit.clone(), rec.base.clone());
+            let reaches = rec.facts.reaches_others();
             let trunk = r.chain.state.trunk.clone().expect("initialized");
             let policy = r.policy()?;
-            let vcfg = policy.config.verification.clone();
+            let vcfg = policy.config.verification.for_change(reaches);
             let reuse = policy.config.queue.batch_size > 1;
             (r.store.clone(), change, commit, base, trunk, vcfg, reuse)
         };

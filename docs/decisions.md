@@ -594,6 +594,29 @@ entry format, so they have their own version
   - The type of `int a, b` stands in the class's own text, so neither field
     changes: the signature change is `C.<def>`. Each item's signature holds what
     stands in front of the first item, not of itself, so a list stays linear.
+- **Engine 12** reads symbols down to a depth (`MAX_LEVELS`, 32).
+  - Names grow with the depth, and every walk over symbols goes down with it:
+    cost and stack both follow how deep a file nests, not how long it is. A
+    limit keeps all of them bounded at one place.
+  - What stands below the last level is text of the symbol around it. That
+    symbol is a leaf: it keeps its name, its definition and the signature of
+    its header, the merge takes it as one unit and a change in it is a change
+    of `T.<def>`. Levels with no name of their own, such as a C# `namespace`,
+    count.
+    `describe`s have the same limit: past it a test keeps its place among the
+    last ones read, and a skip still reaches it.
+  - The walks over the syntax tree (`exact_text`, `blocks`, `find_descendant`,
+    `js_tests`, `comments_in`) have stacks of their own, at every engine,
+    because a tree can be as deep as a file is long. The comments behind code
+    are found in one pass over a level. Their output is the same, and the
+    frozen snapshots pin that.
+  - The merge remembers the walks of `around_theirs` that met a conflict. Its
+    caller walks the same members again after one, so each level would cost
+    two of the level below. A walk depends only on what it is given, so this
+    changes no output, at any engine.
+  - Up to engine 11 symbols have no limit, so that entries are recomputed as
+    they were written. Only the auditor reads at those engines, and an entry
+    exists only if the daemon got through its file.
 
 ## Batches in the merge queue
 

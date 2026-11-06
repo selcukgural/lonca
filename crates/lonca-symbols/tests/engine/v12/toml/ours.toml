@@ -1,0 +1,6 @@
+[package]
+name = "x"
+
+[dependencies]
+serde = "1"
+anyhow = "1"

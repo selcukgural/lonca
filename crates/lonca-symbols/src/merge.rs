@@ -529,6 +529,11 @@ struct Merger<'a> {
     conflicts: Vec<String>,
     /// `theirs` moved something, which edits in place can not express.
     moved: bool,
+    /// The walks of [`Merger::around_theirs`] that met a conflict. A walk
+    /// depends on nothing but what it is given, and the caller walks the
+    /// members again after one: without this, each level costs two of the
+    /// one below it.
+    stuck: BTreeSet<(*const Sym, *const Sym, *const Sym)>,
 }
 
 fn names(syms: &[Sym]) -> Vec<&str> {
@@ -562,6 +567,7 @@ impl<'a> Merger<'a> {
             edits: Vec::new(),
             conflicts: Vec::new(),
             moved: false,
+            stuck: BTreeSet::new(),
         }
     }
 
@@ -829,9 +835,16 @@ impl<'a> Merger<'a> {
     /// when the members conflict: nothing is done, and that walk is the
     /// caller's to make, in `o`, so that conflicts keep the text of `o`.
     fn around_theirs(&mut self, b: &Sym, o: &Sym, t: &Sym) -> bool {
+        let walk = (b as *const Sym, o as *const Sym, t as *const Sym);
+        if self.stuck.contains(&walk) {
+            return false;
+        }
         let mut m = Merger::new(self.engine, self.path, self.b, self.t, self.o);
+        m.stuck = std::mem::take(&mut self.stuck);
         m.level(&b.children, &t.children, &o.children, Some(t));
+        self.stuck = std::mem::take(&mut m.stuck);
         if !m.conflicts.is_empty() {
+            self.stuck.insert(walk);
             return false;
         }
         self.note_moves(&names(&b.children), &names(&t.children));
@@ -958,6 +971,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
 mod tests {
     use super::*;
     use crate::engine::ENGINE_CURRENT;
+    use crate::engine::ENGINE_LEVELS;
     use crate::engine::ENGINE_RENAMES;
     use crate::extract::{parse, parse_at};
 
@@ -976,6 +990,36 @@ mod tests {
     }
 
     const CHARGE: &str = "class C {\n    void M(int a) {\n        A();\n    }\n}\n";
+
+    /// `depth` classes around one method, each with text of its own from
+    /// `side`, or from the other side, by turns.
+    fn turns(depth: usize, side: char) -> String {
+        let open: String = (0..depth).map(|i| format!("class C{i} {{\n")).collect();
+        let close: String = (0..depth)
+            .rev()
+            .map(|i| {
+                let its_own = ((i % 2 == 0) == (side == 't')) && side != 'b';
+                format!("{}}}\n", if its_own { "\n// note\n" } else { "" })
+            })
+            .collect();
+        format!("{open}void M() {{ {side}(); }}\n{close}")
+    }
+
+    /// Each level hands the walk to the other side and is walked again when
+    /// that meets the conflict below: this would not end if every level paid
+    /// for both. An engine with no limit on depth shows it best.
+    #[test]
+    fn a_conflict_deep_down_is_met_once_for_each_way_of_walking() {
+        let [b, o, t] = ['b', 'o', 't'].map(|side| turns(64, side));
+        let engine = ENGINE_LEVELS - 1;
+        let conflicts = merge_text_at(engine, "a.cs", &b, &o, &t).unwrap_err();
+        // Every other class has its own text changed, and the method both.
+        assert_eq!(conflicts.len(), 64 / 2 + 1, "{conflicts:?}");
+        assert!(
+            conflicts.iter().any(|c| c.ends_with(".C63.M")),
+            "{conflicts:?}"
+        );
+    }
 
     #[test]
     fn an_overload_added_above_does_not_stop_an_edit_of_the_first() {

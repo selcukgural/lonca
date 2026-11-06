@@ -15,9 +15,10 @@ change that takes away more than half of a file keep the file's lease (symbol en
 now merge by their own rules, and a change among equal lines is a conflict rather than a guess.
 `lonca status` and `lonca lease needed` say what the setting does.
 
-After a conflict in a file with no symbols, `lonca sync` brings in the rest of trunk and leaves
-both sides between `<<<<<<< local` and `>>>>>>> trunk`. `propose` refuses until the markers are
-gone.
+After a conflict `lonca sync` brings in the rest of trunk and leaves both sides in the file
+between `<<<<<<< local` and `>>>>>>> trunk`, a symbol whole or by lines where there is no symbol.
+`propose` refuses while any marker stands in a changed file, and a later sync reports the conflict
+again. A conflicting symbol used to keep the local text with nothing to show what trunk did to it.
 
 ### Renames are tracked (symbol engine 7, log format 14)
 

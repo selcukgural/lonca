@@ -837,9 +837,10 @@ Exit codes:
   gone) with nothing on stdout.
 - `sync --json`: `{"base_before": id, "base_after": id, "updated":
   [path], "merged": [path], "conflicts": [{"path", "trunk_copy",
-  "symbols": [symbol]}]}`. In a conflict the `symbols` keep the local text
-  and every other change of trunk comes in; a file with no symbol merge, or
-  whose code outside symbols trunk changed, stays local as a whole.
+  "symbols": [symbol]}]}`. In a conflict both sides stand in the file between `<<<<<<< local <tag>`,
+  `======= <tag>` and `>>>>>>> trunk <tag>`, a symbol whole or by lines, and every
+  other change of trunk comes in. `propose` refuses while any of the three stands
+  in a changed file, and a later sync reports the conflict again.
   Trunk's version is in `trunk_copy` (`<path>.trunk`) for reading: it is
   never a local change and the next sync removes it.
 - `propose --json`: `{"change", "commit", "seq", "decision", "status":

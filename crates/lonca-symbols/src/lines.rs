@@ -13,8 +13,10 @@ use std::ops::Range;
 
 use similar::{DiffTag, TextDiff};
 
-/// Opens what the two sides of a conflict wrote, on a line of its own.
-pub const OURS: &str = "<<<<<<< local";
+/// What a conflict's markers start with. `tag` on each marks them as ones
+/// a sync wrote, so that a file can hold such a line of its own, and any of
+/// the three left behind shows, wherever in a file it ended up.
+const OURS: &str = "<<<<<<< local";
 const BETWEEN: &str = "=======";
 const THEIRS: &str = ">>>>>>> trunk";
 
@@ -142,24 +144,30 @@ pub fn merge(b: &str, o: &str, t: &str) -> Option<String> {
 /// The merge with what could not be merged written out, both sides between
 /// markers. Everything else of both sides is in the text, so settling a
 /// conflict takes back nothing that stands outside it.
-pub fn with_markers(b: &str, o: &str, t: &str) -> String {
-    let line_of = |text: &str| match text.is_empty() || text.ends_with('\n') {
-        true => text.to_string(),
-        false => format!("{text}\n"),
-    };
+pub fn with_markers(b: &str, o: &str, t: &str, tag: &str) -> String {
     let render = |piece: Piece| match piece {
         Piece::Merged(text) => text,
-        Piece::Conflict { ours, theirs } => {
-            let (ours, theirs) = (line_of(&ours), line_of(&theirs));
-            format!("{OURS}\n{ours}{BETWEEN}\n{theirs}{THEIRS}\n")
-        }
+        Piece::Conflict { ours, theirs } => conflict_block(&ours, &theirs, tag),
     };
     pieces(b, o, t).into_iter().map(render).collect()
 }
 
-/// `text` still holds a conflict that [`with_markers`] wrote.
-pub fn has_markers(text: &str) -> bool {
-    text.lines().any(|l| l == OURS)
+/// Both sides of a conflict, each marker on a line of its own.
+pub fn conflict_block(ours: &str, theirs: &str, tag: &str) -> String {
+    let line_of = |text: &str| match text.is_empty() || text.ends_with('\n') {
+        true => text.to_string(),
+        false => format!("{text}\n"),
+    };
+    let (ours, theirs) = (line_of(ours), line_of(theirs));
+    format!("{OURS} {tag}\n{ours}{BETWEEN} {tag}\n{theirs}{THEIRS} {tag}\n")
+}
+
+/// `text` holds a marker of a conflict tagged `tag`: any of the three, on a
+/// line of its own or not, since one can follow a line end of another kind.
+pub fn has_markers(text: &str, tag: &str) -> bool {
+    [OURS, BETWEEN, THEIRS]
+        .iter()
+        .any(|m| text.contains(&format!("{m} {tag}")))
 }
 
 #[cfg(test)]
@@ -265,26 +273,43 @@ mod tests {
     fn markers_hold_both_sides_and_the_rest_comes_in() {
         let o = "a\nO\nc\nd\ne\nf\ng\n";
         let t = "a\nT\nT2\nd\ne\nT3\ng\n";
-        let text = with_markers(B, o, t);
+        let text = with_markers(B, o, t, "k");
         assert_eq!(
             text,
-            "a\n<<<<<<< local\nO\nc\n=======\nT\nT2\n>>>>>>> trunk\nd\ne\nT3\ng\n"
+            "a\n<<<<<<< local k\nO\nc\n======= k\nT\nT2\n>>>>>>> trunk k\nd\ne\nT3\ng\n"
         );
-        assert!(has_markers(&text));
-        assert_eq!(with_markers(B, B, t), t);
-        assert!(!has_markers(t));
-        assert!(!has_markers("<<<<<<< local copy\n"));
+        assert_eq!(with_markers(B, B, t, "k"), t);
+    }
+
+    /// Any of the three shows, and nothing but a marker with the tag.
+    #[test]
+    fn what_counts_as_a_marker() {
+        for one in ["<<<<<<< local k", "======= k", ">>>>>>> trunk k"] {
+            assert!(has_markers(&format!("a\n{one}\nb\n"), "k"), "{one}");
+            assert!(
+                has_markers(&format!("a\r{one}\n"), "k"),
+                "after a CR: {one}"
+            );
+        }
+        for not_one in [
+            "<<<<<<< local\n",
+            "=======\n",
+            ">>>>>>> trunk m\n",
+            "plain\n",
+        ] {
+            assert!(!has_markers(not_one, "k"), "{not_one}");
+        }
     }
 
     #[test]
     fn a_marker_stands_on_its_own_line() {
         assert_eq!(
-            with_markers("a", "o", "t"),
-            "<<<<<<< local\no\n=======\nt\n>>>>>>> trunk\n"
+            with_markers("a", "o", "t", "k"),
+            "<<<<<<< local k\no\n======= k\nt\n>>>>>>> trunk k\n"
         );
         assert_eq!(
-            with_markers("a\n", "", "t\n"),
-            "<<<<<<< local\n=======\nt\n>>>>>>> trunk\n"
+            with_markers("a\n", "", "t\n", "k"),
+            "<<<<<<< local k\n======= k\nt\n>>>>>>> trunk k\n"
         );
     }
 

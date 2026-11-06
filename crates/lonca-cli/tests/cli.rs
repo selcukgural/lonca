@@ -2924,26 +2924,39 @@ fn sync_around_a_conflict_keeps_only_the_conflicting_symbol_local() {
         "{synced}"
     );
     let kept = std::fs::read_to_string(h2.join("src/lib.rs")).unwrap();
-    assert!(kept.contains("a + 1") && kept.contains("a * 3"), "{kept}");
-    assert!(!kept.contains("a * 2"), "{kept}");
+    assert!(kept.contains("a + 1"), "ours: {kept}");
+    assert!(kept.contains("a * 2"), "theirs: {kept}");
+    assert!(kept.contains("a * 3"), "the rest of trunk: {kept}");
     assert!(h2.join("src/lib.rs.trunk").exists());
 
-    let text_out = e.run(&h2, &["diff"]);
-    let facts = parse(&text_out);
-    assert_eq!(facts["edits"], json!(["src/lib.rs#charge"]), "{facts}");
-    assert_eq!(facts["added_files"], json!([]), "the copy is no change");
+    let refused = fails(&e, &h2, &["propose", "-i", "too soon", "--accept-facts"]);
+    assert!(
+        refused.contains("conflict not settled in src/lib.rs"),
+        "{refused}"
+    );
 
-    // Trunk's next change is elsewhere: my edit stays and merges, the copy
-    // of the last conflict goes.
+    // Trunk's next change is elsewhere: the conflict stays open and in view.
     std::fs::write(hws.join("src/lib.rs"), trunk.replace("a * 3", "a * 4")).unwrap();
     land(&e, &hws, "trunk moves again");
     let shown = e.run(&h2, &["sync"]);
-    assert!(shown.contains("1 merged, 0 conflicts"), "{shown}");
-    assert!(!h2.join("src/lib.rs.trunk").exists(), "gone with the sync");
-    let meta = std::fs::read_to_string(h2.join(".lonca/workspace.json")).unwrap();
-    assert_eq!(parse(&meta)["trunk_copies"], json!([]));
+    assert!(shown.contains("1 conflicts"), "{shown}");
+    assert!(h2.join("src/lib.rs.trunk").exists());
     let kept = std::fs::read_to_string(h2.join("src/lib.rs")).unwrap();
+    assert!(kept.contains("<<<<<<< local"), "{kept}");
     assert!(kept.contains("a + 1") && kept.contains("a * 4"), "{kept}");
+
+    // Settled, it goes as any change does, and the rest of trunk is safe.
+    let settled = settle(&kept, "pub fn charge(a: u64) -> u64 {\n    a * 2 + 1\n}\n");
+    std::fs::write(h2.join("src/lib.rs"), &settled).unwrap();
+    land(&e, &h2, "settle charge");
+    e.run(&hws, &["sync"]);
+    let landed = std::fs::read_to_string(hws.join("src/lib.rs")).unwrap();
+    assert!(
+        landed.contains("a * 2 + 1") && landed.contains("a * 4"),
+        "{landed}"
+    );
+    let meta = std::fs::read_to_string(h2.join(".lonca/workspace.json")).unwrap();
+    assert_eq!(parse(&meta)["conflict_tag"], json!(null));
 }
 
 /// Each harness gets a refusal in the shape it honours, and a hook set up
@@ -3641,7 +3654,7 @@ fn a_sync_moves_the_repository_and_keeps_only_local_edits_in_git_diff() {
     assert!(git_in(&ws, &["ls-files"]).contains("src/new.rs"));
     git_in(&ws, &["fsck", "--strict"]);
 
-    // A conflict: the file stays local, the trunk copy is no git change.
+    // A conflict: the file holds both sides, the trunk copy is no git change.
     let clash = CHARGE.replace("    a\n", "    a + 2\n");
     e.run(&hws, &["sync"]);
     std::fs::write(hws.join("src/lib.rs"), format!("{clash}\n{theirs}")).unwrap();
@@ -3653,7 +3666,7 @@ fn a_sync_moves_the_repository_and_keeps_only_local_edits_in_git_diff() {
     assert_eq!(git_in(&ws, &["status", "--porcelain"]), " M src/lib.rs");
     let diff = git_in(&ws, &["diff"]);
     assert!(
-        diff.contains("-    a + 2") && diff.contains("+    a + 1"),
+        diff.contains("+<<<<<<< local") && diff.contains("+    a + 1"),
         "{diff}"
     );
 }
@@ -4160,8 +4173,9 @@ fn trunk_text(e: &Env) -> String {
 
 /// `text` with the conflict settled by `settled`, markers gone.
 fn settle(text: &str, settled: &str) -> String {
-    let (head, rest) = text.split_once("<<<<<<< local\n").unwrap();
-    let (_, tail) = rest.split_once(">>>>>>> trunk\n").unwrap();
+    let (head, rest) = text.split_once("<<<<<<< local").unwrap();
+    let (_, tail) = rest.split_once(">>>>>>> trunk").unwrap();
+    let (_, tail) = tail.split_once('\n').unwrap();
     format!("{head}{settled}{tail}")
 }
 
@@ -4261,4 +4275,75 @@ fn a_second_sync_keeps_an_open_conflict() {
     assert!(local.contains("a10 = 1000;"), "{local}");
     let refused = fails(&e, &b, &["propose", "-i", "too soon", "--accept-facts"]);
     assert!(refused.contains("conflict not settled"), "{refused}");
+}
+
+/// One conflict in `src/Main.java`, left open in the second workspace, and
+/// the text there.
+fn an_open_conflict(e: &Env) -> (PathBuf, String) {
+    let [a, b, _] = three_agents(e);
+    let seed = numbered();
+    std::fs::write(a.join(MAIN), line(&seed, 10, "1000")).unwrap();
+    unparsed_land(e, &a, "line 10");
+    std::fs::write(b.join(MAIN), line(&seed, 10, "2000")).unwrap();
+    unparsed_land(e, &b, "line 10 too");
+    e.run(&b, &["sync", "--json"]);
+    let local = std::fs::read_to_string(b.join(MAIN)).unwrap();
+    (b, local)
+}
+
+const TOO_SOON: [&str; 4] = ["propose", "-i", "too soon", "--accept-facts"];
+
+/// The markers go with the text, not with the path.
+#[test]
+fn a_new_name_does_not_settle_a_conflict() {
+    let e = Env::new();
+    let (b, local) = an_open_conflict(&e);
+    std::fs::remove_file(b.join(MAIN)).unwrap();
+    std::fs::write(b.join("src/Renamed.java"), &local).unwrap();
+    let refused = fails(&e, &b, &TOO_SOON);
+    assert!(
+        refused.contains("conflict not settled in src/Renamed.java"),
+        "{refused}"
+    );
+}
+
+/// Each marker counts: taking out one leaves the others.
+#[test]
+fn every_marker_has_to_go() {
+    for kept in ["=======", ">>>>>>> trunk"] {
+        let e = Env::new();
+        let (b, local) = an_open_conflict(&e);
+        let without: Vec<&str> = local
+            .lines()
+            .filter(|l| !l.starts_with(if kept == "=======" { "<<<" } else { "===" }))
+            .collect();
+        std::fs::write(b.join(MAIN), without.join("\n") + "\n").unwrap();
+        let refused = fails(&e, &b, &TOO_SOON);
+        assert!(refused.contains("conflict not settled"), "{refused}");
+    }
+}
+
+/// A line of the file itself that reads like a marker is the file's.
+#[test]
+fn a_file_may_hold_what_reads_like_a_marker() {
+    let e = Env::new();
+    let [a, b, _] = three_agents(&e);
+    let seed = numbered().replace("    int a30 = 30;\n", "<<<<<<< local\n=======\n");
+    let hws = e.root.join("hws");
+    std::fs::write(hws.join(MAIN), &seed).unwrap();
+    land(&e, &hws, "a file with such lines");
+    e.run(&a, &["sync"]);
+    e.run(&b, &["sync"]);
+    std::fs::write(a.join(MAIN), line(&seed, 10, "1000")).unwrap();
+    unparsed_land(&e, &a, "line 10");
+    std::fs::write(b.join(MAIN), line(&seed, 10, "2000")).unwrap();
+    unparsed_land(&e, &b, "line 10 too");
+    e.run(&b, &["sync", "--json"]);
+    let local = std::fs::read_to_string(b.join(MAIN)).unwrap();
+    let (head, rest) = local.split_once("<<<<<<< local ").unwrap();
+    let (_, tail) = rest.split_once(">>>>>>> trunk ").unwrap();
+    let (_, tail) = tail.split_once('\n').unwrap();
+    std::fs::write(b.join(MAIN), format!("{head}    int a10 = 1500;\n{tail}")).unwrap();
+    unparsed_land(&e, &b, "settled");
+    assert!(trunk_text(&e).contains("a10 = 1500;"));
 }

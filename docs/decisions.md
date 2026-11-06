@@ -548,16 +548,26 @@ entry format, so they have their own version
   - **Lines merge by `lines.rs`.** Changes are compared over `reach`, everywhere
     they could stand with the same result, because among equal lines a diff can
     only guess which line a change took. A conflict costs a look, a wrong guess
-    costs a side's work. On a corpus of Java-shaped files this agreed with
-    `git merge-file` on every input; only files of mostly equal lines conflict
-    more often than git does.
-- **A conflict in a file with no symbol merge is written out.** `lonca sync` brings
-  in the rest of trunk and leaves both sides between `<<<<<<< local` and
-  `>>>>>>> trunk`, all of each change that meets. The file is then the agent's to
-  settle, and the workspace records it: `propose` refuses while the markers stand,
-  a later sync reports it again, and a line next to the conflict is in view rather
-  than missing. This lives in the client: the daemon sees only a file. `lines.rs`
-  is the one core for this and for the merge at integration.
+    costs a side's work. Compared with `git merge-file` on generated inputs, Java-
+    shaped files gave the same result on each of 4000. Files of mostly equal lines
+    conflict more often than git does, and in rare cases merge where git conflicts
+    or place a line elsewhere among equal lines, with both sides' changes in. The
+    same line added at one place by both is one change, and comes in once.
+- **A conflict is written out.** `lonca sync` brings in the rest of trunk and
+  leaves both sides between `<<<<<<< local` and `>>>>>>> trunk`: a symbol whole when
+  both sides have it by that name, else by lines, which show a deletion, a rename
+  and a change of key alike. The file is then the agent's to settle.
+  - **A proposal goes by the text, not by a list of paths.** The markers carry a tag
+    of the workspace, kept in `conflict_tag` while any stand, and `propose` looks for
+    each of the three in every changed file: a new name settles nothing, half a
+    conflict settled is not settled, and a line of the file that merely reads like a
+    marker is the file's. A later sync reports the conflict again.
+  - **It lives in the client.** The daemon sees a file. An agent that writes such
+    text on purpose can land it, as it can land any other bad text.
+  - **A move is the one thing this shows badly:** the moved copy comes in beside the
+    conflict, so keeping the local side leaves the code twice. The facts of the next
+    proposal list it as added. `lines.rs` is the one core for this and for the merge
+    at integration.
 
 - **Engine 10** reads Java, Kotlin, C, C++, Ruby, PHP and Swift. Each is an entry
   in the language table with `since = 10`: engine 9 and older still see their

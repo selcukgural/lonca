@@ -241,6 +241,30 @@ fn a_batch_with_no_evidence_or_another_tree_is_caught() {
         kinds(&deep(&other)).contains(&"merge".to_string()),
         "another tree"
     );
+    // The tip is right and the tree verified, the commit before it is not
+    // what the merge comes to.
+    let inner = forge(&e, "inner", |entries| {
+        let at = the_batch(entries);
+        let Op::ChangeIntegrateBatch { merged, .. } = &mut entries[at].op else {
+            unreachable!("a batch");
+        };
+        merged[0].1 = merged[1].1.clone();
+    });
+    let inner = deep(&inner);
+    let recorded = |f: &lonca_audit::Finding| f.kind == "merge" && f.detail.contains("recorded");
+    assert!(inner.findings.iter().any(recorded), "{:?}", inner.findings);
+    // A commit this copy does not have proves nothing either way.
+    let shallow = forge(&e, "shallow", |entries| {
+        let at = the_batch(entries);
+        let Op::ChangeIntegrateBatch { trunk_before, .. } = &mut entries[at].op else {
+            unreachable!("a batch");
+        };
+        *trunk_before = GitId::of_blob(b"not here");
+    });
+    let shallow = deep(&shallow);
+    assert!(!kinds(&shallow).contains(&"merge".to_string()));
+    let merge = |f: &lonca_audit::Finding| f.kind == "merge";
+    assert!(shallow.skipped.iter().any(merge), "{:?}", shallow.skipped);
     let good = forge(&e, "good", |_| {});
     assert!(kinds(&deep(&good)).is_empty());
 }

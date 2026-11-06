@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
-use lonca_core::oplog::SignedOp;
+use lonca_core::oplog::{OpEntry, SignedOp};
 use lonca_core::ops::Op;
 use lonca_core::{ChangeId, GitId};
 use lonca_daemon::Client;
@@ -269,21 +269,15 @@ fn steps_of(
         .collect()
 }
 
-/// Plans (and with `apply` executes) undoing what `actor` did since `since`.
-pub fn revert(
-    c: &mut Client,
-    human: &str,
-    repo: &str,
-    actor: &str,
-    since: u64,
-    apply: bool,
-) -> Result<()> {
-    let all = ops(c, 0, None)?;
+/// An operation to undo, what it is in words and, for a change of a batch,
+/// what it came to, which is not all of its entry.
+type Planned = (u64, String, Option<BatchStep>);
+
+/// What `actor` did since `since`, the last first.
+fn plan_of(all: &[OpEntry], actor: &str, since: u64) -> Vec<Planned> {
     let mut mine: BTreeSet<ChangeId> = BTreeSet::new();
-    // With what a change of a batch came to, which is not all of its entry.
-    let mut plan: Vec<(u64, String, Option<BatchStep>)> = Vec::new();
-    for o in &all {
-        let e = &o.entry;
+    let mut plan: Vec<Planned> = Vec::new();
+    for e in all {
         let by_actor = matches_actor(&e.actor.label(), e.actor.session(), actor);
         if by_actor && let Op::ChangePropose { change, .. } = &e.op {
             mine.insert(*change);
@@ -322,6 +316,20 @@ pub fn revert(
         }
     }
     plan.reverse();
+    plan
+}
+
+/// Plans (and with `apply` executes) undoing what `actor` did since `since`.
+pub fn revert(
+    c: &mut Client,
+    human: &str,
+    repo: &str,
+    actor: &str,
+    since: u64,
+    apply: bool,
+) -> Result<()> {
+    let all: Vec<OpEntry> = ops(c, 0, None)?.into_iter().map(|o| o.entry).collect();
+    let plan = plan_of(&all, actor, since);
     if plan.is_empty() {
         println!("nothing to revert for {actor} since #{since}");
         return Ok(());
@@ -355,6 +363,83 @@ pub fn revert(
 #[cfg(test)]
 mod batch_tests {
     use super::*;
+    use lonca_core::ops::{Actor, Claim, Decision, Scope};
+
+    fn entry(seq: u64, actor: Actor, op: Op) -> OpEntry {
+        OpEntry {
+            format: 1,
+            seq,
+            prev: String::new(),
+            time_ms: 0,
+            actor,
+            op,
+            evidence: vec![],
+            facts: None,
+            symbols_engine: None,
+            decision: Decision::allow(),
+            human: None,
+        }
+    }
+
+    /// Only `ann`'s: of two sessions alike, of a batch with `bob`'s change.
+    #[test]
+    fn a_revert_plans_only_what_its_actor_did() {
+        let id = |c: &[u8]| GitId::of_blob(c);
+        let (trunk, one, two) = (id(b"t"), id(b"1"), id(b"2"));
+        let (a, b) = (ChangeId::random(), ChangeId::random());
+        let agent = |name: &str| Actor::Agent {
+            name: name.into(),
+            session: format!("ses_{name}"),
+        };
+        let propose = |change| Op::ChangePropose {
+            change,
+            commit: id(b"c"),
+            base: trunk.clone(),
+            claim: Claim::default(),
+        };
+        let lease = |set: &str| Op::LeaseAcquire {
+            set: set.into(),
+            items: vec![],
+            intent: "fix".into(),
+            ttl_ms: 1,
+        };
+        let cap = |child: &str| Op::CapAttenuate {
+            parent: "p".into(),
+            child: child.into(),
+            agent: "x".into(),
+            scope: Scope {
+                paths: vec![],
+                symbols: None,
+                ops: vec![],
+                max_files: None,
+                max_lines: None,
+                scratch: vec![],
+            },
+            expires_ms: 1,
+            leases: vec![],
+        };
+        let merged = vec![(a, one.clone()), (b, two.clone())];
+        let batch = Op::ChangeIntegrateBatch {
+            trunk_before: trunk.clone(),
+            merged,
+        };
+        let all = [
+            entry(0, agent("ann"), propose(a)),
+            entry(1, agent("bob"), propose(b)),
+            entry(2, agent("ann"), lease("mine")),
+            entry(3, agent("bob"), lease("theirs")),
+            entry(4, agent("ann"), cap("my_child")),
+            entry(5, agent("bob"), cap("their_child")),
+            entry(6, Actor::Daemon, batch),
+        ];
+        let plan = plan_of(&all, "agent:ann", 0);
+        let seqs: Vec<u64> = plan.iter().map(|p| p.0).collect();
+        assert_eq!(seqs, [6, 4, 2], "{plan:?}");
+        assert_eq!(plan[0].2, Some((trunk.clone(), one, a)));
+        assert_eq!(plan[1].1, "revoke sub-session my_child");
+        assert_eq!(plan[2].1, "release lease set mine");
+        assert_eq!(plan_of(&all, "agent:ann", 3).len(), 2);
+    }
 
     #[test]
     fn a_batch_gives_back_only_the_changes_asked_for() {

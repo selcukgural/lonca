@@ -9,8 +9,10 @@ use lonca_core::{ChangeId, GitId};
 use std::sync::Arc;
 
 use lonca_policy::chain::{Chain, Submission, replay_checked};
-use lonca_policy::config::{DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle, UnparsedFiles};
-use lonca_policy::decide::{Ctx, decide};
+use lonca_policy::config::{
+    DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle, UnparsedFiles, Verification,
+};
+use lonca_policy::decide::{Ctx, decide, evidence_problems};
 use lonca_policy::human::intent_bytes;
 use lonca_policy::state::{ChangeStatus, Provenance, Renamed, State};
 
@@ -4969,6 +4971,50 @@ fn batch(h: &mut H, merged: &[(ChangeId, GitId)], evidence: Vec<Attestation>) ->
         merged: merged.to_vec(),
     };
     h.daemon(op, evidence)
+}
+
+/// A required check is met by a pass of that check, and by nothing else.
+#[test]
+fn a_required_check_needs_a_pass_of_its_own() {
+    let required = Verification {
+        build: Some("build".into()),
+        test: Some("test".into()),
+        required: true,
+        ..Verification::default()
+    };
+    let missing = |vc: &Verification, evidence: &[Attestation]| -> Vec<String> {
+        let problems = evidence_problems(vc, evidence);
+        let is_missing = |p: &String| p.starts_with("verification_missing");
+        problems.into_iter().filter(is_missing).collect()
+    };
+    let (build, tests) = (CheckKind::Build, CheckKind::Tests);
+    let failed = |check| Attestation {
+        result: CheckResult::Fail,
+        ..pass(check)
+    };
+    let (no_build, no_tests) = ("verification_missing:build", "verification_missing:tests");
+    assert_eq!(missing(&required, &[pass(build), pass(tests)]), [""; 0]);
+    assert_eq!(missing(&required, &[]), [no_build, no_tests]);
+    assert_eq!(missing(&required, &[pass(tests)]), [no_build]);
+    assert_eq!(missing(&required, &[pass(build)]), [no_tests]);
+    assert_eq!(
+        missing(&required, &[failed(build), pass(tests)]),
+        [no_build]
+    );
+    assert_eq!(
+        missing(&required, &[pass(build), failed(tests)]),
+        [no_tests]
+    );
+    let optional = Verification {
+        required: false,
+        ..required.clone()
+    };
+    assert_eq!(missing(&optional, &[]), [""; 0]);
+    let build_only = Verification {
+        test: None,
+        ..required.clone()
+    };
+    assert_eq!(missing(&build_only, &[pass(build)]), [""; 0]);
 }
 
 /// A batch is the head of the queue, in order, within the policy's size, on

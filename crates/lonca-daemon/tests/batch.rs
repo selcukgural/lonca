@@ -121,6 +121,27 @@ fn ten_changes_in_batches_of_five_verify_twice() {
     audited(&e);
 }
 
+/// A change reads the batch it landed in, not the last one in the log.
+#[test]
+fn a_change_reads_its_own_batch() {
+    let (mut e, base) = repo(2);
+    let add_one = |e: &mut Env, i: usize| {
+        add(e, &base, &format!("a{i}"), &format!("src/f{i}"))["change"].clone()
+    };
+    let changes: Vec<Value> = (0..4).map(|i| add_one(&mut e, i)).collect();
+    assert_eq!(e.svc.process_all(), 4);
+    assert_eq!(batches(&e), [2, 2]);
+    let ops = OpLog::new(&e.store()).read_all().unwrap();
+    let is_batch =
+        |o: &&lonca_core::oplog::SignedOp| matches!(o.entry.op, Op::ChangeIntegrateBatch { .. });
+    let seqs: Vec<u64> = ops.iter().filter(is_batch).map(|o| o.entry.seq).collect();
+    for (change, seq) in [(&changes[0], seqs[0]), (&changes[3], seqs[1])] {
+        let got = e.ok("change.get", Some("demo"), None, json!({"change": change}));
+        assert_eq!(got["integrate_seq"], seq, "{got}");
+        assert!(!got["evidence"].as_array().unwrap().is_empty(), "{got}");
+    }
+}
+
 /// Bisection finds the bad one, the others land in queue order, and a
 /// failure is logged as it always was.
 #[test]

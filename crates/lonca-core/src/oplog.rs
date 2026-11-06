@@ -409,6 +409,7 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ChangeId;
     use crate::ops::{Continuation, Decision, HumanKey, Scope};
 
     fn genesis(key: &KeyPair, store: &Store) -> OpEntry {
@@ -784,6 +785,31 @@ mod tests {
         for op in [negotiate(None), attenuate(vec![])] {
             assert_eq!(at(&op, 2).min_format(), FORMAT_LEGACY, "{op:?}");
         }
+    }
+
+    #[test]
+    fn a_batch_needs_its_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let tip = GitId::of_blob(b"tip");
+        let op = Op::ChangeIntegrateBatch {
+            trunk_before: tip.clone(),
+            merged: vec![(ChangeId::random(), tip)],
+        };
+        let at = |format| OpEntry {
+            format,
+            op: op.clone(),
+            symbols_engine: Some(1),
+            ..next(&g, 2000)
+        };
+        assert_eq!(at(FORMAT_BATCH).min_format(), FORMAT_BATCH);
+        let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(format), &key)]);
+        assert!(chain(FORMAT_BATCH).is_ok());
+        let err = chain(FORMAT_BATCH - 1).unwrap_err();
+        let needs = format!("needs log format {FORMAT_BATCH}");
+        assert!(err.to_string().contains(&needs), "{err}");
     }
 
     #[test]

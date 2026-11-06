@@ -2819,14 +2819,14 @@ impl Service {
     }
 
     /// The changes at the head of the queue as one, if the policy says so:
-    /// merged in order off the lock, and the longest prefix whose tip passes
-    /// is integrated by one entry. Halving finds it, and the head alone is
+    /// merged in order off the lock, and a prefix whose tip passes is
+    /// integrated by one entry. Halving finds it, and the head alone is
     /// left to [`Self::process_head`], which logs a failure as it always did.
     /// The tree of a prefix seen before is not verified again. What can not
     /// be merged or verified here ends the stack in front of it: it is not
     /// the changes ahead of it that wait for that.
     fn process_batch(&self, repo: &str) -> Result<Option<SignedOp>> {
-        let (store, jobs, trunk, vcfg, size) = {
+        let (store, jobs, trunk, vcfg) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
                 return Ok(None);
@@ -2835,10 +2835,8 @@ impl Service {
                 return Ok(None);
             }
             let policy = r.policy()?;
-            let (vcfg, size) = (
-                policy.config.verification.clone(),
-                policy.config.queue.batch_size,
-            );
+            let vcfg = policy.config.verification.clone();
+            let size = policy.config.queue.batch_size as usize;
             let state = &r.chain.state;
             let job = |c: &ChangeId| {
                 (
@@ -2847,11 +2845,12 @@ impl Service {
                     state.changes[c].base.clone(),
                 )
             };
-            let jobs: Vec<_> = state.queue.iter().take(size as usize).map(job).collect();
+            let jobs: Vec<_> = state.queue.iter().take(size).map(job).collect();
             let trunk = state.trunk.clone().expect("initialized");
-            (r.store.clone(), jobs, trunk, vcfg, size)
+            (r.store.clone(), jobs, trunk, vcfg)
         };
-        if size < 2 || jobs.len() < 2 {
+        // At most the policy's size, so never two under the default.
+        if jobs.len() < 2 {
             return Ok(None);
         }
         // Merged in order, up to the first that conflicts.
@@ -3146,6 +3145,35 @@ pub fn is_ancestor(store: &Store, ancestor: &GitId, commit: &GitId) -> Result<bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn verified_key(i: usize) -> VerifiedKey {
+        let tree = GitId::of_blob(i.to_string().as_bytes());
+        ("demo".to_string(), tree, "checks".to_string())
+    }
+
+    /// A result is gone at the hour, not a tick after it.
+    #[test]
+    fn a_verified_tree_is_known_until_the_hour() {
+        let mut verified = Verified::default();
+        verified.insert(verified_key(0), &[], 1_000);
+        let at = |ms| verified.get(&verified_key(0), 1_000 + ms).is_some();
+        assert!(at(VERIFIED_FOR_MS - 1));
+        assert!(!at(VERIFIED_FOR_MS));
+    }
+
+    /// As many as it says it keeps, then the oldest goes first.
+    #[test]
+    fn the_oldest_verified_tree_goes_first() {
+        let mut verified = Verified::default();
+        for i in 0..VERIFIED_TREES {
+            verified.insert(verified_key(i), &[], 0);
+        }
+        let known = |v: &Verified, i| v.get(&verified_key(i), 0).is_some();
+        assert!((0..VERIFIED_TREES).all(|i| known(&verified, i)));
+        verified.insert(verified_key(VERIFIED_TREES), &[], 0);
+        assert!(!known(&verified, 0));
+        assert!((1..=VERIFIED_TREES).all(|i| known(&verified, i)));
+    }
 
     /// The rows of the method table in docs/decisions.md.
     fn documented_methods() -> BTreeMap<String, String> {

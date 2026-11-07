@@ -5081,6 +5081,21 @@ fn a_run_keeps_the_setup_of_the_named_harness_and_no_other() {
     let o = in_sandbox(&e, &ws, "cat .mcp.json").unwrap();
     assert_eq!(text(&o.stdout), as_set_up, "{}", text(&o.stderr));
 
+    // A name on the list is not one of the harness's files for being there.
+    let args = session_args("src/**", &["--workspace", "h4", "--harness", "claude-code"]);
+    e.run(&e.root, &args);
+    let ws = e.root.join("h4");
+    std::fs::write(ws.join("stash"), "payload\n").unwrap();
+    edit_meta(&ws, |meta| {
+        meta["generated"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("stash"));
+    });
+    let session = session_of(&ws);
+    let why = fails(&e, &ws, &["run", "--session", &session, "--", "/bin/sh"]);
+    assert!(why.contains("differ from the commit"), "{why}");
+
     // Named, and left out by `--no-setup`: the run does not write them.
     let args = [
         "--workspace",

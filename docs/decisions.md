@@ -2081,6 +2081,30 @@ no hook, no settings file, no vendor.
   `workspace.json` names it, and the scratch roots come from the log
   (`human.prepare_isolate`), since an edited list, or a link in place of a root,
   would widen the sandbox. A scratch root that is not what the log says stops the run.
+- **What a comparison can not read is written afresh.** Contents say nothing of a file's
+  mode, attributes or dates, and `.git` and `.lonca` can not be compared with a commit
+  (Lonca reads nothing in `.git`). So once the daemon has allowed the run, everything in
+  the workspace is deleted and written again from what it says: the commit's files, a
+  new `.git`, a `workspace.json` that keeps only the repository, session, base, scratch
+  roots from the log and whether there is a `.git`, and no `.lonca/session`. Not before:
+  whether a session may be isolated is decided at `human.submit`, and a refused run must
+  leave a used workspace as it was. By then the files were found equal to the commit
+  and the session unused, so what goes is what nothing relied on, a branch left in
+  `.git` included. Lonca does this outside the sandbox, as `lonca sync` writes, and
+  deleting follows no link. If it fails the run stops and the session ends.
+- **What stops a run, rather than being deleted.** Anything in `.lonca` but its files,
+  an empty directory (a name holds as much as a file), a name that is no UTF-8, and a
+  `.git` where `workspace.json` says none belongs. That last word is the workspace's;
+  changing it gets the `.git` deleted, and no content in.
+- **A generated file is the setup's, not the list's.** `generated` in `workspace.json`
+  once decided what the comparison skipped. Now only files the setup of the harness
+  named at `session start --harness` writes stay listed, and they are written over from
+  the policy (`human.prepare_isolate` gives both, so a human needs no agent token); any
+  other counts as a difference. So a harness set up by hand with no name stops a run:
+  `--harness` is what the human signs. A file `--no-setup` kept out stays out.
+- **Not covered.** Something still running outside can write the workspace after the
+  check, and attributes of the workspace's own directory stay. That is §3.1 of the
+  design: one account, harder and visible.
 - **The profile refuses by default.** The verifier's profile allows everything
   and closes a list, which is right for a project's own build. This one is for a
   hostile process: on macOS `(allow default)` would leave Launch Services and

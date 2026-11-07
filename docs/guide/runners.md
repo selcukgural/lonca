@@ -140,7 +140,11 @@ You sign for the sandbox, so run it yourself or give it to something that holds
 your key, never to the agent. The exit code is the command's. The session ends
 with the command, and what was left unproposed is on the record and printed. Each
 run takes a new session in a new workspace: a session something has already used, or
-a workspace that differs from its commit, is refused.
+a workspace that differs from its commit, is refused. That covers ignored files, empty
+directories and anything of yours in `.lonca`. Files of `lonca harness setup` count only
+for the harness you named with `session start --harness`. A run that goes ahead then
+deletes all of the workspace and writes it again, `.git` too, so a branch left there is
+gone and nothing left in it reaches the sandbox. A refused run changes nothing.
 
 The command's stdin is a pipe from yours, never your terminal. A command that reads
 stdin to its end before it starts waits for you with no output, as `opencode run`
@@ -160,7 +164,7 @@ Inside, the command:
 
 - Use `lonca` inside as anywhere else, it is on `PATH`: `lonca mcp`, `lonca propose`,
   and hooks if the harness has them. `LONCA_WORKSPACE`, `LONCA_SOCKET` and
-  `LONCA_TOKEN_FILE` are set for it. The token in `.lonca/session` stopped working when the run began.
+  `LONCA_TOKEN_FILE` are set for it. `.lonca/session` is gone when the run begins.
 - Your tools usually need more than `PATH`: `--read ~/.rustup --env RUSTUP_HOME`.
   A harness that keeps state in its home directory will start empty; point it at a
   scratch root with `--env`.

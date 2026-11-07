@@ -4866,6 +4866,258 @@ fn a_run_refuses_what_it_can_not_vouch_for() {
     assert!(!log.contains("session.isolate"), "{log}");
 }
 
+/// The whole of `workspace.json`, changed by `edit`, as anyone can.
+fn edit_meta(ws: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+    let file = ws.join(".lonca/workspace.json");
+    let mut meta = parse(&std::fs::read_to_string(&file).unwrap());
+    edit(&mut meta);
+    std::fs::write(&file, meta.to_string()).unwrap();
+}
+
+/// What the comparison with the commit does not read is not read in the
+/// sandbox either: it was written afresh.
+#[test]
+fn a_run_starts_with_nothing_from_outside_in_git_or_in_its_metadata() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    std::fs::write(ws.join(".git/stash"), "payload\n").unwrap();
+    let config = std::fs::read_to_string(ws.join(".git/config")).unwrap();
+    let config = format!("{config}[alias]\n\tpush = !payload\n");
+    std::fs::write(ws.join(".git/config"), config).unwrap();
+    std::fs::write(ws.join(".lonca/.gitignore"), "payload\n").unwrap();
+    edit_meta(&ws, |meta| {
+        meta["stash"] = json!("payload");
+        meta["human"] = json!("payload");
+        meta["conflict_tag"] = json!("payload");
+        meta["trunk_copies"] = json!(["payload"]);
+        meta["scratch_roots"] = json!(["payload"]);
+        meta["manifest"]["payload"] = meta["manifest"]["src/lib.rs"].clone();
+    });
+    let script = "grep -rl payload .git .lonca; ls -A .lonca";
+    let o = in_sandbox(&e, &ws, script).unwrap();
+    assert_eq!(
+        text(&o.stdout),
+        ".gitignore\nworkspace.json\n",
+        "{}",
+        text(&o.stderr)
+    );
+    let meta = parse(&std::fs::read_to_string(ws.join(".lonca/workspace.json")).unwrap());
+    assert_eq!(meta["manifest"].as_object().unwrap().len(), 1, "{meta}");
+    // The repository is whole, and at the base.
+    assert_eq!(git_in(&ws, &["status", "--porcelain"]), "");
+    let subject = git_in(&ws, &["log", "--format=%s"]);
+    assert_eq!(
+        subject,
+        format!("lonca base {}", meta["base"].as_str().unwrap())
+    );
+}
+
+/// A `.git` that is no directory goes too; a link goes, not what it names.
+#[test]
+fn a_run_replaces_a_git_that_is_a_file_or_a_link() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    std::fs::remove_dir_all(ws.join(".git")).unwrap();
+    std::fs::write(ws.join(".git"), "gitdir: /nowhere\n").unwrap();
+    let o = in_sandbox(&e, &ws, "test -d .git").unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert_eq!(git_in(&ws, &["status", "--porcelain"]), "");
+
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let keep = e.root.join("keep");
+    std::fs::rename(ws.join(".git"), &keep).unwrap();
+    std::os::unix::fs::symlink(&keep, ws.join(".git")).unwrap();
+    let o = in_sandbox(&e, &ws, "test -d .git").unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let git = std::fs::symlink_metadata(ws.join(".git")).unwrap();
+    assert!(git.is_dir(), "the link was followed");
+    assert!(keep.join("HEAD").exists());
+}
+
+/// A file's mode and the rest a comparison of contents does not see.
+#[test]
+fn a_run_writes_every_file_of_the_commit_afresh() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let exec = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    std::fs::set_permissions(ws.join("src/lib.rs"), exec).unwrap();
+    std::fs::remove_file(ws.join(".lonca/session")).unwrap();
+    std::fs::create_dir(ws.join(".lonca/session")).unwrap();
+    let script = "test ! -x src/lib.rs; test ! -e .lonca/session";
+    let o = in_sandbox(&e, &ws, script).unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    // Nothing stood in the way of the token of what continues it.
+    e.run(&e.root, &session_args("src/**", &["--continue", "ws"]));
+    assert!(ws.join(".lonca/session").is_file());
+}
+
+/// What the daemon refuses leaves the workspace as it was: it is only
+/// nothing to lose in a run that goes ahead.
+#[test]
+fn a_run_that_is_refused_touches_nothing() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let session = session_of(&ws);
+    let revoke = [
+        "session", "revoke", &session, "--repo", "demo", "--reason", "x",
+    ];
+    e.run(&e.root, &revoke);
+    std::fs::write(ws.join(".git/keep"), "mine\n").unwrap();
+    let meta = std::fs::read(ws.join(".lonca/workspace.json")).unwrap();
+    let args = ["run", "--session", &session, "--", "/bin/sh", "-c", ":"];
+    fails(&e, &ws, &args);
+    assert!(ws.join(".git/keep").exists());
+    assert!(ws.join(".lonca/session").exists());
+    let after = std::fs::read(ws.join(".lonca/workspace.json")).unwrap();
+    assert_eq!(after, meta);
+}
+
+/// Not being able to look is not having looked.
+#[test]
+fn a_scratch_root_that_can_not_be_read_stops_a_run() {
+    let e = Env::new();
+    agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let scratch = e.root.join("s1");
+    let extra = ["--workspace", "w1", "--scratch", scratch.to_str().unwrap()];
+    e.run(&e.root, &session_args("src/**", &extra));
+    let ws = e.root.join("w1");
+    let mode = |m: u32| std::os::unix::fs::PermissionsExt::from_mode(m);
+    std::fs::set_permissions(&scratch, mode(0o000)).unwrap();
+    let session = session_of(&ws);
+    let why = fails(&e, &ws, &["run", "--session", &session, "--", "/bin/sh"]);
+    std::fs::set_permissions(&scratch, mode(0o700)).unwrap();
+    assert!(why.contains("is not empty"), "{why}");
+}
+
+#[test]
+fn what_stands_beside_the_commit_stops_a_run() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let session = session_of(&ws);
+    let args = ["run", "--session", &session, "--", "/bin/sh", "-c", ":"];
+    let refused = |what: &str| {
+        let why = fails(&e, &ws, &args);
+        assert!(why.contains("differ from the commit"), "{why}");
+        assert!(why.contains(what), "{why}");
+    };
+    std::fs::write(ws.join(".lonca/stash"), "payload\n").unwrap();
+    refused(".lonca/stash");
+    std::fs::remove_file(ws.join(".lonca/stash")).unwrap();
+    std::fs::create_dir_all(ws.join("src/payload/here")).unwrap();
+    refused("src/payload/here");
+    std::fs::remove_dir_all(ws.join("src/payload")).unwrap();
+    // Nothing is a generated file for saying so, not even one of the commit.
+    std::fs::write(ws.join("stash"), "payload\n").unwrap();
+    edit_meta(&ws, |meta| meta["generated"] = json!(["stash"]));
+    refused("stash");
+    std::fs::remove_file(ws.join("stash")).unwrap();
+    let lib = std::fs::read(ws.join("src/lib.rs")).unwrap();
+    std::fs::write(ws.join("src/lib.rs"), "payload\n").unwrap();
+    edit_meta(&ws, |meta| meta["generated"] = json!(["src/lib.rs"]));
+    refused("src/lib.rs");
+    std::fs::write(ws.join("src/lib.rs"), lib).unwrap();
+    // None of that took the workspace's token or isolated anything.
+    assert!(ws.join(".lonca/session").exists());
+    let o = in_sandbox(&e, &ws, ":").unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+}
+
+#[test]
+fn a_workspace_with_no_git_can_not_hold_one_in_a_run() {
+    let e = Env::new();
+    agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let args = session_args("src/**", &["--workspace", "plain", "--no-git"]);
+    e.run(&e.root, &args);
+    let ws = e.root.join("plain");
+    let o = in_sandbox(&e, &ws, "test ! -e .git").unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+
+    let args = session_args("src/**", &["--workspace", "plain2", "--no-git"]);
+    e.run(&e.root, &args);
+    let ws = e.root.join("plain2");
+    std::fs::create_dir(ws.join(".git")).unwrap();
+    std::fs::write(ws.join(".git/stash"), "payload\n").unwrap();
+    let session = session_of(&ws);
+    let why = fails(&e, &ws, &["run", "--session", &session, "--", "/bin/sh"]);
+    assert!(why.contains(".git"), "{why}");
+    assert!(ws.join(".git/stash").exists(), "not the run's to take");
+}
+
+/// Files of a harness stand if the human named it, as its setup writes them.
+#[test]
+fn a_run_keeps_the_setup_of_the_named_harness_and_no_other() {
+    let e = Env::new();
+    agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let args = session_args("src/**", &["--workspace", "h1", "--harness", "claude-code"]);
+    e.run(&e.root, &args);
+    let ws = e.root.join("h1");
+    let as_set_up = std::fs::read_to_string(ws.join(".mcp.json")).unwrap();
+    std::fs::write(ws.join(".mcp.json"), "payload\n").unwrap();
+    let o = in_sandbox(&e, &ws, "cat .mcp.json").unwrap();
+    assert_eq!(text(&o.stdout), as_set_up, "{}", text(&o.stderr));
+
+    // A name on the list is not one of the harness's files for being there.
+    let args = session_args("src/**", &["--workspace", "h4", "--harness", "claude-code"]);
+    e.run(&e.root, &args);
+    let ws = e.root.join("h4");
+    std::fs::write(ws.join("stash"), "payload\n").unwrap();
+    edit_meta(&ws, |meta| {
+        meta["generated"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("stash"));
+    });
+    let session = session_of(&ws);
+    let why = fails(&e, &ws, &["run", "--session", &session, "--", "/bin/sh"]);
+    assert!(why.contains("differ from the commit"), "{why}");
+
+    // Named, and left out by `--no-setup`: the run does not write them.
+    let args = [
+        "--workspace",
+        "h2",
+        "--harness",
+        "claude-code",
+        "--no-setup",
+    ];
+    e.run(&e.root, &session_args("src/**", &args));
+    let o = in_sandbox(&e, &e.root.join("h2"), "test ! -e .mcp.json").unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+
+    // Set up by hand, unnamed: the human never said it was this harness.
+    let args = session_args("src/**", &["--workspace", "h3"]);
+    e.run(&e.root, &args);
+    let ws = e.root.join("h3");
+    e.run(&ws, &["harness", "setup", "claude-code"]);
+    let session = session_of(&ws);
+    let why = fails(&e, &ws, &["run", "--session", &session, "--", "/bin/sh"]);
+    assert!(why.contains("differ from the commit"), "{why}");
+}
+
 #[test]
 fn a_sandbox_reads_only_what_the_human_named() {
     let e = Env::new();

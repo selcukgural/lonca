@@ -1908,11 +1908,17 @@ impl Service {
             return fail("not_found", "no such session");
         };
         let base_known = r.chain.state.trunk_history.contains(&p.base);
+        let scratch = s.scope.scratch.clone();
+        let harness = s.harness.clone();
+        let policy = r.policy().or_fail()?;
+        let profile = harness.as_deref().and_then(|h| policy.config.harness(h));
         Ok(json!({
-            "scratch": s.scope.scratch,
+            "scratch": scratch,
             "proxy": self.settings.proxy,
             "home": self.home.root,
             "base_known": base_known,
+            "harness": harness,
+            "setup": profile.map(|p| &p.setup),
         }))
     }
 

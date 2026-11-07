@@ -33,7 +33,20 @@ pub fn neutral_rules(ws: Option<&Workspace>) -> String {
 /// Reads the harness's setup from the policy and fills it in for `ws`.
 pub fn prepare(client: &mut Client, ws: &Workspace, harness: &str) -> Result<Prepared> {
     let r = ctx::call(client, "harness.setup", json!({"harness": harness}))?;
-    let setup: Option<Setup> = serde_json::from_value(r["setup"].clone())?;
+    filled_in(ws, harness, r["setup"].clone())
+}
+
+/// The setup of the harness the human named when the session started, from
+/// `human.prepare_isolate`: the only one a sandbox lets stand.
+pub fn of_session(ws: &Workspace, isolate: &Value) -> Result<Option<Prepared>> {
+    let Some(harness) = isolate["harness"].as_str() else {
+        return Ok(None);
+    };
+    filled_in(ws, harness, isolate["setup"].clone()).map(Some)
+}
+
+fn filled_in(ws: &Workspace, harness: &str, setup: Value) -> Result<Prepared> {
+    let setup: Option<Setup> = serde_json::from_value(setup)?;
     let rules = neutral_rules(Some(ws));
     let socket = ctx::socket().to_string_lossy().into_owned();
     let workspace = ws.root.to_string_lossy().into_owned();
@@ -78,6 +91,24 @@ impl Prepared {
         }
         ws.exclude_from_git()?;
         Ok(paths)
+    }
+
+    /// Does the setup write `path`?
+    pub fn writes(&self, path: &str) -> bool {
+        self.filled.files.contains_key(path)
+    }
+
+    /// Writes again what stands in the workspace of the setup's files, so
+    /// nothing of them is anyone else's. Writes none it does not list: a
+    /// session started with `--no-setup` stays without them.
+    pub fn write_over(&self, ws: &Workspace) -> Result<()> {
+        for path in &ws.meta.generated {
+            check_target(ws, path)?;
+            let text = self.filled.files.get(path).map(String::as_bytes);
+            let text = text.with_context(|| format!("{path} is not of the setup"))?;
+            wsfs::write(&ws.root, path, text, wsfs::REGULAR)?;
+        }
+        Ok(())
     }
 
     pub fn report(&self, written: &[String]) -> Value {

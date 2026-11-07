@@ -556,10 +556,12 @@ branch; `{"op": op (import.external)}`. Errors: `up_to_date`,
 
 *human.* `{"session": string, "base": commit}`. What a sandbox for the
 session is built from: `{"scratch": [string], "proxy": "host:port" | null,
-"home": string, "base_known": boolean}`. The scratch roots are the log's,
-never a workspace file's; `proxy` is `null` when the daemon runs none;
-`home` is the daemon's directory, which the sandbox closes; `base_known`
-says whether `base` was ever trunk. Errors: `not_found`.
+"home": string, "base_known": boolean, "harness": string | null, "setup":
+object | null}`. The scratch roots are the log's, never a workspace file's;
+`proxy` is `null` when the daemon runs none; `home` is the daemon's directory,
+which the sandbox closes; `base_known` says whether `base` was ever trunk;
+`harness` is the name the session started with, and `setup` that harness's
+setup in the policy, as `harness.setup` gives it. Errors: `not_found`.
 
 ### `human.submit`
 

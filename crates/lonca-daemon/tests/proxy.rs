@@ -262,6 +262,8 @@ fn what_a_sandbox_is_built_from_comes_from_the_log() {
     assert_eq!(r["scratch"], json!([scratch]), "{r}");
     assert_eq!(r["proxy"], e.settings.proxy.clone().unwrap(), "{r}");
     assert_eq!(r["base_known"], true, "{r}");
+    assert_eq!(r["harness"], Value::Null, "{r}");
+    assert_eq!(r["setup"], Value::Null, "{r}");
     assert_eq!(
         r["home"].as_str(),
         Some(e.root.join("home").to_str().unwrap()),

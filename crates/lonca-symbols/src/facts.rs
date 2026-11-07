@@ -9,7 +9,7 @@ use lonca_core::{FileEntry, FileMap, FileMode, GitId, Result};
 use crate::engine::ENGINE_KEYS;
 use crate::engine::{
     ENGINE_EXACT, ENGINE_LINE_EDITS, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS,
-    ENGINE_SIGNATURES, ENGINE_UNPARSED,
+    ENGINE_SIGNATURES, ENGINE_UNPARSED, reads_size,
 };
 use crate::extract::{
     MAX_COMPARED, Parsed, Sym, align, best_pairs, likeness, moved, parse_at, parse_together,
@@ -93,6 +93,7 @@ pub fn analyze(
             (None, Some(n)) => {
                 f.added_files.push(path.clone());
                 let bytes = read(&n.blob)?;
+                let lang = lang.filter(|_| reads_size(engine, bytes.len()));
                 if lang.is_some_and(|l| !l.is_strict() && !reads(engine, l, &bytes)) {
                     f.unread_files.push(path.clone());
                 }
@@ -110,6 +111,7 @@ pub fn analyze(
             (Some(b), None) => {
                 f.deleted_files.push(path.clone());
                 let bytes = read(&b.blob)?;
+                let lang = lang.filter(|_| reads_size(engine, bytes.len()));
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     f.lines_removed += count_lines(text);
                     if let Some(lang) = lang {
@@ -130,6 +132,9 @@ pub fn analyze(
                     continue;
                 }
                 let (old, new_bytes) = (read(&b.blob)?, read(&n.blob)?);
+                let in_size = [&old, &new_bytes].map(|t| reads_size(engine, t.len()));
+                let in_size = in_size == [true, true];
+                let lang = lang.filter(|_| in_size);
                 let (Ok(old), Ok(newt)) =
                     (std::str::from_utf8(&old), std::str::from_utf8(&new_bytes))
                 else {
@@ -144,7 +149,7 @@ pub fn analyze(
                 f.lines_removed += r;
                 let Some(lang) = lang else {
                     let format = Format::detect(path);
-                    let by_section = (engine >= ENGINE_SECTIONS)
+                    let by_section = (engine >= ENGINE_SECTIONS && in_size)
                         .then_some(format)
                         .flatten()
                         .is_some_and(|format| compare_sections(path, format, old, newt, &mut f));
@@ -277,22 +282,26 @@ fn compare_sections(path: &str, format: Format, old: &str, new: &str, f: &mut Fa
     let (Some(bs), Some(ns)) = (sections(format, old), sections(format, new)) else {
         return false;
     };
-    let text = |list: &[Section], name: &str| {
-        let found = list.iter().find(|s| s.name == name);
-        found.map(|s| s.text.clone())
+    let first_of = |list: &'_ [Section]| {
+        let mut out = BTreeMap::new();
+        for s in list {
+            out.entry(s.name.clone()).or_insert(s.text.clone());
+        }
+        out
     };
+    let (in_base, in_new) = (first_of(&bs), first_of(&ns));
     let before = f.edits.len() + f.adds.len() + f.deletes.len();
     for n in &ns {
-        match text(&bs, &n.name) {
+        match in_base.get(&n.name) {
             None => f.adds.push(sym_id(path, &n.name)),
-            Some(b) if b == n.text => {}
-            Some(b) if format == Format::Markdown && appended(&b, &n.text).is_some() => {
+            Some(b) if *b == n.text => {}
+            Some(b) if format == Format::Markdown && appended(b, &n.text).is_some() => {
                 f.adds.push(sym_id(path, &format!("{}.{APPEND}", n.name)));
             }
             Some(_) => f.edits.push(sym_id(path, &n.name)),
         }
     }
-    let gone = bs.iter().filter(|b| text(&ns, &b.name).is_none());
+    let gone = bs.iter().filter(|b| !in_new.contains_key(&b.name));
     f.deletes.extend(gone.map(|b| sym_id(path, &b.name)));
     f.edits.len() + f.adds.len() + f.deletes.len() > before
 }
@@ -504,6 +513,125 @@ fn diff_level(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{ENGINE_LIMITS, MAX_READ};
+
+    /// `text`, filled to `len` bytes with a comment.
+    fn filled(text: &str, len: usize) -> String {
+        format!("{text}{}\n", "/".repeat(len - text.len() - 1))
+    }
+
+    fn read_of<'t>(texts: &'t [&'t str]) -> impl Fn(&GitId) -> Result<Vec<u8>> + 't {
+        |id: &GitId| {
+            let found = texts.iter().find(|t| GitId::of_blob(t.as_bytes()) == *id);
+            Ok(found.unwrap().as_bytes().to_vec())
+        }
+    }
+
+    fn one_file(path: &str, text: Option<&str>) -> FileMap {
+        let mut m = FileMap::new();
+        if let Some(text) = text {
+            m.insert(
+                path.to_string(),
+                lonca_core::FileEntry {
+                    mode: lonca_core::FileMode::Regular,
+                    blob: GitId::of_blob(text.as_bytes()),
+                },
+            );
+        }
+        m
+    }
+
+    fn analysis(engine: u32, path: &str, old: Option<&str>, new: Option<&str>) -> Analysis {
+        let texts: Vec<&str> = [old, new].into_iter().flatten().collect();
+        let (b, n) = (one_file(path, old), one_file(path, new));
+        analyze(engine, &b, &n, &read_of(&texts)).unwrap()
+    }
+
+    const CODE: &str = "fn a() { 1 }\n\n\n\n\nfn b() { 2 }\n";
+    const EDITED: &str = "fn a() { 3 }\n\n\n\n\nfn b() { 2 }\n";
+    const BROKEN: &str = "fn a( {\n";
+
+    #[test]
+    fn a_change_past_the_limit_is_an_edit_of_the_file_on_either_side() {
+        let e = ENGINE_LIMITS;
+        let (small, large) = (filled(CODE, MAX_READ), filled(CODE, MAX_READ + 1));
+        let (edited, edited_large) = (filled(EDITED, MAX_READ), filled(EDITED, MAX_READ + 1));
+        let a = analysis(e, "a.rs", Some(&small), Some(&edited));
+        assert_eq!(a.facts.edits, ["a.rs#a"]);
+        assert!(a.facts.unparsed_files.is_empty());
+        for (old, new) in [
+            (&large, &edited),
+            (&small, &edited_large),
+            (&large, &edited_large),
+        ] {
+            let a = analysis(e, "a.rs", Some(old), Some(new));
+            assert_eq!(a.facts.edits, ["a.rs#<file>"], "{}", old.len());
+            assert_eq!(a.facts.unparsed_files, ["a.rs"]);
+        }
+        let old = analysis(e - 1, "a.rs", Some(&large), Some(&edited_large));
+        assert_eq!(old.facts.edits, ["a.rs#a"]);
+    }
+
+    #[test]
+    fn a_file_added_or_deleted_past_the_limit_has_no_symbols_read() {
+        let e = ENGINE_LIMITS;
+        let tested = "#[test]\nfn t() {}\n";
+        let (small, large) = (filled(tested, MAX_READ), filled(tested, MAX_READ + 1));
+        assert_eq!(analysis(e, "a.rs", None, Some(&small)).facts.tests.added, 1);
+        assert_eq!(analysis(e, "a.rs", None, Some(&large)).facts.tests.added, 0);
+        assert_eq!(
+            analysis(e - 1, "a.rs", None, Some(&large))
+                .facts
+                .tests
+                .added,
+            1
+        );
+        assert_eq!(
+            analysis(e, "a.rs", Some(&small), None).facts.tests.deleted,
+            1
+        );
+        assert_eq!(
+            analysis(e, "a.rs", Some(&large), None).facts.tests.deleted,
+            0
+        );
+        assert_eq!(
+            analysis(e - 1, "a.rs", Some(&large), None)
+                .facts
+                .tests
+                .deleted,
+            1
+        );
+    }
+
+    #[test]
+    fn what_stands_past_the_limit_is_no_syntax_error() {
+        let e = ENGINE_LIMITS;
+        let large = filled(BROKEN, MAX_READ + 1);
+        let added = analysis(e, "a.rs", None, Some(&large));
+        assert!(added.syntax_errors.is_empty());
+        let changed = analysis(e, "a.rs", Some(CODE), Some(&large));
+        assert!(changed.syntax_errors.is_empty());
+        let small = filled(BROKEN, MAX_READ);
+        assert_eq!(
+            analysis(e, "a.rs", None, Some(&small)).syntax_errors,
+            ["a.rs"]
+        );
+    }
+
+    #[test]
+    fn sections_past_the_limit_are_an_edit_of_the_file() {
+        let e = ENGINE_LIMITS;
+        let sides = |len, n: u32| filled(&format!("[a]\nx = {n}\n[b]\ny = 2\n# "), len);
+        let (old, new) = (sides(MAX_READ, 1), sides(MAX_READ, 3));
+        assert_eq!(section_facts(e, "a.toml", &old, &new).edits, ["a.toml#a.x"]);
+        for (o, n) in [(MAX_READ + 1, MAX_READ), (MAX_READ, MAX_READ + 1)] {
+            let (old, new) = (sides(o, 1), sides(n, 3));
+            assert_eq!(
+                section_facts(e, "a.toml", &old, &new).edits,
+                ["a.toml#<file>"]
+            );
+        }
+    }
 
     fn section_facts(engine: u32, path: &str, old: &str, new: &str) -> Facts {
         let map = |text: &str| {

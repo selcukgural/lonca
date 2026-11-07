@@ -1,0 +1,361 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.go#Charge"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.go"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.go#Added"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.go#Gone"
+        ],
+        "edits": [
+          "src/sample.go#<imports>",
+          "src/sample.go#Ledger.Add",
+          "src/sample.go#Sig",
+          "src/sample.go#TestCharges"
+        ],
+        "import_only_files": [],
+        "lines_added": 10,
+        "lines_removed": 4,
+        "modified_files": [
+          "src/sample.go"
+        ],
+        "signature_changes": [
+          "src/sample.go#Sig"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 1,
+          "skipped": 1
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "package billing\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n)\n\nfunc Charge(amount int) int {\n\treturn amount * 2\n}\n\nfunc Sig(a int, b int) int {\n\treturn a + b\n}\n\nfunc Added() string {\n\treturn strings.ToUpper(\"x\")\n}\n\ntype Ledger struct {\n\tentries map[string]int\n}\n\nfunc (l *Ledger) Add(k string, v int) {\n\tif _, ok := l.entries[k]; !ok {\n\t\tl.entries[k] = v\n\t}\n}\n\nfunc TestCharges(t *testing.T) {\n\tt.Skip(\"flaky\")\n\tif Charge(2) != 2 {\n\t\tt.Fatal(fmt.Sprint(\"bad\"))\n\t}\n}\n"
+  },
+  "path": "src/sample.go",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          17,
+          34
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fbilling\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Charge",
+          "own": "",
+          "signature": "func Charge(amount int) int",
+          "skipped": false,
+          "span": [
+            36,
+            36,
+            82
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Gone",
+          "own": "",
+          "signature": "func Gone()",
+          "skipped": false,
+          "span": [
+            84,
+            84,
+            98
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Sig",
+          "own": "",
+          "signature": "func Sig(a int) int",
+          "skipped": false,
+          "span": [
+            100,
+            100,
+            137
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": "type Ledger struct { entries map[string]int }",
+          "skipped": false,
+          "span": [
+            139,
+            139,
+            185
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Add",
+          "own": "",
+          "signature": "func (l *Ledger) Add(k string, v int)",
+          "skipped": false,
+          "span": [
+            187,
+            187,
+            246
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TestCharges",
+          "own": "",
+          "signature": "func TestCharges(t *testing.T)",
+          "skipped": false,
+          "span": [
+            248,
+            248,
+            335
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          17,
+          34
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fbilling\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Charge",
+          "own": "",
+          "signature": "func Charge(amount int) int",
+          "skipped": false,
+          "span": [
+            36,
+            36,
+            86
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Gone",
+          "own": "",
+          "signature": "func Gone()",
+          "skipped": false,
+          "span": [
+            88,
+            88,
+            102
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Sig",
+          "own": "",
+          "signature": "func Sig(a int) int",
+          "skipped": false,
+          "span": [
+            104,
+            104,
+            141
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": "type Ledger struct { entries map[string]int }",
+          "skipped": false,
+          "span": [
+            143,
+            143,
+            189
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Add",
+          "own": "",
+          "signature": "func (l *Ledger) Add(k string, v int)",
+          "skipped": false,
+          "span": [
+            191,
+            191,
+            250
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TestCharges",
+          "own": "",
+          "signature": "func TestCharges(t *testing.T)",
+          "skipped": false,
+          "span": [
+            252,
+            252,
+            339
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          17,
+          45
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fbilling\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Charge",
+          "own": "",
+          "signature": "func Charge(amount int) int",
+          "skipped": false,
+          "span": [
+            47,
+            47,
+            93
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Sig",
+          "own": "",
+          "signature": "func Sig(a int, b int) int",
+          "skipped": false,
+          "span": [
+            95,
+            95,
+            139
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Added",
+          "own": "",
+          "signature": "func Added() string",
+          "skipped": false,
+          "span": [
+            141,
+            141,
+            193
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": "type Ledger struct { entries map[string]int }",
+          "skipped": false,
+          "span": [
+            195,
+            195,
+            241
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger.Add",
+          "own": "",
+          "signature": "func (l *Ledger) Add(k string, v int)",
+          "skipped": false,
+          "span": [
+            243,
+            243,
+            339
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": true,
+          "name": "TestCharges",
+          "own": "",
+          "signature": "func TestCharges(t *testing.T)",
+          "skipped": true,
+          "span": [
+            341,
+            341,
+            445
+          ]
+        }
+      ]
+    }
+  }
+}

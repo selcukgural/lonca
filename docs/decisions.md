@@ -621,6 +621,28 @@ entry format, so they have their own version
   - Up to engine 11 symbols have no limit, so that entries are recomputed as
     they were written. Only the auditor reads at those engines, and an entry
     exists only if the daemon got through its file.
+- **Engine 13** reads a file up to a size (`MAX_READ`, 2 MiB) and its names up
+  to a total (`MAX_NAMES`, 16 MiB).
+  - A file past `MAX_READ` on any side of a comparison goes by its lines, as a
+    file no grammar reads: an edit of `<file>`, listed in `unparsed_files`, and
+    a line merge. That holds for sections too, and the verifier's syntax check
+    leaves such a file alone, so a long generated file is not refused. What
+    people write stays far below this, and what a merge costs grows with it: a
+    merge of a 2 MiB file takes seconds.
+  - A name holds the names around it, so a long name over many members costs
+    their product while the file costs only their sum, and so does a signature
+    that repeats what a list has in front of its items. `MAX_NAMES` counts the
+    names and signatures read so far; what is left past it is text of what is
+    around it, as with `MAX_LEVELS`, and test names of JavaScript stop there as
+    well. Files that are read stay far below it.
+  - Both limits depend only on the text, so the auditor gets the same answer.
+    Engines before 13 read everything, as they always did.
+- **The cost of a merge grows with the file**, in every engine. Going through a
+  list for each symbol, node or change made a merge of 300 KB take minutes.
+  What did that now has a look-up (`Cuts`, `Namespaces`, `neighbours`,
+  `names_of_both`), and each is held to the plain walk it replaced by a test.
+  Their output is the walk's, so no engine changed for them: the frozen corpus
+  and the golden logs still pass, and v13 of the corpus is v12's.
 
 ## Batches in the merge queue
 

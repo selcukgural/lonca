@@ -15,7 +15,7 @@ use lonca_core::{FileEntry, FileMap, GitId, Result};
 
 use crate::engine::{
     ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LANGUAGES, ENGINE_LINE_MERGE,
-    ENGINE_PLACES, ENGINE_SECTIONS,
+    ENGINE_PLACES, ENGINE_SECTIONS, reads_size,
 };
 use crate::extract::{
     Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_at,
@@ -156,7 +156,7 @@ fn section_merge(
     o: &str,
     t: &str,
 ) -> Option<std::result::Result<String, Vec<String>>> {
-    if engine < ENGINE_SECTIONS {
+    if engine < ENGINE_SECTIONS || !all_read(engine, [b, o, t]) {
         return None;
     }
     let format = Format::detect(path)?;
@@ -165,6 +165,12 @@ fn section_merge(
         Ok(_) => Err(vec![format!("{path}#<file>")]),
         Err(names) => Err(names.iter().map(|n| format!("{path}#{n}")).collect()),
     })
+}
+
+/// `engine` reads all three sides of a file: a side it does not read has no
+/// symbols, and a file that has them on one side only has nothing to compare.
+fn all_read(engine: u32, texts: [&str; 3]) -> bool {
+    texts.iter().all(|t| reads_size(engine, t.len()))
 }
 
 /// Merges one file's text with the given engine.
@@ -179,7 +185,7 @@ pub fn merge_text_at(
         return r;
     }
     let file_conflict = || vec![format!("{path}#<file>")];
-    let lang = Lang::detect_at(engine, path);
+    let lang = Lang::detect_at(engine, path).filter(|_| all_read(engine, [b, o, t]));
     if let Some(lang) = lang {
         match symbol_merge(engine, path, lang, b, o, t) {
             Sm::Merged(s) => return Ok(s),
@@ -291,7 +297,7 @@ fn around_conflicts(
     o: &str,
     t: &str,
 ) -> Option<(String, Vec<String>)> {
-    let lang = Lang::detect_at(engine, path)?;
+    let lang = Lang::detect_at(engine, path).filter(|_| all_read(engine, [b, o, t]))?;
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return None;
@@ -398,7 +404,8 @@ fn holds_up(
     all_names(&po.syms, &mut sides);
     all_names(&pt.syms, &mut sides);
     all_names(&merged.syms, &mut there);
-    let in_conflict = |n: &str| conflicts.contains(&format!("{path}#{n}"));
+    let conflicting: BTreeSet<&str> = conflicts.iter().map(String::as_str).collect();
+    let in_conflict = |n: &str| conflicting.contains(format!("{path}#{n}").as_str());
     if !sides
         .difference(&base)
         .all(|n| there.contains(n) || in_conflict(n))
@@ -556,6 +563,45 @@ fn by_name(syms: &[Sym]) -> BTreeMap<&str, &Sym> {
     syms.iter().map(|s| (s.name.as_str(), s)).collect()
 }
 
+/// Where a symbol of a list stands in its group.
+#[derive(Clone, Copy)]
+struct Near<'s> {
+    /// The ones right in front of it and behind it.
+    before: Option<&'s Sym>,
+    after: Option<&'s Sym>,
+    /// The nearest with an anchor, its own counting behind it.
+    prev: Option<&'s Sym>,
+    next: Option<&'s Sym>,
+}
+
+/// [`Near`] for each of `syms`, in one walk each way: a symbol that asks the
+/// list makes as many steps as there are new symbols, for each of them.
+fn neighbours<'s>(syms: &'s [Sym], anchor: impl Fn(&'s Sym) -> Option<&'s Sym>) -> Vec<Near<'s>> {
+    let empty = Near {
+        before: None,
+        after: None,
+        prev: None,
+        next: None,
+    };
+    let mut out = vec![empty; syms.len()];
+    let mut seen: BTreeMap<Option<Holder>, (&Sym, Option<&Sym>)> = BTreeMap::new();
+    for (near, s) in out.iter_mut().zip(syms) {
+        let last = seen.get(&s.holder);
+        near.before = last.map(|l| l.0);
+        near.prev = last.and_then(|l| l.1);
+        let kept = anchor(s).or(near.prev);
+        seen.insert(s.holder, (s, kept));
+    }
+    seen.clear();
+    for (near, s) in out.iter_mut().zip(syms).rev() {
+        let last = seen.get(&s.holder);
+        near.after = last.map(|l| l.0);
+        near.next = anchor(s).or(last.and_then(|l| l.1));
+        seen.insert(s.holder, (s, near.next));
+    }
+    out
+}
+
 impl<'a> Merger<'a> {
     fn new(engine: u32, path: &'a str, b: &'a str, o: &'a str, t: &'a str) -> Self {
         Merger {
@@ -628,6 +674,17 @@ impl<'a> Merger<'a> {
         let o_has: BTreeMap<&str, &Sym> = (o_renames.iter())
             .filter_map(|[old, new]| Some((*old, *om.get(new)?)))
             .collect();
+        // What a new symbol can stand next to: the neighbours of its own
+        // group, on a side where that one is in the same kind of group.
+        let anchor = |s: &Sym| {
+            let name = s.name.as_str();
+            let o_sym = om.get(name).copied();
+            let o_sym = o_sym.or(in_place.get(name).map(|(_, o)| *o));
+            let o_sym = o_sym.or(o_has.get(name).copied());
+            let shape = |h: Option<Holder>| h.map(|h| (h.kind, h.joined));
+            o_sym.filter(|o| shape(o.holder) == shape(s.holder))
+        };
+        let near = neighbours(ts, anchor);
         let mut renamed = BTreeSet::new();
         for (i, ts_sym) in ts.iter().enumerate() {
             let name = ts_sym.name.as_str();
@@ -654,18 +711,7 @@ impl<'a> Merger<'a> {
                         self.conflict(old);
                         continue;
                     }
-                    // A new symbol stands next to one of its own group, on
-                    // a side where that one is in the same kind of group.
                     let held = ts_sym.holder;
-                    let beside = |s: &&Sym| s.holder == held;
-                    let shape = |h: Option<Holder>| h.map(|h| (h.kind, h.joined));
-                    let anchor = |s: &Sym| {
-                        let name = s.name.as_str();
-                        let o_sym = om.get(name).copied();
-                        let o_sym = o_sym.or(in_place.get(name).map(|(_, o)| *o));
-                        let o_sym = o_sym.or(o_has.get(name).copied());
-                        o_sym.filter(|o| shape(o.holder) == shape(held))
-                    };
                     let (gap_start, gap_end) = ts_sym.around;
                     let sep_before = match (gap_start, ws_before(self.t, ts_sym.start)) {
                         (Some(from), _) => &self.t[from..ts_sym.start],
@@ -678,11 +724,13 @@ impl<'a> Merger<'a> {
                     // it goes: order against other elements can matter.
                     let touching =
                         |gap: Option<usize>, at: Option<usize>| gap.is_none() || gap == at;
-                    let before = ts[..i].iter().rev().find(beside);
-                    let after = ts[i + 1..].iter().find(beside);
-                    let prev = ts[..i].iter().rev().filter(beside).find_map(anchor);
+                    let Near {
+                        before,
+                        after,
+                        prev,
+                        next,
+                    } = near[i];
                     let prev = prev.filter(|_| touching(gap_start, before.map(|p| p.end)));
-                    let next = ts[i..].iter().filter(beside).find_map(anchor);
                     let next = next.filter(|_| touching(gap_end, after.map(|a| a.start)));
                     let after_code = self.engine >= ENGINE_PLACES && i > 0 && {
                         let gap = &self.t[ts[i - 1].end..ts_sym.start];
@@ -972,8 +1020,106 @@ mod tests {
     use super::*;
     use crate::engine::ENGINE_CURRENT;
     use crate::engine::ENGINE_LEVELS;
+    use crate::engine::ENGINE_LIMITS;
     use crate::engine::ENGINE_RENAMES;
+    use crate::engine::MAX_READ;
     use crate::extract::{parse, parse_at};
+
+    /// `text` of exactly `len` bytes, with what it holds in front.
+    fn filled(text: &str, len: usize) -> String {
+        format!("{text}{}\n", "/".repeat(len - text.len() - 1))
+    }
+
+    /// Two ends of one pair of lines, which the symbols tell apart and the
+    /// lines do not.
+    fn neighbours_of(len: usize) -> [String; 3] {
+        let at = |a, b| filled(&format!("fn a() {{ {a} }}\nfn b() {{ {b} }}\n"), len);
+        [at(1, 2), at(3, 2), at(1, 4)]
+    }
+
+    #[test]
+    fn a_file_past_the_limit_merges_by_its_lines() {
+        let [b, o, t] = neighbours_of(MAX_READ);
+        assert!(merge_text_at(ENGINE_LIMITS, "a.rs", &b, &o, &t).is_ok());
+        for grown in 0..3 {
+            let mut sides = neighbours_of(MAX_READ);
+            sides[grown].push('\n');
+            let [b, o, t] = &sides;
+            assert_eq!(
+                merge_text_at(ENGINE_LIMITS, "a.rs", b, o, t),
+                Err(vec!["a.rs#<file>".to_string()]),
+                "{grown}"
+            );
+            assert_eq!(merge_around_conflicts(ENGINE_LIMITS, "a.rs", b, o, t), None);
+        }
+        let [b, o, t] = neighbours_of(MAX_READ + 1);
+        assert!(merge_text_at(ENGINE_LIMITS - 1, "a.rs", &b, &o, &t).is_ok());
+    }
+
+    #[test]
+    fn a_file_of_sections_past_the_limit_merges_by_its_lines() {
+        let sides = |len: usize| {
+            let at = |a, b| filled(&format!("[a]\nx = {a}\n[{b}]\ny = 2\n# "), len);
+            [at(1, "b"), at(3, "b"), at(1, "c")]
+        };
+        let [b, o, t] = sides(MAX_READ);
+        assert!(merge_text_at(ENGINE_LIMITS, "a.toml", &b, &o, &t).is_ok());
+        let [b, o, t] = sides(MAX_READ + 1);
+        let conflict = merge_text_at(ENGINE_LIMITS, "a.toml", &b, &o, &t);
+        assert_eq!(conflict, Err(vec!["a.toml#<file>".to_string()]));
+        assert!(merge_text_at(ENGINE_LIMITS - 1, "a.toml", &b, &o, &t).is_ok());
+    }
+
+    #[test]
+    fn neighbours_are_those_a_walk_through_the_list_finds() {
+        let mut x = 6u64;
+        let mut next = |below: u64| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) % below
+        };
+        let template = parse(Lang::named("rust"), "fn x() {}\n").syms[0].clone();
+        let holder = |n: u64| {
+            (n > 0).then_some(Holder {
+                kind: n as u16,
+                start: 0,
+                end: 0,
+                joined: false,
+                block: (0, 0),
+            })
+        };
+        for _ in 0..2000 {
+            let syms: Vec<Sym> = (0..next(7))
+                .map(|i| {
+                    let mut s = template.clone();
+                    s.name = format!("{i}");
+                    s.holder = holder(next(3));
+                    s
+                })
+                .collect();
+            let held: BTreeSet<String> = (0..syms.len())
+                .filter(|_| next(2) == 0)
+                .map(|i| i.to_string())
+                .collect();
+            let anchor = |s: &'_ Sym| held.contains(&s.name);
+            let name = |s: Option<&Sym>| s.map(|s| s.name.clone());
+            let near = neighbours(&syms, |s| {
+                let found = syms.iter().find(|x| x.name == s.name);
+                found.filter(|_| anchor(s))
+            });
+            for (i, s) in syms.iter().enumerate() {
+                let beside = |x: &&Sym| x.holder == s.holder;
+                let n = near[i];
+                assert_eq!(name(n.before), name(syms[..i].iter().rev().find(beside)));
+                assert_eq!(name(n.after), name(syms[i + 1..].iter().find(beside)));
+                let prev = syms[..i].iter().rev().filter(beside).find(|x| anchor(x));
+                assert_eq!(name(n.prev), name(prev));
+                let next = syms[i..].iter().filter(beside).find(|x| anchor(x));
+                assert_eq!(name(n.next), name(next));
+            }
+        }
+    }
 
     const CLASS: &str = "class A:\n    x = 1\n\n    def a(self):\n        return 1\n\n    def b(self):\n        return 2\n\n    def c(self):\n        return 3\n";
 

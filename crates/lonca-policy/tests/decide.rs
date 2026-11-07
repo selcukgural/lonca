@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use lonca_policy::chain::{Chain, Submission, replay_checked};
 use lonca_policy::config::{
-    CVal, CedarOutcome, DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle, Profile, UnparsedFiles,
-    Verification,
+    CVal, CedarOutcome, DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle, Profile, Quota,
+    UnparsedFiles, Verification,
 };
-use lonca_policy::decide::{Ctx, decide, evidence_problems};
+use lonca_policy::decide::{Ctx, decide, evidence_problems, quota_problems};
 use lonca_policy::human::intent_bytes;
 use lonca_policy::state::{ChangeStatus, Provenance, Renamed, State};
 
@@ -6206,4 +6206,228 @@ fn a_change_alone_says_a_session_was_used() {
     h.chain.state.sessions.insert("s2".into(), s);
     let d = h.human("ayse", isolate("s2"));
     assert!(denied_with(&d, "session_used"), "{d:?}");
+}
+
+// ------------------------------------------------------ verification quota
+
+const DAY: i64 = 86_400_000;
+
+fn with_quota(session: u64, day: u64) -> H {
+    H::with_policy(quota_policy(DEFAULT_CONFIG, session, day))
+}
+
+fn quota_policy(config: &str, session: u64, day: u64) -> PolicyBundle {
+    let config = config
+        .replace(
+            "session_seconds = 0",
+            &format!("session_seconds = {session}"),
+        )
+        .replace("day_seconds = 0", &format!("day_seconds = {day}"));
+    PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap()
+}
+
+/// A check that took `ms`, as the verifier writes it.
+fn took(ms: &str) -> Attestation {
+    let mut a = pass(CheckKind::Tests);
+    a.details.insert("duration_ms".into(), ms.into());
+    a
+}
+
+/// `session` (observed) leases `symbol`, writes its file and proposes an
+/// edit of it.
+fn queue_edit(h: &mut H, session: &str, symbol: &str) -> (ChangeId, Decision) {
+    lease_and_write(h, session, symbol);
+    let change = ChangeId::random();
+    (change, h.propose(session, change, edit(symbol)))
+}
+
+fn lease_and_write(h: &mut H, session: &str, symbol: &str) {
+    let set: String = symbol.chars().filter(char::is_ascii_alphanumeric).collect();
+    let d = h.lease(session, &set, &[(symbol, LeaseKind::Edit)]);
+    assert!(d.is_allow(), "{d:?}");
+    h.wrote(session, symbol.split('#').next().unwrap());
+}
+
+/// The head of the queue, integrated as `tip` with `evidence`.
+fn verified(h: &mut H, change: ChangeId, tip: char, evidence: Vec<Attestation>) -> Decision {
+    let trunk_before = h.chain.state.trunk.clone().unwrap();
+    let op = Op::ChangeIntegrate {
+        change,
+        trunk_before,
+        merged: Some(gid(tip)),
+        conflicts: vec![],
+    };
+    h.daemon(op, evidence)
+}
+
+fn refused_for(d: &Decision, quota: &str) {
+    assert_eq!(d.outcome, Outcome::Deny, "{d:?}");
+    assert_eq!(d.reasons, [format!("verification_quota:{quota}")], "{d:?}");
+}
+
+#[test]
+fn a_session_past_its_verification_quota_proposes_nothing_more() {
+    let mut h = with_quota(2, 0);
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let (c1, d) = queue_edit(&mut h, "a", "src/a.rs#f");
+    assert!(d.is_allow(), "{d:?}");
+    assert!(verified(&mut h, c1, 'e', vec![took("1500"), took("499")]).is_allow());
+    assert_eq!(h.chain.state.session_spent("a"), 1999);
+    // A millisecond under the quota is under it.
+    let (c2, d) = queue_edit(&mut h, "a", "src/a.rs#g");
+    assert!(d.is_allow(), "{d:?}");
+    let (c3, d) = queue_edit(&mut h, "b", "src/b.rs#f");
+    assert!(d.is_allow(), "{d:?}");
+    assert!(verified(&mut h, c2, 'f', vec![took("1")]).is_allow());
+    let (_, d) = queue_edit(&mut h, "a", "src/a.rs#h");
+    refused_for(&d, "session");
+    // Every session pays its own.
+    assert!(verified(&mut h, c3, '1', vec![took("1999")]).is_allow());
+    let (_, d) = queue_edit(&mut h, "b", "src/b.rs#g");
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(h.chain.state.day_spent(h.now), 3999);
+    h.assert_replay();
+}
+
+#[test]
+fn what_is_queued_past_the_quota_is_rejected() {
+    let mut h = with_quota(1, 0);
+    h.start_observed("a", &["src/**"]);
+    let (c1, _) = queue_edit(&mut h, "a", "src/a.rs#f");
+    let (c2, d) = queue_edit(&mut h, "a", "src/a.rs#g");
+    assert!(d.is_allow(), "{d:?}");
+    assert!(verified(&mut h, c1, 'e', vec![took("1000")]).is_allow());
+    // Even with a pass: a run past the quota stands for nothing.
+    let d = verified(&mut h, c2, 'f', vec![pass(CheckKind::Tests)]);
+    refused_for(&d, "session");
+    let s = &h.chain.state;
+    let reasons = vec!["verification_quota:session".to_string()];
+    assert_eq!(s.changes[&c2].status, ChangeStatus::Rejected { reasons });
+    assert!(s.queue.is_empty());
+    h.assert_replay();
+}
+
+#[test]
+fn a_run_costs_what_it_took_failed_or_not_and_a_cached_one_nothing() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    let (c1, _) = queue_edit(&mut h, "a", "src/a.rs#f");
+    let failed = Attestation {
+        result: CheckResult::Fail,
+        ..took("700")
+    };
+    let mut cached = took("5000");
+    cached.details.insert("reused".into(), "true".into());
+    let unread = [took("soon"), took("-4"), pass(CheckKind::Build)];
+    let mut evidence = vec![failed, cached];
+    evidence.extend(unread);
+    let d = verified(&mut h, c1, 'e', evidence);
+    assert!(denied_with(&d, "verification_failed:tests"), "{d:?}");
+    assert_eq!(h.chain.state.session_spent("a"), 700);
+    assert_eq!(h.chain.state.day_spent(h.now), 700);
+    // No quota by default, however long it takes.
+    let (c2, _) = queue_edit(&mut h, "a", "src/a.rs#g");
+    let huge = took(&u64::MAX.to_string());
+    assert!(verified(&mut h, c2, 'f', vec![huge.clone(), huge]).is_allow());
+    assert_eq!(h.chain.state.session_spent("a"), u64::MAX);
+    let (_, d) = queue_edit(&mut h, "a", "src/a.rs#h");
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn the_day_quota_is_the_repositorys_and_starts_over_at_midnight() {
+    let midnight = (T0 / DAY + 1) * DAY;
+    let mut h = with_quota(0, 3);
+    h.now = midnight - 30 * MIN;
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let (c1, _) = queue_edit(&mut h, "a", "src/a.rs#f");
+    let (c2, d) = queue_edit(&mut h, "b", "src/b.rs#f");
+    assert!(d.is_allow(), "{d:?}");
+    assert!(verified(&mut h, c1, 'e', vec![took("3000")]).is_allow());
+    assert_eq!(h.chain.state.session_spent("b"), 0);
+    // `b` used nothing, but the day is spent.
+    refused_for(&verified(&mut h, c2, 'f', vec![]), "day");
+    let human = Actor::Human {
+        name: "ayse".into(),
+    };
+    let quota = Quota {
+        session_seconds: 1,
+        day_seconds: 3,
+    };
+    let s = &h.chain.state;
+    let agent = |session: &str| Actor::Agent {
+        name: "bot".into(),
+        session: session.into(),
+    };
+    let day = vec!["verification_quota:day".to_string()];
+    let both = vec!["verification_quota:session".to_string(), day[0].clone()];
+    assert_eq!(quota_problems(s, &human, h.now, &quota), day);
+    assert_eq!(quota_problems(s, &agent("b"), h.now, &quota), day);
+    assert_eq!(quota_problems(s, &agent("a"), h.now, &quota), both);
+    assert_eq!(quota_problems(s, &agent("a"), midnight, &quota), &both[..1]);
+    h.now = midnight - 5 * MIN;
+    lease_and_write(&mut h, "b", "src/b.rs#g");
+    // The entry takes the next millisecond: the last of the day.
+    h.now = midnight - 2;
+    refused_for(
+        &h.propose("b", ChangeId::random(), edit("src/b.rs#g")),
+        "day",
+    );
+    let d = h.propose("b", ChangeId::random(), edit("src/b.rs#g"));
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(h.chain.state.day_spent(h.now), 0);
+    assert_eq!(h.chain.state.day_spent(midnight - 1), 3000);
+    h.assert_replay();
+}
+
+#[test]
+fn sessions_made_from_or_continuing_a_session_pay_with_it() {
+    let mut h = with_quota(2, 0);
+    h.start_observed("a", &["src/**"]);
+    let attenuate = Op::CapAttenuate {
+        parent: "a".into(),
+        child: "kid".into(),
+        agent: "bot".into(),
+        scope: h.chain.state.sessions["a"].scope.clone(),
+        expires_ms: h.now + 10 * MIN,
+        leases: vec![],
+    };
+    assert!(h.agent("a", attenuate).is_allow());
+    let (c1, d) = queue_edit(&mut h, "kid", "src/a.rs#f");
+    assert!(d.is_allow(), "{d:?}");
+    assert!(verified(&mut h, c1, 'e', vec![took("2000")]).is_allow());
+    let s = &h.chain.state;
+    assert_eq!((s.payer("kid"), s.payer("a")), ("a", "a"));
+    assert_eq!(s.session_spent("a"), 2000);
+    let (_, d) = queue_edit(&mut h, "a", "src/a.rs#g");
+    refused_for(&d, "session");
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+    let (_, d) = queue_edit(&mut h, "b", "src/a.rs#h");
+    refused_for(&d, "session");
+    assert!(h.continue_as("c", "b", &["src/**"], false).is_allow());
+    assert_eq!(h.chain.state.payer("c"), "a");
+    h.assert_replay();
+}
+
+#[test]
+fn a_batch_is_one_run_and_its_changes_share_it() {
+    let config = DEFAULT_CONFIG.replace("batch_size = 1", "batch_size = 3");
+    let mut h = H::with_policy(quota_policy(&config, 1, 0));
+    let [a, b, c] = three_queued(&mut h);
+    let (d, _) = queue_edit(&mut h, "a", "src/a.rs#g");
+    let (e, _) = queue_edit(&mut h, "b", "src/b.rs#g");
+    let merged = [(a, gid('e')), (b, gid('f')), (c, gid('1'))];
+    assert!(batch(&mut h, &merged, vec![took("3002")]).is_allow());
+    let s = &h.chain.state;
+    let paid: Vec<u64> = ["a", "b", "c"].map(|x| s.session_spent(x)).into();
+    assert_eq!(paid, [1000; 3]);
+    assert_eq!(s.day_spent(h.now), 3002);
+    // One change past the quota refuses the batch, and nothing moves.
+    let d2 = batch(&mut h, &[(d, gid('2')), (e, gid('3'))], vec![]);
+    refused_for(&d2, "session");
+    assert_eq!(h.chain.state.queue, [d, e]);
+    h.assert_replay();
 }

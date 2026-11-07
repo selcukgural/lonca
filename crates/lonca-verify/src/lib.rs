@@ -165,6 +165,7 @@ impl Verifier {
                 ));
                 continue;
             }
+            let started = Instant::now();
             let mut attempts = 0;
             let (result, details, log) = loop {
                 attempts += 1;
@@ -175,6 +176,8 @@ impl Verifier {
                 }
             };
             let mut details = details;
+            let took = started.elapsed().as_millis().to_string();
+            details.insert("duration_ms".into(), took);
             details.insert("attempts".into(), attempts.to_string());
             details.insert("sandbox".into(), self.sandbox.name().into());
             let log_id = store.write_blob(log.as_bytes())?;
@@ -276,7 +279,6 @@ impl Verifier {
             if passed.is_empty() { "" } else { " " },
             passed.join(" ")
         );
-        let started = Instant::now();
         let mut details = BTreeMap::new();
         let running = match process::start(command, cfg) {
             Ok(r) => r,
@@ -289,10 +291,6 @@ impl Verifier {
         let log = format!("{header}{}", String::from_utf8_lossy(&ended.output));
         let left = ended.left.is_some();
         details.extend(ended.left);
-        details.insert(
-            "duration_ms".into(),
-            started.elapsed().as_millis().to_string(),
-        );
         let result = match ended.status {
             None => {
                 details.insert("error".into(), "timeout".into());
@@ -521,6 +519,20 @@ mod tests {
         let r = v.run(&store, &files, &tree, &c).unwrap();
         assert_eq!(r[0].result, CheckResult::Error);
         assert_eq!(r[0].details["error"], "timeout");
+    }
+
+    /// What a check took is every attempt's time, so a quota sees retries.
+    #[test]
+    fn duration_is_every_attempt() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let mut c = cfg(None, Some("sleep 0.3; exit 1"));
+        c.retries = 2;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Fail);
+        assert_eq!(r[0].details["attempts"], "3");
+        let ms: u64 = r[0].details["duration_ms"].parse().unwrap();
+        assert!((900..60_000).contains(&ms), "{ms}");
     }
 
     fn log_of(store: &Store, a: &Attestation) -> String {

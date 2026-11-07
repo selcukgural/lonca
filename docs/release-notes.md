@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### A quota on verification
+
+`[quota] session_seconds` and `day_seconds` cap the time verification may take for a session
+(with the sessions made from it or continuing it) and for the repository in a UTC day. Past
+either, a proposal is denied with `verification_quota:session` or `:day`, and what the session
+queued before is rejected without a run. Both are 0, off, by default. An agent's
+`change.withdraw` of a change whose checks are running is refused with `verifying`. `duration_ms` in the
+evidence now covers every attempt of a retried check. `status` shows `verification_ms` per
+session and `verification_day_ms`. See `docs/guide/verification.md`, "Quota".
+
 ### Nothing of a verification outlives it
 
 A build or test command now runs as a session whose process group is killed when it ends,

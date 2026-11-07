@@ -10,11 +10,11 @@ use lonca_core::ChangeId;
 use lonca_core::GitId;
 use lonca_core::oplog::{
     FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS, FORMAT_SYMBOL_KEYS,
-    GENESIS_PREV, SignedOp,
+    GENESIS_PREV, OpEntry, SignedOp,
 };
 use lonca_core::ops::{
-    Actor, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind, ObservationLevel, Op,
-    Outcome, Scope,
+    Actor, Attestation, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind,
+    ObservationLevel, Op, Outcome, Scope,
 };
 use serde::Serialize;
 
@@ -215,6 +215,16 @@ pub struct Thread {
     pub closed: bool,
 }
 
+/// What verification has cost so far, from the evidence in the log.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Spent {
+    /// Milliseconds by paying session, see [`State::payer`].
+    pub sessions: BTreeMap<String, u64>,
+    /// The UTC day of the last charge, and milliseconds in it.
+    pub day: i64,
+    pub day_ms: u64,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct State {
     pub repo: String,
@@ -242,6 +252,7 @@ pub struct State {
     pub leases: BTreeMap<String, LeaseSet>,
     pub changes: BTreeMap<ChangeId, ChangeRecord>,
     pub queue: Vec<ChangeId>,
+    pub spent: Spent,
     pub pending: BTreeMap<u64, Pending>,
     pub nonces: BTreeSet<String>,
     pub frozen: Option<String>,
@@ -261,6 +272,15 @@ pub struct State {
 }
 
 /// Required approvals are carried in the decision as `approvals=N`.
+/// The milliseconds a check took. One the cache answered took none.
+fn cost_ms(a: &Attestation) -> u64 {
+    if a.details.contains_key("reused") {
+        return 0;
+    }
+    let ms = a.details.get("duration_ms").map(|d| d.parse());
+    ms.and_then(Result::ok).unwrap_or(0)
+}
+
 pub fn approvals_from(reasons: &[String]) -> u32 {
     reasons
         .iter()
@@ -271,6 +291,7 @@ pub fn approvals_from(reasons: &[String]) -> u32 {
 }
 
 pub const RELEASED: &str = "released";
+const DAY_MS: i64 = 86_400_000;
 /// On an integration's decision: `leases.release_on_integrate` is off, the
 /// items pinned to the change go back to the TTL of their set.
 /// A reason of a proposal: `affected_lease:<session>:<set>`, a set of another
@@ -322,6 +343,31 @@ impl State {
             cur = p;
         }
         cur
+    }
+
+    /// The session that pays for `id`'s verification: the first of what it
+    /// was made from and what it continues, so that neither starts over.
+    pub fn payer<'a>(&'a self, id: &'a str) -> &'a str {
+        let mut cur = id;
+        while let Some(s) = self.sessions.get(cur) {
+            match s.parent.as_deref().or(s.continued_from.as_deref()) {
+                Some(earlier) => cur = earlier,
+                None => break,
+            }
+        }
+        cur
+    }
+
+    /// Milliseconds of verification `session`'s payer has used.
+    pub fn session_spent(&self, session: &str) -> u64 {
+        let paid = self.spent.sessions.get(self.payer(session));
+        paid.copied().unwrap_or(0)
+    }
+
+    /// Milliseconds of verification used on the UTC day of `now_ms`.
+    pub fn day_spent(&self, now_ms: i64) -> u64 {
+        let today = now_ms.div_euclid(DAY_MS) == self.spent.day;
+        if today { self.spent.day_ms } else { 0 }
     }
 
     /// `session` and the sessions it continues, newest first.
@@ -768,6 +814,33 @@ impl State {
             .collect()
     }
 
+    /// Charges what an integration's checks took, whatever came of them: a
+    /// run that failed took its time too. A batch is one run, and each of
+    /// its changes pays its share.
+    fn charge(&mut self, e: &OpEntry) {
+        let changes: Vec<ChangeId> = match &e.op {
+            Op::ChangeIntegrate { change, .. } => vec![*change],
+            Op::ChangeIntegrateBatch { merged, .. } => merged.iter().map(|m| m.0).collect(),
+            _ => return,
+        };
+        let costs = e.evidence.iter().map(cost_ms);
+        let ms = costs.fold(0, u64::saturating_add);
+        let day = e.time_ms.div_euclid(DAY_MS);
+        if day != self.spent.day {
+            self.spent.day = day;
+            self.spent.day_ms = 0;
+        }
+        self.spent.day_ms = self.spent.day_ms.saturating_add(ms);
+        let share = ms.checked_div(changes.len() as u64).unwrap_or(0);
+        for change in &changes {
+            let owner = self.changes.get(change).and_then(|c| c.actor.session());
+            if let Some(payer) = owner.map(|s| self.payer(s).to_string()) {
+                let paid = self.spent.sessions.entry(payer).or_default();
+                *paid = paid.saturating_add(share);
+            }
+        }
+    }
+
     pub fn apply(&mut self, s: &SignedOp) {
         let e = &s.entry;
         self.next_seq = e.seq + 1;
@@ -782,6 +855,7 @@ impl State {
             self.prune_leases(e.time_ms);
         }
         self.settle_reservations(e.time_ms);
+        self.charge(e);
         // What the proposal is decided on: its session's leases at this
         // moment. A release by approval changes nothing, the pins are there.
         if pins

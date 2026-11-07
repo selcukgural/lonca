@@ -7,6 +7,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use tree_sitter::Node;
 
@@ -14,7 +15,7 @@ use lonca_core::ops::DEF;
 
 use crate::engine::{
     ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LEVELS,
-    ENGINE_SIGNATURES,
+    ENGINE_LIMITS, ENGINE_SIGNATURES,
 };
 use crate::lang::{
     CallTests, DefHow, DefRule, GroupHow, GroupRule, ImportCalls, Lang, Marked, Partial, Rules,
@@ -43,6 +44,12 @@ const TYPE_KINDS: &[&str] = &[
 /// of the symbol around it: names grow with the depth, and everything that
 /// walks symbols goes down with it. Code people write stays far above this.
 pub(crate) const MAX_LEVELS: usize = 32;
+
+/// How many bytes of names and signatures a file's symbols hold. A name holds
+/// the names around it, so that a long one with many members would cost their
+/// product, while a file's text is only their sum. What is left past this is
+/// text of what is around it. Files that are read stay far below this.
+pub(crate) const MAX_NAMES: usize = 16 << 20;
 
 /// Fields that hold what a declaration is set to, which hold across
 /// tree-sitter grammars as [`TYPE_KINDS`] do.
@@ -175,7 +182,7 @@ impl Sym {
 /// A part of the tree whose members are symbols of the level around it: a
 /// grouped declaration, a block, a namespace. Spans are only comparable
 /// within one side of a merge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Holder {
     pub kind: u16,
     pub start: usize,
@@ -308,15 +315,9 @@ fn keyed_names(engine: u32, lang: Lang, texts: &[&str]) -> Keyed {
         let before = keyed.len();
         for (tree, src) in &trees {
             let Some(tree) = tree else { continue };
-            let ex = Extractor::new(engine, lang, src, &keyed, Some(Census::default()));
-            ex.level(
-                tree.root_node(),
-                "",
-                &mut Vec::new(),
-                None,
-                &mut BTreeMap::new(),
-                None,
-            );
+            let root = tree.root_node();
+            let ex = Extractor::new(engine, lang, src, root, &keyed, Some(Census::default()));
+            ex.level(root, "", &mut Vec::new(), None, &mut BTreeMap::new(), None);
             let census = ex.census.map(RefCell::into_inner).unwrap_or_default();
             let shared = census.into_iter().filter(|(_, keys)| keys.len() > 1);
             let found: Vec<String> = shared.map(|(name, _)| name).collect();
@@ -342,7 +343,7 @@ pub fn parse_keyed(engine: u32, lang: Lang, src: &str, keyed: &Keyed) -> Parsed 
         };
     };
     let root = tree.root_node();
-    let ex = Extractor::new(engine, lang, src, keyed, None);
+    let ex = Extractor::new(engine, lang, src, root, keyed, None);
     let mut imports = Vec::new();
     let mut syms = Vec::new();
     ex.level(
@@ -414,6 +415,48 @@ fn is_verbatim(kind: &str) -> bool {
 /// A span [`exact_text`] leaves out, and what stands there.
 type Mark<'a> = (usize, usize, &'a str);
 
+/// The `;` right behind each child of `parent`, by the child. A node finds its
+/// sibling by going through its parent, which is one step per sibling.
+fn closers<'t>(parent: Node<'t>) -> BTreeMap<usize, Node<'t>> {
+    let parts: Vec<Node> = parent.children(&mut parent.walk()).collect();
+    let closed = parts.windows(2).filter(|w| w[1].kind() == ";");
+    closed.map(|w| (w[0].id(), w[1])).collect()
+}
+
+/// The first of a list of marks around a span, which [`exact_text`] asks for
+/// every node: a walk through the list makes that as many steps as a file
+/// has nodes times symbols.
+struct Cuts<'c, 'a> {
+    cut: &'c [Mark<'a>],
+    /// Start of each mark in order of start, the furthest end up to it, and
+    /// its place in `cut`.
+    order: Vec<(usize, usize, usize)>,
+}
+
+impl<'c, 'a> Cuts<'c, 'a> {
+    fn new(cut: &'c [Mark<'a>]) -> Self {
+        let mut places: Vec<usize> = (0..cut.len()).collect();
+        places.sort_by_key(|&i| cut[i].0);
+        let mut reach = 0;
+        let order = places.into_iter().map(|i| {
+            reach = cut[i].1.max(reach);
+            (cut[i].0, reach, i)
+        });
+        Cuts {
+            cut,
+            order: order.collect(),
+        }
+    }
+
+    fn around(&self, start: usize, end: usize) -> Option<&'c Mark<'a>> {
+        let started = self.order.partition_point(|&(s, ..)| s <= start);
+        let near = self.order[..started].iter().rev();
+        let reaching = near.take_while(|&&(_, reach, _)| reach >= end);
+        let first = reaching.map(|&(.., i)| i).filter(|&i| self.cut[i].1 >= end);
+        first.min().map(|i| &self.cut[i])
+    }
+}
+
 /// Writes `n` without the parts inside `cut`: its tree, and the text of its
 /// tokens, noting in `spots` where each cut part stood. Reformatting leaves
 /// this as it was; whatever changes the program does not, because
@@ -430,6 +473,11 @@ fn exact_text(
     out: &mut String,
     spots: &mut Vec<Spot>,
 ) {
+    let cuts = Cuts::new(cut);
+    let mut held = BTreeMap::new();
+    for h in holders {
+        held.entry((h.start, h.end, h.kind)).or_insert(h);
+    }
     let mut stack = vec![Some(n)];
     while let Some(step) = stack.pop() {
         let Some(n) = step else {
@@ -437,9 +485,8 @@ fn exact_text(
             continue;
         };
         let (start, end) = (n.start_byte(), n.end_byte());
-        let same = |h: &&Holder| h.start == start && h.end == end && h.kind == n.kind_id();
-        let holder = holders.iter().find(same);
-        let cut_here = cut.iter().find(|&&(s, e, _)| s <= start && end <= e);
+        let holder = held.get(&(start, end, n.kind_id()));
+        let cut_here = cuts.around(start, end);
         if let (Some(&(.., name)), None) = (cut_here, holder) {
             if spots.last().is_none_or(|last| last.name != name) {
                 spots.push(Spot {
@@ -568,21 +615,30 @@ pub fn key_twice(merged: &Parsed, sides: [&Parsed; 3]) -> bool {
 pub fn rename_aligned(merged: &mut Parsed, pairs: &[Pair]) {
     let mut all = Vec::new();
     each_symbol(&merged.syms, &mut all);
-    let keyed = |s: &&&Sym| !s.container && pairs.iter().any(|p| p.stem == s.stem);
+    let stems: BTreeSet<&str> = pairs.iter().map(|p| p.stem.as_str()).collect();
+    let keyed = |s: &&&Sym| !s.container && stems.contains(s.stem.as_str());
     let mine: Vec<&Sym> = all.iter().filter(keyed).copied().collect();
-    let mut open: Vec<&Pair> = pairs.iter().collect();
-    open.sort_by_key(|p| p.at);
+    let mut sorted: Vec<&Pair> = pairs.iter().collect();
+    sorted.sort_by_key(|p| p.at);
+    // The pairs still to give, in that order: by name, and by name and text.
+    let mut open: BTreeMap<&str, BTreeSet<usize>> = BTreeMap::new();
+    let mut alike: BTreeMap<(&str, &str), BTreeSet<usize>> = BTreeMap::new();
+    for (i, p) in sorted.iter().enumerate() {
+        open.entry(&p.stem).or_default().insert(i);
+        alike.entry((&p.stem, &p.own)).or_default().insert(i);
+    }
     let mut names = BTreeMap::new();
     for s in &mine {
-        let same = |p: &&Pair| p.stem == s.stem && p.own == s.own;
-        if let Some(at) = open.iter().position(same) {
-            names.insert(s.name.clone(), open.remove(at).base.clone());
+        let same = alike.get_mut(&(s.stem.as_str(), s.own.as_str()));
+        if let Some(i) = same.and_then(BTreeSet::pop_first) {
+            open.entry(&sorted[i].stem).or_default().remove(&i);
+            names.insert(s.name.clone(), sorted[i].base.clone());
         }
     }
     for s in mine {
         if !names.contains_key(&s.name) {
-            let at = open.iter().position(|p| p.stem == s.stem);
-            let name = at.map_or(s.stem.clone(), |at| open.remove(at).base.clone());
+            let first = open.get_mut(s.stem.as_str()).and_then(BTreeSet::pop_first);
+            let name = first.map_or(s.stem.clone(), |i| sorted[i].base.clone());
             names.insert(s.name.clone(), name);
         }
     }
@@ -590,14 +646,24 @@ pub fn rename_aligned(merged: &mut Parsed, pairs: &[Pair]) {
 }
 
 fn rename(syms: &mut [Sym], spots: &mut [Spot], names: &BTreeMap<String, String>) {
+    // Which spots each name has now: one symbol's new name can be what
+    // another one is called until its turn comes.
+    let mut places: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, spot) in spots.iter().enumerate().filter(|_| !names.is_empty()) {
+        places.entry(spot.name.clone()).or_default().push(i);
+    }
     for s in syms {
         if let Some(name) = names.get(&s.name).filter(|_| !s.container) {
-            for spot in spots.iter_mut().filter(|at| at.name == s.name) {
-                spot.name = name.clone();
-            }
+            let moved = places.remove(&s.name).unwrap_or_default();
+            places.entry(name.clone()).or_default().extend(moved);
             s.name = name.clone();
         }
         rename(&mut s.children, &mut s.spots, names);
+    }
+    for (name, list) in places {
+        for i in list {
+            spots[i].name = name.clone();
+        }
     }
 }
 
@@ -715,22 +781,24 @@ fn closest<'s>(lost: Vec<&'s Sym>, gained: Vec<&'s Sym>) -> Vec<(&'s Sym, &'s Sy
 /// Code with the symbols around it left out, and the symbols around it.
 pub type Placed<'a> = (&'a str, &'a [Spot]);
 
-/// The code of `text` piece by piece, each with the `common` names in front
-/// of it. A name that only one side has does not cut a piece.
+/// The `common` names of `text` in their order, and its code piece by piece,
+/// each with how many of those names stand in front of it. A name that only
+/// one side has does not cut a piece.
 fn pieces<'t>(
     (text, spots): Placed<'t>,
     common: &BTreeSet<&str>,
-) -> Vec<(BTreeSet<&'t str>, &'t str)> {
+) -> (Vec<&'t str>, Vec<(usize, &'t str)>) {
     let mut out = Vec::new();
-    let (mut before, mut from) = (BTreeSet::new(), 0);
+    let mut names = Vec::new();
+    let mut from = 0;
     for s in spots.iter().filter(|s| common.contains(s.name.as_str())) {
-        out.push((before.clone(), &text[from..s.at]));
-        before.insert(s.name.as_str());
+        out.push((names.len(), &text[from..s.at]));
+        names.push(s.name.as_str());
         from = s.at;
     }
-    out.push((before, &text[from..]));
+    out.push((names.len(), &text[from..]));
     out.retain(|(_, code)| !code.is_empty());
-    out
+    (names, out)
 }
 
 /// The same code stands elsewhere among the symbols both sides have. Adding
@@ -741,7 +809,44 @@ pub(crate) fn shifted(a: Placed, b: Placed) -> bool {
         |p: Placed<'_>| -> BTreeSet<String> { p.1.iter().map(|s| s.name.clone()).collect() };
     let (na, nb) = (names(a), names(b));
     let common: BTreeSet<&str> = na.intersection(&nb).map(String::as_str).collect();
-    pieces(a, &common) != pieces(b, &common)
+    let ((names_a, pieces_a), (names_b, pieces_b)) = (pieces(a, &common), pieces(b, &common));
+    if pieces_a.len() != pieces_b.len() {
+        return true;
+    }
+    // Sets in front of each piece, kept up to date in place: the names that
+    // stand in front of it on one side only.
+    let (mut front_a, mut front_b) = (BTreeSet::new(), BTreeSet::new());
+    let mut one_side_only = BTreeSet::new();
+    let (mut seen_a, mut seen_b) = (0, 0);
+    for (&(until_a, code_a), &(until_b, code_b)) in pieces_a.iter().zip(&pieces_b) {
+        for name in &names_a[seen_a..until_a] {
+            step_front(name, &mut front_a, &front_b, &mut one_side_only);
+        }
+        for name in &names_b[seen_b..until_b] {
+            step_front(name, &mut front_b, &front_a, &mut one_side_only);
+        }
+        (seen_a, seen_b) = (until_a, until_b);
+        if code_a != code_b || !one_side_only.is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
+/// `name` joins the names in front of a piece on one side.
+fn step_front<'t>(
+    name: &'t str,
+    mine: &mut BTreeSet<&'t str>,
+    theirs: &BTreeSet<&'t str>,
+    one_side_only: &mut BTreeSet<&'t str>,
+) {
+    if mine.insert(name) {
+        if theirs.contains(name) {
+            one_side_only.remove(name);
+        } else {
+            one_side_only.insert(name);
+        }
+    }
 }
 
 /// The names both lists hold that do not keep their place among them.
@@ -881,15 +986,101 @@ fn is_one_of(kinds: &[String], kind: &str) -> bool {
 /// that has none.
 type Census = BTreeMap<String, BTreeSet<Option<String>>>;
 
+/// A namespace of a file: where it stands, what it is called and which one
+/// is around it.
+struct Namespace<'s> {
+    span: (usize, usize),
+    name: &'s str,
+    outer: Option<usize>,
+}
+
+/// The namespaces of a file, read once: a node finds its parent by going down
+/// from the root, one step per sibling on the way.
+struct Namespaces<'s> {
+    all: Vec<Namespace<'s>>,
+    /// Each place where the innermost namespace changes, and to which.
+    turns: Vec<(usize, Option<usize>)>,
+    /// What [`Namespaces::around`] says inside each of them.
+    written: RefCell<BTreeMap<usize, Rc<str>>>,
+}
+
+impl<'s> Namespaces<'s> {
+    fn of(root: Node, src: &'s str) -> Self {
+        let mut all: Vec<Namespace> = Vec::new();
+        let mut turns = Vec::new();
+        let mut open: Vec<usize> = Vec::new();
+        // As [`comments_in`], where `None` leaves a namespace.
+        let mut stack = vec![Some(root)];
+        while let Some(step) = stack.pop() {
+            let Some(n) = step else {
+                let left = open.pop().map(|i| all[i].span.1);
+                turns.extend(left.map(|end| (end, open.last().copied())));
+                continue;
+            };
+            if n.kind().ends_with("namespace_declaration") {
+                let name = n.child_by_field_name("name");
+                turns.push((n.start_byte(), Some(all.len())));
+                all.push(Namespace {
+                    span: (n.start_byte(), n.end_byte()),
+                    name: name.map_or("", |c| &src[c.start_byte()..c.end_byte()]),
+                    outer: open.last().copied(),
+                });
+                open.push(all.len() - 1);
+                stack.push(None);
+            }
+            let parts: Vec<Node> = n.children(&mut n.walk()).collect();
+            stack.extend(parts.into_iter().rev().map(Some));
+        }
+        Namespaces {
+            all,
+            turns,
+            written: RefCell::default(),
+        }
+    }
+
+    /// The names of the namespaces `n` stands in, from the inside out.
+    fn around(&self, n: Node) -> Rc<str> {
+        let (start, end) = (n.start_byte(), n.end_byte());
+        let passed = self.turns.partition_point(|t| t.0 <= start);
+        let mut at = passed.checked_sub(1).and_then(|i| self.turns[i].1);
+        // A namespace does not stand in itself.
+        while let Some(i) = at {
+            let (from, to) = self.all[i].span;
+            if from <= start && end <= to && (from, to) != (start, end) {
+                break;
+            }
+            at = self.all[i].outer;
+        }
+        let Some(inner) = at else {
+            return Rc::from("");
+        };
+        let mut written = self.written.borrow_mut();
+        let text = written.entry(inner).or_insert_with(|| {
+            let mut text = String::new();
+            let mut at = Some(inner);
+            while let Some(i) = at {
+                text.push_str(self.all[i].name);
+                text.push('.');
+                at = self.all[i].outer;
+            }
+            Rc::from(text)
+        });
+        text.clone()
+    }
+}
+
 struct Extractor<'s> {
     engine: u32,
     rules: &'static Rules,
     src: &'s str,
     /// Where each C# type name was first seen: its namespaces.
-    scopes: RefCell<BTreeMap<String, String>>,
+    scopes: RefCell<BTreeMap<String, Rc<str>>>,
+    namespaces: Namespaces<'s>,
     groups_seen: Cell<u32>,
     /// How many levels are being read.
     levels: Cell<usize>,
+    /// What the names and signatures read so far hold, against [`MAX_NAMES`].
+    spent: Cell<usize>,
     keyed: &'s Keyed,
     /// Set for a round that only counts names.
     census: Option<RefCell<Census>>,
@@ -900,6 +1091,7 @@ impl<'s> Extractor<'s> {
         engine: u32,
         lang: Lang,
         src: &'s str,
+        root: Node,
         keyed: &'s Keyed,
         census: Option<Census>,
     ) -> Self {
@@ -908,8 +1100,10 @@ impl<'s> Extractor<'s> {
             rules: lang.rules(),
             src,
             scopes: RefCell::default(),
+            namespaces: Namespaces::of(root, src),
             groups_seen: Cell::new(0),
             levels: Cell::new(0),
+            spent: Cell::new(0),
             keyed,
             census: census.map(RefCell::new),
         }
@@ -918,6 +1112,15 @@ impl<'s> Extractor<'s> {
     /// Whether what stands inside the deepest of `levels` is read.
     fn reads_below(&self, levels: usize) -> bool {
         self.engine < ENGINE_LEVELS || levels < MAX_LEVELS
+    }
+
+    fn spend(&self, bytes: usize) {
+        self.spent.set(self.spent.get().saturating_add(bytes));
+    }
+
+    /// Whether what is left of the file stays text.
+    fn spent_all(&self) -> bool {
+        self.engine >= ENGINE_LIMITS && self.spent.get() > MAX_NAMES
     }
 
     fn text(&self, n: Node) -> &'s str {
@@ -1045,15 +1248,7 @@ impl<'s> Extractor<'s> {
     /// `n` stands in the namespaces where `name` was first seen. Namespaces
     /// are no part of a name, and one can be written twice.
     fn same_scope(&self, name: &str, n: Node) -> bool {
-        let mut scope = String::new();
-        let mut at = n.parent();
-        while let Some(p) = at {
-            if p.kind().ends_with("namespace_declaration") {
-                scope.push_str(&self.field_text(p, "name").unwrap_or_default());
-                scope.push('.');
-            }
-            at = p.parent();
-        }
+        let scope = self.namespaces.around(n);
         let mut scopes = self.scopes.borrow_mut();
         let first = scopes
             .entry(name.to_string())
@@ -1403,7 +1598,11 @@ impl<'s> Extractor<'s> {
         let mut before: Option<Node> = None;
         let children: Vec<Node> = parent.named_children(&mut parent.walk()).collect();
         let trailing = self.trailing(parent);
+        let closers = closers(parent);
         for &child in &children {
+            if self.spent_all() {
+                break;
+            }
             if before.is_some_and(|b| self.stands_apart(b, child)) {
                 pending = firm;
             }
@@ -1456,6 +1655,7 @@ impl<'s> Extractor<'s> {
             } else {
                 format!("{prefix}.{}", def.name)
             };
+            self.spend(base.len());
             let key = (self.engine >= ENGINE_KEYS)
                 .then(|| self.key(def_node, child, &def))
                 .flatten();
@@ -1509,19 +1709,19 @@ impl<'s> Extractor<'s> {
             };
             // The `;` behind a member of a TypeScript class is a sibling, and
             // it comes and goes with that member.
-            let closer = child.next_sibling().filter(|c| c.kind() == ";");
+            let closer = closers.get(&child.id());
             let end = closer
                 .filter(|_| self.engine >= ENGINE_KEYS)
                 .map_or(child.end_byte(), |c| c.end_byte());
             let around = match holder {
-                Some(h) if h.joined => (
-                    children
-                        .iter()
-                        .rev()
-                        .map(|c| c.end_byte())
-                        .find(|e| *e <= start),
-                    children.iter().map(|c| c.start_byte()).find(|s| *s >= end),
-                ),
+                Some(h) if h.joined => {
+                    let front = children.partition_point(|c| c.end_byte() <= start);
+                    let behind = children.partition_point(|c| c.start_byte() < end);
+                    (
+                        front.checked_sub(1).map(|i| children[i].end_byte()),
+                        children.get(behind).map(|c| c.start_byte()),
+                    )
+                }
                 _ => (None, None),
             };
             let cut: Vec<(usize, usize)> = children_syms.iter().map(|s| (s.start, s.end)).collect();
@@ -1549,6 +1749,7 @@ impl<'s> Extractor<'s> {
             let front = holder.filter(|h| h.joined && self.engine >= ENGINE_SIGNATURES);
             let front = front.map_or(String::new(), |h| self.list_front(&h, &children, child));
             let signature = self.signature(&def, def_node, is_type, &front);
+            self.spend(signature.as_ref().map_or(0, String::len));
             let attached = &self.src[start..def.header_start.max(start)];
             let (is_test, skipped) = self.test_markers(&def, def_node, &qualified, attached);
             out.push(Sym {
@@ -1661,6 +1862,9 @@ impl<'s> Extractor<'s> {
         let mut path: Vec<String> = Vec::new();
         let mut stack = vec![Some((root, false))];
         while let Some(step) = stack.pop() {
+            if self.spent_all() {
+                break;
+            }
             let Some((n, skipped)) = step else {
                 path.pop();
                 continue;
@@ -1692,8 +1896,10 @@ impl<'s> Extractor<'s> {
                         "it" | "test" => {
                             let mut name = path.clone();
                             name.push(title);
+                            let name = name.join(" > ");
+                            self.spend(name.len());
                             out.push(JsTest {
-                                name: name.join(" > "),
+                                name,
                                 text: normalize(self.text(n)),
                                 skipped: skipped || skip_here,
                             });
@@ -1743,6 +1949,329 @@ fn find_descendant<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
 mod tests {
     use super::*;
     use crate::engine::ENGINE_KEYS;
+
+    /// A number generator for tests that hold a look-up to the plain walk it
+    /// stands in for: the same cases on every run.
+    fn stepper(seed: u64) -> impl FnMut(usize) -> usize {
+        let mut x = seed;
+        move |below| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((x >> 33) as usize) % below
+        }
+    }
+
+    #[test]
+    fn cuts_find_what_a_walk_through_the_marks_finds() {
+        let mut next = stepper(1);
+        for round in 0..400 {
+            let list: Vec<Mark> = (0..next(7))
+                .map(|i| {
+                    let (a, b) = (next(12), next(12));
+                    (a.min(b), a.max(b), ["a", "b", "c", "d", "e", "f"][i])
+                })
+                .collect();
+            let cuts = Cuts::new(&list);
+            for start in 0..12 {
+                for end in start..12 {
+                    let walk = list.iter().find(|&&(s, e, _)| s <= start && end <= e);
+                    assert_eq!(
+                        cuts.around(start, end),
+                        walk,
+                        "{round}: {list:?} {start}..{end}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// What [`shifted`] asks, with the names in front of every piece written out.
+    fn shifted_by_sets(a: Placed, b: Placed) -> bool {
+        type Piece<'t> = (BTreeSet<&'t str>, &'t str);
+        fn cut<'t>((text, spots): Placed<'t>, common: &BTreeSet<&str>) -> Vec<Piece<'t>> {
+            let mut out = Vec::new();
+            let (mut before, mut from) = (BTreeSet::new(), 0);
+            for s in spots.iter().filter(|s| common.contains(s.name.as_str())) {
+                out.push((before.clone(), &text[from..s.at]));
+                before.insert(s.name.as_str());
+                from = s.at;
+            }
+            out.push((before, &text[from..]));
+            out.retain(|(_, code)| !code.is_empty());
+            out
+        }
+        let names =
+            |p: Placed<'_>| -> BTreeSet<String> { p.1.iter().map(|s| s.name.clone()).collect() };
+        let (na, nb) = (names(a), names(b));
+        let common: BTreeSet<&str> = na.intersection(&nb).map(String::as_str).collect();
+        cut(a, &common) != cut(b, &common)
+    }
+
+    #[test]
+    fn places_compare_as_the_sets_in_front_of_each_piece_do() {
+        let mut next = stepper(2);
+        let side = |next: &mut dyn FnMut(usize) -> usize| {
+            let text: String = (0..next(7)).map(|_| ['x', 'y'][next(2)]).collect();
+            let mut at: Vec<usize> = (0..next(6)).map(|_| next(text.len() + 1)).collect();
+            at.sort();
+            let spot = |at| Spot {
+                at,
+                name: ["a", "b", "c", "d"][next(4)].to_string(),
+            };
+            (text, at.into_iter().map(spot).collect::<Vec<_>>())
+        };
+        let (mut same, mut apart) = (0, 0);
+        for _ in 0..4000 {
+            let (a, b) = (side(&mut next), side(&mut next));
+            let (a, b) = ((a.0.as_str(), &a.1[..]), (b.0.as_str(), &b.1[..]));
+            let want = shifted_by_sets(a, b);
+            assert_eq!(shifted(a, b), want, "{a:?} {b:?}");
+            *(if want { &mut apart } else { &mut same }) += 1;
+        }
+        assert!(same > 50 && apart > 50, "{same} {apart}");
+    }
+
+    #[test]
+    fn namespaces_are_what_the_parents_of_a_node_say() {
+        let src = "namespace A { namespace B.C { class X { } }\n namespace D { } class Y { } }\n\
+                   class Z { }\nnamespace E { class W { } }\nnamespace F;\nclass V { }\n";
+        let tree = Lang::named("csharp").parse(src).unwrap();
+        let root = tree.root_node();
+        let spaces = Namespaces::of(root, src);
+        let by_parents = |n: Node| {
+            let mut scope = String::new();
+            let mut at = n.parent();
+            while let Some(p) = at {
+                if p.kind().ends_with("namespace_declaration") {
+                    let name = p.child_by_field_name("name");
+                    scope.push_str(name.map_or("", |c| &src[c.start_byte()..c.end_byte()]));
+                    scope.push('.');
+                }
+                at = p.parent();
+            }
+            scope
+        };
+        let mut stack = vec![root];
+        let mut seen = BTreeSet::new();
+        while let Some(n) = stack.pop() {
+            let scope = by_parents(n);
+            assert_eq!(&*spaces.around(n), scope, "{}", spaces_of(n, src));
+            seen.insert(scope);
+            stack.extend(n.children(&mut n.walk()));
+        }
+        assert!(seen.contains("B.C.A."), "{seen:?}");
+        assert!(seen.contains("D.A."), "{seen:?}");
+        assert!(seen.contains("A."), "{seen:?}");
+        assert!(seen.contains("F."), "{seen:?}");
+    }
+
+    fn spaces_of(n: Node, src: &str) -> String {
+        format!("{} {:?}", n.kind(), &src[n.start_byte()..n.end_byte()])
+    }
+
+    #[test]
+    fn a_name_comes_as_often_as_the_symbols_ask_for_it() {
+        // One symbol's new name is what the next one is called until its turn.
+        let mut next = stepper(3);
+        let parsed = parse(Lang::named("rust"), "fn x() {}\n");
+        let like = |name: &str| {
+            let mut s = parsed.syms[0].clone();
+            s.name = name.to_string();
+            s
+        };
+        let names = ["a", "b", "c", "d"];
+        for _ in 0..2000 {
+            let mut syms: Vec<Sym> = (0..next(4)).map(|_| like(names[next(4)])).collect();
+            let mut spots: Vec<Spot> = (0..next(5))
+                .map(|at| Spot {
+                    at,
+                    name: names[next(4)].to_string(),
+                })
+                .collect();
+            let map: BTreeMap<String, String> = (0..next(4))
+                .map(|_| (names[next(4)].to_string(), names[next(4)].to_string()))
+                .collect();
+            let (mut want_syms, mut want_spots) = (syms.clone(), spots.clone());
+            for s in &mut want_syms {
+                if let Some(name) = map.get(&s.name) {
+                    for spot in want_spots.iter_mut().filter(|at| at.name == s.name) {
+                        spot.name = name.clone();
+                    }
+                    s.name = name.clone();
+                }
+            }
+            rename(&mut syms, &mut spots, &map);
+            assert_eq!(spots, want_spots, "{map:?}");
+            assert_eq!(syms, want_syms, "{map:?}");
+        }
+    }
+
+    #[test]
+    fn a_container_keeps_its_name_and_its_spots_in_a_rename() {
+        let p = parse(
+            Lang::named("rust"),
+            "mod m {\n    fn a() {}\n}\nfn b() {}\n",
+        );
+        let mut syms = p.syms.clone();
+        let mut spots = vec![Spot {
+            at: 0,
+            name: "m".into(),
+        }];
+        let map: BTreeMap<String, String> = [("m", "n"), ("m.a", "m.c"), ("b", "d")]
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .into();
+        rename(&mut syms, &mut spots, &map);
+        assert_eq!(spots[0].name, "m");
+        assert_eq!(syms[0].name, "m");
+        assert_eq!(syms[0].children[0].name, "m.c");
+        assert_eq!(syms[1].name, "d");
+    }
+
+    fn pair(stem: &str, base: &str, own: &str, at: usize) -> Pair {
+        Pair {
+            side: format!("{stem}?"),
+            stem: stem.to_string(),
+            base: base.to_string(),
+            own: own.to_string(),
+            at,
+        }
+    }
+
+    /// `rename_aligned` as a walk through the open pairs.
+    fn aligned_by_walking(all: &[(&str, &str, &str)], pairs: &[Pair]) -> BTreeMap<String, String> {
+        let mine: Vec<_> = all
+            .iter()
+            .filter(|s| pairs.iter().any(|p| p.stem == s.1))
+            .collect();
+        let mut open: Vec<&Pair> = pairs.iter().collect();
+        open.sort_by_key(|p| p.at);
+        let mut names = BTreeMap::new();
+        for s in &mine {
+            if let Some(at) = open.iter().position(|p| p.stem == s.1 && p.own == s.2) {
+                names.insert(s.0.to_string(), open.remove(at).base.clone());
+            }
+        }
+        for s in mine {
+            if !names.contains_key(s.0) {
+                let at = open.iter().position(|p| p.stem == s.1);
+                let name = at.map_or(s.1.to_string(), |at| open.remove(at).base.clone());
+                names.insert(s.0.to_string(), name);
+            }
+        }
+        names
+    }
+
+    #[test]
+    fn aligned_names_go_as_they_do_in_a_walk_through_the_pairs() {
+        let parsed = parse(Lang::named("rust"), "fn x() {}\n");
+        let mut next = stepper(4);
+        let stems = ["f", "g", "h"];
+        let texts = ["1", "2"];
+        for _ in 0..3000 {
+            let all: Vec<(String, &str, &str)> = (0..next(5))
+                .map(|i| (format!("s{i}"), stems[next(3)], texts[next(2)]))
+                .collect();
+            let pairs: Vec<Pair> = (0..next(5))
+                .map(|i| pair(stems[next(3)], &format!("b{i}"), texts[next(2)], next(4)))
+                .collect();
+            let syms = all.iter().map(|(name, stem, own)| {
+                let mut s = parsed.syms[0].clone();
+                (s.name, s.stem, s.own) = (name.clone(), stem.to_string(), own.to_string());
+                s
+            });
+            let mut merged = parsed.clone();
+            merged.syms = syms.collect();
+            merged.spots.clear();
+            rename_aligned(&mut merged, &pairs);
+            let rows: Vec<(&str, &str, &str)> =
+                all.iter().map(|(n, s, o)| (n.as_str(), *s, *o)).collect();
+            let want = aligned_by_walking(&rows, &pairs);
+            for (s, (name, ..)) in merged.syms.iter().zip(&all) {
+                assert_eq!(
+                    s.name,
+                    *want.get(name).unwrap_or(name),
+                    "{rows:?} {pairs:?}"
+                );
+            }
+        }
+    }
+
+    /// What the names and signatures of a file hold, as `level` counts them.
+    fn spent_in(syms: &[Sym]) -> usize {
+        let own = |s: &Sym| s.name.len() + s.signature.as_ref().map_or(0, String::len);
+        syms.iter().map(|s| own(s) + spent_in(&s.children)).sum()
+    }
+
+    fn count(syms: &[Sym]) -> usize {
+        syms.iter().map(|s| 1 + count(&s.children)).sum()
+    }
+
+    #[test]
+    fn a_long_name_over_many_members_stops_at_the_limit() {
+        let lang = Lang::named("python");
+        let long = "C".repeat(1 << 20);
+        let members: String = (0..40)
+            .map(|i| format!("    def m{i}(s): pass\n"))
+            .collect();
+        let src = format!("class {long}:\n{members}");
+        let p = parse_at(ENGINE_LIMITS, lang, &src);
+        assert!(!p.has_error);
+        let read = count(&p.syms);
+        assert!((5..30).contains(&read), "{read}");
+        assert!(
+            spent_in(&p.syms) <= MAX_NAMES + (3 << 20),
+            "{}",
+            spent_in(&p.syms)
+        );
+        // What is left stays in the text of the class.
+        assert!(p.syms[0].own.contains("def m39(s)"));
+        assert!(!p.syms[0].own.contains("def m0(s)"));
+        let old = parse_at(ENGINE_LIMITS - 1, lang, &src);
+        assert_eq!(count(&old.syms), 41);
+    }
+
+    #[test]
+    fn the_limit_counts_signatures_too() {
+        let lang = Lang::named("javascript");
+        let long = "t".repeat(1 << 20);
+        let many: String = (0..40)
+            .map(|i| format!("function f{i}({long}) {{}}\n"))
+            .collect();
+        let p = parse(lang, &many);
+        assert!(!p.has_error);
+        assert!((5..30).contains(&count(&p.syms)), "{}", count(&p.syms));
+    }
+
+    #[test]
+    fn the_limit_stands_at_its_exact_size() {
+        let lang = Lang::named("rust");
+        let file = |long: usize| format!("fn {}(a: u8) {{}}\nfn b() {{}}\n", "x".repeat(long));
+        // A name, and a signature that holds it with what stands around it.
+        let around = parse(lang, &file(1)).syms[0]
+            .signature
+            .as_ref()
+            .unwrap()
+            .len()
+            - 1;
+        let long = (MAX_NAMES - around) / 2;
+        assert_eq!(long * 2 + around, MAX_NAMES, "the file must fit the limit");
+        assert_eq!(names(&parse(lang, &file(long))).len(), 2);
+        assert_eq!(names(&parse(lang, &file(long + 1))).len(), 1);
+    }
+
+    #[test]
+    fn a_long_title_over_many_tests_stops_at_the_limit() {
+        let lang = Lang::named("javascript");
+        let long = "t".repeat(1 << 20);
+        let its: String = (0..40)
+            .map(|i| format!("it('i{i}', () => {{}});\n"))
+            .collect();
+        let src = format!("describe('{long}', () => {{\n{its}}});\n");
+        let p = parse_at(ENGINE_LIMITS, lang, &src);
+        assert!((5..30).contains(&p.js_tests.len()), "{}", p.js_tests.len());
+        assert_eq!(parse_at(ENGINE_LIMITS - 1, lang, &src).js_tests.len(), 40);
+    }
 
     fn find<'a>(s: &'a [Sym], name: &str) -> &'a Sym {
         fn walk<'a>(s: &'a [Sym], name: &str) -> Option<&'a Sym> {

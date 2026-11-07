@@ -16,6 +16,7 @@ use lonca_core::canonical::sha256_hex;
 use lonca_core::ops::{Attestation, CheckKind, CheckResult};
 use lonca_core::{FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::config::Verification;
+use lonca_symbols::engine::{ENGINE_CURRENT, reads_size};
 use lonca_symbols::{Lang, parse};
 
 pub mod jail;
@@ -99,7 +100,7 @@ impl Verifier {
             }
             let bytes = store.read_blob(&e.blob)?;
             let ok = std::str::from_utf8(&bytes)
-                .map(|t| !parse(lang, t).has_error)
+                .map(|t| !reads_size(ENGINE_CURRENT, t.len()) || !parse(lang, t).has_error)
                 .unwrap_or(false);
             if !ok {
                 bad.push(p.clone());
@@ -461,6 +462,8 @@ pub fn materialize(store: &Store, files: &FileMap, dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use lonca_symbols::engine::MAX_READ;
+
     use super::*;
     use lonca_core::FileEntry;
 
@@ -877,6 +880,20 @@ mod tests {
             .unwrap();
         assert_eq!(a.result, CheckResult::Fail);
         assert_eq!(a.details["errors"], "b.rs");
+    }
+
+    /// A file past the limit goes by its lines, whatever a grammar would say.
+    #[test]
+    fn syntax_leaves_a_file_past_the_limit_to_its_lines() {
+        let fill = |len: usize| format!("fn bad( {{\n{}\n", "/".repeat(len - 11));
+        let (at, past) = (fill(MAX_READ), fill(MAX_READ + 1));
+        let (dir, store, files, tree) =
+            setup(&[("at.rs", at.as_str()), ("past.rs", past.as_str())]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let a = v.syntax(&store, &files, &["past.rs".into()], &tree);
+        assert_eq!(a.unwrap().result, CheckResult::Pass);
+        let a = v.syntax(&store, &files, &["at.rs".into()], &tree);
+        assert_eq!(a.unwrap().result, CheckResult::Fail);
     }
 
     /// A grammar that can not read a file says nothing about the file.

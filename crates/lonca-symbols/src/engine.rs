@@ -26,8 +26,9 @@ use lonca_core::{Error, Result};
 /// only a change that is an edit of lines, and merges lines by their own
 /// rules; version 10 reads Java, Kotlin, C, C++, Ruby, PHP and Swift; version
 /// 11 gives every declaration a signature and lists what mentions the names a
-/// change takes away; version 12 reads symbols down to a depth.
-pub const ENGINE_CURRENT: u32 = 12;
+/// change takes away; version 12 reads symbols down to a depth; version 13
+/// reads a file up to a size, and its names up to a total.
+pub const ENGINE_CURRENT: u32 = 13;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -79,8 +80,21 @@ pub const ENGINE_SIGNATURES: u32 = 11;
 /// leaves what stands deeper as text of what is around it.
 pub const ENGINE_LEVELS: u32 = 12;
 
+/// The first engine with [`MAX_READ`] and a limit on the text of names.
+pub const ENGINE_LIMITS: u32 = 13;
+
+/// The longest file read for symbols or sections. A longer one goes by its
+/// lines, as a file no grammar reads: what people write stays far below this,
+/// and what a merge costs grows with it.
+pub const MAX_READ: usize = 2 << 20;
+
+/// `engine` reads a file of `len` bytes for symbols or sections.
+pub fn reads_size(engine: u32, len: usize) -> bool {
+    engine < ENGINE_LIMITS || len <= MAX_READ
+}
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {
@@ -97,6 +111,13 @@ pub fn check(engine: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_is_read_up_to_its_size_from_the_engine_of_the_limit() {
+        assert!(reads_size(ENGINE_LIMITS, MAX_READ));
+        assert!(!reads_size(ENGINE_LIMITS, MAX_READ + 1));
+        assert!(reads_size(ENGINE_LIMITS - 1, MAX_READ + 1));
+    }
 
     #[test]
     fn current_is_known_and_others_are_refused() {

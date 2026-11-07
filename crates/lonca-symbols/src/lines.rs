@@ -9,6 +9,7 @@
 //! The diff library is part of the symbol engine: an update that changes
 //! what this produces is a new engine version.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use similar::{DiffTag, TextDiff};
@@ -89,7 +90,12 @@ fn applied(base: &[String], from: usize, to: usize, changes: &[&Change]) -> Stri
 fn pieces(b: &str, o: &str, t: &str) -> Vec<Piece> {
     let (base, ours) = changes(b, o);
     let (_, theirs) = changes(b, t);
-    let theirs: Vec<Change> = theirs.into_iter().filter(|c| !ours.contains(c)).collect();
+    let same = |c: &'_ Change| (c.at.start, c.at.end, c.text.clone());
+    let mine: BTreeSet<_> = ours.iter().map(same).collect();
+    let theirs: Vec<Change> = theirs
+        .into_iter()
+        .filter(|c| !mine.contains(&same(c)))
+        .collect();
     // Each change with its side and its reach, by where that starts.
     let mut all: Vec<(bool, &Change, Range<usize>)> = Vec::new();
     all.extend(ours.iter().map(|c| (true, c, reach(&base, c))));
@@ -175,6 +181,15 @@ mod tests {
     use super::*;
 
     const B: &str = "a\nb\nc\nd\ne\nf\ng\n";
+
+    #[test]
+    fn a_change_both_sides_made_counts_once_among_others() {
+        let o = "a\nX\nc\nd\nO\nf\ng\n";
+        let t = "a\nX\nc\nd\ne\nf\nT\n";
+        assert_eq!(merge(B, o, t).as_deref(), Some("a\nX\nc\nd\nO\nf\nT\n"));
+        let t = "a\nY\nc\nd\ne\nf\ng\n";
+        assert_eq!(merge(B, o, t), None);
+    }
 
     #[test]
     fn changes_apart_merge() {

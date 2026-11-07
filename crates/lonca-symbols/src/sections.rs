@@ -9,7 +9,7 @@
 //! `dependencies.serde`), so a lease on a section covers what is in it. A `.`
 //! or `#` inside a heading or a key becomes `-`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const PREAMBLE: &str = "<module>";
 /// The tail of a Markdown section that only grew: an addition, not an edit.
@@ -473,6 +473,50 @@ fn both_appended(base: &str, ours: &str, theirs: &str) -> Option<String> {
 
 type Named = (String, String);
 
+/// The first text of each name in `list`.
+fn first_of(list: &[Named]) -> BTreeMap<&str, &str> {
+    let mut out = BTreeMap::new();
+    for (name, text) in list {
+        out.entry(name.as_str()).or_insert(text.as_str());
+    }
+    out
+}
+
+/// The names of `ours` in order, with those of `theirs` that it does not have,
+/// each behind the name that stands in front of it there. As links: places in
+/// a list that grows would cost a walk through it for every name.
+fn names_of_both<'n>(ours: &'n [Named], theirs: &'n [Named]) -> Vec<&'n str> {
+    let mut names: Vec<&str> = ours.iter().map(|(n, _)| n.as_str()).collect();
+    let mut behind: Vec<Option<usize>> = (1..names.len()).map(Some).collect();
+    behind.extend(ours.first().map(|_| None));
+    let mut head = ours.first().map(|_| 0);
+    let mut first_at = BTreeMap::new();
+    for (i, name) in names.iter().enumerate() {
+        first_at.entry(*name).or_insert(i);
+    }
+    let mut last = None;
+    for (name, _) in theirs {
+        let name = name.as_str();
+        if !first_at.contains_key(name) {
+            let at = names.len();
+            names.push(name);
+            first_at.insert(name, at);
+            let link = last.and_then(|l| first_at.get(l).copied());
+            let slot = link.map_or(&mut head, |p| &mut behind[p]);
+            let next = slot.replace(at);
+            behind.push(next);
+        }
+        last = Some(name);
+    }
+    let mut out = Vec::with_capacity(names.len());
+    let mut at = head;
+    while let Some(i) = at {
+        out.push(names[i]);
+        at = behind[i];
+    }
+    out
+}
+
 /// Three-way merge of named parts. `Err` names the parts both sides changed.
 /// The result has ours' order; what only theirs added follows the part it
 /// followed there.
@@ -482,38 +526,29 @@ fn merge_named(
     theirs: &[Named],
     append: bool,
 ) -> Result<Vec<Named>, Vec<String>> {
-    let get = |list: &[Named], name: &str| {
-        let found = list.iter().find(|(n, _)| n == name);
-        found.map(|(_, t)| t.clone())
-    };
-    let mut names: Vec<String> = ours.iter().map(|(n, _)| n.clone()).collect();
-    for (i, (name, _)) in theirs.iter().enumerate() {
-        if names.contains(name) {
-            continue;
-        }
-        let before = theirs[..i].iter().rev();
-        let after = before.filter_map(|(n, _)| names.iter().position(|x| x == n));
-        let at = after.into_iter().next().map_or(0, |p| p + 1);
-        names.insert(at, name.clone());
-    }
+    let (in_base, in_ours, in_theirs) = (first_of(base), first_of(ours), first_of(theirs));
     let mut out = Vec::new();
     let mut conflicts = Vec::new();
-    for name in names {
-        let (b, o, t) = (get(base, &name), get(ours, &name), get(theirs, &name));
+    for name in names_of_both(ours, theirs) {
+        let (b, o, t) = (
+            in_base.get(name).copied(),
+            in_ours.get(name).copied(),
+            in_theirs.get(name).copied(),
+        );
         let merged = if o == t || b == t {
-            o
+            o.map(str::to_string)
         } else if b == o {
-            t
-        } else if let (true, Some(b), Some(o), Some(t)) = (append, &b, &o, &t)
+            t.map(str::to_string)
+        } else if let (true, Some(b), Some(o), Some(t)) = (append, b, o, t)
             && let Some(joined) = both_appended(b, o, t)
         {
             Some(joined)
         } else {
-            conflicts.push(name);
+            conflicts.push(name.to_string());
             continue;
         };
         if let Some(text) = merged {
-            out.push((name, text));
+            out.push((name.to_string(), text));
         }
     }
     conflicts.is_empty().then_some(out).ok_or(conflicts)
@@ -548,15 +583,12 @@ fn join(object: &JsonObject, members: Vec<Named>) -> String {
 /// Members of two objects, one level into the keys that hold many.
 fn merge_json(base: &str, ours: &str, theirs: &str) -> Option<Result<String, Vec<String>>> {
     let (b, o, t) = (json_object(base)?, json_object(ours)?, json_object(theirs)?);
-    let inner = |side: &JsonObject, key: &str| {
-        let member = side.members.iter().find(|(k, _)| k == key)?;
-        nested(key, &member.1)
-    };
+    let firsts = [&b, &o, &t].map(|side| first_of(&side.members));
+    let inner = |side: usize, key: &str| nested(key, firsts[side].get(key)?);
     // A member both sides changed may still merge by its own members.
     let mut replaced = (b.members.clone(), o.members.clone(), t.members.clone());
     for (key, _) in &o.members {
-        let (Some(ib), Some(io), Some(it)) = (inner(&b, key), inner(&o, key), inner(&t, key))
-        else {
+        let (Some(ib), Some(io), Some(it)) = (inner(0, key), inner(1, key), inner(2, key)) else {
             continue;
         };
         let merged = match merge_named(&ib.members, &io.members, &it.members, false) {
@@ -603,6 +635,61 @@ pub fn merge(format: Format, b: &str, o: &str, t: &str) -> Option<Result<String,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`names_of_both`] as a list that grows, for names with and without
+    /// repeats.
+    fn names_by_walking(ours: &[Named], theirs: &[Named]) -> Vec<String> {
+        let mut names: Vec<String> = ours.iter().map(|(n, _)| n.clone()).collect();
+        for (i, (name, _)) in theirs.iter().enumerate() {
+            if names.contains(name) {
+                continue;
+            }
+            let before = theirs[..i].iter().rev();
+            let after = before.filter_map(|(n, _)| names.iter().position(|x| x == n));
+            let at = after.into_iter().next().map_or(0, |p| p + 1);
+            names.insert(at, name.clone());
+        }
+        names
+    }
+
+    #[test]
+    fn names_of_both_stand_where_a_list_that_grows_puts_them() {
+        let mut x = 5u64;
+        let mut next = |below: u64| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (x >> 33) % below
+        };
+        for _ in 0..3000 {
+            let list = |next: &mut dyn FnMut(u64) -> u64| -> Vec<Named> {
+                let n = next(7);
+                (0..n)
+                    .map(|_| (format!("n{}", next(9)), String::new()))
+                    .collect()
+            };
+            let (ours, theirs) = (list(&mut next), list(&mut next));
+            assert_eq!(
+                names_of_both(&ours, &theirs),
+                names_by_walking(&ours, &theirs),
+                "{ours:?} {theirs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_first_of_a_repeated_name_is_the_one_merged() {
+        let named = |list: &[(&str, &str)]| -> Vec<Named> {
+            list.iter()
+                .map(|(n, t)| (n.to_string(), t.to_string()))
+                .collect()
+        };
+        let b = named(&[("a", "1"), ("a", "2")]);
+        let o = named(&[("a", "1"), ("a", "3")]);
+        let t = named(&[("a", "9"), ("a", "2")]);
+        let merged = merge_named(&b, &o, &t, false).unwrap();
+        assert_eq!(merged, named(&[("a", "9"), ("a", "9")]));
+    }
 
     #[test]
     fn the_files_with_sections_are_those_policy_reads_as_headings() {

@@ -28,6 +28,9 @@ use crate::{gitdir, wsfs};
 
 pub const META_DIR: &str = ".lonca";
 
+/// What `session start` leaves in `META_DIR`, and all that may stand there.
+const META_FILES: [&str; 3] = ["workspace.json", "session", ".gitignore"];
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Meta {
     pub repo: String,
@@ -169,13 +172,9 @@ impl Workspace {
         let status = call(client, "status", json!({}))?;
         let base: GitId = serde_json::from_value(status["trunk"].clone())?;
         let files = fetch(client, &base, None)?;
-        let mut manifest = BTreeMap::new();
-        for f in &files {
-            if f.mode == FileMode::Submodule {
-                continue;
-            }
+        let manifest = manifest_of(&files);
+        for f in files.iter().filter(|f| f.mode != FileMode::Submodule) {
             write_file(dir, f)?;
-            manifest.insert(f.path.clone(), (f.mode, f.blob.clone()));
         }
         let ws = Workspace {
             root: dir.to_path_buf(),
@@ -194,7 +193,7 @@ impl Workspace {
             },
         };
         ws.save()?;
-        wsfs::write(dir, &meta_file(".gitignore"), b"*\n", wsfs::REGULAR)?;
+        ws.write_gitignore()?;
         if git {
             gitdir::init(dir)?;
             let (blobs, time_ms) = (blobs_of(&files)?, ctx::now_ms());
@@ -203,6 +202,44 @@ impl Workspace {
             ws.exclude_from_git()?;
         }
         Ok(ws)
+    }
+
+    fn write_gitignore(&self) -> Result<()> {
+        let name = meta_file(".gitignore");
+        wsfs::write(&self.root, &name, b"*\n", wsfs::REGULAR)
+    }
+
+    /// Writes the whole workspace afresh from `files`, the base as the
+    /// daemon has it: a comparison sees no mode, attribute or date of a
+    /// file, nothing in `.git` and `.lonca`. Nothing stands here but the
+    /// new, so the token is gone too, and only after a decision to run may
+    /// this be called: it takes all there was. The generated files stay
+    /// listed, for the caller to write.
+    pub fn start_clean(&mut self, files: &[TreeFile]) -> Result<()> {
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            // Neither of these follows a link.
+            if entry.file_type()?.is_dir() {
+                fs::remove_dir_all(entry.path())?;
+            } else {
+                fs::remove_file(entry.path())?;
+            }
+        }
+        for f in files.iter().filter(|f| f.mode != FileMode::Submodule) {
+            write_file(&self.root, f)?;
+        }
+        self.meta.manifest = manifest_of(files);
+        self.meta.human = None;
+        self.meta.submitted = None;
+        self.meta.trunk_copies.clear();
+        self.meta.conflict_tag = None;
+        self.save()?;
+        self.write_gitignore()?;
+        if self.meta.git {
+            gitdir::init(&self.root)?;
+            self.write_git_base(files)?;
+        }
+        Ok(())
     }
 
     /// Moves `.git` to the base. `files` are those whose content it may
@@ -302,12 +339,22 @@ impl Workspace {
 
     /// What differs from `tree`, the files of the commit the workspace was
     /// made from as the daemon has them: everything, ignored files too, and
-    /// never by the manifest, a file that can be edited. `.lonca` and `.git`
-    /// are not looked at; files `harness setup` wrote are allowed.
+    /// never by the manifest, a file that can be edited. So does anything in
+    /// `.lonca` but its own files, and a `.git` where none belongs. What is
+    /// in those files and in a `.git` is not looked at, and files listed as
+    /// generated are allowed: [`Workspace::start_clean`] and the setup write
+    /// them over.
     pub fn differs_from(&self, tree: &BTreeMap<String, GitId>) -> Result<Vec<String>> {
         let mut found = Vec::new();
         every_file(&self.root, "", &mut found)?;
         let mut out = Vec::new();
+        if !self.meta.git && fs::symlink_metadata(self.root.join(".git")).is_ok() {
+            out.push(".git".to_string());
+        }
+        let mut meta = Vec::new();
+        every_file(&self.root, META_DIR, &mut meta)?;
+        let own = |p: &String| META_FILES.iter().any(|f| *p == meta_file(f));
+        out.extend(meta.into_iter().filter(|p| !own(p)));
         for rel in &found {
             if self.meta.generated.contains(rel) {
                 continue;
@@ -320,8 +367,8 @@ impl Workspace {
                 out.push(rel.clone());
             }
         }
-        let missing = tree.keys().filter(|p| !found.contains(p)).cloned();
-        out.extend(missing);
+        let found: BTreeSet<&String> = found.iter().collect();
+        out.extend(tree.keys().filter(|p| !found.contains(p)).cloned());
         Ok(out)
     }
 
@@ -586,6 +633,13 @@ impl SyncReport {
     }
 }
 
+fn manifest_of(files: &[TreeFile]) -> BTreeMap<String, (FileMode, GitId)> {
+    let tracked = files.iter().filter(|f| f.mode != FileMode::Submodule);
+    tracked
+        .map(|f| (f.path.clone(), (f.mode, f.blob.clone())))
+        .collect()
+}
+
 /// How many encoded bytes one `blobs` page may carry. `LONCA_FETCH_BUDGET`
 /// overrides it (tests); the default is the daemon's page budget for
 /// `MAX_LINE`.
@@ -721,11 +775,15 @@ fn in_dir(dir: &str, name: &str) -> String {
 /// The files under `dir` that are not ignored. Symlinks are skipped, and
 /// each path found is opened through `wsfs` after this: a directory swapped
 /// for a symlink meanwhile gets no further than its names.
-/// Every path under `dir` that is not a directory, links included.
+/// Every path under `dir` that is no directory, links included, and every
+/// directory with nothing in it.
 fn every_file(root: &Path, dir: &str, out: &mut Vec<String>) -> Result<()> {
     for entry in fs::read_dir(root.join(dir))? {
         let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
+        let name = entry.file_name();
+        let Some(name) = name.to_str().map(str::to_string) else {
+            bail!("{:?} in {dir:?}: Lonca paths are UTF-8", entry.file_name());
+        };
         if dir.is_empty() && (name == META_DIR || name == ".git") {
             continue;
         }
@@ -734,7 +792,12 @@ fn every_file(root: &Path, dir: &str, out: &mut Vec<String>) -> Result<()> {
             _ => format!("{dir}/{name}"),
         };
         if entry.file_type()?.is_dir() {
+            let before = out.len();
             every_file(root, &rel, out)?;
+            // A commit has no empty directory, and a name can hold anything.
+            if out.len() == before {
+                out.push(rel);
+            }
         } else {
             out.push(rel);
         }
@@ -803,6 +866,18 @@ mod tests {
     use super::{BTreeMap, GitId, Meta, Workspace, encoded_len, plan_pages};
     use std::fs;
     use std::path::Path;
+
+    /// Two names that read the same once made text would hide one of them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_that_is_no_text_is_not_read_as_one() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(OsStr::from_bytes(b"a\xff")), "x").unwrap();
+        let e = super::every_file(dir.path(), "", &mut vec![]).unwrap_err();
+        assert!(e.to_string().contains("UTF-8"), "{e}");
+    }
 
     fn workspace(root: &Path) -> Workspace {
         let meta = Meta {

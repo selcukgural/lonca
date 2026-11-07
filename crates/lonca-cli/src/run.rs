@@ -31,7 +31,8 @@ use serde_json::{Value, json};
 
 use crate::ctx::{self, call};
 use crate::mcp;
-use crate::workspace::Workspace;
+use crate::setup::{self, Prepared};
+use crate::workspace::{Workspace, fetch};
 
 /// What the command gets of the launcher's environment, besides `--env`.
 const KEPT_ENV: [&str; 8] = [
@@ -521,15 +522,15 @@ fn refuse_scratch(root: &Path, real: &Path, secrets: &[PathBuf], home: &Path) ->
 /// Refuses a workspace that is not the commit it says it stands on, as the
 /// daemon has that commit: what is in there would pass for the sandbox's work
 /// without having been made in it. Nothing the workspace says about itself
-/// counts, and a scratch root must be empty for the same reason.
-fn refuse_outside_work(ws: &Workspace, c: &mut Client, prepared: &Value) -> Result<()> {
+/// counts, and a scratch root must be empty for the same reason. Returns the
+/// commit's files.
+fn refuse_outside_work(ws: &Workspace, c: &mut Client, prepared: &Value) -> Result<Vec<TreeFile>> {
     if prepared["base_known"] != true {
         bail!("the workspace stands on a commit that was never trunk");
     }
-    let r = call(c, "tree", json!({ "commit": ws.meta.base }))?;
-    let files: Vec<TreeFile> = serde_json::from_value(r)?;
-    let tree = files.into_iter().filter(|f| f.mode != FileMode::Submodule);
-    let tree = tree.map(|f| (f.path, f.blob)).collect();
+    let files = fetch(c, &ws.meta.base, None)?;
+    let tree = files.iter().filter(|f| f.mode != FileMode::Submodule);
+    let tree = tree.map(|f| (f.path.clone(), f.blob.clone())).collect();
     let differs = ws.differs_from(&tree)?;
     if let Some(first) = differs.first() {
         bail!(
@@ -539,15 +540,32 @@ fn refuse_outside_work(ws: &Workspace, c: &mut Client, prepared: &Value) -> Resu
         );
     }
     for root in scratch_roots(prepared)? {
-        if fs::read_dir(&root).is_ok_and(|mut d| d.next().is_some()) {
+        // One that is not there yet is empty. One that can not be read is
+        // not known to be, and the command may open it again.
+        let empty = match fs::read_dir(&root) {
+            Ok(mut entries) => entries.next().is_none(),
+            Err(e) => e.kind() == io::ErrorKind::NotFound,
+        };
+        if !empty {
             bail!("scratch root {} is not empty", root.display());
         }
     }
-    Ok(())
+    Ok(files)
+}
+
+/// What a run starts from, once the daemon has said it may run.
+struct Start<'a> {
+    ws: &'a mut Workspace,
+    files: &'a [TreeFile],
+    setup: Option<&'a Prepared>,
 }
 
 /// From the moment the session is isolated: nothing here may skip its end.
-fn in_sandbox(plan: &Plan, a: &Args, token: &str) -> Result<ExitStatus> {
+fn in_sandbox(plan: &Plan, a: &Args, start: Start, token: &str) -> Result<ExitStatus> {
+    start.ws.start_clean(start.files)?;
+    if let Some(setup) = start.setup {
+        setup.write_over(start.ws)?;
+    }
     if let (Some(relay), Some(proxy)) = (&plan.jail.relay, plan.proxy) {
         fs::remove_file(relay)?;
         let listener = UnixListener::bind(relay)?;
@@ -598,7 +616,7 @@ pub fn run(a: Args) -> Result<i32> {
         Some(d) => ctx::absolute(d)?,
         None => std::env::current_dir()?,
     };
-    let ws = Workspace::find(&dir)
+    let mut ws = Workspace::find(&dir)
         .filter(|ws| ws.root == dir)
         .with_context(|| format!("{} is not a Lonca workspace", dir.display()))?;
     if ws.meta.session.as_deref() != Some(a.session.as_str()) {
@@ -619,7 +637,13 @@ pub fn run(a: Args) -> Result<i32> {
         "human.prepare_isolate",
         json!({"session": a.session, "base": ws.meta.base}),
     )?;
-    refuse_outside_work(&ws, &mut c, &prepared)?;
+    // The log's word, not the workspace's: only the named harness's files
+    // may stand, and then only as its setup writes them.
+    ws.meta.scratch_roots = serde_json::from_value(prepared["scratch"].clone())?;
+    let setup = setup::of_session(&ws, &prepared)?;
+    let of_setup = |p: &String| setup.as_ref().is_some_and(|s| s.writes(p));
+    ws.meta.generated.retain(of_setup);
+    let files = refuse_outside_work(&ws, &mut c, &prepared)?;
 
     let run_dir = tempfile::Builder::new().prefix("lonca-run-").tempdir()?;
     fs::set_permissions(run_dir.path(), fs::Permissions::from_mode(0o700))?;
@@ -656,7 +680,12 @@ pub fn run(a: Args) -> Result<i32> {
         .ok_or_else(|| anyhow!("the session was not isolated: {}", r["decision"]["outcome"]))?;
     fs::write(&token_file, token)?;
 
-    let status = in_sandbox(&plan, &a, token);
+    let start = Start {
+        ws: &mut ws,
+        files: &files,
+        setup: setup.as_ref(),
+    };
+    let status = in_sandbox(&plan, &a, start, token);
     // Whatever became of the command, the session does not go on without it.
     let ended = finish(token, &ws.root);
     let status = status?;

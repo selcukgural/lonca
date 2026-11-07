@@ -99,7 +99,7 @@ impl Env {
 fn start_daemon(root: &Path, home: &Path, sock: &Path) {
     let proxy = lonca_daemon::proxy::bind("127.0.0.1:0").unwrap();
     let settings = Settings {
-        managed_settings: root.join("managed.json"),
+        managed_settings: Some(root.join("managed.json")),
         require_root_settings: false,
         git: "git".into(),
         line_cap: lonca_daemon::protocol::MAX_LINE,

@@ -50,8 +50,9 @@ pub fn system_clock() -> Clock {
 
 #[derive(Clone, Debug)]
 pub struct Settings {
-    /// Claude Code managed settings inspected by `hook.bind`.
-    pub managed_settings: PathBuf,
+    /// The file `hook.bind` inspects instead of the one the harness's profile
+    /// names.
+    pub managed_settings: Option<PathBuf>,
     /// Require managed settings and the hook program to be root-owned.
     pub require_root_settings: bool,
     pub git: String,
@@ -62,10 +63,27 @@ pub struct Settings {
     pub proxy: Option<String>,
 }
 
+impl Settings {
+    /// What `lonca daemon` runs with. Administrator files must be root's
+    /// unless it was told otherwise, for a test.
+    pub fn for_daemon(
+        allow_user_owned: bool,
+        managed_settings: Option<PathBuf>,
+        proxy: Option<String>,
+    ) -> Self {
+        Self {
+            require_root_settings: !allow_user_owned,
+            managed_settings,
+            proxy,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            managed_settings: hooks::default_managed_settings(),
+            managed_settings: None,
             require_root_settings: true,
             git: "git".into(),
             line_cap: MAX_LINE,
@@ -2647,16 +2665,18 @@ impl Service {
                 "scratch": scratch,
             }));
         }
-        let ins = if b.harness == "claude-code" {
-            hooks::inspect_claude_code(
-                &self.settings.managed_settings,
-                self.settings.require_root_settings,
-            )
-        } else {
-            hooks::Inspection {
+        let policy = r.policy().or_fail()?;
+        let locked = policy.config.locked(&b.harness);
+        let file = locked.and_then(|l| {
+            let named = || l.file_here().map(PathBuf::from);
+            self.settings.managed_settings.clone().or_else(named)
+        });
+        let ins = match (locked, file) {
+            (Some(l), Some(file)) => hooks::inspect(l, &file, self.settings.require_root_settings),
+            _ => hooks::Inspection {
                 notes: vec![format!("no locked profile for harness {}", b.harness)],
                 ..Default::default()
-            }
+            },
         };
         let checks = BindChecks {
             harness: b.harness,
@@ -3263,6 +3283,16 @@ mod tests {
 
     /// A result is gone at the hour, not a tick after it.
     #[test]
+    fn the_daemon_trusts_only_root_s_files_unless_told_otherwise() {
+        let file = Some(PathBuf::from("/m"));
+        let strict = Settings::for_daemon(false, file.clone(), Some("p".into()));
+        assert!(strict.require_root_settings);
+        assert_eq!(strict.managed_settings, file);
+        assert_eq!(strict.proxy.as_deref(), Some("p"));
+        assert!(!Settings::for_daemon(true, None, None).require_root_settings);
+    }
+
+    #[test]
     fn a_verified_tree_is_known_until_the_hour() {
         let mut verified = Verified::default();
         verified.insert(verified_key(0), &[], 1_000);
@@ -3353,7 +3383,7 @@ mod tests {
         let svc = Service::open(
             Home::new(dir.path().join("h")),
             Settings {
-                managed_settings: dir.path().join("m.json"),
+                managed_settings: Some(dir.path().join("m.json")),
                 require_root_settings: false,
                 git: "git".into(),
                 line_cap: MAX_LINE,

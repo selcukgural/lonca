@@ -312,9 +312,49 @@ its turn as on a harness with no stop event, and `lonca session end` still recor
 what was left. A subagent's work is its parent's to deliver, so only the parent is
 sent back.
 
-Only Claude Code has a locked setup so far (`hook.bind` gives
-`hooks_sandbox` with its managed settings). Other harnesses are
-`unobserved`, so their changes wait for a human.
+### Observation levels
+
+| Harness | Level with hooks | Why |
+|---|---|---|
+| Claude Code | `hooks_sandbox` with its managed settings | Hooks only an administrator sets, and a failure blocks |
+| Codex 0.167 | `unobserved` | A hook that crashes or times out lets the tool run |
+| Gemini CLI 0.67 | `unobserved` | A project's settings can turn a system hook off |
+| OpenCode 2.2 | `unobserved` | Hooks are a plugin, and settings can not require one |
+
+`unobserved` changes wait for a human. **Any harness gets `isolated` under `lonca run`,
+with no hook at all.** That is the way to run these three without a person approving
+everything; see "Any agent, in a sandbox". The reasons are in `docs/decisions.md`,
+"Harness levels".
+
+A level comes from a `locked` table in the profile: a file only root can write and what
+must hold in it. A harness gets one when it can be shown that its hooks hold, also when
+they fail. The table is part of a whole profile (start from `lonca harness show <name>`);
+a profile of yours with no table keeps the built-in one:
+
+```toml
+[harnesses.acme.locked]
+file = { macos = "/Library/Application Support/Acme/managed.toml", linux = "/etc/acme/managed.toml" }
+format = "toml"                      # or "json"
+# Each list, as a JSON pointer, needs a Lonca hook for every tool: a group of `hooks`,
+# with a `command`, and at most a `matcher` of "*". The first list names the hook
+# program, which must be root-owned as well.
+hook_lists = ["/hooks/before", "/hooks/after"]
+# What a Lonca hook must say besides its command, if a harness needs it to block.
+hook_fields = { on_error = "block" }
+# What makes these hooks the only ones. This list and `sandbox` each need a check a
+# value must pass: "empty" holds for a key nobody wrote.
+hooks = [{ at = "/managed_hooks_only", equals = true }]
+# What locks the shell sandbox, with its network through Lonca's proxy. Leave it out
+# and the level stops at `hooks`.
+sandbox = [
+  { at = "/sandbox/enabled", equals = true },
+  { at = "/sandbox/proxy_port", is = "number" },
+  { at = "/sandbox/excluded", is = "empty" },    # missing or an empty list
+]
+```
+
+The answer of `hook.bind` has notes for what did not hold; `lonca doctor` shows the same
+for the built-in tables, not for one in a repository's policy.
 
 ### Any other harness
 

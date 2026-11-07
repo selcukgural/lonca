@@ -24,8 +24,9 @@ fn installer_settings_pass_inspection() {
         "packaging/linux/install-hardened.sh",
     ] {
         let dir = render(script);
-        let ins =
-            lonca_daemon::hooks::inspect_claude_code(&dir.join("managed-settings.json"), false);
+        let profile = &lonca_policy::harness::built_in()["claude-code"];
+        let locked = profile.locked.as_ref().unwrap();
+        let ins = lonca_daemon::hooks::inspect(locked, &dir.join("managed-settings.json"), false);
         assert!(ins.managed_hooks, "{script}: {:?}", ins.notes);
         assert!(ins.locked_sandbox, "{script}: {:?}", ins.notes);
         assert!(ins.hook_binary_protected, "{script}: {:?}", ins.notes);

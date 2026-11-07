@@ -233,6 +233,15 @@ impl Config {
         let built_in = || crate::harness::built_in().get(name);
         self.harnesses.get(name).or_else(built_in)
     }
+
+    /// How to tell that a harness is locked. A profile with no table of its
+    /// own keeps the built-in one: replacing a harness's tool names says
+    /// nothing about how an administrator locks it.
+    pub fn locked(&self, name: &str) -> Option<&crate::harness::Locked> {
+        let built_in = || crate::harness::built_in().get(name)?.locked.as_ref();
+        let own = self.harnesses.get(name).and_then(|p| p.locked.as_ref());
+        own.or_else(built_in)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

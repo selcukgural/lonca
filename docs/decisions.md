@@ -2148,6 +2148,48 @@ run` if it is the same sandbox, so it now is: `Jail`, with no socket and no prox
   else can be written, and the shared temp directories are closed.
 - **No log format.** The check is evidence and its entry looks as it did.
 
+## Harness levels
+
+Which observation level other harnesses can reach was open since the design (§10, issue
+#21). The answer, for these versions on 2026-11-07:
+
+| Harness | Level with hooks | Evidence |
+|---|---|---|
+| Claude Code | H2, `hooks_sandbox` | Its documentation of 2026-10-16: managed settings, `onFailure: block`, a locked sandbox. No failure run like Codex's, and the effect of `allowManagedHooksOnly` is still to be tested (design §10) |
+| Codex 0.167 | H0, `unobserved` | Run: a `PreToolUse` hook that exited 1, was killed, timed out or printed garbage let the tool run, 4 of 4. Only exit 2 blocked |
+| Gemini CLI 0.67 | H0, `unobserved` | Source: `hooksConfig.disabled` merges as a union, so a project's settings turn a system hook off. All hooks stop in an untrusted folder. No setting keeps only the system's hooks |
+| OpenCode 2.2 | H0, `unobserved` | Docs: a policy can deny a plugin, not require one, and "settings alone cannot stop users from adding" them. The plugin runs inside the harness |
+| Cursor and others | not looked at | |
+
+- **What H1 asks is that the hook blocks, also when it fails.** Lonca's own hook exits 2
+  when it can not reach the daemon, so a healthy hook program fails closed anywhere.
+  What it can not do is answer for a hook that was killed or timed out, and that is what
+  Claude Code's `onFailure: block` covers. Codex's `requirements.toml` can make hooks
+  managed-only (`allow_managed_hooks_only`), and its documentation calls hooks a
+  guardrail, "not a complete enforcement boundary"; the run shows why. So a root-owned
+  setup would not change the answer, and none was tried.
+- **The way for these harnesses is `lonca run`.** It asks nothing of the harness and gives
+  `isolated`, which is above H2. Hooks there still deliver news and the stop.
+- **A level is data.** `locked` in a profile says which file to read, in which format, and
+  what must hold in it, so a harness that gains these guarantees needs a table, not a
+  release. It replaces a `harness == "claude-code"` in the daemon. The checks moved over
+  with these changes, each stricter: a value in `excludedCommands` that is not a list no
+  longer counts as empty, a hook group with a field other than `hooks` and `matcher`, or
+  a `matcher` that is not `*` or empty, no longer counts as every tool, and the digest
+  is of a file that passed. What stays in code is the shape of a hook group and that a
+  Lonca hook names `lonca` and `hook`: a harness with another shape needs a change here.
+- **A table that says nothing proves nothing.** An empty `sandbox` is no sandbox, and a
+  `locked` is refused with no `hook_lists`, no `hooks` or no absolute `file`, and with a
+  list of nothing but `is = "empty"`, which holds for a key nobody wrote.
+- **A profile with no table keeps the built-in one.** `lonca harness show` and a signed
+  copy is how a repository changes tool names, and before tables a level hung on the
+  name alone. So it is the one part of a profile that does not go with the rest.
+- **The file is checked before it is read.** A path can now come from a signed policy. A
+  FIFO would hold the daemon's lock for every repository, so it must pass as root's
+  first, be a regular file, and only 1 MiB of it is read.
+- **A new built-in table needs a run.** A level relaxes approval, so `built_in()` has one
+  for Claude Code alone, from before this rule, and a test says so.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use lonca_core::oplog::{SignedOp, verify_chain};
 use lonca_daemon::Client;
-use lonca_daemon::hooks::{Inspection, default_managed_settings, inspect_claude_code};
+use lonca_daemon::hooks::{Inspection, inspect};
 use lonca_daemon::service::PROTOCOL;
 use lonca_daemon::trust::Trust;
 use lonca_policy::config::{CONFIG_FILE, DEFAULT_POLICY, PolicyBundle};
+use lonca_policy::harness::built_in;
 use lonca_verify::Sandbox;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -346,7 +347,6 @@ fn report(mode: Option<&str>, checks: &[Check]) -> Value {
 pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
     let trust = Trust::load();
     let mut checks = vec![mode_check(&trust)];
-    let settings = managed_settings.unwrap_or_else(default_managed_settings);
     let path = std::env::var_os("PATH");
     let mut reachable = false;
     if let Ok(t) = &trust {
@@ -362,8 +362,13 @@ pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
             },
             Err(e) => checks.push(fail("daemon", e.to_string(), "start `lonca daemon`")),
         }
-        let ins = inspect_claude_code(&settings, t.is_hardened());
-        checks.push(hooks_check(&ins, t.is_hardened()));
+        for locked in built_in().values().filter_map(|p| p.locked.as_ref()) {
+            let named = || locked.file_here().map(PathBuf::from);
+            if let Some(file) = managed_settings.clone().or_else(named) {
+                let ins = inspect(locked, &file, t.is_hardened());
+                checks.push(hooks_check(&ins, t.is_hardened()));
+            }
+        }
     }
     checks.push(sandbox_check(Sandbox::detect()));
     checks.extend(tools_checks(path.as_deref()));

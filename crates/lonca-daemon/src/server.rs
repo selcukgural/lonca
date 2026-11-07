@@ -221,6 +221,11 @@ enum Incoming {
     },
 }
 
+/// Whether a read ended at its deadline rather than failing.
+fn timed_out(e: &std::io::Error) -> bool {
+    matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+}
+
 /// One line, under the connection's limits. A refused line is read to its
 /// end, so the client, still writing, gets to read why.
 fn read_request(
@@ -247,7 +252,7 @@ fn read_request(
         let _ = stream.set_read_timeout(Some(wait));
         let chunk = match r.fill_buf() {
             Ok(chunk) => chunk,
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+            Err(e) if timed_out(&e) => {
                 let started = deadline.is_some();
                 return Ok(Incoming::TimedOut { started });
             }
@@ -381,6 +386,13 @@ mod tests {
             ErrorKind::WouldBlock | ErrorKind::TimedOut
         ));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn only_a_deadline_is_a_timeout() {
+        assert!(timed_out(&ErrorKind::WouldBlock.into()));
+        assert!(timed_out(&ErrorKind::TimedOut.into()));
+        assert!(!timed_out(&ErrorKind::ConnectionReset.into()));
     }
 
     #[test]

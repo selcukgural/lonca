@@ -368,6 +368,7 @@ fn a_short_line_ends_at_its_limit() {
     let e = Env::new();
     let sock = served(&e, Limits::default());
     let mut c = Raw::open(&sock);
+    assert_eq!(SHORT_LINE, 65536, "docs/protocol.md says 64 KiB");
     c.send(&line_of("ping", 2, "", SHORT_LINE));
     assert!(c.answer().ok, "exactly the limit");
     c.send(&line_of("ping", 3, "", SHORT_LINE + 1));
@@ -434,6 +435,24 @@ fn a_long_line_needs_its_method_and_a_live_token_first() {
     first.extend_from_slice(b"\"},\"id\":6,\"method\":\"tree\"}\n");
     c.send(&first);
     assert_eq!(c.code(), "too_large", "the params came first");
+}
+
+/// Asked of the method's own credential: a line that passed would be
+/// `too_large` here.
+#[test]
+fn a_long_line_is_held_to_its_own_method() {
+    let mut e = Env::new();
+    e.init(None);
+    let auth = human_auth(&mut e);
+    let limits = Limits {
+        short_line: 512,
+        long_line: 1024,
+        ..Limits::default()
+    };
+    let sock = served(&e, limits);
+    let mut c = Raw::open(&sock);
+    c.send(&line_of("change.propose", 2, &auth, 2048));
+    assert_eq!(c.code(), "forbidden");
 }
 
 #[test]

@@ -1083,17 +1083,35 @@ mod tests {
     }
 
     #[test]
-    fn a_command_that_will_not_stop_is_killed_after_its_grace() {
+    fn a_group_that_will_not_stop_is_killed_after_its_grace() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("pid");
+        // The helper inherits the ignored signal, so only SIGKILL ends it,
+        // and it only gets that as a member of the group.
+        let script = format!(
+            "trap '' TERM; sleep 30 & echo $! > {}; while :; do sleep 1; done",
+            file.display()
+        );
         let mut c = Command::new("/bin/sh");
-        c.args(["-c", "trap '' TERM; while :; do sleep 1; done"]);
-        c.stdin(Stdio::null());
+        c.args(["-c", &script]).stdin(Stdio::null());
         let mut child = spawn(c).unwrap();
-        std::thread::sleep(Duration::from_millis(200));
+        while fs::read_to_string(&file).map_or(true, |t| !t.ends_with('\n')) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let helper: libc::pid_t = fs::read_to_string(&file).unwrap().trim().parse().unwrap();
         let stop = AtomicI32::new(libc::SIGTERM);
         let started = Instant::now();
         let status = wait(&mut child, &stop, Duration::from_millis(300)).unwrap();
         assert_eq!(exit_code(status), 128 + libc::SIGKILL);
         assert!(started.elapsed() >= Duration::from_millis(300));
+        for _ in 0..200 {
+            // SAFETY: `kill` takes no pointers; signal 0 only asks.
+            if unsafe { libc::kill(helper, 0) } != 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("a member of the group outlived SIGKILL");
     }
 
     #[test]

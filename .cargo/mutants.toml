@@ -4,8 +4,10 @@
 # Run the whole workspace's tests for every mutant. Many modules are tested
 # from other crates (lonca-audit only from lonca-daemon/tests/audit.rs,
 # lonca-policy chain/state from tests/decide.rs, most of lonca-core from
-# downstream crates), so per-package testing reports false survivors.
-# A workspace test run takes ~10 s, so this is affordable.
+# downstream crates), so per-package testing reports false survivors. A
+# workspace run is about 200 s on a CI runner, which a mutant pays in full if
+# it survives. So on a pull request this setting is the second stage: the first
+# passes `--test-workspace=false`, and only what that leaves comes here.
 test_workspace = true
 
 # `cargo test` runs one crate after another, so a mutant in a crate late in the
@@ -17,12 +19,12 @@ test_tool = "nextest"
 # `--in-diff` measures the baseline with `--package` of the changed crates only,
 # while every mutant runs the whole workspace (`test_workspace`). For a PR on
 # one crate the baseline is ~1 s, so the auto timeout falls to this minimum.
-# A mutant in a crate tested late (lonca-symbols comes after the daemon's tests)
-# was cut off before its own tests ran, and a timeout counts as caught. So this
-# is the workspace's real time: ~60 s on a CI runner, five times over.
-# A mutant that hangs the daemon or a socket test still ends as a timeout.
+# A timeout counts as caught, so this must clear a whole run with room to spare,
+# or a survivor on a busy runner passes as caught: 600 s is three times the
+# ~200 s of a workspace run. A mutant that hangs the daemon or a socket test
+# still ends as a timeout.
 timeout_multiplier = 5.0
-minimum_test_timeout = 300
+minimum_test_timeout = 600
 
 # Mutants that are equivalent (no behaviour can tell them apart) or
 # irrelevant. Every entry needs a comment saying why. Nothing in decide.rs,

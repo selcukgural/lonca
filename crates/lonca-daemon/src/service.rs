@@ -63,6 +63,23 @@ pub struct Settings {
     pub proxy: Option<String>,
 }
 
+impl Settings {
+    /// What `lonca daemon` runs with. Administrator files must be root's
+    /// unless it was told otherwise, for a test.
+    pub fn for_daemon(
+        allow_user_owned: bool,
+        managed_settings: Option<PathBuf>,
+        proxy: Option<String>,
+    ) -> Self {
+        Self {
+            require_root_settings: !allow_user_owned,
+            managed_settings,
+            proxy,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -3265,6 +3282,16 @@ mod tests {
     }
 
     /// A result is gone at the hour, not a tick after it.
+    #[test]
+    fn the_daemon_trusts_only_root_s_files_unless_told_otherwise() {
+        let file = Some(PathBuf::from("/m"));
+        let strict = Settings::for_daemon(false, file.clone(), Some("p".into()));
+        assert!(strict.require_root_settings);
+        assert_eq!(strict.managed_settings, file);
+        assert_eq!(strict.proxy.as_deref(), Some("p"));
+        assert!(!Settings::for_daemon(true, None, None).require_root_settings);
+    }
+
     #[test]
     fn a_verified_tree_is_known_until_the_hour() {
         let mut verified = Verified::default();

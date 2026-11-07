@@ -1252,6 +1252,25 @@ run = { kind = "shell", fields = ["line"] }
         }
     }
 
+    /// A hook of something else in the file watches nothing for Lonca.
+    #[test]
+    fn a_lonca_hook_names_both_lonca_and_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("m.json");
+        let file = |command: &str| {
+            let hooks = json!([{"hooks": [{"command": command, "onFailure": "block"}]}]);
+            let doc = json!({
+                "allowManagedHooksOnly": true,
+                "hooks": {"PreToolUse": hooks, "PostToolUse": hooks},
+            });
+            fs::write(&p, serde_json::to_vec(&doc).unwrap()).unwrap();
+            inspect(&claude_code(), &p, false).managed_hooks
+        };
+        assert!(file("/usr/bin/lonca hook"));
+        assert!(!file("/usr/bin/lonca status"));
+        assert!(!file("/usr/local/bin/audit-hook"));
+    }
+
     #[test]
     fn a_file_that_is_not_settings_is_not_read() {
         let dir = tempfile::tempdir().unwrap();

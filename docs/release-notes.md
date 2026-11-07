@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Limits on the socket
+
+One client can no longer tie the daemon up. Connections are capped (the longest-quiet one makes
+room), a quiet connection closes after 15 minutes, and a request line has 60 seconds to arrive. A
+request line is at most 64 KiB, or 96 MiB for the methods that carry files, and a long line must
+name `method` and `token` before `params`. A session and those made from it get `[sessions]
+ops_per_minute`, 600 by default; past it requests are `rate_limited` and the log does not grow.
+`queue.run` now only wakes the worker, `log` answers at most 1 000 entries, and `ping` counts
+what was refused. See `docs/protocol.md`.
+
 ### A level reads the proxy's port and every hook
 
 A harness table can now say `is = "proxy_port"`: the value must be the port the daemon's

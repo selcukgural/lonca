@@ -1,12 +1,15 @@
 //! Unix socket server: one thread per connection, one JSON line per request.
+//! How many, for how long and how long a line: `crate::limits`.
 
-use std::io::BufReader;
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use crate::protocol::{MAX_LINE, Request, Response, read_line_limited, write_line};
+use crate::limits::{Counters, Held, Limits, Registry, Slot, head_of};
+use crate::protocol::{Request, Response};
 use crate::service::Service;
 
 /// Longest socket path that fits `sockaddr_un` on every supported platform.
@@ -162,44 +165,235 @@ pub fn group_id(name: &str) -> Option<u32> {
 }
 
 pub fn serve(listener: UnixListener, svc: Arc<Service>) {
-    serve_with(listener, svc, Access::default())
+    serve_with(listener, svc, Access::default(), Limits::default())
 }
 
-pub fn serve_with(listener: UnixListener, svc: Arc<Service>, access: Access) {
+/// How long to wait after a failed `accept`: with no descriptors left it
+/// fails at once, every time.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(20);
+
+/// `accept` itself never waits for a client, so nothing a client does can
+/// stop the next one being let in.
+pub fn serve_with(listener: UnixListener, svc: Arc<Service>, access: Access, limits: Limits) {
+    let registry = Registry::new(limits);
     for conn in listener.incoming() {
-        let Ok(stream) = conn else { continue };
-        if let Some(allowed) = &access.allowed_uids {
-            match peer_uid(&stream) {
-                Some(uid) if allowed.contains(&uid) => {}
-                _ => continue, // dropped: closes the connection
-            }
+        let Ok(stream) = conn else {
+            std::thread::sleep(ACCEPT_PAUSE);
+            continue;
+        };
+        let uid = peer_uid(&stream);
+        if let Some(allowed) = &access.allowed_uids
+            && !uid.is_some_and(|u| allowed.contains(&u))
+        {
+            continue; // dropped: closes the connection
+        }
+        let stream = Arc::new(stream);
+        // A uid unknown to the system is one more client, not a free pass.
+        let Some((slot, evicted)) = registry.admit(uid.unwrap_or(u32::MAX), stream.clone()) else {
+            Counters::add(&svc.counters.busy);
+            let full = "the daemon has no room for another connection";
+            let _ = write_by(&stream, &Response::err(0, "busy", full), ACCEPT_WRITE);
+            continue;
+        };
+        if evicted {
+            Counters::add(&svc.counters.evicted);
         }
         let svc = svc.clone();
-        std::thread::spawn(move || {
-            let _ = handle_conn(stream, &svc);
+        let _ = std::thread::Builder::new().spawn(move || {
+            let _ = handle_conn(&stream, &slot, &svc);
         });
     }
 }
 
-fn handle_conn(stream: UnixStream, svc: &Service) -> std::io::Result<()> {
-    let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
-    while let Some(line) = read_line_limited(&mut reader, MAX_LINE)? {
-        if line.trim().is_empty() {
-            continue;
+/// A refusal is one short line into an empty buffer, but `accept` must
+/// not depend on that.
+const ACCEPT_WRITE: Duration = Duration::from_millis(100);
+
+/// What a connection sent next.
+enum Incoming {
+    Line(String),
+    /// The line was read and thrown away; the connection goes on.
+    Refused(Response),
+    End,
+    /// Nothing came in time; `started`: in the middle of a line.
+    TimedOut {
+        started: bool,
+    },
+}
+
+/// One line, under the connection's limits. A refused line is read to its
+/// end, so the client, still writing, gets to read why.
+fn read_request(
+    r: &mut BufReader<&UnixStream>,
+    held: &mut Held,
+    limits: &Limits,
+    svc: &Service,
+) -> std::io::Result<Incoming> {
+    let stream = *r.get_ref();
+    let mut buf = Vec::new();
+    let mut id = 0;
+    let mut long = false;
+    let mut refused = None;
+    let mut deadline = None;
+    loop {
+        let wait = deadline.map_or(limits.idle, |d: Instant| {
+            d.saturating_duration_since(Instant::now())
+        });
+        if wait.is_zero() {
+            return Ok(Incoming::TimedOut { started: true });
         }
-        let resp = match serde_json::from_str::<Request>(&line) {
-            Ok(req) => svc.handle_from(req, &|| peer_in_sandbox(&writer)),
-            Err(e) => Response::err(0, "invalid", format!("bad request: {e}")),
+        // Fails only on macOS once the client is gone, and then no read waits:
+        // what it wrote before leaving is still there to read.
+        let _ = stream.set_read_timeout(Some(wait));
+        let chunk = match r.fill_buf() {
+            Ok(chunk) => chunk,
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                let started = deadline.is_some();
+                return Ok(Incoming::TimedOut { started });
+            }
+            Err(e) => return Err(e),
         };
-        write_line(&mut writer, &resp)?;
+        if chunk.is_empty() {
+            return Ok(match refused {
+                Some(why) => Incoming::Refused(why),
+                None if buf.is_empty() => Incoming::End,
+                None => Incoming::Line(String::from_utf8_lossy(&buf).into_owned()),
+            });
+        }
+        deadline.get_or_insert_with(|| Instant::now() + limits.line);
+        let newline = chunk.iter().position(|&b| b == b'\n');
+        let n = newline.unwrap_or(chunk.len());
+        if refused.is_none() {
+            buf.extend_from_slice(&chunk[..n]);
+        }
+        r.consume(n + usize::from(newline.is_some()));
+        if refused.is_none() && buf.len() > limits.short_line {
+            if !long {
+                let head = head_of(&buf[..limits.short_line]);
+                id = head.id;
+                match svc.long_line(&head) {
+                    Ok(()) => long = true,
+                    Err((code, msg)) => refused = Some(Response::err(id, &code, msg)),
+                }
+            }
+            if long && buf.len() > limits.long_line {
+                let msg = format!("a request line holds at most {} bytes", limits.long_line);
+                refused = Some(Response::err(id, "too_large", msg));
+            } else if long && !held.grow(buf.len()) {
+                let msg = "too many long requests at once; send it again";
+                refused = Some(Response::err(id, "busy", msg));
+            }
+            if let Some(why) = &refused {
+                Counters::add(match why.error.as_ref().map(|e| e.code.as_str()) {
+                    Some("busy") => &svc.counters.busy,
+                    _ => &svc.counters.too_large,
+                });
+                buf = Vec::new();
+            }
+        }
+        if newline.is_some() {
+            return Ok(match refused {
+                Some(why) => Incoming::Refused(why),
+                None => Incoming::Line(String::from_utf8_lossy(&buf).into_owned()),
+            });
+        }
+    }
+}
+
+/// Writes one line by a deadline for all of it: a client that takes one byte
+/// at a time gets no more time than one that takes none.
+fn write_by(mut s: &UnixStream, v: &Response, limit: Duration) -> std::io::Result<()> {
+    let mut bytes = serde_json::to_vec(v)?;
+    bytes.push(b'\n');
+    let deadline = Instant::now() + limit;
+    let mut left = &bytes[..];
+    while !left.is_empty() {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        if wait.is_zero() {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        let _ = s.set_write_timeout(Some(wait)); // as in `read_request`
+        left = &left[s.write(left)?..];
     }
     Ok(())
+}
+
+/// The last line of a connection the daemon is closing on a client that may
+/// be gone.
+fn farewell(stream: &UnixStream, limits: &Limits, code: &str, msg: &str) {
+    let _ = write_by(stream, &Response::err(0, code, msg), limits.write);
+}
+
+const NOT_READ: &str = "connection closed while quiet; this request was not run, send it again";
+
+fn handle_conn(stream: &UnixStream, slot: &Slot, svc: &Service) -> std::io::Result<()> {
+    let limits = slot.limits();
+    let mut reader = BufReader::new(stream);
+    loop {
+        let mut held = slot.hold();
+        let resp = match read_request(&mut reader, &mut held, limits, svc)? {
+            Incoming::End if slot.evicted() => {
+                farewell(stream, limits, "closed", NOT_READ);
+                return Ok(());
+            }
+            Incoming::End => return Ok(()),
+            Incoming::TimedOut { started: false } => {
+                Counters::add(&svc.counters.idle);
+                farewell(stream, limits, "closed", NOT_READ);
+                return Ok(());
+            }
+            Incoming::TimedOut { started: true } => {
+                Counters::add(&svc.counters.slow);
+                farewell(stream, limits, "timeout", "the request line took too long");
+                return Ok(());
+            }
+            Incoming::Refused(why) => why,
+            Incoming::Line(line) if line.trim().is_empty() => continue,
+            Incoming::Line(_) if !slot.begin() => {
+                farewell(stream, limits, "closed", NOT_READ);
+                return Ok(());
+            }
+            Incoming::Line(line) => match serde_json::from_str::<Request>(&line) {
+                Ok(req) => svc.handle_from(req, &|| peer_in_sandbox(stream)),
+                Err(e) => Response::err(0, "invalid", format!("bad request: {e}")),
+            },
+        };
+        if let Err(e) = write_by(stream, &resp, limits.write) {
+            Counters::add(&svc.counters.slow);
+            return Err(e);
+        }
+        slot.end();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_response_nobody_reads_runs_out_of_time() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let big = Response::err(0, "x", "y".repeat(16 * 1024 * 1024));
+        let started = Instant::now();
+        let e = write_by(&a, &big, Duration::from_millis(100)).unwrap_err();
+        assert!(matches!(
+            e.kind(),
+            ErrorKind::WouldBlock | ErrorKind::TimedOut
+        ));
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_response_is_a_line() {
+        use std::io::Read;
+        let (a, mut b) = UnixStream::pair().unwrap();
+        write_by(&a, &Response::err(3, "x", "y"), Duration::from_secs(5)).unwrap();
+        drop(a);
+        let mut text = String::new();
+        b.read_to_string(&mut text).unwrap();
+        let line = text.strip_suffix('\n').unwrap();
+        assert_eq!(serde_json::from_str::<Response>(line).unwrap().id, 3);
+    }
 
     #[test]
     fn a_test_process_is_in_no_sandbox() {

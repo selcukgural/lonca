@@ -34,6 +34,7 @@ use serde_json::{Value, json};
 
 use crate::home::{Home, TokenEntry, Tokens};
 use crate::hooks;
+use crate::limits::{Bucket, Counters, Head};
 use crate::protocol::*;
 use crate::repo::{HUMAN_HEADER, POLICY_REF, RepoHandle, SESSION_HEADER, TRUNK_REF};
 
@@ -96,6 +97,11 @@ impl Default for Settings {
             proxy: None,
         }
     }
+}
+
+/// How many entries a `log` answer holds, for the `limit` it was asked with.
+fn log_page(limit: Option<u64>) -> usize {
+    limit.unwrap_or(LOG_PAGE).min(LOG_PAGE) as usize
 }
 
 /// Bytes a page of blob contents may hold once base64-encoded, under a
@@ -219,6 +225,9 @@ pub const LOG_WAIT_MAX_MS: i64 = 30_000;
 /// what makes the request return at once.
 pub const LOG_POLL_MS: u64 = 2_000;
 
+/// Most entries one `log` answer holds: a longer log is read in pages.
+pub const LOG_PAGE: u64 = 1000;
+
 /// Longest diff text `change.diff` returns; beyond it `truncated` is set.
 pub const DIFF_CAP_BYTES: usize = 2 * 1024 * 1024;
 
@@ -329,6 +338,34 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("queue.run", Cred::AnyHuman),
 ];
 
+/// What may send a line past `limits::SHORT_LINE`: what carries files or
+/// a list the repository decides the length of. All of them take a token.
+pub const LONG_LINES: &[&str] = &[
+    "tree",
+    "blobs",
+    "human.prepare_change",
+    "human.prepare_policy",
+    "human.submit",
+    "lease.acquire",
+    "lease.interest",
+    "change.propose",
+    "facts.preview",
+    "session.end",
+    "hook.event",
+    "hook.input",
+    "hook.stop",
+];
+
+/// Agent methods that write nothing to the log, and `session.end`: a session
+/// over its rate must still be able to stop.
+const NOT_THROTTLED: [&str; 5] = [
+    "facts.preview",
+    "events",
+    "inbox",
+    "harness.setup",
+    "session.end",
+];
+
 /// Who sent a request, as far as its token says.
 #[derive(Clone, Debug)]
 enum Caller {
@@ -437,6 +474,9 @@ struct Inner {
     /// They accept nothing but `daemon.recover`.
     foreign: BTreeMap<String, RepoHandle>,
     tokens: Tokens,
+    /// What each session and those made from it may still do, by repository
+    /// and the first of them. Lives as long as the daemon.
+    buckets: BTreeMap<(String, String), Bucket>,
     /// Nonces of recent logins, so a login signature opens one session.
     login_nonces: BTreeMap<String, i64>,
     prepared: BTreeMap<String, Op>,
@@ -498,6 +538,7 @@ fn same_proposal(state: &State, change: ChangeId, commit: &GitId, base: &GitId) 
 
 pub struct Service {
     pub home: Home,
+    pub counters: Counters,
     clock: Clock,
     verifier: Verifier,
     /// Checks that passed, by repository, tree and configuration. It lives
@@ -545,6 +586,7 @@ impl Service {
             verified: Mutex::default(),
             verification_runs: AtomicU64::new(0),
             home,
+            counters: Counters::default(),
             clock,
             settings,
             inner: Mutex::new(Inner {
@@ -552,6 +594,7 @@ impl Service {
                 repos,
                 foreign,
                 tokens,
+                buckets: BTreeMap::new(),
                 login_nonces: BTreeMap::new(),
                 prepared: BTreeMap::new(),
                 workspaces: BTreeMap::new(),
@@ -692,6 +735,49 @@ impl Service {
         )
     }
 
+    /// A session past `[sessions] ops_per_minute` goes no further, and the
+    /// log does not grow. This is no decision: nothing of it is logged, so
+    /// `decide()` and a replay never see it. Sessions made from one another
+    /// spend from one bucket, or a child would be a way round it.
+    fn throttle(&self, req: &Request) -> std::result::Result<(), (String, String)> {
+        let mut guard = self.lock();
+        let inner = &mut *guard;
+        let now = self.now();
+        let (repo, actor) = Self::agent(inner, req, now)?;
+        let session = actor.session().expect("agent");
+        let r = Self::repo(inner, &repo)?;
+        let rate = r.policy().or_fail()?.config.sessions.ops_per_minute as u64;
+        let root = r.chain.state.root_session(session).to_string();
+        let bucket = inner.buckets.entry((repo, root));
+        let bucket = bucket.or_insert_with(|| Bucket::full(rate, now));
+        bucket.take(rate, now).map_err(|wait_ms| {
+            Counters::add(&self.counters.rate_limited);
+            let msg = format!("this session is over its rate; try again in {wait_ms} ms");
+            ("rate_limited".to_string(), msg)
+        })
+    }
+
+    /// Whether a line may go on past `limits::SHORT_LINE`, from what its
+    /// first bytes say.
+    pub fn long_line(&self, head: &Head) -> std::result::Result<(), (String, String)> {
+        let method = head.method.as_deref().unwrap_or_default();
+        let found = METHODS.iter().find(|(m, _)| *m == method);
+        let Some(&(_, cred)) = found.filter(|_| LONG_LINES.contains(&method)) else {
+            return fail("too_large", "this request line is too long");
+        };
+        if head.token.is_none() {
+            return fail("too_large", "a long line names its method and token first");
+        }
+        let req = Request {
+            id: head.id,
+            method: method.into(),
+            repo: head.repo.clone(),
+            token: head.token.clone(),
+            params: Value::Null,
+        };
+        self.authorize(&req, cred).map(|_| ())
+    }
+
     fn dispatch(&self, req: &Request, in_sandbox: &dyn Fn() -> bool) -> Hr {
         let p = &req.params;
         let Some(&(_, cred)) = METHODS.iter().find(|(m, _)| *m == req.method) else {
@@ -708,6 +794,9 @@ impl Service {
         let auth = self.authorize(req, cred)?;
         if cred == Cred::Agent {
             self.hold_to_sandbox(req, in_sandbox)?;
+            if !NOT_THROTTLED.contains(&req.method.as_str()) {
+                self.throttle(req)?;
+            }
         }
         match req.method.as_str() {
             "ping" => Ok(json!({
@@ -716,6 +805,7 @@ impl Service {
                 "daemon_key": self.public_key(),
                 "next_key": self.next_key(),
                 "proxy": self.settings.proxy,
+                "refused": self.counters.to_json(),
             })),
             "human.login" => self.login(req, params(p)?),
             "human.logout" => self.logout(req),
@@ -782,7 +872,10 @@ impl Service {
             "hook.bind" => self.hook_bind(req, params(p)?),
             "hook.stop" => self.hook_stop(req, params(p)?),
             "harness.setup" => self.harness_setup(req, params(p)?),
-            "queue.run" => Ok(json!({"integrated": self.process_all()})),
+            "queue.run" => {
+                self.notify_queue();
+                Ok(json!({"integrated": 0, "woken": true}))
+            }
             m => fail("unknown_method", format!("unknown method {m}")),
         }
     }
@@ -1309,10 +1402,8 @@ impl Service {
                 .wait_timeout(held, left.min(Duration::from_millis(LOG_POLL_MS)))
                 .unwrap_or_else(|e| e.into_inner());
         };
-        let ops = OpLog::new(&store).read_all().or_fail()?;
-        let limit = q.limit.unwrap_or(u64::MAX) as usize;
-        let out: Vec<&SignedOp> = ops.iter().skip(q.from as usize).take(limit).collect();
-        Ok(json!(out))
+        let ops = OpLog::new(&store).read_from(q.from).or_fail()?;
+        Ok(json!(ops[..log_page(q.limit).min(ops.len())]))
     }
 
     fn tree(&self, auth: &Auth, q: TreeQuery) -> Hr {
@@ -3351,6 +3442,23 @@ mod tests {
         verified.insert(verified_key(VERIFIED_TREES), &[], 0);
         assert!(!known(&verified, 0));
         assert!((1..=VERIFIED_TREES).all(|i| known(&verified, i)));
+    }
+
+    #[test]
+    fn queue_run_wakes_the_worker() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::new(dir.path().join("h"));
+        let svc = Service::open(home, Settings::default(), system_clock()).unwrap();
+        let before = *svc.wake.0.lock().unwrap();
+        svc.notify_queue();
+        assert_eq!(*svc.wake.0.lock().unwrap(), before + 1);
+    }
+
+    #[test]
+    fn a_log_page_is_what_was_asked_up_to_the_cap() {
+        assert_eq!(log_page(Some(3)), 3);
+        assert_eq!(log_page(None), LOG_PAGE as usize);
+        assert_eq!(log_page(Some(u64::MAX)), LOG_PAGE as usize);
     }
 
     /// The rows of the method table in docs/decisions.md.

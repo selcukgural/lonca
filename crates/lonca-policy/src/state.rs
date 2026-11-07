@@ -315,6 +315,15 @@ impl State {
         true
     }
 
+    /// The session `id` was made from, and that one from, as far as it goes.
+    pub fn root_session<'a>(&'a self, id: &'a str) -> &'a str {
+        let mut cur = id;
+        while let Some(p) = self.sessions.get(cur).and_then(|s| s.parent.as_deref()) {
+            cur = p;
+        }
+        cur
+    }
+
     /// `session` and the sessions it continues, newest first.
     fn lineage(&self, session: &str) -> Vec<String> {
         let mut out = Vec::new();

@@ -1,0 +1,468 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#Ledger.Charge"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cs#Ledger.Added"
+        ],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.cs#Ledger.Gone"
+        ],
+        "edits": [
+          "src/sample.cs#Ledger.Add",
+          "src/sample.cs#Ledger.Sig",
+          "src/sample.cs#LedgerTests.Charges"
+        ],
+        "import_only_files": [
+          "src/sample.cs"
+        ],
+        "lines_added": 10,
+        "lines_removed": 6,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [
+          "src/sample.cs#Ledger.Sig"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 1,
+          "skipped": 1
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "using System;\nusing System.Collections.Generic;\nusing System.Linq;\n\nnamespace Billing\n{\n    public class Ledger\n    {\n        private readonly Dictionary<string, long> entries = new();\n\n        public long Charge(long amount)\n        {\n            return amount * 2;\n        }\n\n        public int Sig(int a, int b)\n        {\n            return a + b;\n        }\n\n        public void Add(string k, long v)\n        {\n            entries.TryAdd(k, v);\n        }\n\n        public long Added()\n        {\n            return entries.Values.Sum();\n        }\n    }\n\n    public class LedgerTests\n    {\n        [Fact(Skip = \"flaky\")]\n        public void Charges()\n        {\n            Assert.Equal(2, new Ledger().Charge(2));\n        }\n    }\n}\n"
+  },
+  "path": "src/sample.cs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          13
+        ],
+        [
+          14,
+          47
+        ]
+      ],
+      "js_tests": [],
+      "residual": "compilation_unit(namespace_declaration(namespace\u001fBilling\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": "private readonly Dictionary<string, long> entries = new();",
+              "skipped": false,
+              "span": [
+                107,
+                107,
+                165
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Charge",
+              "own": "",
+              "signature": "public long Charge(long amount)",
+              "skipped": false,
+              "span": [
+                175,
+                175,
+                253
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Gone",
+              "own": "",
+              "signature": "public void Gone()",
+              "skipped": false,
+              "span": [
+                263,
+                263,
+                285
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Sig",
+              "own": "",
+              "signature": "public int Sig(int a)",
+              "skipped": false,
+              "span": [
+                295,
+                295,
+                362
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Add",
+              "own": "",
+              "signature": "public void Add(string k, long v)",
+              "skipped": false,
+              "span": [
+                372,
+                372,
+                453
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_declaration(modifier(public\u001f)class\u001fLedger\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class Ledger",
+          "skipped": false,
+          "span": [
+            73,
+            73,
+            459
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "LedgerTests.Charges",
+              "own": "",
+              "signature": "public void Charges()",
+              "skipped": false,
+              "span": [
+                504,
+                504,
+                613
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "LedgerTests",
+          "own": "class_declaration(modifier(public\u001f)class\u001fLedgerTests\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class LedgerTests",
+          "skipped": false,
+          "span": [
+            465,
+            465,
+            619
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          13
+        ],
+        [
+          14,
+          47
+        ]
+      ],
+      "js_tests": [],
+      "residual": "compilation_unit(namespace_declaration(namespace\u001fBilling\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": "private readonly Dictionary<string, long> entries = new();",
+              "skipped": false,
+              "span": [
+                107,
+                107,
+                165
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Charge",
+              "own": "",
+              "signature": "public long Charge(long amount)",
+              "skipped": false,
+              "span": [
+                175,
+                175,
+                257
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Gone",
+              "own": "",
+              "signature": "public void Gone()",
+              "skipped": false,
+              "span": [
+                267,
+                267,
+                289
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Sig",
+              "own": "",
+              "signature": "public int Sig(int a)",
+              "skipped": false,
+              "span": [
+                299,
+                299,
+                366
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Add",
+              "own": "",
+              "signature": "public void Add(string k, long v)",
+              "skipped": false,
+              "span": [
+                376,
+                376,
+                457
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_declaration(modifier(public\u001f)class\u001fLedger\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class Ledger",
+          "skipped": false,
+          "span": [
+            73,
+            73,
+            463
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "LedgerTests.Charges",
+              "own": "",
+              "signature": "public void Charges()",
+              "skipped": false,
+              "span": [
+                508,
+                508,
+                617
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "LedgerTests",
+          "own": "class_declaration(modifier(public\u001f)class\u001fLedgerTests\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class LedgerTests",
+          "skipped": false,
+          "span": [
+            469,
+            469,
+            623
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          13
+        ],
+        [
+          14,
+          47
+        ],
+        [
+          48,
+          66
+        ]
+      ],
+      "js_tests": [],
+      "residual": "compilation_unit(namespace_declaration(namespace\u001fBilling\u001fdeclaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.entries",
+              "own": "",
+              "signature": "private readonly Dictionary<string, long> entries = new();",
+              "skipped": false,
+              "span": [
+                126,
+                126,
+                184
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Charge",
+              "own": "",
+              "signature": "public long Charge(long amount)",
+              "skipped": false,
+              "span": [
+                194,
+                194,
+                272
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Sig",
+              "own": "",
+              "signature": "public int Sig(int a, int b)",
+              "skipped": false,
+              "span": [
+                282,
+                282,
+                356
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Add",
+              "own": "",
+              "signature": "public void Add(string k, long v)",
+              "skipped": false,
+              "span": [
+                366,
+                366,
+                453
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.Added",
+              "own": "",
+              "signature": "public long Added()",
+              "skipped": false,
+              "span": [
+                463,
+                463,
+                543
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_declaration(modifier(public\u001f)class\u001fLedger\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class Ledger",
+          "skipped": false,
+          "span": [
+            92,
+            92,
+            549
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "LedgerTests.Charges",
+              "own": "",
+              "signature": "public void Charges()",
+              "skipped": true,
+              "span": [
+                594,
+                594,
+                719
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "LedgerTests",
+          "own": "class_declaration(modifier(public\u001f)class\u001fLedgerTests\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class LedgerTests",
+          "skipped": false,
+          "span": [
+            555,
+            555,
+            725
+          ]
+        }
+      ]
+    }
+  }
+}

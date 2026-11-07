@@ -197,8 +197,13 @@ the body; a change of the signature needs `edit`. `leases.shared` is refused
 without `required = true` and a `build` or `test` command, and a `shared` item
 is refused (`shared_off`) where the policy does not have it.
 
-The checks run on the merged tree, and they are what makes this safe: two
-changes that touch different lines can still break each other.
+When two holders change the same function, the second to integrate is merged
+line by line with the first: lines both changed, or lines next to each other,
+are a conflict naming the function, and so is a result that does not parse.
+A change on trunk since its base made under any other kind (or by a human,
+or imported) is not joined with. The checks run on the merged tree, and they
+are what makes this safe: two changes that touch different lines can still
+break each other.
 
 ## Starters
 

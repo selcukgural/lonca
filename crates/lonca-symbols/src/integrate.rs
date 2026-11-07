@@ -16,7 +16,7 @@ use lonca_core::{FileMap, GitId, Result, Store};
 
 use crate::engine;
 use crate::facts::{Analysis, FILE, analyze};
-use crate::merge::merge3;
+use crate::merge::{Joins, merge3_joining, no_joins};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Integration {
@@ -34,13 +34,25 @@ pub fn integrate(
     trunk: &GitId,
     change: &GitId,
 ) -> Result<Integration> {
+    integrate_joining(store, engine, base, trunk, change, &no_joins)
+}
+
+/// [`integrate`], joining by lines the symbols `joins` names.
+pub fn integrate_joining(
+    store: &Store,
+    engine: u32,
+    base: &GitId,
+    trunk: &GitId,
+    change: &GitId,
+    joins: Joins,
+) -> Result<Integration> {
     engine::check(engine)?;
     let base_files = store.commit_files(base)?;
     let ours = store.commit_files(trunk)?;
     let theirs = store.commit_files(change)?;
     let read = |id: &GitId| store.read_blob(id);
     let write = |b: &[u8]| store.write_blob(b);
-    let r = merge3(engine, &base_files, &ours, &theirs, &read, &write)?;
+    let r = merge3_joining(engine, &base_files, &ours, &theirs, &read, &write, joins)?;
     if !r.conflicts.is_empty() {
         return Ok(Integration {
             merged: None,

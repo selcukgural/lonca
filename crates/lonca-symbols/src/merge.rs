@@ -15,7 +15,7 @@ use lonca_core::{FileEntry, FileMap, GitId, Result};
 
 use crate::engine::{
     ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LANGUAGES, ENGINE_LINE_MERGE,
-    ENGINE_PLACES, ENGINE_SECTIONS, reads_size,
+    ENGINE_PLACES, ENGINE_SECTIONS, ENGINE_SHARED, reads_size,
 };
 use crate::extract::{
     Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_at,
@@ -51,6 +51,18 @@ pub struct MergeResult {
     pub conflicts: Vec<String>,
 }
 
+/// Which symbols (`path#name`) a merge may join line by line when both sides
+/// changed them: those held `shared` (see `docs/decisions.md`, "Shared
+/// leases (#112)"). Asked from [`ENGINE_SHARED`] on, of a symbol that is
+/// not a container on every side: a container's members are merged one by
+/// one.
+pub type Joins<'a> = &'a dyn Fn(&str) -> bool;
+
+/// No symbol is joined by lines.
+pub fn no_joins(_: &str) -> bool {
+    false
+}
+
 pub fn merge3(
     engine: u32,
     base: &FileMap,
@@ -58,6 +70,19 @@ pub fn merge3(
     theirs: &FileMap,
     read: &dyn Fn(&GitId) -> Result<Vec<u8>>,
     write: &dyn Fn(&[u8]) -> Result<GitId>,
+) -> Result<MergeResult> {
+    merge3_joining(engine, base, ours, theirs, read, write, &no_joins)
+}
+
+/// [`merge3`], joining by lines the symbols `joins` names.
+pub fn merge3_joining(
+    engine: u32,
+    base: &FileMap,
+    ours: &FileMap,
+    theirs: &FileMap,
+    read: &dyn Fn(&GitId) -> Result<Vec<u8>>,
+    write: &dyn Fn(&[u8]) -> Result<GitId>,
+    joins: Joins,
 ) -> Result<MergeResult> {
     let mut files = FileMap::new();
     let mut conflicts = Vec::new();
@@ -112,7 +137,7 @@ pub fn merge3(
                         pick(Some(o), &mut files);
                         continue;
                     };
-                    match merge_text_at(engine, path, bt, ot, tt) {
+                    match merge_text_joining(engine, path, bt, ot, tt, joins) {
                         Ok(text) => write(text.as_bytes())?,
                         Err(c) => {
                             conflicts.extend(c);
@@ -181,13 +206,25 @@ pub fn merge_text_at(
     o: &str,
     t: &str,
 ) -> std::result::Result<String, Vec<String>> {
+    merge_text_joining(engine, path, b, o, t, &no_joins)
+}
+
+/// [`merge_text_at`], joining by lines the symbols `joins` names.
+pub fn merge_text_joining(
+    engine: u32,
+    path: &str,
+    b: &str,
+    o: &str,
+    t: &str,
+    joins: Joins,
+) -> std::result::Result<String, Vec<String>> {
     if let Some(r) = section_merge(engine, path, b, o, t) {
         return r;
     }
     let file_conflict = || vec![format!("{path}#<file>")];
     let lang = Lang::detect_at(engine, path).filter(|_| all_read(engine, [b, o, t]));
     if let Some(lang) = lang {
-        match symbol_merge(engine, path, lang, b, o, t) {
+        match symbol_merge(engine, path, lang, [b, o, t], joins) {
             Sm::Merged(s) => return Ok(s),
             Sm::Conflict(c) => return Err(c),
             Sm::Fallback => {}
@@ -305,7 +342,7 @@ fn around_conflicts(
     if differs(engine, outer_code(engine, &pb), outer_code(engine, &pt)) {
         return None;
     }
-    let mut m = Merger::new(engine, path, b, o, t);
+    let mut m = Merger::new(engine, path, b, o, t, &no_joins);
     m.imports(&pb, &po, &pt);
     m.level(&pb.syms, &po.syms, &pt.syms, None);
     if m.moved {
@@ -541,6 +578,9 @@ struct Merger<'a> {
     /// members again after one: without this, each level costs two of the
     /// one below it.
     stuck: BTreeSet<(*const Sym, *const Sym, *const Sym)>,
+    joins: Joins<'a>,
+    /// The symbols joined by lines, as `path#name`.
+    joined: Vec<String>,
 }
 
 fn names(syms: &[Sym]) -> Vec<&str> {
@@ -603,7 +643,14 @@ fn neighbours<'s>(syms: &'s [Sym], anchor: impl Fn(&'s Sym) -> Option<&'s Sym>) 
 }
 
 impl<'a> Merger<'a> {
-    fn new(engine: u32, path: &'a str, b: &'a str, o: &'a str, t: &'a str) -> Self {
+    fn new(
+        engine: u32,
+        path: &'a str,
+        b: &'a str,
+        o: &'a str,
+        t: &'a str,
+        joins: Joins<'a>,
+    ) -> Self {
         Merger {
             engine,
             path,
@@ -614,11 +661,29 @@ impl<'a> Merger<'a> {
             conflicts: Vec::new(),
             moved: false,
             stuck: BTreeSet::new(),
+            joins,
+            joined: Vec::new(),
         }
     }
 
     fn conflict(&mut self, name: &str) {
         self.conflicts.push(format!("{}#{name}", self.path));
+    }
+
+    /// Both sides changed `unit`: joins their lines if it may be joined and
+    /// none of them meet. What it joins is held to [`holds_up`] like the rest
+    /// of the file, which refuses a symbol that holds others on one side.
+    fn join(&mut self, unit: &str, [b, o, t]: [&Sym; 3]) -> bool {
+        let name = format!("{}#{unit}", self.path);
+        if self.engine < ENGINE_SHARED || !(self.joins)(&name) {
+            return false;
+        }
+        let Some(text) = lines::merge(b.text(self.b), o.text(self.o), t.text(self.t)) else {
+            return false;
+        };
+        self.replace(o.start, o.end, text);
+        self.joined.push(name);
+        true
     }
 
     fn insert(&mut self, pos: usize, text: String) {
@@ -779,7 +844,9 @@ impl<'a> Merger<'a> {
                     }
                     let unit = b_sym.changed_unit(ts_sym, self.engine);
                     if !(b_sym.container && o_sym.container && ts_sym.container) {
-                        self.conflict(&unit);
+                        if !self.join(&unit, [b_sym, o_sym, ts_sym]) {
+                            self.conflict(&unit);
+                        }
                         continue;
                     }
                     let defs = self.engine >= ENGINE_DEFS;
@@ -887,7 +954,7 @@ impl<'a> Merger<'a> {
         if self.stuck.contains(&walk) {
             return false;
         }
-        let mut m = Merger::new(self.engine, self.path, self.b, self.t, self.o);
+        let mut m = Merger::new(self.engine, self.path, self.b, self.t, self.o, self.joins);
         m.stuck = std::mem::take(&mut self.stuck);
         m.level(&b.children, &t.children, &o.children, Some(t));
         self.stuck = std::mem::take(&mut m.stuck);
@@ -897,6 +964,7 @@ impl<'a> Merger<'a> {
         }
         self.note_moves(&names(&b.children), &names(&t.children));
         self.moved |= m.moved;
+        self.joined.append(&mut m.joined);
         match m.apply_within(t.start, t.end) {
             Some(text) => self.replace(o.start, o.end, text),
             None => self.moved = true,
@@ -977,7 +1045,7 @@ impl<'a> Merger<'a> {
     }
 }
 
-fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) -> Sm {
+fn symbol_merge(engine: u32, path: &str, lang: Lang, [b, o, t]: [&str; 3], joins: Joins) -> Sm {
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return Sm::Fallback;
@@ -992,7 +1060,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
     if !numbers_hold([&pb, &po, &pt]) || (engine >= ENGINE_KEYS && !counts_hold([&pb, &po, &pt])) {
         return Sm::Fallback;
     }
-    let mut m = Merger::new(engine, path, b, o, t);
+    let mut m = Merger::new(engine, path, b, o, t, joins);
     m.imports(&pb, &po, &pt);
     m.level(&pb.syms, &po.syms, &pt.syms, None);
     if !m.conflicts.is_empty() {
@@ -1004,12 +1072,20 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
     if m.moved {
         return Sm::Fallback;
     }
+    let mut joined = std::mem::take(&mut m.joined);
     match m.apply() {
         // Nothing of `theirs` came through, though the files differ: only
         // the line merge sees what it changed.
         Some(text) if engine >= ENGINE_EXACT && text == o => Sm::Fallback,
         Some(text) if holds_up(engine, path, lang, &text, &naming, [&pb, &po, &pt], &[]) => {
             Sm::Merged(text)
+        }
+        // What was joined by lines does not hold up: that is its conflict,
+        // and the lines of the whole file would join it the same way.
+        _ if !joined.is_empty() => {
+            joined.sort();
+            joined.dedup();
+            Sm::Conflict(joined)
         }
         _ => Sm::Fallback,
     }
@@ -1018,6 +1094,77 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, b: &str, o: &str, t: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod joins {
+        use super::super::*;
+
+        const F: &str = "fn f() -> usize {\n    let a = 1;\n    let x = 0;\n    let b = 2;\n    let y = 0;\n    let c = 3;\n    a + b + c + x + y\n}\n";
+
+        fn join(
+            engine: u32,
+            o: &str,
+            t: &str,
+            may: &[&str],
+        ) -> std::result::Result<String, Vec<String>> {
+            let may_join = |name: &str| may.contains(&name);
+            merge_text_joining(engine, "a.rs", F, o, t, &may_join)
+        }
+
+        fn line(n: usize, text: &str) -> String {
+            let mut lines: Vec<&str> = F.lines().collect();
+            lines[n] = text;
+            lines.join("\n") + "\n"
+        }
+
+        #[test]
+        fn lines_of_a_symbol_both_changed_are_joined_from_its_engine_on() {
+            let o = line(1, "    let a = 10;");
+            let t = line(5, "    let c = 30;");
+            let both = line(1, "    let a = 10;").replace("let c = 3;", "let c = 30;");
+            assert_eq!(join(ENGINE_SHARED, &o, &t, &["a.rs#f"]), Ok(both.clone()));
+            assert_eq!(join(ENGINE_SHARED, &t, &o, &["a.rs#f"]), Ok(both));
+            let conflict = Err(vec!["a.rs#f".to_string()]);
+            assert_eq!(join(ENGINE_SHARED - 1, &o, &t, &["a.rs#f"]), conflict);
+            assert_eq!(join(ENGINE_SHARED, &o, &t, &[]), conflict);
+            assert_eq!(join(ENGINE_SHARED, &o, &t, &["a.rs#g"]), conflict);
+            // Lines both changed are no join.
+            let t = line(1, "    let a = 11;");
+            assert_eq!(join(ENGINE_SHARED, &o, &t, &["a.rs#f"]), conflict);
+        }
+
+        /// Each side reads, the two together do not: `theirs` writes what
+        /// ends the raw string `ours` opens.
+        #[test]
+        fn a_join_that_does_not_read_is_the_symbols_conflict() {
+            let o = line(1, "    let a = r#\"").replace("    let c = 3;", "    \"#.len();");
+            let t = line(3, "    let b = 2; // \"#");
+            for side in [&o, &t] {
+                assert!(
+                    !parse_at(ENGINE_SHARED, Lang::detect("a.rs").unwrap(), side).has_error,
+                    "{side}"
+                );
+            }
+            let conflict = Err(vec!["a.rs#f".to_string()]);
+            assert_eq!(join(ENGINE_SHARED, &o, &t, &["a.rs#f"]), conflict);
+        }
+
+        /// A symbol one side gave members does not hold up joined: its own
+        /// text is neither side's. (The fields of a Rust struct are its own
+        /// text, not members: they are joined.)
+        #[test]
+        fn a_symbol_that_holds_others_on_a_side_is_not_joined() {
+            let b = "#[cfg(test)]\n/// M.\nmod m;\n";
+            let o = b.replace("test", "unix");
+            let t = b.replace("mod m;", "mod m {\n    fn f() {}\n}");
+            let may_join = |_: &str| true;
+            for (o, t) in [(&o, &t), (&t, &o)] {
+                let r = merge_text_joining(ENGINE_SHARED, "a.rs", b, o, t, &may_join);
+                let n = merge_text_at(ENGINE_SHARED, "a.rs", b, o, t);
+                assert_eq!(r, n);
+                assert_eq!(r, Err(vec!["a.rs#m".to_string()]));
+            }
+        }
+    }
     use crate::engine::ENGINE_CURRENT;
     use crate::engine::ENGINE_LEVELS;
     use crate::engine::ENGINE_LIMITS;

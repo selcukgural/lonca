@@ -5,7 +5,8 @@
 //! change. For every case under `tests/engine/v<N>/<case>/` (a `base`, an
 //! `ours` (trunk) and a `theirs` (proposal) file of one language) this test
 //! pins the extracted symbols of each file, the facts of both sides against
-//! the base, and the three-way merge, in `expected.json`.
+//! the base, and the three-way merge, in `expected.json`. A `joins` file
+//! lists, one per line, the symbols the merge may join by lines.
 //!
 //! A failure here means extraction, facts or the merge changed, possibly
 //! through a tree-sitter grammar or diff library update. Do not edit
@@ -18,8 +19,9 @@ use std::path::{Path, PathBuf};
 
 use lonca_core::{FileEntry, FileMap, FileMode, Store};
 use lonca_symbols::engine::{ENGINES_KNOWN, check};
+use lonca_symbols::merge::merge3_joining;
 use lonca_symbols::sections::{Format, sections};
-use lonca_symbols::{Lang, Sym, analyze, merge3, parse_at};
+use lonca_symbols::{Lang, Sym, analyze, parse_at};
 use serde_json::{Value, json};
 
 /// Rebuilds objects with their keys in sorted order. A workspace build turns
@@ -111,7 +113,13 @@ fn run_case(engine: u32, dir: &Path) -> Value {
         let a = analyze(engine, &b, n, &read).unwrap();
         json!({"facts": a.facts, "syntax_errors": a.syntax_errors})
     };
-    let merged = merge3(engine, &b, &o, &t, &read, &write).unwrap();
+    let joins: Vec<String> = std::fs::read_to_string(dir.join("joins"))
+        .unwrap_or_default()
+        .lines()
+        .map(|name| format!("{path}#{name}"))
+        .collect();
+    let may_join = |name: &str| joins.iter().any(|j| j == name);
+    let merged = merge3_joining(engine, &b, &o, &t, &read, &write, &may_join).unwrap();
     let merged_text = merged
         .files
         .get(&path)

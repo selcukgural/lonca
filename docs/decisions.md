@@ -638,6 +638,10 @@ entry format, so they have their own version
     around it, as with `MAX_LEVELS`, and test names of JavaScript stop there as
     well. Files that are read stay far below it.
   - Both limits depend only on the text, so the auditor gets the same answer.
+- **Engine 14** joins by lines a symbol both sides changed, where the caller
+  says it may (`Joins`): one held `shared` (see "Shared leases (#112)"). With
+  nothing to join its output is engine 13's. The cases under
+  `tests/engine/v14/` with a `joins` file pin what it joins.
     Engines before 13 read everything, as they always did.
 - **The cost of a merge grows with the file**, in every engine. Going through a
   list for each symbol, node or change made a merge of 300 KB take minutes.
@@ -2510,15 +2514,25 @@ to it line by line.
   not be merged by lines. Deletes and renames are as before.
 - **Log format 21.** An old reader would take `shared` for an unknown kind, so
   the chain check refuses one in an older entry.
-- **The merge (engine 14, the next step).** Until it lands, two holders'
-  changes to one symbol are what they are today: the second to integrate is
-  `conflicted`. Engine 14 line-merges a symbol both sides changed when the
-  change being integrated pinned a `shared` item covering it and no change
-  integrated since its base changed it under any other kind. Both come from
-  the replayed state, so the auditor recomputes the same merge and the log
-  carries nothing new. Lines both sides changed stay a conflict naming the
-  symbol, the result must parse and keep what the symbol merge keeps, and only
-  a symbol that holds no others is merged this way.
+- **The merge (engine 14).** A symbol both sides changed is joined by
+  lines when the change being integrated pinned a `shared` item covering it,
+  and no move of trunk since its base changed it under any other kind: an
+  integration records in the state what its facts change (edits, signature
+  changes, deletes, renamed names) that no `shared` pin of it covers, and an
+  import from outside counts as changing everything. In a batch, the members
+  in front count too. Nothing is joined under a policy without `shared`
+  leases, whatever was pinned. All of it comes from the replayed state and
+  the policy in force, so the auditor recomputes the same merge and the log
+  carries nothing new.
+- **What a join must hold to.** Lines both sides changed, or lines next to
+  each other, stay a conflict naming the symbol. The result must parse and
+  keep what the symbol merge keeps (`holds_up`); a joined result that does not
+  is a conflict naming the joined symbol, not the file. A type whose members
+  are symbols is merged member by member as before; a Rust struct's fields are
+  its own text, so they are joined.
+- **Recorded state grows with trunk.** One record per integration that
+  changed something exclusively; a lookup reads only the records since the
+  change's base.
 
 ## Open questions (carried from the design)
 

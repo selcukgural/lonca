@@ -1,0 +1,682 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rb#Client.charge"
+        ],
+        "import_only_files": [
+          "src/sample.rb"
+        ],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rb"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.rb#Shape.side"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rb#Client.self.make",
+          "src/sample.rb#Shape.area",
+          "src/sample.rb#top"
+        ],
+        "import_only_files": [],
+        "lines_added": 7,
+        "lines_removed": 3,
+        "modified_files": [
+          "src/sample.rb"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "require \"json\"\nrequire \"set\"\nrequire_relative \"base\"\n\n# A client.\nclass Client < Base\n  LIMIT = 10\n\n  def initialize(total)\n    @total = total\n  end\n\n  def charge(amount)\n    @total + amount + 1\n  end\n\n  def self.make\n    new(1)\n  end\n\n  class << self\n    def other\n      1\n    end\n  end\nend\n\nmodule Shape\n  def area\n    1\n  end\n\n  def side\n    2\n  end\nend\n\ndef top(x)\n  x + 1\nend\n\ndescribe \"client\" do\n  it \"charges\" do\n    expect(1).to eq(1)\n  end\n\n  xit \"refunds\" do\n    expect(1).to eq(2)\n  end\nend\n\nclass ClientTest < Minitest::Test\n  def test_charge\n    assert true\n  end\n\n  def test_later\n    skip\n  end\nend\n"
+  },
+  "path": "src/sample.rb",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          14
+        ],
+        [
+          15,
+          38
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "client > charges",
+          "skipped": false,
+          "text": "it \"charges\" do expect(1).to eq(1) end"
+        },
+        {
+          "name": "client > refunds",
+          "skipped": true,
+          "text": "xit \"refunds\" do expect(1).to eq(2) end"
+        }
+      ],
+      "residual": "program(call(describe\u001fargument_list(\"client\"\u001f)do_block(do\u001fbody_statement(call(it\u001fargument_list(\"charges\"\u001f)do_block(do\u001fbody_statement(call(call(expect\u001fargument_list((\u001f1\u001f)\u001f)).\u001fto\u001fargument_list(call(eq\u001fargument_list((\u001f1\u001f)\u001f)))))end\u001f))call(xit\u001fargument_list(\"refunds\"\u001f)do_block(do\u001fbody_statement(call(call(expect\u001fargument_list((\u001f1\u001f)\u001f)).\u001fto\u001fargument_list(call(eq\u001fargument_list((\u001f2\u001f)\u001f)))))end\u001f)))end\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.LIMIT",
+              "own": "",
+              "signature": "LIMIT =",
+              "skipped": false,
+              "span": [
+                74,
+                74,
+                84
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.initialize",
+              "own": "",
+              "signature": "def initialize(total)",
+              "skipped": false,
+              "span": [
+                88,
+                88,
+                134
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge",
+              "own": "",
+              "signature": "def charge(amount)",
+              "skipped": false,
+              "span": [
+                138,
+                138,
+                182
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.self.make",
+              "own": "",
+              "signature": "def self.make",
+              "skipped": false,
+              "span": [
+                186,
+                186,
+                216
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.other",
+              "own": "",
+              "signature": "def other",
+              "skipped": false,
+              "span": [
+                238,
+                238,
+                263
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "# A client.\nclass(class\u001fClient\u001fsuperclass(<\u001fBase\u001f)body_statement(singleton_class(class\u001f<<\u001fself\u001fbody_statement()end\u001f))end\u001f)",
+          "signature": "class Client < Base",
+          "skipped": false,
+          "span": [
+            40,
+            52,
+            273
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": "def area",
+              "skipped": false,
+              "span": [
+                290,
+                290,
+                310
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "module(module\u001fShape\u001fbody_statement()end\u001f)",
+          "signature": "module Shape",
+          "skipped": false,
+          "span": [
+            275,
+            275,
+            314
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "def top(x)",
+          "skipped": false,
+          "span": [
+            316,
+            316,
+            334
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "ClientTest.test_charge",
+              "own": "",
+              "signature": "def test_charge",
+              "skipped": false,
+              "span": [
+                494,
+                494,
+                531
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "ClientTest.test_later",
+              "own": "",
+              "signature": "def test_later",
+              "skipped": true,
+              "span": [
+                535,
+                535,
+                564
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "ClientTest",
+          "own": "class(class\u001fClientTest\u001fsuperclass(<\u001fscope_resolution(Minitest\u001f::\u001fTest\u001f))body_statement()end\u001f)",
+          "signature": "class ClientTest < Minitest::Test",
+          "skipped": false,
+          "span": [
+            458,
+            458,
+            568
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          14
+        ],
+        [
+          15,
+          28
+        ],
+        [
+          29,
+          52
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "client > charges",
+          "skipped": false,
+          "text": "it \"charges\" do expect(1).to eq(1) end"
+        },
+        {
+          "name": "client > refunds",
+          "skipped": true,
+          "text": "xit \"refunds\" do expect(1).to eq(2) end"
+        }
+      ],
+      "residual": "program(call(describe\u001fargument_list(\"client\"\u001f)do_block(do\u001fbody_statement(call(it\u001fargument_list(\"charges\"\u001f)do_block(do\u001fbody_statement(call(call(expect\u001fargument_list((\u001f1\u001f)\u001f)).\u001fto\u001fargument_list(call(eq\u001fargument_list((\u001f1\u001f)\u001f)))))end\u001f))call(xit\u001fargument_list(\"refunds\"\u001f)do_block(do\u001fbody_statement(call(call(expect\u001fargument_list((\u001f1\u001f)\u001f)).\u001fto\u001fargument_list(call(eq\u001fargument_list((\u001f2\u001f)\u001f)))))end\u001f)))end\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.LIMIT",
+              "own": "",
+              "signature": "LIMIT =",
+              "skipped": false,
+              "span": [
+                88,
+                88,
+                98
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.initialize",
+              "own": "",
+              "signature": "def initialize(total)",
+              "skipped": false,
+              "span": [
+                102,
+                102,
+                148
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge",
+              "own": "",
+              "signature": "def charge(amount)",
+              "skipped": false,
+              "span": [
+                152,
+                152,
+                200
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.self.make",
+              "own": "",
+              "signature": "def self.make",
+              "skipped": false,
+              "span": [
+                204,
+                204,
+                234
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.other",
+              "own": "",
+              "signature": "def other",
+              "skipped": false,
+              "span": [
+                256,
+                256,
+                281
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "# A client.\nclass(class\u001fClient\u001fsuperclass(<\u001fBase\u001f)body_statement(singleton_class(class\u001f<<\u001fself\u001fbody_statement()end\u001f))end\u001f)",
+          "signature": "class Client < Base",
+          "skipped": false,
+          "span": [
+            54,
+            66,
+            291
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": "def area",
+              "skipped": false,
+              "span": [
+                308,
+                308,
+                328
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "module(module\u001fShape\u001fbody_statement()end\u001f)",
+          "signature": "module Shape",
+          "skipped": false,
+          "span": [
+            293,
+            293,
+            332
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "def top(x)",
+          "skipped": false,
+          "span": [
+            334,
+            334,
+            352
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "ClientTest.test_charge",
+              "own": "",
+              "signature": "def test_charge",
+              "skipped": false,
+              "span": [
+                512,
+                512,
+                549
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "ClientTest.test_later",
+              "own": "",
+              "signature": "def test_later",
+              "skipped": true,
+              "span": [
+                553,
+                553,
+                582
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "ClientTest",
+          "own": "class(class\u001fClientTest\u001fsuperclass(<\u001fscope_resolution(Minitest\u001f::\u001fTest\u001f))body_statement()end\u001f)",
+          "signature": "class ClientTest < Minitest::Test",
+          "skipped": false,
+          "span": [
+            476,
+            476,
+            586
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          14
+        ],
+        [
+          15,
+          38
+        ]
+      ],
+      "js_tests": [
+        {
+          "name": "client > charges",
+          "skipped": false,
+          "text": "it \"charges\" do expect(1).to eq(1) end"
+        },
+        {
+          "name": "client > refunds",
+          "skipped": true,
+          "text": "xit \"refunds\" do expect(1).to eq(2) end"
+        }
+      ],
+      "residual": "program(call(describe\u001fargument_list(\"client\"\u001f)do_block(do\u001fbody_statement(call(it\u001fargument_list(\"charges\"\u001f)do_block(do\u001fbody_statement(call(call(expect\u001fargument_list((\u001f1\u001f)\u001f)).\u001fto\u001fargument_list(call(eq\u001fargument_list((\u001f1\u001f)\u001f)))))end\u001f))call(xit\u001fargument_list(\"refunds\"\u001f)do_block(do\u001fbody_statement(call(call(expect\u001fargument_list((\u001f1\u001f)\u001f)).\u001fto\u001fargument_list(call(eq\u001fargument_list((\u001f2\u001f)\u001f)))))end\u001f)))end\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.LIMIT",
+              "own": "",
+              "signature": "LIMIT =",
+              "skipped": false,
+              "span": [
+                74,
+                74,
+                84
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.initialize",
+              "own": "",
+              "signature": "def initialize(total)",
+              "skipped": false,
+              "span": [
+                88,
+                88,
+                134
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge",
+              "own": "",
+              "signature": "def charge(amount)",
+              "skipped": false,
+              "span": [
+                138,
+                138,
+                182
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.self.make",
+              "own": "",
+              "signature": "def self.make",
+              "skipped": false,
+              "span": [
+                186,
+                186,
+                216
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.other",
+              "own": "",
+              "signature": "def other",
+              "skipped": false,
+              "span": [
+                238,
+                238,
+                263
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "# A client.\nclass(class\u001fClient\u001fsuperclass(<\u001fBase\u001f)body_statement(singleton_class(class\u001f<<\u001fself\u001fbody_statement()end\u001f))end\u001f)",
+          "signature": "class Client < Base",
+          "skipped": false,
+          "span": [
+            40,
+            52,
+            273
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": "def area",
+              "skipped": false,
+              "span": [
+                290,
+                290,
+                310
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.side",
+              "own": "",
+              "signature": "def side",
+              "skipped": false,
+              "span": [
+                314,
+                314,
+                334
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "module(module\u001fShape\u001fbody_statement()end\u001f)",
+          "signature": "module Shape",
+          "skipped": false,
+          "span": [
+            275,
+            275,
+            338
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "def top(x)",
+          "skipped": false,
+          "span": [
+            340,
+            340,
+            362
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "ClientTest.test_charge",
+              "own": "",
+              "signature": "def test_charge",
+              "skipped": false,
+              "span": [
+                522,
+                522,
+                559
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "ClientTest.test_later",
+              "own": "",
+              "signature": "def test_later",
+              "skipped": true,
+              "span": [
+                563,
+                563,
+                592
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "ClientTest",
+          "own": "class(class\u001fClientTest\u001fsuperclass(<\u001fscope_resolution(Minitest\u001f::\u001fTest\u001f))body_statement()end\u001f)",
+          "signature": "class ClientTest < Minitest::Test",
+          "skipped": false,
+          "span": [
+            486,
+            486,
+            596
+          ]
+        }
+      ]
+    }
+  }
+}

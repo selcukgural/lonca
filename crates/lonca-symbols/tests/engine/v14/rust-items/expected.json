@@ -1,0 +1,361 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#f",
+          "src/sample.rs#m!"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [
+          "src/sample.rs#f",
+          "src/sample.rs#m!"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#g",
+          "src/sample.rs#m!~2",
+          "src/sample.rs#thread_local!"
+        ],
+        "import_only_files": [],
+        "lines_added": 3,
+        "lines_removed": 3,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [
+          "src/sample.rs#m!~2",
+          "src/sample.rs#thread_local!"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "//! Crate docs.\n\nuse std::fmt;\n\n// Section.\n\nextern \"C\" {\n    fn f(a: u16);\n    static X: u8;\n}\n\nthread_local! { static A: u8 = 2; }\n\nm!(c);\nm!(d);\n\nfn g() { h(); }\n"
+  },
+  "path": "src/sample.rs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          17,
+          30
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(//! Crate docs.\n\u001f// Section.\u001fforeign_mod_item(extern_modifier(extern\u001f\"C\"\u001f)declaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "fn f(a: u8);",
+          "skipped": false,
+          "span": [
+            62,
+            62,
+            74
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "X",
+          "own": "",
+          "signature": "static X: u8;",
+          "skipped": false,
+          "span": [
+            79,
+            79,
+            92
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "thread_local!",
+          "own": "",
+          "signature": "thread_local! { static A: u8 = 1; }",
+          "skipped": false,
+          "span": [
+            96,
+            96,
+            131
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "m!",
+          "own": "",
+          "signature": "m!(a);",
+          "skipped": false,
+          "span": [
+            133,
+            133,
+            139
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "m!~2",
+          "own": "",
+          "signature": "m!(b);",
+          "skipped": false,
+          "span": [
+            140,
+            140,
+            146
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "g",
+          "own": "",
+          "signature": "fn g()",
+          "skipped": false,
+          "span": [
+            148,
+            148,
+            157
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          17,
+          30
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(//! Crate docs.\n\u001f// Section.\u001fforeign_mod_item(extern_modifier(extern\u001f\"C\"\u001f)declaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "fn f(a: u16);",
+          "skipped": false,
+          "span": [
+            62,
+            62,
+            75
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "X",
+          "own": "",
+          "signature": "static X: u8;",
+          "skipped": false,
+          "span": [
+            80,
+            80,
+            93
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "thread_local!",
+          "own": "",
+          "signature": "thread_local! { static A: u8 = 1; }",
+          "skipped": false,
+          "span": [
+            97,
+            97,
+            132
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "m!",
+          "own": "",
+          "signature": "m!(c);",
+          "skipped": false,
+          "span": [
+            134,
+            134,
+            140
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "m!~2",
+          "own": "",
+          "signature": "m!(b);",
+          "skipped": false,
+          "span": [
+            141,
+            141,
+            147
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "g",
+          "own": "",
+          "signature": "fn g()",
+          "skipped": false,
+          "span": [
+            149,
+            149,
+            158
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          17,
+          30
+        ]
+      ],
+      "js_tests": [],
+      "residual": "source_file(//! Crate docs.\n\u001f// Section.\u001fforeign_mod_item(extern_modifier(extern\u001f\"C\"\u001f)declaration_list({\u001f}\u001f)))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "fn f(a: u8);",
+          "skipped": false,
+          "span": [
+            62,
+            62,
+            74
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "X",
+          "own": "",
+          "signature": "static X: u8;",
+          "skipped": false,
+          "span": [
+            79,
+            79,
+            92
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "thread_local!",
+          "own": "",
+          "signature": "thread_local! { static A: u8 = 2; }",
+          "skipped": false,
+          "span": [
+            96,
+            96,
+            131
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "m!",
+          "own": "",
+          "signature": "m!(a);",
+          "skipped": false,
+          "span": [
+            133,
+            133,
+            139
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "m!~2",
+          "own": "",
+          "signature": "m!(d);",
+          "skipped": false,
+          "span": [
+            140,
+            140,
+            146
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "g",
+          "own": "",
+          "signature": "fn g()",
+          "skipped": false,
+          "span": [
+            148,
+            148,
+            163
+          ]
+        }
+      ]
+    }
+  }
+}

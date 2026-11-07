@@ -118,6 +118,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 18** adds `affected` and `affected_more` to facts, left out of the
   encoding when empty, and a proposal reports the lease sets they reach (see
   "Signature changes"). Older entries report none and replay as they were.
+- **Version 19** adds `session.isolate` (see "Isolated mode: `lonca run` (#115)").
+- **Version 20** adds `harness` to `session.start`, left out of the encoding when
+  absent, and holds `session.bind` to it (see "Naming the harness"). Older entries
+  replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -2189,6 +2193,39 @@ Which observation level other harnesses can reach was open since the design (§1
   first, be a regular file, and only 1 MiB of it is read.
 - **A new built-in table needs a run.** A level relaxes approval, so `built_in()` has one
   for Claude Code alone, from before this rule, and a test says so.
+
+## Naming the harness
+
+A level says what a machine guarantees for one harness, so the name is part of the
+claim. It comes from the human who starts the session, in the signed `session.start`
+(`--harness`, log format 20), like the scope and the task. Only an entry of this
+format can carry it, and what is signed shows it: "start agent a on src/**, under
+claude-code".
+
+- **The table is the named harness's.** `hook.bind` still says what the hook was told
+  it is. A name that differs from the session's, and a session with none, read no
+  table: the level is `unobserved`, with a note, and the report goes in the log as it
+  came. So a session with no `--harness` is `unobserved` on any machine. That is the
+  default a human opts out of, and it costs an existing setup one flag.
+- **`decide()` holds the daemon to it.** From format 20 a level above `unobserved` for
+  another harness than the session's is denied (`bind_other_harness`), so the auditor
+  checks the rule on replay.
+- **A bound level stays or falls** (`bind_raises_level`). The first report is the
+  hook's, sent at the harness's start before the agent has run. A report after it can
+  say the machine got better, but it comes from someone holding the session's token.
+  A fix to the managed settings takes effect in a new session.
+- **A child stands where its parent stands.** It takes the harness and `bound` along
+  with the level: it is the one session an agent can make, and nobody signed for it.
+- **A continuation reports afresh.** It is signed, so its harness binds as a new
+  session does, and it keeps the old session's harness unless it names another. What
+  was known of the files stays: taint and `writes` go along whatever it reports.
+- **`--no-setup` names without writing.** A harness locked by an administrator has its
+  hooks already, and the repository may track files setup would refuse to touch.
+- **The name is a human's word.** The daemon can not see what runs on the token, and
+  a person who names one harness and starts another gets the level of the first.
+- **`sudo_without_password` is still the hook's report**, since only that process can
+  try it. A level can not rise past the first report, so what stands is the report
+  sent when the harness started.
 
 ## Open questions (carried from the design)
 

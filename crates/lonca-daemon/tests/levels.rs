@@ -45,7 +45,7 @@ hooks = [{ at = "/allow_managed_hooks_only", equals = true }]
 fn a_table_in_the_signed_policy_gives_a_harness_its_level() {
     let mut e = Env::new();
     e.init(None);
-    let t = e.session("s1", &["src/**"]);
+    let t = e.session_under("s1", &["src/**"], Some("codex"));
     let hook = json!([{"hooks": [{"command": "/usr/bin/lonca hook"}]}]);
     let file = json!({
         "allow_managed_hooks_only": true,
@@ -69,16 +69,86 @@ fn a_table_in_the_signed_policy_gives_a_harness_its_level() {
     assert_eq!(e.human(op)["decision"]["outcome"], "allow");
 
     // Hooks only: the table says nothing that locks a sandbox.
-    let r = bind(&mut e, &t, "codex");
+    let t2 = e.session_under("s2", &["src/**"], Some("codex"));
+    let r = bind(&mut e, &t2, "codex");
     assert_eq!(r["level"], "hooks", "{r}");
 
     let mut open = file.clone();
     open["allow_managed_hooks_only"] = json!(false);
     std::fs::write(&path, serde_json::to_vec(&open).unwrap()).unwrap();
-    let r = bind(&mut e, &t, "codex");
+    let r = bind(&mut e, &t2, "codex");
     assert_eq!(r["level"], "unobserved", "{r}");
     assert!(
         r["notes"].to_string().contains("allow_managed_hooks_only"),
         "{r}"
     );
+}
+
+/// The table is the one the human named, whatever the request calls itself.
+#[test]
+fn a_level_is_read_for_the_harness_the_session_started_under() {
+    let mut e = Env::new();
+    e.init(None);
+    let locked = e.session("locked", &["src/**"]);
+    e.bind(&locked);
+
+    let t = e.session_under("s1", &["src/**"], Some("codex"));
+    let r = bind(&mut e, &t, "claude-code");
+    assert_eq!(r["level"], "unobserved", "{r}");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(
+        r["notes"],
+        json!(["the session was started for codex, not claude-code"])
+    );
+    let t = e.session_under("s2", &["src/**"], None);
+    let r = bind(&mut e, &t, "claude-code");
+    assert_eq!(r["level"], "unobserved", "{r}");
+    assert_eq!(
+        r["notes"],
+        json!(["the session was started with no harness named"])
+    );
+
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    let of = |id: &str| {
+        let s = st["sessions"].as_array().unwrap().iter();
+        s.clone().find(|s| s["id"] == id).unwrap()["harness"].clone()
+    };
+    assert_eq!(of("s1"), "codex");
+    assert_eq!(of("s2"), Value::Null);
+}
+
+/// A first report that says the machine is open is not taken back by a
+/// second that says it is shut, and the answer is the level that stands.
+#[test]
+fn a_session_that_bound_low_stays_low() {
+    let mut e = Env::new();
+    e.init(None);
+    let locked = e.session("locked", &["src/**"]);
+    e.bind(&locked);
+
+    let t = e.session("s1", &["src/**"]);
+    let sudo = |open| json!({"harness": "claude-code", "harness_session": "h", "sudo_without_password": open});
+    let r = e.ok("hook.bind", None, Some(&t), sudo(true));
+    assert_eq!(r["level"], "unobserved", "{r}");
+    let r = e.ok("hook.bind", None, Some(&t), sudo(false));
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    assert_eq!(
+        r["decision"]["reasons"],
+        json!(["bind_raises_level"]),
+        "{r}"
+    );
+    assert_eq!(r["level"], "unobserved", "{r}");
+}
+
+/// `lonca session start --continue` with no `--harness` goes on under the
+/// one it had.
+#[test]
+fn a_continuation_binds_under_the_harness_it_took_over() {
+    let mut e = Env::new();
+    e.init(None);
+    let old = e.session("s1", &["src/**"]);
+    e.bind(&old);
+    let r = e.continue_session("s2", "s1", &["src/**"]);
+    let t = r["token"].as_str().unwrap().to_string();
+    assert_eq!(bind(&mut e, &t, "claude-code")["level"], "hooks_sandbox");
 }

@@ -733,8 +733,11 @@ answer, and it is then told. No news, no `"output"`.
 
 *agent.* `{"harness": string, "harness_session": string,
 "sudo_without_password": boolean, "workspace": absolute path | null}`.
-Logged, plus `"level"` (observation level), `"notes"` ([string]) and
-`"scratch"` ([absolute path], the session's scratch roots from the log).
+Logged, plus `"level"` (the level the session stands at after this request),
+`"notes"` ([string]) and `"scratch"` ([absolute path], the session's scratch roots
+from the log). A level is read only when `harness` is the one in the session's
+`session.start`, and it can not rise once a bind has set it: such a bind is denied
+(`bind_raises_level`) and `"level"` is what stood.
 
 ### `hook.stop`
 
@@ -928,7 +931,10 @@ still needs a signature.
   repository has, a local file or a symlink at a target is refused, and
   nothing is written; the files of `setup` are never a local change.
 - `session start --harness <name> --json`: the same report as `"setup"`. If
-  the setup fails, the session has started: the error names it.
+  the setup fails, the session has started: the error names it. The name goes in
+  the signed `session.start`, and it is what a level is read for: a session with
+  none is `unobserved`. `--no-setup` names it and writes nothing, and `"setup"` is
+  `null`.
 - `rules`: the rules as text, with neutral tool names.
 
 MCP tools: an argument a tool does not take is refused with `invalid` by a
@@ -961,3 +967,6 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `created_ms` and `paths`; `status.changes` entries carry `base`,
   `created_ms`, `version` and `paths`; `log` takes `wait_ms`. Every
   request authenticated (`docs/decisions.md`, "Daemon authentication").
+  `harness` on `session.start` and `status.sessions[]`; `hook.bind` reads a level
+  only for that harness, and a session started without one is `unobserved`, where
+  before the request's name was enough.

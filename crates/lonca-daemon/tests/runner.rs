@@ -285,6 +285,7 @@ fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
         scope,
         expires_ms: now + 3_600_000,
         continues: None,
+        harness: Some("gemini".into()),
     };
     // Refused roots: relative, with `..`, a trailing slash, too many.
     for bad in ["scratch", "/tmp/../x", "/tmp/x/", "/", "/tmp/./x"] {

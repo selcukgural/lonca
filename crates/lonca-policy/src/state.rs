@@ -40,6 +40,11 @@ pub struct Session {
     pub created_ms: i64,
     pub expires_ms: i64,
     pub level: ObservationLevel,
+    /// The harness the human named, or the session's it continues or came
+    /// from: what `level` can be read for.
+    pub harness: Option<String>,
+    /// A `session.bind` has set `level`: from here it can only stay or fall.
+    pub bound: bool,
     pub taint: Option<String>,
     pub ended: Option<String>,
     pub writes: BTreeSet<String>,
@@ -1233,6 +1238,7 @@ impl State {
                 scope,
                 expires_ms,
                 continues,
+                harness,
             } => {
                 let root_human = match actor {
                     Actor::Human { name } => name.clone(),
@@ -1260,6 +1266,12 @@ impl State {
                             .map(|o| o.level)
                             .filter(|l| *l != ObservationLevel::Isolated)
                             .unwrap_or(ObservationLevel::Unobserved),
+                        harness: harness
+                            .clone()
+                            .or_else(|| old.as_ref().and_then(|o| o.harness.clone())),
+                        // A human signed this start: its harness gets to
+                        // report, and the taint stays whatever it says.
+                        bound: false,
                         taint: old.as_ref().and_then(|o| o.taint.clone()),
                         ended: None,
                         writes: old.as_ref().map(|o| o.writes.clone()).unwrap_or_default(),
@@ -1277,6 +1289,7 @@ impl State {
             Op::SessionBind { session, level, .. } => {
                 if let Some(s) = self.sessions.get_mut(session) {
                     s.level = *level;
+                    s.bound = true;
                 }
             }
             Op::SessionIsolate { session, .. } => {
@@ -1315,6 +1328,10 @@ impl State {
                             created_ms: time_ms,
                             expires_ms: *expires_ms,
                             level: p.level,
+                            // Nobody signed for a child: it stands where its
+                            // parent stands, or it would be a way up.
+                            harness: p.harness.clone(),
+                            bound: p.bound,
                             taint: p.taint.as_ref().map(|t| format!("inherited: {t}")),
                             ended: None,
                             writes: BTreeSet::new(),

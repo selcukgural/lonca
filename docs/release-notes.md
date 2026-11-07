@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### A session names its harness (log format 20)
+
+`session start --harness <name>` now puts the name in what you sign, and an observation
+level is read only for that harness. A session started without it is `unobserved` on any
+machine, so a hardened setup must add the flag; `--no-setup` names the harness and writes
+nothing in the workspace. Once set, a level can not rise for the rest of the session.
+`status` lists each session's harness.
+
 ### Batches in the merge queue (log format 17)
 
 `[queue] batch_size` in a signed policy, default 1, verifies the changes at the head of the queue

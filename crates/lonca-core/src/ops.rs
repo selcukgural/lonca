@@ -520,6 +520,10 @@ pub enum Op {
         /// The session whose workspace this one takes over.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         continues: Option<Continuation>,
+        /// The harness the human runs the session under. Their word, and the
+        /// only one an observation level is read for (format 20).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        harness: Option<String>,
     },
     #[serde(rename = "session.bind")]
     SessionBind {

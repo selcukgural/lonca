@@ -16,6 +16,7 @@ use std::collections::BTreeSet;
 
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_ISOLATE, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS,
+    FORMAT_SESSION_HARNESS,
 };
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
@@ -705,10 +706,14 @@ pub fn decide(
             scope,
             expires_ms,
             continues,
+            harness,
             ..
         } => {
             if !valid_token(session, 64) || !valid_token(agent, 64) {
                 v.deny("invalid_name");
+            }
+            if harness.as_ref().is_some_and(|h| !valid_token(h, 64)) {
+                v.deny("invalid_harness");
             }
             if state.sessions.contains_key(session) {
                 v.deny("session_exists");
@@ -735,13 +740,22 @@ pub fn decide(
             if *level != level_for(checks) {
                 v.deny("bind_level_mismatch");
             }
+            let s = state.sessions.get(session);
             // A hook in a sandbox must not take the session's level from it.
-            if state
-                .sessions
-                .get(session)
-                .is_some_and(|s| s.level == ObservationLevel::Isolated)
-            {
+            if s.is_some_and(|s| s.level == ObservationLevel::Isolated) {
                 v.deny("session_isolated");
+            }
+            if ctx.format >= FORMAT_SESSION_HARNESS {
+                // A level is read for the harness a human named, and whoever
+                // asks has a token: the checks must be for that harness.
+                let named = s.and_then(|s| s.harness.as_ref());
+                if *level > ObservationLevel::Unobserved && named != Some(&checks.harness) {
+                    v.deny("bind_other_harness");
+                }
+                // The first report is the hook's, before the agent has run.
+                if s.is_some_and(|s| s.bound && *level > s.level) {
+                    v.deny("bind_raises_level");
+                }
             }
         }
         Op::SessionIsolate {

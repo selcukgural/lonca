@@ -3263,6 +3263,34 @@ fn flags_for_a_runner_and_the_rules_for_a_harness_lonca_does_not_know() {
     assert!(text.contains("\"command\": \"lonca\""), "{text}");
 }
 
+/// A harness an administrator keeps is named, and nothing is written.
+#[test]
+fn session_start_can_name_a_harness_and_leave_the_workspace_alone() {
+    let e = Env::new();
+    agent_workspace(&e);
+    let r = &e.root;
+    let start = &["session", "start", "--repo", "demo", "--agent", "a"];
+    let rest = &["--paths", "**", "--workspace", "ws2", "--json"];
+    let run = |extra: &[&str]| {
+        let args = [&start[..], rest, extra].concat();
+        e.cmd(r, &args).output().unwrap()
+    };
+    assert!(!run(&["--no-setup"]).status.success());
+    let o = run(&["--harness", "gemini", "--no-setup"]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(out["setup"], serde_json::Value::Null);
+    assert!(!r.join("ws2/.gemini").exists());
+    let o = e
+        .cmd(r, &["status", "--repo", "demo", "--json"])
+        .output()
+        .unwrap();
+    let st: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let sessions = st["sessions"].as_array().unwrap();
+    let ours = sessions.iter().find(|s| s["id"] == out["session"]).unwrap();
+    assert_eq!(ours["harness"], "gemini");
+}
+
 /// `session start --harness` leaves a workspace ready; a file of the
 /// repository at the same path is not overwritten, and the runner hears why;
 /// a file trunk brings later takes the generated one's place and counts.

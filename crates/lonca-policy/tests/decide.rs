@@ -216,6 +216,7 @@ impl H {
             },
             expires_ms: self.now + 120 * MIN,
             continues,
+            harness: Some("claude-code".into()),
         }
     }
 
@@ -1709,6 +1710,7 @@ fn key_operations_work_in_a_frozen_repository() {
         },
         expires_ms: h.now + 60 * MIN,
         continues: None,
+        harness: None,
     };
     assert!(denied_with(&h.human("ayse", start), "frozen:incident"));
     assert!(
@@ -5710,6 +5712,169 @@ fn a_hook_does_not_take_a_sandbox_level_away() {
         h.chain.state.sessions["s1"].level,
         ObservationLevel::Isolated
     );
+    h.assert_replay();
+}
+
+/// What a hook of `harness` reports on a machine that locks it.
+fn bind(session: &str, harness: &str, level: ObservationLevel) -> Op {
+    let locked = level > ObservationLevel::Unobserved;
+    Op::SessionBind {
+        session: session.into(),
+        checks: BindChecks {
+            harness: harness.into(),
+            harness_session: "x".into(),
+            managed_hooks: locked,
+            locked_sandbox: level == ObservationLevel::HooksSandbox,
+            sudo_without_password: false,
+            config_digest: String::new(),
+            hook_binary_protected: locked,
+        },
+        level,
+    }
+}
+
+#[test]
+fn a_level_rests_on_the_harness_the_human_named() {
+    let mut h = H::new();
+    let start = |h: &mut H, id: &str, harness: Option<&str>| {
+        let mut op = h.start_op(id, &["src/**"], None);
+        if let Op::SessionStart { harness: named, .. } = &mut op {
+            *named = harness.map(str::to_string);
+        }
+        assert!(h.human("ayse", op).is_allow());
+    };
+    start(&mut h, "s1", Some("codex"));
+    let up = bind("s1", "claude-code", ObservationLevel::HooksSandbox);
+    assert!(denied_with(&h.daemon(up, vec![]), "bind_other_harness"));
+    assert_eq!(
+        h.chain.state.sessions["s1"].level,
+        ObservationLevel::Unobserved
+    );
+    // Nobody named one: nothing can be read for it.
+    start(&mut h, "s2", None);
+    let up = bind("s2", "claude-code", ObservationLevel::Hooks);
+    assert!(denied_with(&h.daemon(up, vec![]), "bind_other_harness"));
+
+    // A report of nothing needs no vouching, and is on the record.
+    let low = bind("s2", "claude-code", ObservationLevel::Unobserved);
+    assert!(h.daemon(low, vec![]).is_allow());
+    assert!(h.chain.state.sessions["s2"].bound);
+
+    let up = bind("s1", "codex", ObservationLevel::Hooks);
+    assert!(h.daemon(up, vec![]).is_allow());
+    assert_eq!(h.chain.state.sessions["s1"].level, ObservationLevel::Hooks);
+    h.assert_replay();
+}
+
+#[test]
+fn a_session_s_harness_must_be_a_name() {
+    let mut h = H::new();
+    let mut op = h.start_op("s1", &["src/**"], None);
+    if let Op::SessionStart { harness, .. } = &mut op {
+        *harness = Some("no/such name".into());
+    }
+    assert!(denied_with(&h.human("ayse", op), "invalid_harness"));
+    h.assert_replay();
+}
+
+#[test]
+fn a_bound_level_stays_or_falls() {
+    let mut h = H::new();
+    let code = "claude-code";
+    h.start("s1", &["src/**"]);
+    assert!(!h.chain.state.sessions["s1"].bound);
+    // The first report sets it, from below.
+    let first = bind("s1", code, ObservationLevel::Hooks);
+    assert!(h.daemon(first, vec![]).is_allow());
+    let up = bind("s1", code, ObservationLevel::HooksSandbox);
+    assert!(denied_with(&h.daemon(up, vec![]), "bind_raises_level"));
+    let same = bind("s1", code, ObservationLevel::Hooks);
+    assert!(h.daemon(same, vec![]).is_allow());
+    let down = bind("s1", code, ObservationLevel::Unobserved);
+    assert!(h.daemon(down, vec![]).is_allow());
+    assert_eq!(
+        h.chain.state.sessions["s1"].level,
+        ObservationLevel::Unobserved
+    );
+    let back = bind("s1", code, ObservationLevel::Hooks);
+    assert!(denied_with(&h.daemon(back, vec![]), "bind_raises_level"));
+    h.assert_replay();
+}
+
+/// A session of its own is what an agent can make: it starts where its
+/// parent stands.
+#[test]
+fn a_child_can_not_bind_its_way_past_its_parent() {
+    let mut h = H::new();
+    let code = "claude-code";
+    h.start("s1", &["src/**"]);
+    let attenuate = |parent: &str, child: &str| Op::CapAttenuate {
+        parent: parent.into(),
+        child: child.into(),
+        agent: "bot".into(),
+        scope: Scope {
+            paths: vec!["src/**".into()],
+            symbols: None,
+            ops: vec![OpKind::ChangePropose],
+            max_files: None,
+            max_lines: None,
+            scratch: vec![],
+        },
+        expires_ms: h.now + MIN,
+        leases: vec![],
+    };
+    let early = attenuate("s1", "early");
+    let low = attenuate("s1", "low");
+    assert!(h.agent("s1", early).is_allow());
+    let child = &h.chain.state.sessions["early"];
+    assert_eq!(child.harness.as_deref(), Some(code));
+    assert!(!child.bound);
+    let up = bind("early", code, ObservationLevel::Hooks);
+    assert!(h.daemon(up, vec![]).is_allow());
+
+    let first = bind("s1", code, ObservationLevel::Unobserved);
+    assert!(h.daemon(first, vec![]).is_allow());
+    assert!(h.agent("s1", low).is_allow());
+    assert!(h.chain.state.sessions["low"].bound);
+    let up = bind("low", code, ObservationLevel::Hooks);
+    assert!(denied_with(&h.daemon(up, vec![]), "bind_raises_level"));
+    h.assert_replay();
+}
+
+/// A continuation is signed: its harness reports afresh, and what was known
+/// of the files stays known whatever it says.
+#[test]
+fn a_continuation_keeps_the_harness_unless_it_names_one() {
+    let mut h = H::new();
+    let code = "claude-code";
+    h.start("s1", &["src/**"]);
+    let first = bind("s1", code, ObservationLevel::Unobserved);
+    assert!(h.daemon(first, vec![]).is_allow());
+
+    let c = |session: &str| {
+        Some(Continuation {
+            session: session.into(),
+            widen: false,
+        })
+    };
+    let mut op = h.start_op("s2", &["src/**"], c("s1"));
+    if let Op::SessionStart { harness, .. } = &mut op {
+        *harness = None;
+    }
+    assert!(h.human("ayse", op).is_allow());
+    let s2 = &h.chain.state.sessions["s2"];
+    assert_eq!(s2.harness.as_deref(), Some(code));
+    assert!(!s2.bound);
+    let up = bind("s2", code, ObservationLevel::Hooks);
+    assert!(h.daemon(up, vec![]).is_allow());
+
+    let mut op = h.start_op("s3", &["src/**"], c("s2"));
+    if let Op::SessionStart { harness, .. } = &mut op {
+        *harness = Some("codex".into());
+    }
+    assert!(h.human("ayse", op).is_allow());
+    let s3 = &h.chain.state.sessions["s3"];
+    assert_eq!(s3.harness.as_deref(), Some("codex"));
     h.assert_replay();
 }
 

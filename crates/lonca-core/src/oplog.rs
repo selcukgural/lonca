@@ -41,8 +41,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// and follows them in leases; version 15 adds `unparsed_files` to facts;
 /// version 16 adds `unread_files`; version 17 adds `change.integrate_batch`;
 /// version 18 adds `affected` to facts and reports who holds it; version 19
-/// adds `session.isolate`.
-pub const FORMAT_CURRENT: u32 = 19;
+/// adds `session.isolate`; version 20 adds `harness` to `session.start`, and
+/// a level rests on it.
+pub const FORMAT_CURRENT: u32 = 20;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -92,6 +93,10 @@ pub const FORMAT_BATCH: u32 = 17;
 pub const FORMAT_AFFECTED: u32 = 18;
 /// The first format with `session.isolate`.
 pub const FORMAT_ISOLATE: u32 = 19;
+/// The first format with `harness` on `session.start`. From here a
+/// `session.bind` is held to it, and can not raise a level already bound.
+/// Older entries replay as they were.
+pub const FORMAT_SESSION_HARNESS: u32 = 20;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -167,6 +172,9 @@ impl OpEntry {
                 ..
             } => FORMAT_LEASE_QUEUE,
             Op::CapAttenuate { ref leases, .. } if !leases.is_empty() => FORMAT_LEASE_QUEUE,
+            Op::SessionStart {
+                harness: Some(_), ..
+            } => FORMAT_SESSION_HARNESS,
             Op::SessionStart {
                 continues: Some(_), ..
             } => FORMAT_SESSION_CONTINUE,
@@ -719,6 +727,7 @@ mod tests {
             },
             expires_ms: 9000,
             continues,
+            harness: None,
         };
         let plain = OpEntry {
             format: FORMAT_LEGACY,
@@ -739,6 +748,52 @@ mod tests {
         assert!(chain(9).is_ok());
         let err = chain(8).unwrap_err();
         assert!(err.to_string().contains("needs log format 9"), "{err}");
+    }
+
+    /// A harness needs its format whatever else the start carries.
+    #[test]
+    fn a_named_harness_needs_format_20() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let start = |continues: Option<Continuation>, scratch: Vec<String>| Op::SessionStart {
+            session: "s".into(),
+            agent: "bot".into(),
+            model: None,
+            task: String::new(),
+            scope: Scope {
+                paths: vec!["**".into()],
+                symbols: None,
+                ops: vec![],
+                max_files: None,
+                max_lines: None,
+                scratch,
+            },
+            expires_ms: 9000,
+            continues,
+            harness: Some("codex".into()),
+        };
+        let continued = Continuation {
+            session: "old".into(),
+            widen: false,
+        };
+        for op in [
+            start(None, vec![]),
+            start(Some(continued), vec![]),
+            start(None, vec!["/tmp/x".into()]),
+        ] {
+            let at = |format| OpEntry {
+                format,
+                op: op.clone(),
+                ..next(&g, 2000)
+            };
+            assert_eq!(at(20).min_format(), FORMAT_SESSION_HARNESS, "{op:?}");
+            let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(format), &key)]);
+            assert!(chain(20).is_ok());
+            let err = chain(19).unwrap_err();
+            assert!(err.to_string().contains("needs log format 20"), "{err}");
+        }
     }
 
     #[test]

@@ -40,8 +40,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// stand for every symbol of that name; version 14 adds `renames` to facts
 /// and follows them in leases; version 15 adds `unparsed_files` to facts;
 /// version 16 adds `unread_files`; version 17 adds `change.integrate_batch`;
-/// version 18 adds `affected` to facts and reports who holds it.
-pub const FORMAT_CURRENT: u32 = 18;
+/// version 18 adds `affected` to facts and reports who holds it; version 19
+/// adds `session.isolate`.
+pub const FORMAT_CURRENT: u32 = 19;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -89,6 +90,8 @@ pub const FORMAT_BATCH: u32 = 17;
 /// The first format with `affected` in facts, and whose proposals report the
 /// lease sets it reaches. Older entries report none and replay as they were.
 pub const FORMAT_AFFECTED: u32 = 18;
+/// The first format with `session.isolate`.
+pub const FORMAT_ISOLATE: u32 = 19;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -150,6 +153,7 @@ impl OpEntry {
             Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
             Op::Reject { .. } => FORMAT_REJECT,
             Op::ChangeIntegrateBatch { .. } => FORMAT_BATCH,
+            Op::SessionIsolate { .. } => FORMAT_ISOLATE,
             Op::Observe { ref events, .. }
                 if events
                     .iter()
@@ -789,6 +793,30 @@ mod tests {
         for op in [negotiate(None), attenuate(vec![])] {
             assert_eq!(at(&op, 2).min_format(), FORMAT_LEGACY, "{op:?}");
         }
+    }
+
+    #[test]
+    fn isolating_a_session_needs_its_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let op = Op::SessionIsolate {
+            session: "s".into(),
+            sandbox: "seatbelt".into(),
+            profile: "ab".repeat(32),
+        };
+        let at = |format| OpEntry {
+            format,
+            op: op.clone(),
+            ..next(&g, 2000)
+        };
+        assert_eq!(at(FORMAT_ISOLATE).min_format(), FORMAT_ISOLATE);
+        let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(format), &key)]);
+        assert!(chain(FORMAT_ISOLATE).is_ok());
+        let err = chain(FORMAT_ISOLATE - 1).unwrap_err();
+        let needs = format!("needs log format {FORMAT_ISOLATE}");
+        assert!(err.to_string().contains(&needs), "{err}");
     }
 
     #[test]

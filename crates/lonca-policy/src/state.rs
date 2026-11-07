@@ -1253,9 +1253,13 @@ impl State {
                         scope: scope.clone(),
                         created_ms: time_ms,
                         expires_ms: *expires_ms,
+                        // A sandbox is not handed on: what continues the
+                        // session has not been shown to run in one.
                         level: old
                             .as_ref()
-                            .map_or(ObservationLevel::Unobserved, |o| o.level),
+                            .map(|o| o.level)
+                            .filter(|l| *l != ObservationLevel::Isolated)
+                            .unwrap_or(ObservationLevel::Unobserved),
                         taint: old.as_ref().and_then(|o| o.taint.clone()),
                         ended: None,
                         writes: old.as_ref().map(|o| o.writes.clone()).unwrap_or_default(),
@@ -1273,6 +1277,11 @@ impl State {
             Op::SessionBind { session, level, .. } => {
                 if let Some(s) = self.sessions.get_mut(session) {
                     s.level = *level;
+                }
+            }
+            Op::SessionIsolate { session, .. } => {
+                if let Some(s) = self.sessions.get_mut(session) {
+                    s.level = ObservationLevel::Isolated;
                 }
             }
             Op::SessionEnd { session, reason } => {

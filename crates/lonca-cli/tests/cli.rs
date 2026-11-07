@@ -97,15 +97,19 @@ impl Env {
 
 /// An in-process daemon on `home`, serving `sock`.
 fn start_daemon(root: &Path, home: &Path, sock: &Path) {
+    let proxy = lonca_daemon::proxy::bind("127.0.0.1:0").unwrap();
     let settings = Settings {
         managed_settings: root.join("managed.json"),
         require_root_settings: false,
         git: "git".into(),
         line_cap: lonca_daemon::protocol::MAX_LINE,
+        proxy: proxy.local_addr().ok().map(|a| a.to_string()),
     };
     let svc = Service::open(Home::new(home), settings, lonca_daemon::system_clock()).unwrap();
     let listener = lonca_daemon::server::bind(sock).unwrap();
     svc.spawn_worker();
+    let gate = svc.clone();
+    std::thread::spawn(move || lonca_daemon::proxy::serve(proxy, gate));
     std::thread::spawn(move || lonca_daemon::server::serve(listener, svc));
 }
 
@@ -4463,4 +4467,618 @@ fn a_later_change_refuses_all_of_a_batchs_undo() {
         assert!(on_trunk(&e, "src/f1.txt"), "{file}");
         assert!(on_trunk(&e, "src/f2.txt"), "{file}");
     }
+}
+
+// ---------------------------------------------------------------- lonca run
+
+/// The session of a workspace.
+fn session_of(ws: &Path) -> String {
+    let meta = std::fs::read_to_string(ws.join(".lonca/workspace.json")).unwrap();
+    parse(&meta)["session"].as_str().unwrap().to_string()
+}
+
+/// `lonca run` of a shell script, whose output goes to the returned value.
+/// `None` where this machine has no sandbox to run it in.
+fn in_sandbox(e: &Env, ws: &Path, script: &str) -> Option<Output> {
+    let sandbox = lonca_verify::Sandbox::detect();
+    if sandbox == lonca_verify::Sandbox::None {
+        return None;
+    }
+    let session = session_of(ws);
+    let exe = env!("CARGO_BIN_EXE_lonca");
+    let bin = format!("BIN={exe}");
+    let args = [
+        "run",
+        "--session",
+        &session,
+        "--env",
+        &bin,
+        "--",
+        "/bin/sh",
+        "-c",
+        script,
+    ];
+    Some(e.cmd(ws, &args).stdin(Stdio::null()).output().unwrap())
+}
+
+#[test]
+fn a_command_with_no_hooks_runs_isolated_and_integrates_without_a_human() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let script = r#"
+        set -e
+        "$BIN" lease acquire -i "more" "src/lib.rs#charge" "src/lib.rs#refund"
+        sed -i.bak 's/    a$/    a + 1/' src/lib.rs
+        rm src/lib.rs.bak
+        "$BIN" propose -i "one more" --accept-facts
+    "#;
+    let Some(o) = in_sandbox(&e, &ws, script) else {
+        return;
+    };
+    assert!(
+        o.status.success(),
+        "stdout: {}\nstderr: {}",
+        text(&o.stdout),
+        text(&o.stderr)
+    );
+    e.settle();
+    let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
+    let log = parse(&log);
+    let entries = log.as_array().or(log["entries"].as_array()).unwrap();
+    let of = |kind: &str| {
+        let hit = entries.iter().filter(|x| x["entry"]["op"]["op"] == kind);
+        hit.collect::<Vec<_>>()
+    };
+    let isolate = of("session.isolate");
+    assert_eq!(isolate.len(), 1, "{log}");
+    assert_eq!(isolate[0]["entry"]["decision"]["outcome"], "allow");
+    assert_eq!(isolate[0]["entry"]["actor"]["kind"], "human");
+    let proposed = of("change.propose");
+    assert_eq!(proposed.len(), 2, "{log}");
+    assert_eq!(
+        proposed[1]["entry"]["decision"]["outcome"], "allow",
+        "{log}"
+    );
+    assert_eq!(of("change.integrate").len(), 2, "{log}");
+    // The session ended with the command, and beat while it ran.
+    assert_eq!(of("session.end").len(), 1, "{log}");
+    let beats = of("observe").into_iter();
+    assert!(
+        beats
+            .map(|o| o.to_string())
+            .any(|o| o.contains("heartbeat"))
+    );
+    // And the token the workspace held stopped at the start.
+    let o = e.cmd(&ws, &["status", "--json"]).output().unwrap();
+    assert!(!o.status.success(), "{}", text(&o.stdout));
+}
+
+#[test]
+fn what_runs_in_the_sandbox_stays_in_it() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let root = &e.root;
+    let home = root.join("user");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/id_ed25519"), "secret").unwrap();
+    std::fs::write(home.join("notes"), "secret").unwrap();
+    let outside = root.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let humans = root.join("humans");
+    let key = std::fs::read_dir(&humans).unwrap().next().unwrap().unwrap();
+    let store = root.join("lonca-home");
+    std::fs::create_dir_all(store.join("sub")).unwrap();
+    let probes = [
+        ("write_outside", format!("echo x > {}/w", outside.display())),
+        ("write_home", format!("echo x > {}/w", home.display())),
+        ("write_store", format!("echo x > {}/w", store.display())),
+        (
+            "read_ssh",
+            format!("cat {}/.ssh/id_ed25519", home.display()),
+        ),
+        ("read_home", format!("cat {}/notes", home.display())),
+        ("list_home", format!("ls {}/.ssh", home.display())),
+        ("read_key", format!("cat {}", key.path().display())),
+        ("list_store", format!("ls {}/sub", store.display())),
+    ];
+    let mut script = String::new();
+    let mut escapes: Vec<(&str, String)> = vec![];
+    if cfg!(target_os = "macos") {
+        // Each of these would start a process outside the sandbox.
+        let marker = outside.join("escaped");
+        escapes = vec![
+            (
+                "launchd",
+                format!(
+                    "/bin/launchctl submit -l lonca.test.{} -- /usr/bin/touch {}",
+                    std::process::id(),
+                    marker.display()
+                ),
+            ),
+            (
+                "osascript",
+                format!(
+                    "/usr/bin/osascript -e 'do shell script \"touch {}\"'",
+                    marker.display()
+                ),
+            ),
+        ];
+    }
+    for (name, probe) in probes
+        .iter()
+        .map(|(n, p)| (n, p))
+        .chain(escapes.iter().map(|(n, p)| (n, p)))
+    {
+        script += &format!("if {probe} >/dev/null 2>&1; then echo 'open {name}'; fi\n");
+    }
+    script += "echo x > in-workspace; rm in-workspace\n";
+    script += "echo x > \"$HOME/in-home\"; echo x > \"$TMPDIR/in-tmp\"; echo reached the end\n";
+    script += "/usr/bin/nc -z -G 1 -w 1 1.1.1.1 443 2>/dev/null && echo open direct_net\n";
+    let Some(o) = in_sandbox(&e, &ws, &script) else {
+        return;
+    };
+    let out = text(&o.stdout);
+    assert!(
+        out.contains("reached the end"),
+        "{out}\n{}",
+        text(&o.stderr)
+    );
+    assert!(!out.contains("open "), "{out}");
+    assert!(!outside.join("w").exists());
+    assert!(!home.join("w").exists());
+    assert!(!outside.join("escaped").exists());
+}
+
+#[test]
+fn a_command_inherits_no_descriptor_but_the_standard_three() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let session = session_of(&ws);
+    let exe = env!("CARGO_BIN_EXE_lonca");
+    // Fd 9 is open in the launcher, as something the launcher's own caller
+    // left: the script inside must not find it.
+    let outer = format!(
+        "exec 9</etc/hosts; exec {exe} run --session {session} -- /bin/sh -c \
+         'if cat <&9 >/dev/null 2>&1; then echo inherited; else echo closed; fi'"
+    );
+    let mut c = Command::new("/bin/sh");
+    let probe = e.cmd(&ws, &["status"]);
+    for (k, v) in probe.get_envs() {
+        match v {
+            Some(v) => c.env(k, v),
+            None => c.env_remove(k),
+        };
+    }
+    let o = c.arg("-c").arg(&outer).current_dir(&ws).output().unwrap();
+    assert_eq!(text(&o.stdout), "closed\n", "{}", text(&o.stderr));
+}
+
+#[test]
+fn stopping_the_launcher_stops_the_command_and_ends_the_session() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let session = session_of(&ws);
+    let mark = ws.join("started");
+    let script = format!("touch {}; exec sleep 20", mark.display());
+    let args = ["run", "--session", &session, "--", "/bin/sh", "-c", &script];
+    let mut child = e.cmd(&ws, &args).stdin(Stdio::null()).spawn().unwrap();
+    for _ in 0..200 {
+        if mark.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(mark.exists(), "the command never started");
+    let id = child.id() as i32;
+    assert!(
+        Command::new("kill")
+            .arg(id.to_string())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(128 + 15), "{status:?}");
+    let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
+    let log = parse(&log).to_string();
+    assert!(log.contains("session.end"), "{log}");
+}
+
+#[test]
+fn a_run_says_how_the_command_ended() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let Some(o) = in_sandbox(&e, &ws, "echo out; echo err >&2; exit 7") else {
+        return;
+    };
+    assert_eq!(o.status.code(), Some(7), "{}", text(&o.stderr));
+    assert_eq!(text(&o.stdout), "out\n");
+    assert!(text(&o.stderr).contains("err"));
+    assert!(!text(&o.stderr).contains("unproposed"), "nothing was left");
+}
+
+#[test]
+fn a_command_may_end_its_session_itself() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let Some(o) = in_sandbox(&e, &ws, "lonca session end --json >/dev/null") else {
+        return;
+    };
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert!(
+        !text(&o.stderr).contains("not ended"),
+        "{}",
+        text(&o.stderr)
+    );
+}
+
+#[test]
+fn a_run_tells_what_was_left_unproposed() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let Some(o) = in_sandbox(&e, &ws, "echo new > src/new.rs") else {
+        return;
+    };
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let err = text(&o.stderr);
+    assert!(err.contains("left unproposed: 1 file(s)"), "{err}");
+}
+
+#[test]
+fn a_run_refuses_what_it_can_not_vouch_for() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        let o = e
+            .cmd(&ws, &["run", "--session", "x", "--", "/bin/sh"])
+            .output()
+            .unwrap();
+        assert!(!o.status.success());
+        assert!(
+            text(&o.stderr).contains("no sandbox"),
+            "{}",
+            text(&o.stderr)
+        );
+        return;
+    }
+    let session = session_of(&ws);
+    let fails = |cwd: &Path, args: &[&str], why: &str| {
+        let o = e.cmd(cwd, args).output().unwrap();
+        assert!(!o.status.success(), "{args:?}");
+        assert!(text(&o.stderr).contains(why), "{}", text(&o.stderr));
+    };
+    fails(
+        &ws,
+        &["run", "--session", "ses_other", "--", "/bin/sh"],
+        "not the workspace of session",
+    );
+    fails(
+        &e.root,
+        &["run", "--session", &session, "--", "/bin/sh"],
+        "not a Lonca workspace",
+    );
+    fails(
+        &ws,
+        &["run", "--session", &session, "--", "no-such-program-here"],
+        "not found",
+    );
+    fails(
+        &ws,
+        &[
+            "run",
+            "--session",
+            &session,
+            "--env",
+            "LONCA_HOME=/x",
+            "--",
+            "/bin/sh",
+        ],
+        "not a name",
+    );
+    fails(
+        &ws,
+        &[
+            "run",
+            "--session",
+            &session,
+            "--env",
+            "DYLD_INSERT_LIBRARIES=/x",
+            "--",
+            "/bin/sh",
+        ],
+        "not a name",
+    );
+    let humans = e.root.join("humans");
+    fails(
+        &ws,
+        &[
+            "run",
+            "--session",
+            &session,
+            "--read",
+            humans.to_str().unwrap(),
+            "--",
+            "/bin/sh",
+        ],
+        "stays closed",
+    );
+    // Work that was not made in the sandbox can not pass for work that was.
+    let original = std::fs::read(ws.join("src/lib.rs")).unwrap();
+    std::fs::write(ws.join("src/lib.rs"), "pub fn written_outside() {}\n").unwrap();
+    let args = ["run", "--session", &session, "--", "/bin/sh"];
+    fails(&ws, &args, "differ from the commit");
+    std::fs::write(ws.join("src/lib.rs"), original).unwrap();
+    // Nor a file git would not show.
+    std::fs::write(ws.join(".gitignore"), "stash\n").unwrap();
+    std::fs::write(ws.join("stash"), "payload\n").unwrap();
+    fails(&ws, &args, "differ from the commit");
+    std::fs::remove_file(ws.join(".gitignore")).unwrap();
+    std::fs::remove_file(ws.join("stash")).unwrap();
+    // None of that isolated anything.
+    let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
+    assert!(!log.contains("session.isolate"), "{log}");
+}
+
+#[test]
+fn a_sandbox_reads_only_what_the_human_named() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let extra = e.root.join("user/tool");
+    std::fs::create_dir_all(&extra).unwrap();
+    std::fs::write(extra.join("config"), "seen\n").unwrap();
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let session = session_of(&ws);
+    let script = format!("cat {}/config", extra.display());
+    let args = [
+        "run",
+        "--session",
+        &session,
+        "--read",
+        extra.to_str().unwrap(),
+        "--",
+        "/bin/sh",
+        "-c",
+        &script,
+    ];
+    let o = e.cmd(&ws, &args).output().unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert_eq!(text(&o.stdout), "seen\n");
+}
+
+/// A tiny HTTP server that says `hello`.
+fn hello_server() -> u16 {
+    use std::io::Read;
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let mut s = s.unwrap();
+            let mut head = [0; 1024];
+            let _ = s.read(&mut head);
+            let reply = "HTTP/1.1 200 OK\r\ncontent-length: 6\r\nconnection: close\r\n\r\nhello\n";
+            let _ = s.write_all(reply.as_bytes());
+        }
+    });
+    port
+}
+
+fn set_network_policy(e: &Env, agent_hosts: &str) {
+    let r = &e.root;
+    let config = lonca_policy::config::DEFAULT_CONFIG
+        .replace(
+            "allow_private_network = false",
+            "allow_private_network = true",
+        )
+        .replace("agent_hosts = []", &format!("agent_hosts = {agent_hosts}"));
+    std::fs::write(r.join("c.toml"), config).unwrap();
+    std::fs::write(r.join("p.cedar"), lonca_policy::config::DEFAULT_POLICY).unwrap();
+    let args = [
+        "policy", "set", "--repo", "demo", "--config", "c.toml", "--policy", "p.cedar",
+    ];
+    assert!(e.run(r, &args).contains("allow"));
+}
+
+/// Whether this machine can fetch a page from a sandbox.
+fn no_curl() -> bool {
+    !Path::new("/usr/bin/curl").exists()
+}
+
+#[test]
+fn the_network_of_a_sandbox_is_the_proxy_and_it_is_on_the_record() {
+    if no_curl() {
+        return;
+    }
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    set_network_policy(&e, "[]");
+    let port = hello_server();
+    let script = format!("/usr/bin/curl -s -m 10 http://127.0.0.1:{port}/");
+    let Some(o) = in_sandbox(&e, &ws, &script) else {
+        return;
+    };
+    assert_eq!(text(&o.stdout), "hello\n", "{}", text(&o.stderr));
+    let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
+    let log = parse(&log).to_string();
+    assert!(log.contains(r#""host":"127.0.0.1""#), "{log}");
+    assert!(log.contains(r#""external":true"#), "{log}");
+}
+
+#[test]
+fn a_sandboxed_agent_reaches_its_model_and_still_integrates_alone() {
+    if no_curl() {
+        return;
+    }
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    set_network_policy(&e, r#"["127.0.0.1"]"#);
+    let port = hello_server();
+    let script = format!(
+        r#"
+        set -e
+        /usr/bin/curl -s -m 10 http://127.0.0.1:{port}/
+        "$BIN" lease acquire -i "more" "src/lib.rs#charge" "src/lib.rs#refund"
+        sed -i.bak 's/    a$/    a + 1/' src/lib.rs
+        rm src/lib.rs.bak
+        "$BIN" propose -i "one more" --accept-facts
+    "#
+    );
+    let Some(o) = in_sandbox(&e, &ws, &script) else {
+        return;
+    };
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("hello") && out.contains("allow"), "{out}");
+    assert!(!out.contains("escalate"), "{out}");
+    e.settle();
+    let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
+    let log = parse(&log).to_string();
+    assert!(log.contains(r#""host":"127.0.0.1""#), "{log}");
+    assert!(!log.contains(r#""external":true"#), "{log}");
+}
+
+/// What the sandbox was called in the log.
+fn sandbox_in_log(e: &Env) -> String {
+    let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
+    let log = parse(&log);
+    let entries = log.as_array().unwrap().iter();
+    let mut names = entries.map(|o| &o["entry"]["op"]);
+    let op = names.find(|op| op["op"] == "session.isolate").unwrap();
+    op["sandbox"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn a_loopback_listener_is_the_humans_to_allow_and_it_shows() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let sandbox = lonca_verify::Sandbox::detect();
+    if sandbox != lonca_verify::Sandbox::Seatbelt {
+        return;
+    }
+    let script = "import socket; s = socket.socket(); s.bind(('127.0.0.1', 0)); print('bound')";
+    let session = session_of(&ws);
+    let args = [
+        "run",
+        "--session",
+        &session,
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        script,
+    ];
+    let o = e.cmd(&ws, &args).stdin(Stdio::null()).output().unwrap();
+    assert!(!text(&o.stdout).contains("bound"), "{}", text(&o.stdout));
+    assert_eq!(sandbox_in_log(&e), "seatbelt");
+
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let session = session_of(&ws);
+    let args = [
+        "run",
+        "--session",
+        &session,
+        "--loopback",
+        "--",
+        "/usr/bin/python3",
+        "-c",
+        script,
+    ];
+    let o = e.cmd(&ws, &args).stdin(Stdio::null()).output().unwrap();
+    assert!(text(&o.stdout).contains("bound"), "{}", text(&o.stderr));
+    assert_eq!(sandbox_in_log(&e), "seatbelt-loopback");
+}
+
+#[test]
+fn ps_can_be_started_and_says_nothing_of_the_machine() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let script = "ps -axeww; echo rc=$?";
+    let Some(o) = in_sandbox(&e, &ws, script) else {
+        return;
+    };
+    let out = text(&o.stdout);
+    assert!(out.ends_with("rc=0\n"), "{out}\n{}", text(&o.stderr));
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::Seatbelt {
+        assert_eq!(out, "rc=0\n");
+    }
+}
+
+#[test]
+fn a_scratch_root_is_what_the_log_says_and_it_starts_empty() {
+    let e = Env::new();
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let ws = agent_workspace(&e);
+    e.run(&ws, &["session", "end"]);
+    let r = &e.root;
+    let args = [
+        "session",
+        "start",
+        "--repo",
+        "demo",
+        "--agent",
+        "worker",
+        "--paths",
+        "src/**",
+        "--workspace",
+        "w2",
+        "--scratch",
+        "s2",
+    ];
+    e.run(r, &args);
+    let ws = r.join("w2");
+    let scratch = r.join("s2");
+    let session = session_of(&ws);
+    let run = [
+        "run",
+        "--session",
+        &session,
+        "--",
+        "/bin/sh",
+        "-c",
+        "exit 0",
+    ];
+    let refused = |why: &str| {
+        let o = e.cmd(&ws, &run).output().unwrap();
+        assert!(!o.status.success());
+        assert!(text(&o.stderr).contains(why), "{}", text(&o.stderr));
+    };
+    std::fs::write(scratch.join("note"), "left by something").unwrap();
+    refused("is not empty");
+    std::fs::remove_file(scratch.join("note")).unwrap();
+    // A link in its place would open what it points at for writing.
+    std::fs::remove_dir(&scratch).unwrap();
+    let secret = r.join("user");
+    std::fs::create_dir_all(&secret).unwrap();
+    std::os::unix::fs::symlink(&secret, &scratch).unwrap();
+    refused("has been replaced");
+    std::fs::remove_file(&scratch).unwrap();
+    std::fs::create_dir(&scratch).unwrap();
+    assert!(e.cmd(&ws, &run).output().unwrap().status.success());
+}
+
+#[test]
+fn what_runs_in_a_sandbox_sees_no_other_workspace_and_no_terminal() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let other = e.root.join("other");
+    std::fs::create_dir_all(other.join(".lonca")).unwrap();
+    std::fs::write(other.join(".lonca/session"), "token").unwrap();
+    let script = format!(
+        "if cat {}/.lonca/session; then echo open; fi; [ -t 0 ] && echo terminal; \
+         [ -t 1 ] && echo terminal; lonca --version >/dev/null && echo found",
+        other.display()
+    );
+    let Some(o) = in_sandbox(&e, &ws, &script) else {
+        return;
+    };
+    assert_eq!(text(&o.stdout), "found\n", "{}", text(&o.stderr));
 }

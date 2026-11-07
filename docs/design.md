@@ -589,7 +589,7 @@ Faz 0'da kapananlar (gerekçeleri `docs/decisions.md`'de): temel **gitoxide + ke
 | §5.14 AI Danışman | Tamam | `lonca advise`; günlük bütçe; diff kırpılmıyor, büyükse reddediliyor. Yalnızca sahte API'ye karşı test edildi. |
 | §3.1–3.3 Sertleştirilmiş mod | Tamam, sahada denenmedi | Kurulum betikleri (macOS/Linux), peer uid kontrolü, sudo kontrolü, managed settings denetimi. Betikler `--render` ile ve Lonca'nın kendi denetleyicisiyle test edildi; gerçek `sudo` kurulumu çalıştırılmadı. |
 | Yedekleme / taşıma | Tamam | `lonca backup` (bundle), `lonca restore` (bundle, ayna veya push edilmiş uzak depo), anahtarsız geri yükleme `daemon.recover` ile; zamanlanmış yedek ve budama yok. |
-| İzole mod | Yapılmadı | Container tabanlı agent çalıştırma. |
+| İzole mod | Tamam, sapmalı | `lonca run`: Seatbelt ve bubblewrap ile, hook gerektirmeden; token yenileme, ağ yalnızca proxy üzerinden, insan imzalı `session.isolate`. Container arka ucu yapılmadı. |
 | Ekip sunucusu | Yapılmadı | Tasarım açık soru olarak duruyor. |
 
 ---

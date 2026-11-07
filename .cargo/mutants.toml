@@ -35,6 +35,16 @@ minimum_test_timeout = 600
 # ... from struct expression" mutants; exclude those with exclude_globs or
 # kill them with a test.
 exclude_re = [
+  # `lonca run` ending its session: the guard tells "already over" from any
+  # other failure, which only a daemon gone in the middle of a run produces,
+  # and all that changes then is a line on stderr.
+  'replace match guard mcp::session_over\(&e\) with true in finish',
+  # One millisecond more or less of the grace after SIGTERM: not observable.
+  'replace > with >= in wait',
+  # `setsid` in the forked child: it fails only for a group leader, which a
+  # child just forked can not be, and on success it returns a pid, never 0.
+  'replace < with <= in spawn',
+  'replace < with == in spawn',
   # Walking a child that starts exactly at `end` finds only a comment at that
   # very place, and `remove_spans` stops at `end`, so the text is the same:
   # the bound only saves the walk through a body.

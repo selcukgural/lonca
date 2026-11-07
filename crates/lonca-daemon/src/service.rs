@@ -2,7 +2,7 @@
 //! the merge queue.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -14,7 +14,7 @@ use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp};
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckResult, Claim, HumanKey, LeaseItem, MAX_UNPROPOSED_PATHS,
-    ObsKind, Observation, Op, Phase,
+    ObsKind, Observation, ObservationLevel, Op, Phase,
 };
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileMap, GitId, Result, Store};
@@ -58,6 +58,8 @@ pub struct Settings {
     /// The longest response line (`MAX_LINE` outside tests): `blobs`
     /// refuses a page that would not fit.
     pub line_cap: usize,
+    /// Where the network proxy listens (`host:port`), for `lonca run`.
+    pub proxy: Option<String>,
 }
 
 impl Default for Settings {
@@ -67,6 +69,7 @@ impl Default for Settings {
             require_root_settings: true,
             git: "git".into(),
             line_cap: MAX_LINE,
+            proxy: None,
         }
     }
 }
@@ -275,6 +278,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("human.prepare_policy", Cred::Human),
     ("human.prepare_import", Cred::Human),
     ("human.prepare_push", Cred::Human),
+    ("human.prepare_isolate", Cred::Human),
     ("human.submit", Cred::Human),
     ("lease.acquire", Cred::Agent),
     ("lease.release", Cred::Agent),
@@ -658,6 +662,7 @@ impl Service {
             "human.prepare_policy" => self.prepare_policy(&auth, params(p)?),
             "human.prepare_import" => self.prepare_import(&auth, params(p)?),
             "human.prepare_push" => self.prepare_push(&auth, params(p)?),
+            "human.prepare_isolate" => self.prepare_isolate(&auth, params(p)?),
             "human.submit" => self.human_submit(&auth, params(p)?),
             "lease.acquire" => self.lease_acquire(req, params(p)?),
             "lease.release" => {
@@ -1724,6 +1729,25 @@ impl Service {
         )
     }
 
+    /// What a sandbox for `session` has to be built from: the roots from
+    /// the log, never from a file in the workspace, which an agent could
+    /// have edited to widen its sandbox.
+    fn prepare_isolate(&self, auth: &Auth, p: PrepareIsolate) -> Hr {
+        let name = auth.repo()?;
+        let mut inner = self.lock();
+        let r = Self::repo(&mut inner, &name)?;
+        let Some(s) = r.chain.state.sessions.get(&p.session) else {
+            return fail("not_found", "no such session");
+        };
+        let base_known = r.chain.state.trunk_history.contains(&p.base);
+        Ok(json!({
+            "scratch": s.scope.scratch,
+            "proxy": self.settings.proxy,
+            "home": self.home.root,
+            "base_known": base_known,
+        }))
+    }
+
     // ---------------------------------------------------------------- backup, restore
 
     /// Writes a Git bundle of the repository, every ref included (trunk,
@@ -1931,6 +1955,7 @@ impl Service {
             p.op.clone(),
         );
         sub.human = Some(p.sig);
+        let workspace = p.workspace.filter(|w| Path::new(w).is_absolute());
         match &p.op {
             Op::RepoInit { .. } => return fail("invalid", "use repo.init"),
             Op::ChangePropose {
@@ -2024,6 +2049,17 @@ impl Service {
                     ],
                 )?;
                 out["push"] = json!(pushed);
+            }
+            // The old token was seen outside the sandbox, so it stops here:
+            // from now on the level belongs to whoever holds the new one.
+            Op::SessionIsolate { session, .. } => {
+                let old = std::slice::from_ref(session);
+                inner.tokens.revoke_sessions(&name, old).or_fail()?;
+                out["token"] = json!(inner.tokens.issue(&name, session).or_fail()?);
+                if let Some(ws) = workspace {
+                    let key = (name.clone(), session.clone());
+                    inner.workspaces.insert(key, PathBuf::from(ws));
+                }
             }
             Op::CapRevoke { session, .. } | Op::SessionEnd { session, .. } => {
                 Self::revoke_tokens(inner, &name, session)?;
@@ -2549,6 +2585,17 @@ impl Service {
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
+        // A hook of a harness that runs in a sandbox: it has nothing to add,
+        // and what the hook can see of the machine is the sandbox's.
+        let s = r.chain.state.sessions.get(&session);
+        if s.is_some_and(|s| s.level == ObservationLevel::Isolated) {
+            let scratch = s.map(|s| s.scope.scratch.clone()).unwrap_or_default();
+            return Ok(json!({
+                "level": ObservationLevel::Isolated,
+                "notes": ["the session runs in a Lonca sandbox"],
+                "scratch": scratch,
+            }));
+        }
         let ins = if b.harness == "claude-code" {
             hooks::inspect_claude_code(
                 &self.settings.managed_settings,
@@ -2628,14 +2675,18 @@ impl Service {
                 .collect(),
             None => vec![],
         };
+        // A session that is over answers for nothing: a command could stand
+        // in its directory to keep its own session clean.
+        matched.retain(|(repo, session)| {
+            let r = inner.repos.get(repo);
+            r.is_some_and(|r| r.chain.state.session_active(session, now))
+        });
         let attributed = !matched.is_empty();
         if !attributed {
             for (name, r) in inner.repos.iter().filter(|(_, r)| r.initialized()) {
                 let s = &r.chain.state;
                 for x in s.sessions.values() {
-                    if x.level == lonca_core::ops::ObservationLevel::HooksSandbox
-                        && s.session_active(&x.id, now)
-                    {
+                    if x.level >= ObservationLevel::HooksSandbox && s.session_active(&x.id, now) {
                         matched.push((name.clone(), x.id.clone()));
                     }
                 }
@@ -2658,14 +2709,18 @@ impl Service {
                 allow = false;
                 continue;
             };
-            allow &= policy.config.observation.network == "taint";
-            allow_private &= policy.config.observation.allow_private_network;
+            let cfg = &policy.config.observation;
+            // A host the policy names as the agent's own is no outside
+            // content: it is on the record and it taints nothing.
+            let own = cfg.agent_hosts.iter().any(|h| h == host);
+            allow &= own || cfg.network == "taint";
+            allow_private &= cfg.allow_private_network;
             let ev = Observation {
                 phase: Phase::Pre,
                 kind: ObsKind::Fetch {
                     host: host.to_string(),
                 },
-                external: true,
+                external: !own,
             };
             if r.submit(
                 Submission::new(
@@ -3251,6 +3306,7 @@ mod tests {
                 require_root_settings: false,
                 git: "git".into(),
                 line_cap: MAX_LINE,
+                proxy: None,
             },
             Arc::new(|| 1_760_000_000_000),
         )

@@ -125,6 +125,13 @@ impl Workspace {
     }
 
     pub fn token(&self) -> Result<String> {
+        // In a sandbox, the token is not in the workspace: `lonca run`
+        // replaced that one, which outsiders may have seen.
+        if let Some(file) = std::env::var_os("LONCA_TOKEN_FILE") {
+            let text = fs::read_to_string(&file)
+                .with_context(|| format!("token file {}", file.display()))?;
+            return Ok(text.trim().to_string());
+        }
         let t = wsfs::read(&self.root, &meta_file("session"))?
             .context("this workspace has no agent session")?;
         Ok(String::from_utf8_lossy(&t.bytes).trim().to_string())
@@ -291,6 +298,31 @@ impl Workspace {
             })
         };
         self.changes()?.into_iter().map(local).collect()
+    }
+
+    /// What differs from `tree`, the files of the commit the workspace was
+    /// made from as the daemon has them: everything, ignored files too, and
+    /// never by the manifest, a file that can be edited. `.lonca` and `.git`
+    /// are not looked at; files `harness setup` wrote are allowed.
+    pub fn differs_from(&self, tree: &BTreeMap<String, GitId>) -> Result<Vec<String>> {
+        let mut found = Vec::new();
+        every_file(&self.root, "", &mut found)?;
+        let mut out = Vec::new();
+        for rel in &found {
+            if self.meta.generated.contains(rel) {
+                continue;
+            }
+            let same = wsfs::read(&self.root, rel)
+                .ok()
+                .flatten()
+                .map(|local| GitId::of_blob(&local.bytes));
+            if same.is_none() || same.as_ref() != tree.get(rel) {
+                out.push(rel.clone());
+            }
+        }
+        let missing = tree.keys().filter(|p| !found.contains(p)).cloned();
+        out.extend(missing);
+        Ok(out)
     }
 
     /// The changed files that hold markers of a sync.
@@ -689,6 +721,27 @@ fn in_dir(dir: &str, name: &str) -> String {
 /// The files under `dir` that are not ignored. Symlinks are skipped, and
 /// each path found is opened through `wsfs` after this: a directory swapped
 /// for a symlink meanwhile gets no further than its names.
+/// Every path under `dir` that is not a directory, links included.
+fn every_file(root: &Path, dir: &str, out: &mut Vec<String>) -> Result<()> {
+    for entry in fs::read_dir(root.join(dir))? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if dir.is_empty() && (name == META_DIR || name == ".git") {
+            continue;
+        }
+        let rel = match dir {
+            "" => name,
+            _ => format!("{dir}/{name}"),
+        };
+        if entry.file_type()?.is_dir() {
+            every_file(root, &rel, out)?;
+        } else {
+            out.push(rel);
+        }
+    }
+    Ok(())
+}
+
 fn walk(root: &Path, dir: &str, ignored: &mut IgnoreFiles, out: &mut Vec<String>) -> Result<()> {
     for entry in fs::read_dir(root.join(dir))? {
         let entry = entry?;

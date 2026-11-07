@@ -5595,3 +5595,356 @@ fn before_the_format_a_proposal_reports_nobody() {
     assert!(decided(FORMAT_CURRENT).reasons.iter().any(|r| r == HOLDER));
     assert!(decided(FORMAT_AFFECTED - 1).reasons.is_empty());
 }
+
+// ---------------------------------------------------------------- session.isolate
+
+fn isolate(session: &str) -> Op {
+    Op::SessionIsolate {
+        session: session.into(),
+        sandbox: "seatbelt".into(),
+        profile: "ab".repeat(32),
+    }
+}
+
+#[test]
+fn a_sandbox_is_vouched_for_by_the_human_who_started_the_session() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    let d = h.agent("s1", isolate("s1"));
+    assert!(denied_with(&d, "not_grantable:session.isolate"), "{d:?}");
+    let d = h.daemon(isolate("s1"), vec![]);
+    assert!(denied_with(&d, "not_a_daemon_op:session.isolate"), "{d:?}");
+    assert_eq!(
+        h.chain.state.sessions["s1"].level,
+        ObservationLevel::Unobserved
+    );
+
+    let d = h.human("ayse", isolate("nobody"));
+    assert!(denied_with(&d, "unknown_session"), "{d:?}");
+    let d = h.human("ayse", isolate("s1"));
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(
+        h.chain.state.sessions["s1"].level,
+        ObservationLevel::Isolated
+    );
+    h.assert_replay();
+}
+
+#[test]
+fn an_isolated_session_is_not_refused_for_what_only_hooks_could_see() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    assert!(
+        h.lease("s1", "l1", &[("src/a.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    let d = h.propose("s1", ChangeId::random(), edit("src/a.rs#f"));
+    assert_eq!(d.outcome, Outcome::Allow, "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn isolation_needs_a_session_that_is_alive_and_a_well_formed_word() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    let bad = |sandbox: &str, profile: String| Op::SessionIsolate {
+        session: "s1".into(),
+        sandbox: sandbox.into(),
+        profile,
+    };
+    let good = "ab".repeat(32);
+    for name in ["", "a b", &"x".repeat(33)] {
+        let d = h.human("ayse", bad(name, good.clone()));
+        assert!(denied_with(&d, "invalid_sandbox"), "{name}: {d:?}");
+    }
+    for digest in [
+        "ab".repeat(31),
+        "AB".repeat(32),
+        "xy".repeat(32),
+        "ab".repeat(33),
+    ] {
+        let d = h.human("ayse", bad("seatbelt", digest.clone()));
+        assert!(denied_with(&d, "invalid_profile"), "{digest}: {d:?}");
+    }
+    let longest = bad(&"x".repeat(32), "ab".repeat(32));
+    h.start("s2", &["src/**"]);
+    let d = h.human(
+        "ayse",
+        Op::SessionEnd {
+            session: "s2".into(),
+            reason: "done".into(),
+        },
+    );
+    assert!(d.is_allow(), "{d:?}");
+    let d = h.human("ayse", isolate("s2"));
+    assert!(denied_with(&d, "session_inactive"), "{d:?}");
+    assert!(h.human("ayse", longest).is_allow());
+    h.assert_replay();
+}
+
+#[test]
+fn a_hook_does_not_take_a_sandbox_level_away() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    let checks = BindChecks {
+        harness: "codex".into(),
+        harness_session: "x".into(),
+        managed_hooks: false,
+        locked_sandbox: false,
+        sudo_without_password: false,
+        config_digest: String::new(),
+        hook_binary_protected: false,
+    };
+    let d = h.daemon(
+        Op::SessionBind {
+            session: "s1".into(),
+            checks,
+            level: ObservationLevel::Unobserved,
+        },
+        vec![],
+    );
+    assert!(denied_with(&d, "session_isolated"), "{d:?}");
+    assert_eq!(
+        h.chain.state.sessions["s1"].level,
+        ObservationLevel::Isolated
+    );
+    h.assert_replay();
+}
+
+#[test]
+fn a_session_that_continues_an_isolated_one_has_shown_nothing() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    let op = h.start_op(
+        "s2",
+        &["src/**"],
+        Some(Continuation {
+            session: "s1".into(),
+            widen: false,
+        }),
+    );
+    let d = h.human("ayse", op);
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(
+        h.chain.state.sessions["s2"].level,
+        ObservationLevel::Unobserved
+    );
+    h.assert_replay();
+}
+
+#[test]
+fn another_human_can_not_vouch_and_a_child_takes_its_level_from_its_parent() {
+    let mut h = H::new();
+    h.enroll("bora");
+    h.start("s1", &["src/**"]);
+    let d = h.human("bora", isolate("s1"));
+    assert!(denied_with(&d, "not_own_session"), "{d:?}");
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    let scope = h.chain.state.sessions["s1"].scope.clone();
+    let child = Op::CapAttenuate {
+        parent: "s1".into(),
+        child: "s1c".into(),
+        agent: "sub".into(),
+        scope,
+        expires_ms: h.now + 60 * MIN,
+        leases: vec![],
+    };
+    assert!(h.agent("s1", child).is_allow());
+    assert_eq!(
+        h.chain.state.sessions["s1c"].level,
+        ObservationLevel::Isolated
+    );
+    let d = h.human("ayse", isolate("s1c"));
+    assert!(denied_with(&d, "session_is_a_child"), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn policy_can_ask_for_a_sandbox_by_path_and_by_task() {
+    let rule = format!(
+        "{DEFAULT_POLICY}\n@id(\"sandbox\")\n\
+         forbid(principal is Lonca::Agent, action, resource)\n\
+         when {{ context has path && context.path like \"src/auth/*\" \
+         && context has observation && context.observation != \"isolated\" }};\n\
+         @id(\"task\")\n\
+         forbid(principal is Lonca::Agent, action, resource)\n\
+         when {{ context has path && context has task && context.task == \"T-1\" \
+         && context.observation != \"isolated\" }};\n"
+    );
+    let policy = PolicyBundle::parse(&PolicyBundle::default_bundle().config_text, &rule).unwrap();
+    let mut h = H::with_policy(policy);
+    h.start("s1", &["src/**"]);
+    h.start_observed("s2", &["src/**"]);
+    for s in ["s1", "s2"] {
+        let set = format!("l-{s}");
+        let auth = format!("src/auth/{s}.rs#f");
+        let other = format!("src/{s}.rs#f");
+        let items = [
+            (auth.as_str(), LeaseKind::Edit),
+            (other.as_str(), LeaseKind::Edit),
+        ];
+        assert!(h.lease(s, &set, &items).is_allow());
+        let d = h.propose(s, ChangeId::random(), edit(&auth));
+        assert!(denied_with(&d, "policy:sandbox"), "{s}: {d:?}");
+        let d = h.propose(s, ChangeId::random(), edit(&other));
+        assert!(denied_with(&d, "policy:task"), "{s}: {d:?}");
+        assert!(!denied_with(&d, "policy:sandbox"), "{s}: {d:?}");
+    }
+    h.start("s3", &["src/**"]);
+    assert!(h.human("ayse", isolate("s3")).is_allow());
+    let auth = "src/auth/s3.rs#f";
+    assert!(h.lease("s3", "l3", &[(auth, LeaseKind::Edit)]).is_allow());
+    let d = h.propose("s3", ChangeId::random(), edit(auth));
+    assert_ne!(d.outcome, Outcome::Deny, "{d:?}");
+    h.assert_replay();
+}
+
+/// A policy from before format 19 that asks `context has task` reads false.
+#[test]
+fn old_entries_have_no_task_in_their_context() {
+    let rule = format!(
+        "{DEFAULT_POLICY}\n@id(\"task\")\n\
+         forbid(principal is Lonca::Agent, action == Lonca::Action::\"lease.acquire\", resource)\n\
+         when {{ context has task }};\n"
+    );
+    let policy = PolicyBundle::parse(DEFAULT_CONFIG, &rule).unwrap();
+    let mut h = H::with_policy(policy);
+    h.start("s1", &["src/**"]);
+    let d = h.lease("s1", "l1", &[("src/a.rs#f", LeaseKind::Edit)]);
+    assert!(denied_with(&d, "policy:task"), "{d:?}");
+}
+
+#[test]
+fn only_a_session_nothing_has_used_can_be_isolated() {
+    let used = |h: &mut H| {
+        let d = h.human("ayse", isolate("s1"));
+        assert!(denied_with(&d, "session_used"), "{d:?}");
+        h.assert_replay();
+    };
+    let start = || {
+        let mut h = H::new();
+        h.start("s1", &["src/**"]);
+        h
+    };
+
+    let mut h = start();
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    used(&mut h);
+
+    let mut h = start();
+    let event = |kind, external| Op::Observe {
+        session: "s1".into(),
+        events: vec![Observation {
+            phase: Phase::Post,
+            kind,
+            external,
+        }],
+    };
+    assert!(
+        h.daemon(event(ObsKind::Heartbeat, false), vec![])
+            .is_allow()
+    );
+    used(&mut h);
+
+    let mut h = start();
+    h.wrote("s1", "src/a.rs");
+    used(&mut h);
+
+    let mut h = start();
+    let fetch = ObsKind::Fetch { host: "x".into() };
+    assert!(h.daemon(event(fetch, true), vec![]).is_allow());
+    used(&mut h);
+
+    let mut h = start();
+    let shell = ObsKind::Shell {
+        program: "ls".into(),
+        digest: "d".into(),
+    };
+    assert!(h.daemon(event(shell, false), vec![]).is_allow());
+    used(&mut h);
+
+    let mut h = start();
+    let lease = [("src/a.rs#f", LeaseKind::Edit)];
+    assert!(h.lease("s1", "l1", &lease).is_allow());
+    used(&mut h);
+
+    let mut h = start();
+    assert!(h.lease("s1", "l1", &lease).is_allow());
+    let d = h.propose("s1", ChangeId::random(), edit("src/a.rs#f"));
+    assert_ne!(d.outcome, Outcome::Deny, "{d:?}");
+    used(&mut h);
+
+    let mut h = start();
+    let scope = h.chain.state.sessions["s1"].scope.clone();
+    let child = Op::CapAttenuate {
+        parent: "s1".into(),
+        child: "c".into(),
+        agent: "sub".into(),
+        scope,
+        expires_ms: h.now + 60 * MIN,
+        leases: vec![],
+    };
+    assert!(h.agent("s1", child).is_allow());
+    used(&mut h);
+
+    let mut h = start();
+    let d = h.continue_as("s2", "s1", &["src/**"], false);
+    assert!(d.is_allow(), "{d:?}");
+    let d = h.human("ayse", isolate("s2"));
+    assert!(denied_with(&d, "session_used"), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn none_is_no_sandbox() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    let op = Op::SessionIsolate {
+        session: "s1".into(),
+        sandbox: "none".into(),
+        profile: "ab".repeat(32),
+    };
+    let d = h.human("ayse", op);
+    assert!(denied_with(&d, "invalid_sandbox"), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn what_another_session_did_says_nothing_of_this_one() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    h.start("other", &["src/**"]);
+    h.wrote("other", "src/a.rs");
+    let lease = [("src/a.rs#f", LeaseKind::Edit)];
+    assert!(h.lease("other", "l1", &lease).is_allow());
+    let d = h.propose("other", ChangeId::random(), edit("src/a.rs#f"));
+    assert_ne!(d.outcome, Outcome::Deny, "{d:?}");
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    h.assert_replay();
+}
+
+#[test]
+fn a_change_alone_says_a_session_was_used() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    h.start("s2", &["src/**"]);
+    let change = ChangeId::random();
+    let lease = [("src/a.rs#f", LeaseKind::Edit)];
+    assert!(h.lease("s2", "l2", &lease).is_allow());
+    h.wrote("s2", "src/a.rs");
+    assert_ne!(
+        h.propose("s2", change, edit("src/a.rs#f")).outcome,
+        Outcome::Deny
+    );
+    h.chain.state.leases.clear();
+    let mut s = h.chain.state.sessions["s2"].clone();
+    s.writes.clear();
+    s.taint = None;
+    h.chain.state.sessions.insert("s2".into(), s);
+    let d = h.human("ayse", isolate("s2"));
+    assert!(denied_with(&d, "session_used"), "{d:?}");
+}

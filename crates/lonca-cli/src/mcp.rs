@@ -215,7 +215,7 @@ fn beat(c: &mut Client) -> Result<i64> {
 /// The daemon says this session is over, not that it could not answer:
 /// expired, or ended and its token gone. A worker is told by its next tool
 /// result.
-fn session_over(e: &anyhow::Error) -> bool {
+pub(crate) fn session_over(e: &anyhow::Error) -> bool {
     e.downcast_ref::<ctx::MethodError>()
         .is_some_and(|m| matches!(m.code.as_str(), "session_inactive" | "unauthenticated"))
 }
@@ -223,7 +223,7 @@ fn session_over(e: &anyhow::Error) -> bool {
 /// The heartbeat of this server, on its own connection. It stops when the
 /// session is over, or with the process, which ends when the harness
 /// closes stdin: that is what makes a crashed agent's leases free.
-fn keep_alive(mut c: Client, ended: Arc<AtomicBool>) {
+pub(crate) fn keep_alive(mut c: Client, ended: Arc<AtomicBool>) {
     while let Some(wait) = next_beat(beat(&mut c)) {
         std::thread::sleep(Duration::from_millis(wait as u64));
     }

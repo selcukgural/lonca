@@ -70,6 +70,8 @@ pub enum OpKind {
     SessionStart,
     #[serde(rename = "session.bind")]
     SessionBind,
+    #[serde(rename = "session.isolate")]
+    SessionIsolate,
     #[serde(rename = "session.end")]
     SessionEnd,
     #[serde(rename = "cap.attenuate")]
@@ -130,6 +132,7 @@ impl OpKind {
             OpKind::PolicyUpdate => "policy.update",
             OpKind::SessionStart => "session.start",
             OpKind::SessionBind => "session.bind",
+            OpKind::SessionIsolate => "session.isolate",
             OpKind::SessionEnd => "session.end",
             OpKind::CapAttenuate => "cap.attenuate",
             OpKind::CapRevoke => "cap.revoke",
@@ -524,6 +527,18 @@ pub enum Op {
         checks: BindChecks,
         level: ObservationLevel,
     },
+    /// A human's word that the session runs in a sandbox Lonca built: what
+    /// gives it `level: isolated`. Never from the agent, and never from the
+    /// daemon, which can not see the sandbox: the launcher builds it and the
+    /// human who started the session signs for it.
+    #[serde(rename = "session.isolate")]
+    SessionIsolate {
+        session: String,
+        /// The kind of sandbox (`seatbelt`, `bwrap`).
+        sandbox: String,
+        /// SHA-256 of the sandbox's definition, lowercase hex.
+        profile: String,
+    },
     #[serde(rename = "session.end")]
     SessionEnd { session: String, reason: String },
     #[serde(rename = "cap.attenuate")]
@@ -646,6 +661,7 @@ impl Op {
             Op::PolicyUpdate { .. } => OpKind::PolicyUpdate,
             Op::SessionStart { .. } => OpKind::SessionStart,
             Op::SessionBind { .. } => OpKind::SessionBind,
+            Op::SessionIsolate { .. } => OpKind::SessionIsolate,
             Op::SessionEnd { .. } => OpKind::SessionEnd,
             Op::CapAttenuate { .. } => OpKind::CapAttenuate,
             Op::CapRevoke { .. } => OpKind::CapRevoke,
@@ -838,6 +854,7 @@ mod tests {
             OpKind::LeaseAcquire,
             OpKind::Redact,
             OpKind::SessionBind,
+            OpKind::SessionIsolate,
             OpKind::HumanRotate,
             OpKind::HumanRevoke,
             OpKind::HumanRecoveryKey,

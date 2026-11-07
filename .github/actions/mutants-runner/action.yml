@@ -9,11 +9,14 @@ runs:
       run: |
         rustup toolchain install stable --profile minimal
         rustup default stable
-    # No bubblewrap, on purpose: the same environment as the `test` job
-    # in ci.yml. On ubuntu-latest (24.04) AppArmor blocks bwrap's
-    # unprivileged user namespaces, every sandboxed verification fails,
-    # and the baseline run (not a mutant) fails in the concurrency test.
-    # Sandboxed verification in CI is #54 / #59.
+    # A real sandbox: without one the tests of `lonca run` stop early and say
+    # nothing of it. AppArmor blocks bwrap's unprivileged user namespaces on
+    # ubuntu-latest (24.04).
+    - name: Bubblewrap
+      shell: bash
+      run: |
+        sudo apt-get install -y bubblewrap
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
     # cargo-mutants builds up to two copies of the tree under /tmp, about 12 GB
     # with this workspace's debug targets. A runner with 14 GB free died of
     # ENOSPC (shard 2/6 of PR #88), so the preinstalled toolchains we never use

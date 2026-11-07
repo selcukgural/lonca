@@ -108,6 +108,10 @@ unobserved_is_tainted = true
 # Outbound connections through the Lonca proxy: "taint" lets them through
 # and marks the session tainted, "deny" refuses them.
 network = "taint"
+# Hosts that are part of the agent itself, such as its model's API
+# ("api.anthropic.com"). Connections to them are logged, go through whatever
+# `network` says, and do not taint the session. Exact names, no wildcards.
+agent_hosts = []
 # Let sandboxed commands reach loopback, private and link-local addresses.
 allow_private_network = false
 # What a change to a critical path costs a session nobody fully observes:
@@ -371,6 +375,7 @@ pub const CRITICAL_ESCALATE: &str = "escalate";
 pub struct Observation {
     pub unobserved_is_tainted: bool,
     pub network: String,
+    pub agent_hosts: Vec<String>,
     pub allow_private_network: bool,
     pub unobserved_critical: String,
 }
@@ -532,6 +537,7 @@ impl Default for Observation {
         Self {
             unobserved_is_tainted: true,
             network: "taint".into(),
+            agent_hosts: Vec::new(),
             allow_private_network: false,
             unobserved_critical: CRITICAL_DENY.into(),
         }
@@ -670,6 +676,19 @@ impl PolicyBundle {
         if !matches!(config.observation.network.as_str(), "taint" | "deny") {
             return Err(format!(
                 "{CONFIG_FILE}: observation.network must be taint or deny"
+            ));
+        }
+        // The proxy compares lowercased names, and a wildcard or a stray
+        // character here would be a rule that silently never matches.
+        if let Some(h) = config.observation.agent_hosts.iter().find(|h| {
+            h.is_empty()
+                || h.len() > 253
+                || !h
+                    .bytes()
+                    .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-'))
+        }) {
+            return Err(format!(
+                "{CONFIG_FILE}: observation.agent_hosts: not a host name: {h}"
             ));
         }
         for (key, word) in [
@@ -843,6 +862,30 @@ impl PolicyBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_hosts_are_plain_lowercase_names() {
+        let with = |hosts: &str| {
+            let config =
+                DEFAULT_CONFIG.replace("agent_hosts = []", &format!("agent_hosts = {hosts}"));
+            PolicyBundle::parse(&config, DEFAULT_POLICY).map(|b| b.config.observation.agent_hosts)
+        };
+        assert_eq!(
+            with(r#"["api.example-1.com"]"#).unwrap(),
+            ["api.example-1.com"]
+        );
+        let long = format!("[\"{}\"]", "a".repeat(254));
+        assert!(with(&format!("[\"{}\"]", "a".repeat(253))).is_ok());
+        for bad in [
+            r#"["*.example.com"]"#,
+            r#"["API.example.com"]"#,
+            r#"[""]"#,
+            &long,
+        ] {
+            let e = with(bad).unwrap_err();
+            assert!(e.contains("not a host name"), "{bad}: {e}");
+        }
+    }
 
     #[test]
     fn a_batch_size_stays_within_bounds() {

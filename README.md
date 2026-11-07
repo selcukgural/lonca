@@ -147,9 +147,13 @@ system user, install root-owned binaries, lock Claude Code's hooks and
 sandbox through managed settings and route sandboxed network traffic
 through Lonca's proxy. They name the daemon's uid in a root-owned file, and
 the hook, the MCP server and the CLI refuse to send a token to any other
-process on the socket. They never edit sudoers; read their advice about
-sudo's credential cache. `--render DIR` shows the generated files without
-installing anything.
+process on the socket. They never edit sudoers; `lonca doctor` tells you
+when sudo asks for no password. `--render DIR` shows the generated files
+without installing anything.
+
+A hardened daemon starts each new repository from the hardened profile and
+does not start without a sandbox. See
+[docs/guide/profiles.md](docs/guide/profiles.md).
 
 Repositories created in cooperative mode move with their history: stop
 the cooperative daemon, restore each store into the hardened daemon
@@ -247,6 +251,8 @@ reasons: [docs/decisions.md](docs/decisions.md).
 - [docs/guide/humans.md](docs/guide/humans.md): working as a human, from
   a Lonca workspace or from a git checkout (`lonca fetch`,
   `lonca propose --commit`).
+- [docs/guide/profiles.md](docs/guide/profiles.md): the settings a
+  repository starts from, and what each set protects against.
 - [docs/guide/verification.md](docs/guide/verification.md): build and
   test commands, their environment and sandbox, starters per language.
 - [docs/decisions.md](docs/decisions.md): decisions and deviations from

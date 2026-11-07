@@ -5,16 +5,35 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn render(script: &str) -> PathBuf {
+    render_with(script, &[])
+}
+
+fn render_with(script: &str, extra: &[&str]) -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = tempfile::tempdir().unwrap().keep();
     let status = Command::new("/bin/sh")
         .arg(root.join(script))
         .args(["--render", out.to_str().unwrap(), "--dev-uid", "501"])
         .args(["--daemon-uid", "77"])
+        .args(extra)
         .status()
         .unwrap();
     assert!(status.success());
     out
+}
+
+/// The override reaches the daemon only when the installer was told.
+#[test]
+fn the_unit_starts_without_a_sandbox_only_when_told() {
+    let script = "packaging/linux/install-hardened.sh";
+    let unit = |extra: &[&str]| {
+        let dir = render_with(script, extra);
+        let text = std::fs::read_to_string(dir.join("lonca.service")).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        text
+    };
+    assert!(!unit(&[]).contains("--allow-unsandboxed"));
+    assert!(unit(&["--allow-unsandboxed"]).contains(" --allow-unsandboxed\n"));
 }
 
 #[test]

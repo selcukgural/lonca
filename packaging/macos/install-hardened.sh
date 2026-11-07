@@ -208,13 +208,12 @@ Lonca daemon installed and started as _lonca.
 
 Log out and in again (or run 'newgrp lonca') so your account joins group lonca.
 
-sudo advice (design §3.3): an agent running as you can use a cached sudo
-credential. Either use a non-admin account for daily work, or add
-    Defaults:$dev_user timestamp_timeout=0
-with 'sudo visudo'. Lonca marks sessions as unobserved while 'sudo -n true'
-succeeds for you.
-
-Human signatures with user presence:
+A new repository starts from the hardened profile, which asks for human
+signatures with user presence:
     $BIN_DIR/lonca human keygen --secure-enclave <name>
-and set approvals.require_presence = true in the repository policy.
+
+'$BIN_DIR/lonca doctor' checks the rest: repositories below the hardened
+profile, and a sudo that asks for no password (design §3.3), for which add
+    Defaults:$dev_user timestamp_timeout=0
+with 'sudo visudo', or use a non-admin account for daily work.
 EOF

@@ -69,7 +69,9 @@ lonca verify: sandbox seatbelt, env PATH HOME TMPDIR LANG LONCA_VERIFY CARGO_HOM
 ## The sandbox
 
 macOS: Seatbelt (`sandbox-exec`); Linux: bubblewrap when installed;
-else none (`require_sandbox = true` refuses to verify without one).
+else none (`require_sandbox = true` refuses a change verified without one,
+with `unsandboxed_verification`, and a hardened daemon does not start
+without a sandbox; see [profiles.md](profiles.md)).
 
 A change's tests are the agent's code, so they run in the same sandbox as
 `lonca run` (`docs/guide/runners.md`), with no way out at all: no network,

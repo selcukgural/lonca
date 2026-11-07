@@ -34,7 +34,7 @@ fn block(msg: &str) -> ExitCode {
 
 /// `sudo -n true` succeeds only if sudo would run without asking for a
 /// password right now (cached credentials or NOPASSWD).
-fn sudo_without_password() -> bool {
+pub fn sudo_without_password() -> bool {
     let Ok(mut child) = Command::new("sudo")
         .args(["-n", "true"])
         .stdin(Stdio::null())

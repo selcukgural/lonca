@@ -1,13 +1,14 @@
 #!/bin/sh
 # Lonca hardened install for Linux (systemd).
 #
-#   sudo packaging/linux/install-hardened.sh [--bin DIR]
+#   sudo packaging/linux/install-hardened.sh [--bin DIR] [--allow-unsandboxed]
 #   packaging/linux/install-hardened.sh --render DIR [--dev-uid N] [--daemon-uid N]
 #
 # Same layout as the macOS installer: a lonca system user owns the daemon's
 # state, binaries are root-owned, the socket admits the developer's uid only,
 # /etc/lonca/daemon.toml tells clients the daemon's uid, and Claude Code's
-# managed settings lock hooks and sandbox (bubblewrap).
+# managed settings lock hooks and sandbox (bubblewrap). The daemon does not
+# start without bubblewrap unless --allow-unsandboxed says it may.
 set -eu
 
 PREFIX=/opt/lonca
@@ -25,12 +26,14 @@ src_bin=""
 render=""
 dev_uid=""
 daemon_uid=""
+unsandboxed=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --bin) src_bin=$2; shift 2 ;;
         --render) render=$2; shift 2 ;;
         --dev-uid) dev_uid=$2; shift 2 ;;
         --daemon-uid) daemon_uid=$2; shift 2 ;;
+        --allow-unsandboxed) unsandboxed=" --allow-unsandboxed"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -50,7 +53,7 @@ RuntimeDirectoryMode=0750
 StateDirectory=lonca
 StateDirectoryMode=0700
 UMask=0077
-ExecStart=$BIN_DIR/lonca daemon --home $HOME_DIR --backups $BACKUP_DIR --socket-mode 660 --socket-group lonca --allow-uid $1 --proxy 127.0.0.1:$PROXY_PORT
+ExecStart=$BIN_DIR/lonca daemon --home $HOME_DIR --backups $BACKUP_DIR --socket-mode 660 --socket-group lonca --allow-uid $1 --proxy 127.0.0.1:$PROXY_PORT$unsandboxed
 Restart=always
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -110,7 +113,11 @@ dev_uid=$(id -u "$dev_user")
 here=$(cd "$(dirname "$0")" && pwd)
 src_bin=${src_bin:-"$here/../../target/release"}
 [ -x "$src_bin/lonca" ] || { echo "missing $src_bin/lonca (cargo build --release)" >&2; exit 1; }
-command -v bwrap >/dev/null || echo "WARNING: bubblewrap (bwrap) is not installed; verification will run unsandboxed"
+# The places the verifier looks in, and no others: PATH is no root's word.
+if [ -z "$unsandboxed" ] && [ ! -x /usr/bin/bwrap ] && [ ! -x /bin/bwrap ] && [ ! -x /usr/local/bin/bwrap ]; then
+    echo "bubblewrap (bwrap) is not installed: the daemon would not start. Install it, or pass --allow-unsandboxed." >&2
+    exit 1
+fi
 
 getent group lonca >/dev/null || groupadd --system lonca
 getent passwd lonca >/dev/null || useradd --system --gid lonca --home-dir "$HOME_DIR" --shell /usr/sbin/nologin lonca
@@ -139,4 +146,6 @@ systemctl daemon-reload
 systemctl enable --now lonca.service
 echo "Lonca installed. export LONCA_SOCKET=$SOCKET; log out and in to join group lonca."
 echo "Backups (lonca backup) go to $BACKUP_DIR, readable by group lonca."
-echo "sudo advice: use 'Defaults:$dev_user timestamp_timeout=0' or a non-sudo account for agents."
+echo "A new repository starts from the hardened profile. '$BIN_DIR/lonca doctor' checks the rest:"
+echo "repositories below that profile, and a sudo that asks for no password (use"
+echo "'Defaults:$dev_user timestamp_timeout=0' or a non-sudo account for agents)."

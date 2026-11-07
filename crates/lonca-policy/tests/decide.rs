@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use lonca_policy::chain::{Chain, Submission, replay_checked};
 use lonca_policy::config::{
-    DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle, UnparsedFiles, Verification,
+    CVal, CedarOutcome, DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle, Profile, UnparsedFiles,
+    Verification,
 };
 use lonca_policy::decide::{Ctx, decide, evidence_problems};
 use lonca_policy::human::intent_bytes;
@@ -1243,6 +1244,99 @@ fn policy_without_permit_denies_everything_for_agents() {
         "policy_default_deny"
     ));
     assert!(PolicyBundle::parse(DEFAULT_CONFIG, DEFAULT_POLICY).is_ok());
+}
+
+/// The list of the hardened policy is what an agent can ever be granted,
+/// plus the end of its own session; the rest is refused by no rule at all.
+#[test]
+fn a_hardened_policy_lists_what_agents_do_and_nothing_else() {
+    let (config, policy) = Profile::Hardened.files(true);
+    let hardened = PolicyBundle::parse(&config, &policy).unwrap();
+    let agent = Actor::Agent {
+        name: "a".into(),
+        session: "s1".into(),
+    };
+    let human = Actor::Human {
+        name: "ayse".into(),
+    };
+    // What a proposal is asked with; the rules read these.
+    let allowed = |who: &Actor, action: &str| {
+        let context = vec![
+            ("path", CVal::Str("src/a.rs".into())),
+            ("recent_reverts", CVal::Long(0)),
+            ("files", CVal::Long(1)),
+            ("lines", CVal::Long(1)),
+        ];
+        hardened.evaluate(who, action, context) == CedarOutcome::Allow
+    };
+    let kinds = [
+        OpKind::RepoInit,
+        OpKind::HumanEnroll,
+        OpKind::HumanRotate,
+        OpKind::HumanRevoke,
+        OpKind::HumanRecoveryKey,
+        OpKind::HumanRecover,
+        OpKind::DaemonRotate,
+        OpKind::DaemonRecover,
+        OpKind::PolicyUpdate,
+        OpKind::SessionStart,
+        OpKind::SessionBind,
+        OpKind::SessionIsolate,
+        OpKind::SessionEnd,
+        OpKind::CapAttenuate,
+        OpKind::CapRevoke,
+        OpKind::LeaseAcquire,
+        OpKind::LeaseRelease,
+        OpKind::LeaseRenew,
+        OpKind::LeaseInterest,
+        OpKind::ChangePropose,
+        OpKind::ChangeWithdraw,
+        OpKind::ChangeIntegrate,
+        OpKind::ChangeIntegrateBatch,
+        OpKind::Approve,
+        OpKind::Reject,
+        OpKind::Observe,
+        OpKind::Taint,
+        OpKind::ImportExternal,
+        OpKind::ImportUnmediated,
+        OpKind::BridgePush,
+        OpKind::Freeze,
+        OpKind::Unfreeze,
+        OpKind::Negotiate,
+        OpKind::Redact,
+    ];
+    for k in kinds {
+        let own = matches!(k, OpKind::SessionEnd | OpKind::CapRevoke);
+        let want = k.agent_grantable() || own;
+        assert_eq!(allowed(&agent, k.as_str()), want, "{}", k.as_str());
+        assert!(allowed(&human, k.as_str()), "{}", k.as_str());
+    }
+    for action in ["file.add", "file.modify", "file.delete"] {
+        assert!(allowed(&agent, action), "{action}");
+    }
+    assert!(matches!(
+        hardened.evaluate(&agent, "lonca.unlisted", vec![]),
+        CedarOutcome::Deny(r) if r == ["policy_default_deny:lonca.unlisted"]
+    ));
+    assert!(
+        PolicyBundle::default_bundle()
+            .evaluate(&agent, "lonca.unlisted", vec![])
+            .eq(&CedarOutcome::Allow)
+    );
+}
+
+#[test]
+fn an_agent_works_under_the_hardened_policy() {
+    let (config, policy) = Profile::Hardened.files(false);
+    let mut h = H::with_policy(PolicyBundle::parse(&config, &policy).unwrap());
+    h.start_observed("s1", &["src/**"]);
+    let sym = "src/billing.rs#Client.charge";
+    h.wrote("s1", "src/billing.rs");
+    assert!(h.lease("s1", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    let d = h.propose("s1", c, edit(sym));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
 }
 
 #[test]

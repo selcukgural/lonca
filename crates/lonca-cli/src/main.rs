@@ -73,6 +73,10 @@ enum Cmd {
         /// Only these uids may connect (repeatable).
         #[arg(long = "allow-uid")]
         allow_uids: Vec<u32>,
+        /// Start a hardened daemon on a machine with no sandbox. Verification
+        /// then runs unsandboxed, and every start says so.
+        #[arg(long)]
+        allow_unsandboxed: bool,
     },
     /// Human identities: file keys or Secure Enclave keys.
     #[command(subcommand)]
@@ -90,6 +94,14 @@ enum Cmd {
         branch: Option<String>,
         #[arg(long = "as")]
         human: Option<String>,
+        /// The settings to start from (default: hardened on a hardened
+        /// install, else cooperative). See docs/guide/profiles.md.
+        #[arg(long, value_parser = ["cooperative", "hardened"])]
+        profile: Option<String>,
+        /// A hardened repository that accepts file keys, for a machine with
+        /// no key that proves presence.
+        #[arg(long)]
+        without_presence: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1052,7 +1064,15 @@ fn run(cmd: Cmd) -> Result<()> {
             socket_mode,
             socket_group,
             allow_uids,
+            allow_unsandboxed,
         } => {
+            let hardened = lonca_daemon::trust::Trust::load()?.is_hardened();
+            let sandbox = lonca_verify::Sandbox::detect();
+            let said =
+                lonca_daemon::service::sandbox_at_start(hardened, sandbox, allow_unsandboxed);
+            if let Some(line) = said.map_err(anyhow::Error::msg)? {
+                eprintln!("lonca daemon: {line}");
+            }
             let home = home
                 .map(lonca_daemon::Home::new)
                 .unwrap_or_else(lonca_daemon::Home::from_env);
@@ -1076,9 +1096,13 @@ fn run(cmd: Cmd) -> Result<()> {
                 allow_user_owned_settings,
                 managed_settings,
                 proxy_addr.clone(),
+                hardened,
             );
             let svc =
                 lonca_daemon::Service::open(home.clone(), settings, lonca_daemon::system_clock())?;
+            for line in svc.sandbox_warnings(sandbox) {
+                eprintln!("lonca daemon: {line}");
+            }
             let access = lonca_daemon::server::Access {
                 mode: u32::from_str_radix(&socket_mode, 8)
                     .context("--socket-mode is octal, e.g. 660")?,
@@ -1270,6 +1294,8 @@ fn run(cmd: Cmd) -> Result<()> {
             import,
             branch,
             human,
+            profile,
+            without_presence,
             json: as_json,
         } => {
             let human = human_name(human)?;
@@ -1278,7 +1304,10 @@ fn run(cmd: Cmd) -> Result<()> {
             let prep = call(
                 &mut c,
                 "repo.prepare_init",
-                json!({"repo": repo, "human": human, "human_key": key, "import_from": import, "branch": branch}),
+                json!({
+                    "repo": repo, "human": human, "human_key": key, "import_from": import,
+                    "branch": branch, "profile": profile, "without_presence": without_presence,
+                }),
             )?;
             let op: Op = serde_json::from_value(prep["op"].clone())?;
             if !as_json {
@@ -1294,10 +1323,11 @@ fn run(cmd: Cmd) -> Result<()> {
                 };
                 ctx::print_json(&json!({
                     "repo": repo, "trunk": trunk, "seq": r["seq"], "decision": r["decision"],
-                    "warnings": prep["warnings"],
+                    "warnings": prep["warnings"], "profile": prep["profile"],
                 }))?;
             } else {
                 print_decision(&r);
+                println!("profile {}", prep["profile"].as_str().unwrap_or_default());
             }
             ctx::denied(&r)
         }
@@ -2277,11 +2307,21 @@ fn left_unproposed(session: &Value) -> Option<String> {
     ))
 }
 
+/// A hardened install with a repository that still has weaker settings.
+fn below_hardened_note(s: &Value) -> Option<String> {
+    let list = s["below_hardened"].as_array().filter(|l| !l.is_empty())?;
+    let names: Vec<&str> = list.iter().filter_map(Value::as_str).collect();
+    Some(format!("BELOW HARDENED {}", names.join(", ")))
+}
+
 fn print_status(s: &Value) {
     println!("repo   {}", s["repo"].as_str().unwrap_or(""));
     println!("trunk  {}", s["trunk"].as_str().unwrap_or(""));
     if let Some(f) = s["frozen"].as_str() {
         println!("FROZEN {f}");
+    }
+    if let Some(line) = below_hardened_note(s) {
+        println!("{line}");
     }
     let q = s["queue"].as_array().map(|a| a.len()).unwrap_or(0);
     println!("queue  {q} change(s)");

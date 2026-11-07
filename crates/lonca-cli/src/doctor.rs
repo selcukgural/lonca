@@ -161,8 +161,15 @@ fn hooks_check(ins: &Inspection, hardened: bool) -> Check {
     }
 }
 
-fn sandbox_check(sandbox: Sandbox) -> Check {
+/// A hardened daemon does not start without a sandbox (`--allow-unsandboxed`
+/// is the exception, and a failed check here is how it stays visible).
+fn sandbox_check(sandbox: Sandbox, hardened: bool) -> Check {
     match sandbox {
+        Sandbox::None if hardened => fail(
+            "sandbox",
+            "no sandbox found: verification runs unsandboxed",
+            "install bubblewrap",
+        ),
         Sandbox::None => warn(
             "sandbox",
             "no sandbox found: verification would run unsandboxed",
@@ -170,6 +177,33 @@ fn sandbox_check(sandbox: Sandbox) -> Check {
         ),
         s => pass("sandbox", s.name()),
     }
+}
+
+/// An agent that runs as you can use a sudo that asks for nothing, which
+/// would take it past the boundary of a hardened install.
+fn sudo_check(without_password: bool) -> Check {
+    if without_password {
+        return warn(
+            "sudo",
+            "sudo runs without a password here: sessions count as unobserved",
+            "use `Defaults timestamp_timeout=0`, or a non-admin account for daily work",
+        );
+    }
+    pass("sudo", "sudo asks for a password")
+}
+
+/// A hardened install that serves a repository with weaker settings.
+fn hardened_check(repo: &str, status: &Value) -> Option<Check> {
+    let list = status["below_hardened"].as_array()?;
+    let names: Vec<&str> = list.iter().filter_map(Value::as_str).collect();
+    if names.is_empty() {
+        return None;
+    }
+    Some(warn(
+        format!("settings {repo}"),
+        format!("below the hardened profile: {}", names.join(", ")),
+        "a human changes them with `lonca policy set`",
+    ))
 }
 
 fn on_path(program: &str, path: Option<&std::ffi::OsStr>) -> bool {
@@ -270,6 +304,7 @@ fn repository_checks(human: &str, repo: &str) -> Result<Vec<Check>> {
         audit_check(repo, &ops, status["head_hash"].as_str()),
         human_check(repo, human, &status, presence),
     ];
+    out.extend(hardened_check(repo, &status));
     if let Some(reason) = status["frozen"].as_str() {
         out.push(warn(
             format!("frozen {repo}"),
@@ -378,7 +413,11 @@ pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
             }
         }
     }
-    checks.push(sandbox_check(Sandbox::detect()));
+    let hardened = trust.as_ref().is_ok_and(Trust::is_hardened);
+    checks.push(sandbox_check(Sandbox::detect(), hardened));
+    if hardened {
+        checks.push(sudo_check(crate::hook::sudo_without_password()));
+    }
     checks.extend(tools_checks(path.as_deref()));
     if reachable {
         checks.extend(humans_checks());
@@ -499,9 +538,12 @@ mod tests {
 
     #[test]
     fn no_sandbox_is_a_warning() {
-        assert_eq!(sandbox_check(Sandbox::None).level, Level::Warn);
-        assert_eq!(sandbox_check(Sandbox::Seatbelt).level, Level::Pass);
-        assert_eq!(sandbox_check(Sandbox::Bubblewrap).detail, "bwrap");
+        assert_eq!(sandbox_check(Sandbox::None, false).level, Level::Warn);
+        assert_eq!(sandbox_check(Sandbox::None, true).level, Level::Fail);
+        assert_eq!(sandbox_check(Sandbox::Seatbelt, true).level, Level::Pass);
+        assert_eq!(sandbox_check(Sandbox::Bubblewrap, false).detail, "bwrap");
+        assert_eq!(sudo_check(true).level, Level::Warn);
+        assert_eq!(sudo_check(false).level, Level::Pass);
     }
 
     #[test]

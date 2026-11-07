@@ -1154,6 +1154,8 @@ mod tests {
         }
         let t = Planned::new();
         let mut p = t.plan(sandbox, &t.args(), &t.prepared(None)).unwrap();
+        // No daemon here: bubblewrap would refuse to mount a missing socket.
+        p.jail.socket = t.root.join("run/token");
         assert!(probe(&p).is_ok());
         p.jail.workspace = t.root.join("gone");
         assert!(probe(&p).is_err());

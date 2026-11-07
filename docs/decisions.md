@@ -122,6 +122,8 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 20** adds `harness` to `session.start`, left out of the encoding when
   absent, and holds `session.bind` to it (see "Naming the harness"). Older entries
   replay as they were.
+- **Version 21** adds the lease kind `shared` (see "Shared leases (#112)"). An
+  acquire or an interest with a `shared` item needs it.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -2485,6 +2487,38 @@ both 0 (off) by default.
   leaves (under one millisecond per change) is not charged to a session.
 - **A table of its own**, not `[verification]`: the verifier's cache is keyed
   by a digest of that table, and a quota does not change what a run proves.
+
+## Shared leases (#112)
+
+A symbol has one `edit` holder, so two agents in one long method take turns.
+Most of their edits would not touch the same lines. The lease kind `shared`
+lets several sessions hold a symbol at once, and the merge joins their changes
+to it line by line.
+
+- **Off unless the repository verifies every merge.** `[leases] shared = true`
+  is refused at policy load without `verification.required = true` and a
+  `build` or `test` command, and `decide()` refuses a `shared` item
+  (`shared_off`) unless both hold, in an acquire or an interest. Two edits that
+  do not share a line can still break each other; what catches that is the
+  checks on the merged tree, so the kind can not exist without them.
+- **`shared` goes with `shared` only.** Against `edit` or `rename` on the
+  symbol, on what holds it, or on what it holds, it conflicts as an `edit`
+  would, in both orders, so `edit` keeps meaning exclusive. Against an
+  `insert` it is an `edit`.
+- **A body, not a signature.** A `shared` lease covers a symbol in `edits`. A
+  change of its signature still needs `edit` or `rename`: what calls it can
+  not be merged by lines. Deletes and renames are as before.
+- **Log format 21.** An old reader would take `shared` for an unknown kind, so
+  the chain check refuses one in an older entry.
+- **The merge (engine 14, the next step).** Until it lands, two holders'
+  changes to one symbol are what they are today: the second to integrate is
+  `conflicted`. Engine 14 line-merges a symbol both sides changed when the
+  change being integrated pinned a `shared` item covering it and no change
+  integrated since its base changed it under any other kind. Both come from
+  the replayed state, so the auditor recomputes the same merge and the log
+  carries nothing new. Lines both sides changed stay a conflict naming the
+  symbol, the result must parse and keep what the symbol merge keeps, and only
+  a symbol that holds no others is merged this way.
 
 ## Open questions (carried from the design)
 

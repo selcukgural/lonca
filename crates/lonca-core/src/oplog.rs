@@ -15,7 +15,7 @@ use crate::canonical::{canonical_bytes, digest_of};
 use crate::error::{Error, Result};
 use crate::keys::{KeyPair, verify_hex};
 use crate::ops::{
-    Actor, Attestation, Decision, Facts, HumanSignature, NegotiationMsg, ObsKind, Op,
+    Actor, Attestation, Decision, Facts, HumanSignature, LeaseItem, NegotiationMsg, ObsKind, Op,
 };
 use crate::store::{CommitSpec, FileEntry, FileMap, FileMode, GitId, Store};
 
@@ -42,8 +42,8 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// version 16 adds `unread_files`; version 17 adds `change.integrate_batch`;
 /// version 18 adds `affected` to facts and reports who holds it; version 19
 /// adds `session.isolate`; version 20 adds `harness` to `session.start`, and
-/// a level rests on it.
-pub const FORMAT_CURRENT: u32 = 20;
+/// a level rests on it; version 21 adds the lease kind `shared`.
+pub const FORMAT_CURRENT: u32 = 21;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -97,6 +97,8 @@ pub const FORMAT_ISOLATE: u32 = 19;
 /// `session.bind` is held to it, and can not raise a level already bound.
 /// Older entries replay as they were.
 pub const FORMAT_SESSION_HARNESS: u32 = 20;
+/// The first format with the lease kind `shared`.
+pub const FORMAT_SHARED_LEASES: u32 = 21;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -159,6 +161,11 @@ impl OpEntry {
             Op::Reject { .. } => FORMAT_REJECT,
             Op::ChangeIntegrateBatch { .. } => FORMAT_BATCH,
             Op::SessionIsolate { .. } => FORMAT_ISOLATE,
+            Op::LeaseAcquire { ref items, .. } | Op::LeaseInterest { ref items, .. }
+                if items.iter().any(LeaseItem::is_shared) =>
+            {
+                FORMAT_SHARED_LEASES
+            }
             Op::Observe { ref events, .. }
                 if events
                     .iter()
@@ -426,7 +433,7 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
 mod tests {
     use super::*;
     use crate::ChangeId;
-    use crate::ops::{Continuation, Decision, HumanKey, Scope};
+    use crate::ops::{Continuation, Decision, HumanKey, LeaseKind, Scope};
 
     fn genesis(key: &KeyPair, store: &Store) -> OpEntry {
         let tree = store.empty_tree().unwrap();
@@ -794,6 +801,56 @@ mod tests {
             let err = chain(19).unwrap_err();
             assert!(err.to_string().contains("needs log format 20"), "{err}");
         }
+    }
+
+    /// A `shared` item needs its format, in an acquire or an interest, among
+    /// other items or alone; the other kinds keep theirs.
+    #[test]
+    fn a_shared_lease_needs_format_21() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let items = |kinds: &[LeaseKind]| -> Vec<LeaseItem> {
+            let item = |&kind| LeaseItem {
+                symbol: "a.rs#f".into(),
+                kind,
+            };
+            kinds.iter().map(item).collect()
+        };
+        let acquire = |items| Op::LeaseAcquire {
+            set: "l".into(),
+            items,
+            intent: "x".into(),
+            ttl_ms: 1000,
+        };
+        let interest = |items| Op::LeaseInterest {
+            items,
+            intent: "x".into(),
+        };
+        let at = |op: &Op, format| OpEntry {
+            format,
+            op: op.clone(),
+            ..next(&g, 2000)
+        };
+        let shared = [LeaseKind::Edit, LeaseKind::Shared];
+        for op in [
+            acquire(items(&shared)),
+            acquire(items(&[LeaseKind::Shared])),
+            interest(items(&shared)),
+        ] {
+            assert_eq!(at(&op, 21).min_format(), FORMAT_SHARED_LEASES, "{op:?}");
+            let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(&op, format), &key)]);
+            assert!(chain(21).is_ok(), "{op:?}");
+            let err = chain(20).unwrap_err();
+            assert!(err.to_string().contains("needs log format 21"), "{err}");
+        }
+        let others = [LeaseKind::Edit, LeaseKind::Insert, LeaseKind::Rename];
+        assert_eq!(at(&acquire(items(&others)), 2).min_format(), FORMAT_LEGACY);
+        assert_eq!(
+            at(&interest(items(&others)), 10).min_format(),
+            FORMAT_LEASE_QUEUE
+        );
     }
 
     #[test]

@@ -122,8 +122,11 @@ impl LeaseNeed {
     }
 }
 
-/// What editing or changing a signature takes.
+/// What changing a signature takes: what calls it can not be merged by
+/// lines.
 pub const EDIT_KINDS: &[LeaseKind] = &[LeaseKind::Edit, LeaseKind::Rename];
+/// What editing a body takes.
+pub const BODY_KINDS: &[LeaseKind] = &[LeaseKind::Edit, LeaseKind::Rename, LeaseKind::Shared];
 /// What adding a member to a container takes.
 pub const ADD_KINDS: &[LeaseKind] = &[LeaseKind::Insert, LeaseKind::Edit, LeaseKind::Rename];
 /// What deleting a symbol or a file takes.
@@ -135,7 +138,7 @@ pub fn lease_needs_under(f: &Facts, unparsed: UnparsedFiles) -> Vec<LeaseNeed> {
     let needs = lease_needs(f).into_iter();
     let free = |need: &LeaseNeed| {
         unparsed == UnparsedFiles::Optimistic
-            && need.kinds == EDIT_KINDS
+            && need.kinds == BODY_KINDS
             && f.unparsed_files
                 .iter()
                 .any(|p| need.symbol == file_symbol(p))
@@ -147,8 +150,9 @@ pub fn lease_needs_under(f: &Facts, unparsed: UnparsedFiles) -> Vec<LeaseNeed> {
 /// reports them: the one rule for `lease_missing` and for pinning.
 pub fn lease_needs(f: &Facts) -> Vec<LeaseNeed> {
     let need = |symbol: String, kinds| LeaseNeed { symbol, kinds };
-    let edits = f.edits.iter().chain(&f.signature_changes);
-    let edits = edits.map(|s| need(s.clone(), EDIT_KINDS));
+    let bodies = f.edits.iter().map(|s| need(s.clone(), BODY_KINDS));
+    let signatures = f.signature_changes.iter();
+    let edits = bodies.chain(signatures.map(|s| need(s.clone(), EDIT_KINDS)));
     let deletes = f.deletes.iter().map(|s| need(s.clone(), DELETE_KINDS));
     // A rename takes a `rename` lease on the old name, and that is all of it
     // while the symbol stays where it was.
@@ -389,7 +393,7 @@ mod tests {
         assert_eq!(
             lease_needs(&f),
             vec![
-                need("a.rs#f", EDIT_KINDS),
+                need("a.rs#f", BODY_KINDS),
                 need("a.rs#g", EDIT_KINDS),
                 need("a.rs#h", DELETE_KINDS),
                 need("a.rs#T", ADD_KINDS),

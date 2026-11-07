@@ -53,7 +53,8 @@ fn tool_list() -> Value {
     let number = |what: &str| json!({"type": "integer", "description": what});
     let list =
         |what: &str| json!({"type": "array", "items": {"type": "string"}, "description": what});
-    let kind = json!({"type": "string", "enum": ["edit", "insert", "rename"], "description": "edit changes a body; insert adds members to a type or file; rename renames or deletes"});
+    let names: Vec<&str> = LeaseKind::ALL.iter().map(|k| k.as_str()).collect();
+    let kind = json!({"type": "string", "enum": names, "description": "edit changes a body; insert adds members to a type or file; rename renames or deletes; shared changes a body alongside others who hold it shared, when the repository allows it"});
     let items = |what: &str| {
         json!({"type": "array", "description": what, "items": {
             "type": "object",
@@ -242,11 +243,9 @@ fn next_beat(beat: Result<i64>) -> Option<i64> {
 
 /// `items`, or `symbols` with one `kind` (default edit), or both.
 fn requested_items(args: &Value) -> Result<Vec<LeaseItem>> {
-    let kind = match args["kind"].as_str().unwrap_or("edit") {
-        "edit" => LeaseKind::Edit,
-        "insert" => LeaseKind::Insert,
-        "rename" => LeaseKind::Rename,
-        k => bail!("unknown lease kind {k}"),
+    let kind = args["kind"].as_str().unwrap_or("edit");
+    let Some(kind) = LeaseKind::from_name(kind) else {
+        bail!("unknown lease kind {kind}");
     };
     let mut items: Vec<LeaseItem> = match args.get("items") {
         Some(v) => serde_json::from_value(v.clone())?,

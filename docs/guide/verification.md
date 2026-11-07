@@ -178,6 +178,28 @@ status --json` shows what each session has used (`verification_ms`) and what
 the day has (`verification_day_ms`). A human raises a quota with a policy
 update; a day spent by agents also stops a human's proposals until then.
 
+## Shared leases
+
+```toml
+[leases]
+shared = true
+
+[verification]
+required = true
+test = "cargo test --offline"
+```
+
+With these, an agent may lease a symbol with the kind `shared` (`lonca lease
+acquire path#Type.method --kind shared`), and other agents may hold it
+`shared` too. `edit` and `rename` stay exclusive: they meet every `shared`
+holder, and a `shared` lease meets them. A `shared` lease covers changes to
+the body; a change of the signature needs `edit`. `leases.shared` is refused
+without `required = true` and a `build` or `test` command, and a `shared` item
+is refused (`shared_off`) where the policy does not have it.
+
+The checks run on the merged tree, and they are what makes this safe: two
+changes that touch different lines can still break each other.
+
 ## Starters
 
 **Rust (rustup).** `cargo` under rustup needs `HOME`, `RUSTUP_HOME` and

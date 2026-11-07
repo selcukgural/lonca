@@ -162,7 +162,9 @@ unknown method: `unknown_method`, whatever the token.
   lease on the old name covers it. Once integrated, the old name and the new
   one conflict in leases.
 - **lease item**: `{"symbol": "path#Qualified.name", "kind": "edit" |
-  "insert" | "rename"}`; for `insert` the symbol is the container
+  "insert" | "rename" | "shared"}`; `shared` only where the policy has
+  `[leases] shared = true` (else `shared_off`, see
+  `docs/guide/verification.md`, "Shared leases"); for `insert` the symbol is the container
   (`path#Type` or `path#<file>`). Markdown, TOML, JSON and YAML files
   have sections as symbols (`README.md#Install.Linux`,
   `Cargo.toml#dependencies.serde`); adding to the end of a Markdown section

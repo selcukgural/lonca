@@ -36,6 +36,8 @@ pub struct Env {
     pub next_id: u64,
     /// The human session used for calls made without a token.
     pub human_token: Option<String>,
+    /// What the operating system would say of the caller.
+    pub in_sandbox: bool,
 }
 
 pub fn b64(s: &str) -> String {
@@ -89,6 +91,7 @@ impl Env {
             settings,
             next_id: 1,
             human_token: None,
+            in_sandbox: false,
         }
     }
 
@@ -123,13 +126,15 @@ impl Env {
         params: Value,
     ) -> Result<Value, (String, String)> {
         self.next_id += 1;
-        let r = self.svc.handle(Request {
+        let in_sandbox = self.in_sandbox;
+        let request = Request {
             id: self.next_id,
             method: method.into(),
             repo: repo.map(String::from),
             token: token.map(String::from),
             params,
-        });
+        };
+        let r = self.svc.handle_from(request, &|| in_sandbox);
         if r.ok {
             Ok(r.result)
         } else {

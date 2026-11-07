@@ -5082,3 +5082,41 @@ fn what_runs_in_a_sandbox_sees_no_other_workspace_and_no_terminal() {
     };
     assert_eq!(text(&o.stdout), "found\n", "{}", text(&o.stderr));
 }
+
+#[test]
+fn a_token_carried_out_of_the_sandbox_stops_working_and_shows() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    if lonca_verify::Sandbox::detect() == lonca_verify::Sandbox::None {
+        return;
+    }
+    let session = session_of(&ws);
+    let script = "cp \"$LONCA_TOKEN_FILE\" token.copy; touch ready; \
+                  while [ ! -e done ]; do sleep 0.1; done";
+    let args = ["run", "--session", &session, "--", "/bin/sh", "-c", script];
+    let mut run = e.cmd(&ws, &args).stdin(Stdio::null()).spawn().unwrap();
+    for _ in 0..200 {
+        if ws.join("ready").exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(ws.join("ready").exists(), "the command never started");
+    let o = e
+        .cmd(&ws, &["lease", "acquire", "-i", "x", "src/lib.rs#charge"])
+        .env("LONCA_TOKEN_FILE", ws.join("token.copy"))
+        .output()
+        .unwrap();
+    std::fs::write(ws.join("done"), "").unwrap();
+    run.wait().unwrap();
+    assert!(!o.status.success());
+    assert!(
+        text(&o.stderr).contains("outside it"),
+        "{}",
+        text(&o.stderr)
+    );
+    let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
+    let log = parse(&log).to_string();
+    assert!(log.contains("outside its sandbox"), "{log}");
+    assert!(!log.contains(r#""op":"lease.acquire""#), "{log}");
+}

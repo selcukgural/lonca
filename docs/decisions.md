@@ -2049,6 +2049,28 @@ no hook, no settings file, no vendor.
 - **Not built.** A container backend, which is one more `Sandbox` arm. `sandbox-exec`
   is deprecated by Apple and still ships.
 
+## An isolated token works in its sandbox
+
+`session.isolate` puts a token in a sandbox, and a token can be copied. So for an
+isolated session the daemon asks the operating system about whoever sent an agent
+request: `sandbox_check` on macOS, a pid namespace below its own on Linux. From
+outside it answers `not_in_sandbox` and taints the session once, so nothing it does
+integrates alone and the log says why.
+
+- **`session.heartbeat` and `session.end` are exempt.** The launcher sends them from
+  outside, and neither reads nor changes the repository.
+- **A process that exited reads as sandboxed** on macOS, and it can leave its
+  connection to a child, so it must also be seen alive after the answer. A zombie
+  counts as gone: it has no path.
+- **What this shows.** That the peer is in a sandbox, not in this one. As §3.1 of
+  the design says of everything on one user account, the aim is not to make going
+  around it impossible but harder and visible. It ends the plain cases: a token left
+  in a file, a helper started outside by accident.
+- **`sandbox_check` is not a public API.** It has been stable for years, and it
+  fails closed: if it goes away, isolated sessions stop working and the taint shows.
+- **Hardened mode is not measured.** A daemon of another user may not be allowed to
+  ask. That also fails closed.
+
 ## The verifier runs in the jail
 
 The merge queue runs a change's own tests, so a sandboxed agent's code came out of

@@ -20,10 +20,33 @@ unknown reason as "denied for a reason it can show but not interpret".
 ## Wire format
 
 A Unix socket (`$LONCA_SOCKET`, else `$LONCA_HOME/lonca.sock`, else
-`~/.lonca/lonca.sock`). One JSON object per line in each direction; a
-request line is at most 96 MiB (`MAX_LINE`), base64 file contents
-included. Requests on one connection are answered in order. The client
-chooses `id`; the response repeats it.
+`~/.lonca/lonca.sock`). One JSON object per line in each direction.
+Requests on one connection are answered in order. The client chooses
+`id`; the response repeats it.
+
+A request line is at most 64 KiB. The methods that carry files or a list
+the repository decides the length of may send up to 96 MiB (`MAX_LINE`),
+base64 file contents included: `tree`, `blobs`, `human.prepare_change`,
+`human.prepare_policy`, `human.submit`, `lease.acquire`, `lease.interest`,
+`change.propose`, `facts.preview`, `session.end`, `hook.event`,
+`hook.input` and `hook.stop`. In such a line `method`, `token` and, for a
+human session, `repo` come before `params`: the daemon reads the first
+64 KiB to decide whether to hold the rest. A JSON map that sorts its keys
+puts `token` after `params`, which only matters past 64 KiB. A line
+refused for its length is read to its end and answered with `too_large`;
+the connection goes on.
+
+A connection that sends nothing for 15 minutes is closed. So is the
+longest-quiet connection when the daemon is full (1 024 connections, 512
+of one uid, less when it has few file descriptors). Either way the
+connection's last line is `{"id": 0, "ok": false, "error": {"code":
+"closed", …}}`: the daemon did not read anything sent after it, so open a
+new connection and send the request again. A line must arrive within
+60 seconds of its first byte (`timeout`, and the connection closes), and a
+response must be read within 60 seconds. A request being answered is
+never cut. When every connection is answering one, a new connection gets
+`busy` and closes; so does a long line when 192 MiB of them are already
+held, without the connection closing. Both can be sent again.
 
 ```json
 {"id": 1, "method": "status", "repo": "demo", "token": "lonca_h_…", "params": {}}
@@ -172,12 +195,15 @@ unknown method: `unknown_method`, whatever the token.
 *public.* `params: {}`.
 
 ```json
-{"version": "0.1.0", "protocol": 1, "daemon_key": hex, "next_key": hex | null, "proxy": "host:port" | null}
+{"version": "0.1.0", "protocol": 1, "daemon_key": hex, "next_key": hex | null, "proxy": "host:port" | null,
+ "refused": {"busy": integer, "evicted": integer, "idle": integer, "slow": integer, "too_large": integer, "rate_limited": integer}}
 ```
 
 `daemon_key` is the Ed25519 public key the daemon signs log entries
 with; `next_key` is set during a key rotation; `proxy` is where the
-daemon's network proxy listens, null when none runs.
+daemon's network proxy listens, null when none runs. `refused` counts,
+since the daemon started, what its limits turned away: none of that is in
+any log.
 
 ### `human.login`
 
@@ -358,7 +384,9 @@ sees whether anything was logged since its last read without calling
 {"from": integer, "limit": integer | null, "wait_ms": integer | null}
 ```
 
-Entries with `seq >= from`, at most `limit`. With `wait_ms` and no entry
+Entries with `seq >= from`, at most `limit`, and never more than 1 000,
+also with no `limit`: to read a longer log, ask again from the seq after
+the last entry until the answer is empty. With `wait_ms` and no entry
 past `from`, the daemon holds the request (not its lock) until an entry
 arrives or the time runs out (capped at 30 000), then answers; an empty
 array means the time ran out. A client follows the log with one open
@@ -764,9 +792,11 @@ server. Not logged.
 
 ### `queue.run`
 
-*any human.* `params: {}`. Drains every merge queue now;
-`{"integrated": integer}`. The daemon's worker does this on its own
-within two seconds of a proposal; the call is for tests and scripts.
+*any human.* `params: {}`. Wakes the daemon's worker, which drains the
+merge queues; `{"integrated": 0, "woken": true}`. The answer does not
+wait for it: follow `status`. The worker also does this on its own within
+two seconds of a proposal. `integrated` was the count when the call ran
+the queue itself, and stays 0 under protocol 1.
 
 ## Error codes
 
@@ -779,7 +809,11 @@ within two seconds of a proposal; the call is for tests and scripts.
 | `session_inactive` | `session.heartbeat` of a session that has ended or expired; nothing is logged |
 | `unknown_method` | not in the table |
 | `not_found` | no such repository or change; a path not in the commit (`blobs`) |
-| `too_large` | a `blobs` page, or one file, does not fit the line cap |
+| `too_large` | a request line over its method's limit; a `blobs` page, or one file, does not fit the line cap |
+| `rate_limited` | the session and those made from it are past `[sessions] ops_per_minute`; nothing is logged, and the message says when to try again. `session.end` and the methods that write nothing to the log are exempt |
+| `busy` | no room for this connection or long line; nothing ran, send it again |
+| `closed` | id 0: the connection was closed while quiet; nothing sent after this ran, send it again on a new connection |
+| `timeout` | id 0: the request line took too long; the connection closes |
 | `conflict` | the repository exists |
 | `denied` | a signed operation the log refused before anything was written (`repo.init`, recoveries) |
 | `foreign_key` | the repository is on another daemon key |

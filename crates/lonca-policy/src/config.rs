@@ -24,6 +24,10 @@ max_ttl_minutes = 480
 # told so and sent back, for a harness with a stop event. A proposal starts
 # the count over. 0 only records it, for `status`.
 stop_rounds = 3
+# What a session, with the sessions made from it, may send the log in a
+# minute; a minute's worth may come at once. Past it a request is refused
+# with `rate_limited` and the log does not grow.
+ops_per_minute = 600
 
 [leases]
 max_ttl_minutes = 30
@@ -249,6 +253,7 @@ impl Config {
 pub struct Sessions {
     pub max_ttl_minutes: i64,
     pub stop_rounds: u32,
+    pub ops_per_minute: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -481,6 +486,7 @@ impl Default for Sessions {
         Self {
             max_ttl_minutes: 480,
             stop_rounds: 3,
+            ops_per_minute: 600,
         }
     }
 }
@@ -676,6 +682,11 @@ impl PolicyBundle {
             if !ok {
                 return Err(format!("{CONFIG_FILE}: bad path pattern {p:?}"));
             }
+        }
+        if config.sessions.ops_per_minute == 0 {
+            return Err(format!(
+                "{CONFIG_FILE}: sessions.ops_per_minute must be positive"
+            ));
         }
         if !(1..=MAX_BATCH_SIZE).contains(&config.queue.batch_size) {
             return Err(format!(
@@ -899,6 +910,15 @@ impl PolicyBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_rate_of_nothing_is_refused() {
+        let e = PolicyBundle::parse("[sessions]\nops_per_minute = 0\n", DEFAULT_POLICY);
+        assert!(e.err().unwrap().contains("ops_per_minute"));
+        let b = PolicyBundle::parse("[sessions]\nops_per_minute = 1\n", DEFAULT_POLICY);
+        assert_eq!(b.unwrap().config.sessions.ops_per_minute, 1);
+        assert_eq!(Sessions::default().ops_per_minute, 600);
+    }
 
     #[test]
     fn verification_reads_absolute_paths_and_paths_under_the_home() {

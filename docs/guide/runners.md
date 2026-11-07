@@ -78,6 +78,14 @@ the agent's sandbox, runs what that config says. `lonca fetch` and `propose
 --commit` refuse to run in a workspace for this reason, and `lonca sync` never
 reads it.
 
+## How much a session may send
+
+A session may send the log `sessions.ops_per_minute` operations a minute (600
+by default, shared with the sessions made from it). Past that a request is
+`rate_limited`, nothing is logged, and the message says when to try again. A
+connection that stays quiet is closed with a `closed` line; `docs/protocol.md`,
+"Wire format", has what a client does then.
+
 ## A worker that outlives its session
 
 A session has a TTL (`sessions.max_ttl_minutes`, 8 hours by default) and

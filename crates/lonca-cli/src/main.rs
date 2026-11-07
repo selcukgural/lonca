@@ -364,7 +364,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Run the merge queue now.
+    /// Wake the merge queue: the daemon's worker drains it.
     Queue,
     /// Check the setup: daemon, socket, hooks, sandbox, humans, logs.
     Doctor {
@@ -848,6 +848,31 @@ fn repo_name(r: Option<String>) -> Result<String> {
     }
 }
 
+/// Entries of `lonca log` one request asks for.
+const LOG_PAGE: u64 = lonca_daemon::service::LOG_PAGE;
+
+/// Log entries from `from`, up to `limit`, one page of `page` at a time.
+fn log_pages(
+    from: u64,
+    limit: Option<u64>,
+    page: u64,
+    mut fetch: impl FnMut(u64, u64) -> Result<Vec<Value>>,
+) -> Result<Vec<Value>> {
+    let mut ops: Vec<Value> = Vec::new();
+    loop {
+        let got = ops.len() as u64;
+        let want = limit.map_or(page, |l| l.saturating_sub(got).min(page));
+        if want == 0 {
+            return Ok(ops);
+        }
+        let entries = fetch(from + got, want)?;
+        if entries.is_empty() {
+            return Ok(ops);
+        }
+        ops.extend(entries);
+    }
+}
+
 /// A client acting for `human` on `repo`, with a human session.
 pub(crate) fn human_client(repo: &str, human: &str) -> Result<Client> {
     ctx::human_client(Some(repo), human)
@@ -1084,7 +1109,9 @@ fn run(cmd: Cmd) -> Result<()> {
                 home.socket().display(),
                 &svc.public_key()[..16]
             );
-            lonca_daemon::server::serve_with(listener, svc, access);
+            use lonca_daemon::limits::{Limits, open_files};
+            let limits = Limits::for_files(open_files());
+            lonca_daemon::server::serve_with(listener, svc, access, limits);
             Ok(())
         }
         Cmd::Human(HumanCmd::Keygen {
@@ -2004,12 +2031,15 @@ fn run(cmd: Cmd) -> Result<()> {
             human,
         } => {
             let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
-            let ops = call(&mut c, "log", json!({"from": from, "limit": limit}))?;
+            let ops = log_pages(from, limit, LOG_PAGE, |from, limit| {
+                let page = call(&mut c, "log", json!({"from": from, "limit": limit}))?;
+                Ok(page.as_array().cloned().unwrap_or_default())
+            })?;
             if as_json {
                 println!("{}", serde_json::to_string_pretty(&ops)?);
                 return Ok(());
             }
-            for o in ops.as_array().cloned().unwrap_or_default() {
+            for o in ops {
                 let e = &o["entry"];
                 let actor = match e["actor"]["kind"].as_str() {
                     Some("human") => format!("human:{}", e["actor"]["name"].as_str().unwrap_or("")),
@@ -2175,7 +2205,8 @@ fn run(cmd: Cmd) -> Result<()> {
         Cmd::Restore { repo, from } => restore(&repo, &from),
         Cmd::Queue => {
             let mut c = human_client_any(&ctx::default_human()?)?;
-            println!("{}", call(&mut c, "queue.run", json!({}))?);
+            call(&mut c, "queue.run", json!({}))?;
+            println!("queue woken; `lonca status` shows what the worker does");
             Ok(())
         }
         Cmd::Hook { .. } => unreachable!("handled in main"),
@@ -2374,8 +2405,44 @@ fn pin_note(lease: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_of, lease_need_lines, no_lease_lines, pin_note, source, split_ids, unparsed_note,
+        claim_of, lease_need_lines, log_pages, no_lease_lines, pin_note, source, split_ids,
+        unparsed_note,
     };
+    use anyhow::bail;
+    use serde_json::{Value, json};
+
+    /// A log of `len` entries, read as the daemon would answer.
+    fn entries(len: u64, from: u64, limit: u64) -> Vec<Value> {
+        (from..len).take(limit as usize).map(|i| json!(i)).collect()
+    }
+
+    #[test]
+    fn a_log_is_read_to_its_end_in_pages() {
+        let mut asked = Vec::new();
+        let ops = log_pages(1, None, 2, |from, limit| {
+            asked.push((from, limit));
+            Ok(entries(6, from, limit))
+        });
+        assert_eq!(ops.unwrap(), [1, 2, 3, 4, 5].map(|i| json!(i)));
+        assert_eq!(asked, [(1, 2), (3, 2), (5, 2), (6, 2)]);
+    }
+
+    #[test]
+    fn a_limit_stops_the_pages() {
+        let mut asked = Vec::new();
+        let ops = log_pages(0, Some(3), 2, |from, limit| {
+            asked.push((from, limit));
+            Ok(entries(9, from, limit))
+        });
+        assert_eq!(ops.unwrap().len(), 3);
+        assert_eq!(asked, [(0, 2), (2, 1)]);
+    }
+
+    #[test]
+    fn a_failed_page_fails_the_read() {
+        let r = log_pages(0, None, 2, |_, _| bail!("no"));
+        assert!(r.is_err());
+    }
 
     #[test]
     fn what_is_said_of_files_no_parser_reads() {

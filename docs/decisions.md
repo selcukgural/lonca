@@ -2259,6 +2259,61 @@ claude-code".
 - **Every program, not one.** Each Lonca hook in each list must have its program out of
   a user's reach. A harness runs them all, so the weakest one decides.
 
+## What one client can not do to the others (#50)
+
+The daemon is the single writer for every repository on the machine, and a hook
+that gets no answer blocks its tool call. So the socket has limits, in
+`crates/lonca-daemon/src/limits.rs`. All of them sit in front of the writer: a
+request they refuse was never logged, so `decide()` and a replay never see it.
+What they refuse is counted in `ping` as `refused`.
+
+- **A full daemon lets the newcomer in.** There are at most 1 024 connections, 512
+  of one uid, and half the file descriptors at most (the daemon asks for 4 096; a
+  launchd job starts with 256). Past a cap the connection that has been quiet
+  longest gives up its place, of the same uid if that uid is the one over. A
+  refusal would let anyone who fills the table shut every hook out; this way
+  connections that do nothing can not keep anyone out. Only requests being
+  answered are never cut, and only when all of them are does a new connection get
+  `busy`. Threads stay one per connection: the cap bounds them, and blocking
+  code stays simple.
+- **Deadlines for the whole, not per read.** A line gets 60 seconds from its first
+  byte and a response 60 seconds, each set again before every read and write with
+  the time left, so a byte at a time buys nothing. A connection may be quiet for 15
+  minutes between requests.
+- **A closed connection says so.** `lonca mcp` holds a connection through a whole
+  agent turn, so it will meet the idle close. Sending a request again after an
+  unexplained end of stream could run it twice, so the daemon's last line is
+  `closed` on id 0, written before anything of a later request is read, and a
+  thread that loses its place before it starts a request does not run it. `Client`
+  sends again once on `closed`, or when the write itself finds the connection
+  gone. A bare end of stream stays an error.
+- **Line length is decided from the line's first 64 KiB.** The method is inside the
+  JSON, so the first 64 KiB are parsed as far as they go; only a method in
+  `LONG_LINES` with a live token goes past them. No token before `params`, no long
+  line: otherwise anyone who can open the socket could have 96 MiB held for a
+  minute, per connection. Lonca's client writes `token` first, and a client that
+  sorts its keys can still send up to 64 KiB. Long lines also share a budget of
+  192 MiB, which bounds what the daemon holds whatever the connections. The list
+  is wider than the three methods #50 named, because `hook.input` carries a
+  harness's tool input with a whole file in it, and `tree`, `blobs`,
+  `human.submit`, `session.end` and `hook.stop` carry lists the repository sizes.
+  `human.submit` with `human.recover`, which needs no session, stays under 64 KiB.
+- **The session rate is not a decision.** `[sessions] ops_per_minute` (600) is a
+  token bucket that holds one minute's worth, read from the signed policy and kept
+  in the daemon's memory. It could have been a rule in `decide()` on logged times,
+  but then every refusal would be an entry, and the point is that the log does not
+  grow. A restart fills the buckets. Sessions made with `cap.attenuate` spend from
+  their root's bucket, or children would multiply the rate. `session.end` is exempt
+  so a session over its rate can still stop, as is whatever writes nothing to the
+  log. The hook fails closed on `rate_limited`, which is what a flood should meet.
+- **`queue.run` wakes the worker.** It held a thread for as long as a merge, build
+  and test took, beside the worker. Now one thread merges. The result's `integrated`
+  stays, as 0, because removing it would raise the protocol number for a field no
+  client reads.
+- **`log` has a page**, of 1 000 entries, with or without a `limit`, and reads from
+  `from` rather than the whole log. `lonca log` and `lonca doctor` read on in pages,
+  so a long log still prints whole.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

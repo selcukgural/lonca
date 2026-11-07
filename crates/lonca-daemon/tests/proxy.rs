@@ -363,3 +363,21 @@ fn the_agents_own_host_is_recorded_and_taints_nothing_even_where_the_network_is_
         "on the record: {text}"
     );
 }
+
+#[test]
+fn a_session_that_is_over_answers_for_no_connection() {
+    let mut e = Env::new();
+    e.init(None);
+    let proxy = start_proxy(&e);
+    let up = upstream();
+    e.session("s1", &["src/**"]);
+    let ws = e.root.join("ws1");
+    std::fs::create_dir_all(&ws).unwrap();
+    let token = isolate(&mut e, "s1", &ws);
+    e.ok("session.end", None, Some(&token), json!({}));
+    for cwd in [&ws, &e.root] {
+        let out = tunnel_from(cwd, proxy, &format!("127.0.0.1:{up}"));
+        assert!(!out.contains("hello from upstream"), "{out}");
+        assert!(out.contains("no Lonca session"), "{out}");
+    }
+}

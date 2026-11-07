@@ -4540,8 +4540,14 @@ fn a_command_with_no_hooks_runs_isolated_and_integrates_without_a_human() {
         "{log}"
     );
     assert_eq!(of("change.integrate").len(), 2, "{log}");
-    // The session ended with the command.
+    // The session ended with the command, and beat while it ran.
     assert_eq!(of("session.end").len(), 1, "{log}");
+    let beats = of("observe").into_iter();
+    assert!(
+        beats
+            .map(|o| o.to_string())
+            .any(|o| o.contains("heartbeat"))
+    );
     // And the token the workspace held stopped at the start.
     let o = e.cmd(&ws, &["status", "--json"]).output().unwrap();
     assert!(!o.status.success(), "{}", text(&o.stdout));
@@ -4659,7 +4665,7 @@ fn stopping_the_launcher_stops_the_command_and_ends_the_session() {
     }
     let session = session_of(&ws);
     let mark = ws.join("started");
-    let script = format!("touch {}; exec sleep 60", mark.display());
+    let script = format!("touch {}; exec sleep 20", mark.display());
     let args = ["run", "--session", &session, "--", "/bin/sh", "-c", &script];
     let mut child = e.cmd(&ws, &args).stdin(Stdio::null()).spawn().unwrap();
     for _ in 0..200 {
@@ -4694,6 +4700,22 @@ fn a_run_says_how_the_command_ended() {
     assert_eq!(o.status.code(), Some(7), "{}", text(&o.stderr));
     assert_eq!(text(&o.stdout), "out\n");
     assert!(text(&o.stderr).contains("err"));
+    assert!(!text(&o.stderr).contains("unproposed"), "nothing was left");
+}
+
+#[test]
+fn a_command_may_end_its_session_itself() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let Some(o) = in_sandbox(&e, &ws, "lonca session end --json >/dev/null") else {
+        return;
+    };
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert!(
+        !text(&o.stderr).contains("not ended"),
+        "{}",
+        text(&o.stderr)
+    );
 }
 
 #[test]

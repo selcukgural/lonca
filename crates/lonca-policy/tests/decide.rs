@@ -5911,3 +5911,40 @@ fn none_is_no_sandbox() {
     assert!(denied_with(&d, "invalid_sandbox"), "{d:?}");
     h.assert_replay();
 }
+
+#[test]
+fn what_another_session_did_says_nothing_of_this_one() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    h.start("other", &["src/**"]);
+    h.wrote("other", "src/a.rs");
+    let lease = [("src/a.rs#f", LeaseKind::Edit)];
+    assert!(h.lease("other", "l1", &lease).is_allow());
+    let d = h.propose("other", ChangeId::random(), edit("src/a.rs#f"));
+    assert_ne!(d.outcome, Outcome::Deny, "{d:?}");
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    h.assert_replay();
+}
+
+#[test]
+fn a_change_alone_says_a_session_was_used() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    h.start("s2", &["src/**"]);
+    let change = ChangeId::random();
+    let lease = [("src/a.rs#f", LeaseKind::Edit)];
+    assert!(h.lease("s2", "l2", &lease).is_allow());
+    h.wrote("s2", "src/a.rs");
+    assert_ne!(
+        h.propose("s2", change, edit("src/a.rs#f")).outcome,
+        Outcome::Deny
+    );
+    h.chain.state.leases.clear();
+    let mut s = h.chain.state.sessions["s2"].clone();
+    s.writes.clear();
+    s.taint = None;
+    h.chain.state.sessions.insert("s2".into(), s);
+    let d = h.human("ayse", isolate("s2"));
+    assert!(denied_with(&d, "session_used"), "{d:?}");
+}

@@ -332,21 +332,21 @@ fn carry_streams(child: &mut Child) -> Vec<Receiver<()>> {
 
 /// Waits for `child`, passing on a signal the launcher got. A setsid child
 /// is out of reach of the terminal's Ctrl-C.
-fn wait(child: &mut Child) -> Result<ExitStatus> {
+fn wait(child: &mut Child, stop: &AtomicI32, grace: Duration) -> Result<ExitStatus> {
     let group = child.id() as libc::pid_t;
     let mut stopping: Option<Instant> = None;
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(status);
         }
-        let signal = STOP.load(Ordering::SeqCst);
+        let signal = stop.load(Ordering::SeqCst);
         match stopping {
             None if signal != 0 => {
                 // SAFETY: `kill` takes no pointers.
                 unsafe { libc::kill(-group, libc::SIGTERM) };
                 stopping = Some(Instant::now());
             }
-            Some(at) if at.elapsed() > GRACE => {
+            Some(at) if at.elapsed() > grace => {
                 // SAFETY: as above.
                 unsafe { libc::kill(-group, libc::SIGKILL) };
             }
@@ -402,13 +402,13 @@ struct Plan {
 fn plan(
     sandbox: Sandbox,
     a: &Args,
-    ws: &Workspace,
+    workspace: &Path,
     run: &Path,
     prepared: &Value,
     token_file: &Path,
 ) -> Result<Plan> {
     let real = |p: &Path| p.canonicalize().with_context(|| format!("{}", p.display()));
-    let workspace = real(&ws.root)?;
+    let workspace = real(workspace)?;
     let daemon_home = prepared["home"].as_str().map(PathBuf::from);
     let secrets = real_paths(
         [ctx::lonca_home(), ctx::humans_dir()]
@@ -424,17 +424,7 @@ fn plan(
     let mut writable = Vec::new();
     for root in scratch_roots(prepared)? {
         fs::create_dir_all(&root).with_context(|| format!("{}", root.display()))?;
-        // The log has it as it really was when the session started. A link
-        // put in its place would make the sandbox write through it.
-        if real(&root)? != root {
-            bail!("scratch root {} has been replaced", root.display());
-        }
-        if let Some(s) = holding_secrets(&root, &secrets) {
-            bail!("scratch root {} overlaps {}", root.display(), s.display());
-        }
-        if home.starts_with(&root) {
-            bail!("scratch root {} holds the home directory", root.display());
-        }
+        refuse_scratch(&root, &real(&root)?, &secrets, &home)?;
         writable.push(root);
     }
     for dir in ["home", "tmp"] {
@@ -508,12 +498,13 @@ fn plan(
     ]);
     env.extend(proxy.iter().flat_map(|p| proxy_env(p.port())));
 
+    let socket = ctx::socket();
     let jail = Jail {
         workspace,
         writable,
         readable,
         secrets,
-        socket: real(&ctx::socket())?,
+        socket: socket.canonicalize().unwrap_or(socket),
         proxy_port: proxy.map(|p| p.port()),
         relay,
         loopback: a.loopback,
@@ -549,6 +540,22 @@ fn scratch_roots(prepared: &Value) -> Result<Vec<PathBuf>> {
         Ok(PathBuf::from(text))
     };
     roots.map(root).collect()
+}
+
+/// A scratch root opens for writing, so it must be what the log says, as it
+/// really was when the session started: a link put in its place would make
+/// the sandbox write through it.
+fn refuse_scratch(root: &Path, real: &Path, secrets: &[PathBuf], home: &Path) -> Result<()> {
+    if real != root {
+        bail!("scratch root {} has been replaced", root.display());
+    }
+    if let Some(s) = holding_secrets(root, secrets) {
+        bail!("scratch root {} overlaps {}", root.display(), s.display());
+    }
+    if home.starts_with(root) {
+        bail!("scratch root {} holds the home directory", root.display());
+    }
+    Ok(())
 }
 
 /// The closed tree that `tree` holds or lies in.
@@ -607,13 +614,19 @@ fn in_sandbox(plan: &Plan, a: &Args, token: &str) -> Result<ExitStatus> {
         .envs(plan.env.iter().map(|(k, v)| (k, v)));
     let mut child = spawn(command)?;
     let output = carry_streams(&mut child);
-    let status = wait(&mut child)?;
-    let deadline = Instant::now() + DRAIN;
+    let status = wait(&mut child, &STOP, GRACE)?;
+    drain(output, DRAIN);
+    Ok(status)
+}
+
+/// Waits until the output has ended, or for `within`: something the command
+/// left running can hold the pipes open.
+fn drain(output: Vec<Receiver<()>>, within: Duration) {
+    let deadline = Instant::now() + within;
     for over in output {
         let left = deadline.saturating_duration_since(Instant::now());
         let _ = over.recv_timeout(left);
     }
-    Ok(status)
 }
 
 /// `lonca run`. The exit code is the command's.
@@ -663,7 +676,14 @@ pub fn run(a: Args) -> Result<i32> {
         .create_new(true)
         .mode(0o600)
         .open(&token_file)?;
-    let plan = plan(sandbox, &a, &ws, run_dir.path(), &prepared, &token_file)?;
+    let plan = plan(
+        sandbox,
+        &a,
+        &ws.root,
+        run_dir.path(),
+        &prepared,
+        &token_file,
+    )?;
     probe(&plan)?;
 
     let op = Op::SessionIsolate {
@@ -752,6 +772,9 @@ mod tests {
         assert_eq!(find_program(tool.as_os_str(), &path), Some(tool.clone()));
         let missing = a.join("tool");
         assert_eq!(find_program(missing.as_os_str(), &path), None);
+        // A relative path is not looked for on `PATH`.
+        let here = OsStr::new("src/run.rs");
+        assert!(find_program(here, &path).is_some());
         // A directory of that name is not a program.
         fs::create_dir(a.join("tool")).unwrap();
         assert_eq!(find_program(OsStr::new("tool"), &path), Some(tool));
@@ -834,6 +857,317 @@ mod tests {
         assert!(out.stdout.is_empty(), "{out:?}");
         let path = path_with(std::slice::from_ref(&shims), OsStr::new("/usr/bin:/bin")).unwrap();
         assert_eq!(path, format!("{}:/usr/bin:/bin", shims.display()));
+    }
+
+    /// A sandbox planned on any machine: planning runs nothing.
+    struct Planned {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+    }
+
+    impl Planned {
+        fn new() -> Planned {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            for d in ["ws", "run", "daemon"] {
+                fs::create_dir(root.join(d)).unwrap();
+            }
+            fs::write(root.join("run/token"), "").unwrap();
+            Planned { _dir: dir, root }
+        }
+
+        fn args(&self) -> Args {
+            Args {
+                session: "s".into(),
+                workspace: None,
+                env: vec![],
+                read: vec![],
+                loopback: false,
+                human: None,
+                command: vec!["/bin/sh".into()],
+            }
+        }
+
+        fn prepared(&self, proxy: Option<&str>) -> Value {
+            json!({"scratch": [], "proxy": proxy, "home": self.root.join("daemon")})
+        }
+
+        fn plan(&self, sandbox: Sandbox, a: &Args, prepared: &Value) -> Result<Plan> {
+            let (ws, run) = (self.root.join("ws"), self.root.join("run"));
+            plan(sandbox, a, &ws, &run, prepared, &run.join("token"))
+        }
+    }
+
+    fn env_of<'a>(p: &'a Plan, name: &str) -> Vec<&'a str> {
+        let hits = p.env.iter().filter(|(k, _)| k == name);
+        hits.map(|(_, v)| v.as_str()).collect()
+    }
+
+    #[test]
+    fn a_plan_gives_the_command_a_home_and_a_temp_of_its_own() {
+        let t = Planned::new();
+        let p = t
+            .plan(Sandbox::Seatbelt, &t.args(), &t.prepared(None))
+            .unwrap();
+        let run = t.root.join("run");
+        assert_eq!(env_of(&p, "HOME"), [run.join("home").to_str().unwrap()]);
+        assert_eq!(env_of(&p, "TMPDIR"), [run.join("tmp").to_str().unwrap()]);
+        assert_eq!(p.jail.workspace, t.root.join("ws"));
+        assert_eq!(p.jail.writable, [run.join("home"), run.join("tmp")]);
+        assert!(p.jail.secrets.contains(&t.root.join("daemon")));
+        assert!(p.jail.readable.contains(&run.join("token")));
+        let token = run.join("token");
+        assert_eq!(env_of(&p, "LONCA_TOKEN_FILE"), [token.to_str().unwrap()]);
+        assert_eq!(p.proxy, None);
+        assert_eq!(p.jail.proxy_port, None);
+        assert!(env_of(&p, "HTTPS_PROXY").is_empty());
+    }
+
+    #[test]
+    fn on_macos_the_shims_come_first_and_lonca_next() {
+        let t = Planned::new();
+        let p = t
+            .plan(Sandbox::Seatbelt, &t.args(), &t.prepared(None))
+            .unwrap();
+        let shims = t.root.join("run/bin");
+        assert!(shims.join("ps").is_file());
+        assert!(p.jail.readable.contains(&shims));
+        let path = env_of(&p, "PATH");
+        assert_eq!(path.len(), 1, "{path:?}");
+        let mut dirs = std::env::split_paths(path[0]);
+        assert_eq!(dirs.next().unwrap(), shims);
+        let exe = std::env::current_exe().unwrap();
+        assert_eq!(dirs.next().as_deref(), exe.parent());
+    }
+
+    #[test]
+    fn on_linux_there_are_no_shims_and_the_proxy_comes_by_the_relay() {
+        let t = Planned::new();
+        let prepared = t.prepared(Some("127.0.0.1:8080"));
+        let p = t.plan(Sandbox::Bubblewrap, &t.args(), &prepared).unwrap();
+        assert!(!t.root.join("run/bin").exists());
+        let relay = t.root.join("run/net");
+        assert_eq!(p.jail.relay.as_ref(), Some(&relay));
+        assert!(relay.is_file());
+        assert_eq!(p.jail.proxy_port, Some(8080));
+        assert_eq!(env_of(&p, "HTTPS_PROXY"), ["http://127.0.0.1:8080"]);
+        let path = env_of(&p, "PATH");
+        let exe = std::env::current_exe().unwrap();
+        let first = std::env::split_paths(path[0]).next().unwrap();
+        assert_eq!(Some(first.as_path()), exe.parent());
+
+        let t = Planned::new();
+        let p = t
+            .plan(Sandbox::Bubblewrap, &t.args(), &t.prepared(None))
+            .unwrap();
+        assert_eq!(p.jail.relay, None, "no proxy, nothing to relay");
+        let t = Planned::new();
+        let p = t.plan(Sandbox::Seatbelt, &t.args(), &prepared).unwrap();
+        assert_eq!(p.jail.relay, None, "the profile opens the proxy's port");
+    }
+
+    #[test]
+    fn a_plan_opens_nothing_it_was_not_told_to_and_stays_off_the_secrets() {
+        let t = Planned::new();
+        let mut a = t.args();
+        a.loopback = true;
+        a.env = vec!["NAME=value".into()];
+        let extra = t.root.join("extra");
+        fs::create_dir(&extra).unwrap();
+        a.read = vec![extra.clone()];
+        let p = t.plan(Sandbox::Seatbelt, &a, &t.prepared(None)).unwrap();
+        assert!(p.jail.loopback);
+        assert!(p.jail.readable.contains(&extra));
+        assert_eq!(env_of(&p, "NAME"), ["value"]);
+
+        let t = Planned::new();
+        let mut a = t.args();
+        a.read = vec![t.root.join("daemon")];
+        let e = t
+            .plan(Sandbox::Seatbelt, &a, &t.prepared(None))
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("stays closed"), "{e}");
+        let t = Planned::new();
+        let mut a = t.args();
+        a.command = vec!["no-such-program-here".into()];
+        let e = t
+            .plan(Sandbox::Seatbelt, &a, &t.prepared(None))
+            .err()
+            .unwrap();
+        assert!(e.to_string().contains("not found"), "{e}");
+
+        let t = Planned::new();
+        let inside = json!({"scratch": [], "home": t.root.join("ws")});
+        let e = t.plan(Sandbox::Seatbelt, &t.args(), &inside).err().unwrap();
+        assert!(e.to_string().contains("the workspace overlaps"), "{e}");
+    }
+
+    #[test]
+    fn a_plan_builds_on_the_scratch_roots_of_the_log() {
+        let t = Planned::new();
+        let scratch = t.root.join("scratch");
+        let prepared = json!({"scratch": [scratch], "home": t.root.join("daemon")});
+        assert_eq!(
+            scratch_roots(&prepared).unwrap(),
+            std::slice::from_ref(&scratch)
+        );
+        let p = t.plan(Sandbox::Seatbelt, &t.args(), &prepared).unwrap();
+        assert!(p.jail.writable.contains(&scratch), "it is made if missing");
+        assert!(scratch_roots(&json!({"scratch": [1]})).is_err());
+    }
+
+    #[test]
+    fn a_scratch_root_stays_off_what_is_closed() {
+        let secrets = [PathBuf::from("/h/.lonca")];
+        let refuse = |root: &str, real: &str, home: &str| {
+            let (root, real, home) = (Path::new(root), Path::new(real), Path::new(home));
+            refuse_scratch(root, real, &secrets, home).map_err(|e| e.to_string())
+        };
+        assert!(refuse("/w/s", "/w/s", "/h").is_ok());
+        assert!(refuse("/h/s", "/h/s", "/h").is_ok());
+        let e = refuse("/w/s", "/h", "/h").unwrap_err();
+        assert!(e.contains("has been replaced"), "{e}");
+        let e = refuse("/h/.lonca/s", "/h/.lonca/s", "/h").unwrap_err();
+        assert!(e.contains("overlaps"), "{e}");
+        let e = refuse("/h", "/h", "/h").unwrap_err();
+        assert!(e.contains("overlaps"), "{e}");
+        let e = refuse("/u", "/u", "/u/me").unwrap_err();
+        assert!(e.contains("holds the home directory"), "{e}");
+    }
+
+    #[test]
+    fn a_tree_touches_a_secret_from_above_or_from_below() {
+        let secrets = [PathBuf::from("/h/.lonca"), PathBuf::from("/k")];
+        assert_eq!(
+            holding_secrets(Path::new("/h/.lonca/x"), &secrets),
+            Some(&secrets[0])
+        );
+        assert_eq!(
+            holding_secrets(Path::new("/h"), &secrets),
+            Some(&secrets[0])
+        );
+        assert_eq!(
+            holding_secrets(Path::new("/k"), &secrets),
+            Some(&secrets[1])
+        );
+        assert_eq!(holding_secrets(Path::new("/h/other"), &secrets), None);
+    }
+
+    #[test]
+    fn a_stop_reaches_the_commands_whole_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("pid");
+        let script = format!("sleep 30 & echo $! > {}; wait", file.display());
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", &script]).stdin(Stdio::null());
+        let mut child = spawn(c).unwrap();
+        while fs::read_to_string(&file).map_or(true, |t| !t.ends_with('\n')) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let helper: libc::pid_t = fs::read_to_string(&file).unwrap().trim().parse().unwrap();
+        let stop = AtomicI32::new(libc::SIGTERM);
+        let status = wait(&mut child, &stop, Duration::from_secs(20)).unwrap();
+        assert_eq!(exit_code(status), 128 + libc::SIGTERM);
+        let alive = || {
+            // SAFETY: `kill` takes no pointers; signal 0 only asks.
+            unsafe { libc::kill(helper, 0) == 0 }
+        };
+        for _ in 0..200 {
+            if !alive() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the group outlived the stop");
+    }
+
+    #[test]
+    fn a_command_that_will_not_stop_is_killed_after_its_grace() {
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", "trap '' TERM; while :; do sleep 1; done"]);
+        c.stdin(Stdio::null());
+        let mut child = spawn(c).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let stop = AtomicI32::new(libc::SIGTERM);
+        let started = Instant::now();
+        let status = wait(&mut child, &stop, Duration::from_millis(300)).unwrap();
+        assert_eq!(exit_code(status), 128 + libc::SIGKILL);
+        assert!(started.elapsed() >= Duration::from_millis(300));
+    }
+
+    #[test]
+    fn with_no_stop_a_command_ends_by_itself() {
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", "sleep 0.2; exit 4"]).stdin(Stdio::null());
+        let mut child = spawn(c).unwrap();
+        let stop = AtomicI32::new(0);
+        let status = wait(&mut child, &stop, Duration::ZERO).unwrap();
+        assert_eq!(exit_code(status), 4);
+    }
+
+    #[test]
+    fn a_command_gets_pipes_and_its_own_session() {
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", "exec sleep 0"]);
+        let mut child = spawn(c).unwrap();
+        // SAFETY: both take a pid and no pointers.
+        let (leader, id) = unsafe { (libc::getsid(child.id() as i32), libc::getsid(0)) };
+        assert_ne!(leader, id);
+        assert!(child.stdin.is_some() && child.stdout.is_some() && child.stderr.is_some());
+        assert_eq!(carry_streams(&mut child).len(), 2);
+        child.wait().unwrap();
+    }
+
+    #[test]
+    fn the_output_is_waited_for_but_not_for_ever() {
+        let (over, wait_for) = channel::<()>();
+        let (slow, left) = (Duration::from_millis(100), Duration::from_secs(20));
+        std::thread::spawn(move || {
+            std::thread::sleep(slow);
+            drop(over);
+        });
+        let started = Instant::now();
+        drain(vec![wait_for], left);
+        assert!(started.elapsed() >= slow);
+        assert!(started.elapsed() < left);
+
+        let (held, wait_for) = channel::<()>();
+        let started = Instant::now();
+        drain(vec![wait_for], Duration::from_millis(50));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        drop(held);
+    }
+
+    #[test]
+    fn a_probe_fails_when_the_sandbox_can_not_start() {
+        let t = Planned::new();
+        let mut p = t
+            .plan(Sandbox::Seatbelt, &t.args(), &t.prepared(None))
+            .unwrap();
+        p.sandbox = Sandbox::None;
+        let e = probe(&p).unwrap_err().to_string();
+        assert!(e.contains("no sandbox"), "{e}");
+        let sandbox = Sandbox::detect();
+        if sandbox == Sandbox::None {
+            return;
+        }
+        let t = Planned::new();
+        let mut p = t.plan(sandbox, &t.args(), &t.prepared(None)).unwrap();
+        assert!(probe(&p).is_ok());
+        p.jail.workspace = t.root.join("gone");
+        assert!(probe(&p).is_err());
+    }
+
+    #[test]
+    fn the_relay_gives_back_the_commands_exit_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let free = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = free.local_addr().unwrap().port();
+        drop(free);
+        let argv: [OsString; 3] = ["/bin/sh".into(), "-c".into(), "exit 3".into()];
+        let code = relay_in(port, &dir.path().join("s"), &argv).unwrap();
+        assert_eq!(code, 3);
     }
 
     #[test]

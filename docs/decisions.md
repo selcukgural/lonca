@@ -1729,27 +1729,59 @@ Passing tests do not show that they would catch a flipped `>=` or a
   version). It needs no code changes or annotations, reads
   `.cargo/mutants.toml`, and supports `--in-diff` for PRs and `--shard` for
   splitting a full run.
-- **Whole-workspace tests per mutant** (`test_workspace = true`). Much of
-  the safety-critical code is tested from other crates: `lonca-audit` only
-  from `lonca-daemon/tests/audit.rs`, `chain.rs`/`state.rs` mainly from
-  `lonca-policy/tests/decide.rs`, `lonca-core` from everything above it.
-  Per-package testing would report those as survivors. A workspace test
-  run is about 10 s, so the cost is acceptable. cargo-mutants has no
-  per-crate test list, so this is one setting for all crates.
+- **Two stages on a pull request.** Most of the code is tested from other
+  crates too: `lonca-audit` only from `lonca-daemon/tests/audit.rs`,
+  `chain.rs`/`state.rs` mainly from `lonca-policy/tests/decide.rs`,
+  `lonca-core` from everything above it. So testing only the mutated crate
+  reports false survivors, and the verdict needs `test_workspace = true`. But a
+  workspace run is about 200 s on a runner (881 tests, 774 CPU s), not the 10 s
+  it was when this was chosen, and every mutant rebuilt and linked every crate
+  above it. So a mutant first meets its own crate's tests, and only what
+  survives or times out goes on to the workspace. A mutant caught is caught
+  whichever test caught it, so this loses nothing. On #147 the first stage took
+  181 of 188 and the two stages reached the verdict of the old run on 195 of 196
+  mutants, in about 17 minutes against about 44 on the same machine. The other
+  one, `decide.rs:1105`, is caught only where no sandbox runs: on Linux CI, not
+  under Seatbelt.
+- **`--iterate` filters before `--shard`.** The workspace stage is therefore its
+  own job over the merged results of all first-stage shards: every shard of it
+  must read one list, or they disagree on which mutant is whose and some run
+  nowhere. The first stage's own timeout is `--minimum-test-timeout 60`, not
+  `--timeout`, which would apply to the baseline as well.
+- **A push skips what the last push settled.** Every run of a pull request
+  compared the whole diff against the base, so #147's fix, which added no
+  mutant, ran all 196 again for 13 survivors. `lonca-mutants` keeps caught and
+  unviable mutants in the pull request's Actions cache under a hash of the mutant
+  and its function's text. Lines moved by an edit elsewhere keep the result, any
+  change to the function drops it, and on #147 196 mutants became 43 with no
+  survivor skipped. A result is dropped for all mutants if `Cargo.lock` changed
+  or a test is gone, and never used in `decide.rs`, `chain.rs`, `state.rs`,
+  `oplog.rs`, `canonical.rs`, `changeid.rs`, `keys.rs`, the auditor and
+  `lonca-symbols/src/merge.rs`. What this does not see: a test weakened but not
+  removed, or a change in a callee that stops a test reaching the function. The
+  nightly run uses neither shortcut and catches those. A fork's pull request
+  neither reads nor writes this cache, since it could otherwise hand a required
+  check its own list.
+- **Shards follow the mutants.** Ten mutants a shard up to 20 in the first stage
+  and two up to 8 in the second, so a small diff does not start twenty jobs.
 - **`nextest` runs the tests of a mutant** (`test_tool`), still the whole
   workspace. `cargo test` goes crate by crate, so a mutant in `lonca-symbols`
   waited for the daemon's and the CLI's tests before its own could catch it.
   nextest stops at the first failure, so only a survivor pays for a full run.
   Doctests do not run with it; the workspace has none, and a new one would
   need its own check.
-- **Timeouts** are at least `minimum_test_timeout = 300` s, about five times
-  a workspace test run on CI. They can not come from the measured baseline:
-  with `--in-diff` it runs `--package` of the changed crates while each mutant
-  runs `--workspace`, so a PR on one crate measured ~1 s and got the old
-  minimum of 60 s. A mutant in `lonca-symbols` was then cut off in the daemon's
-  tests, before its own, and counted as caught with no test having looked at
-  it. A mutant that hangs the daemon or a socket test ends as a timeout, which
-  counts as caught, so a shard with more timeouts than caught mutants fails.
+- **Timeouts** are at least `minimum_test_timeout = 600` s, three times a
+  workspace test run on CI. A timeout counts as caught, so a shorter limit lets
+  a survivor on a busy runner pass as caught; 300 s was one and a half times a
+  real run, though it was written as five. The limit can not come from the
+  measured baseline: with `--in-diff` it runs `--package` of the changed crates
+  while each mutant runs `--workspace`, so a PR on one crate measured ~1 s and
+  got the old minimum of 60 s. A mutant in `lonca-symbols` was then cut off in
+  the daemon's tests, before its own, and counted as caught with no test having
+  looked at it. A mutant that hangs the daemon or a socket test ends as a
+  timeout, which counts as caught, so a shard with more timeouts than caught
+  mutants fails. The first stage may be short because a timeout there is no
+  verdict: it goes on to the workspace.
 - **Exclusion policy.** `exclude_re` lists only mutants shown to be
   equivalent (no test could tell them apart from the original) or
   irrelevant (text that no caller reads), each with a comment giving the
@@ -1762,8 +1794,12 @@ Passing tests do not show that they would catch a flipped `>=` or a
   short socket paths; the CLI tests point `HOME` and `LONCA_HOME` into
   their temp dir and drop the developer's `ANTHROPIC_*` variables, so a
   mutant cannot write to the real home or reach the real API.
-- **Not nextest.** Not installed by default and not needed for speed:
-  the workspace test run is dominated by two ~1.3 s binaries.
+- **The first stage runs before a push too.** It reruns in seconds per mutant,
+  so what used to cost a red CI run and a fix can be seen at the desk: 13 of the
+  last 30 pull requests went red first, and those stayed open twice as long. A
+  survivor there is a question, not a verdict, for the reason above. This
+  replaces the rule of not running mutants locally, which came from a local
+  whole-workspace pass of 9 minutes.
 
 ## A workspace is a git repository (#111)
 

@@ -2,10 +2,13 @@
 #
 # On a pull request only the mutants in the diff against the base branch
 # run, and the job fails when any of them survives: this check is required
-# on main. Every night, if main changed, and on demand, the whole workspace
-# runs in shards. That run is required by nothing and blocks nothing: its
-# survivors are in the run's summary and in each shard's artifact, and they
-# are fixed before the next piece of work (CLAUDE.md).
+# on main. They run in two stages: each mutant against its own crate's tests,
+# which takes seconds, and what that leaves against the whole workspace,
+# which takes minutes. A push skips what the last push of the pull request
+# settled. Every night, if main changed, and on demand, the whole workspace
+# runs in shards, with neither shortcut. That run is required by nothing and
+# blocks nothing: its survivors are in the run's summary and in each shard's
+# artifact, and they are fixed before the next piece of work (CLAUDE.md).
 name: mutants
 
 on:
@@ -22,10 +25,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # On a pull request: the diff once, the mutants in it over twenty shards,
-  # and one job named `mutants` that the ruleset requires and that fails
-  # when any shard found a survivor. Each shard pays its own baseline
-  # build (a few minutes) and then a twentieth of the mutants.
+  # On a pull request: the diff once, its mutants less what the last push
+  # settled, those over as many shards as they need against their own crate,
+  # the rest over a few shards against the workspace, and one job named
+  # `mutants` that the ruleset requires.
   diff:
     name: changed Rust
     if: github.event_name == 'pull_request'
@@ -33,6 +36,8 @@ jobs:
     timeout-minutes: 10
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
+      count: ${{ steps.plan.outputs.count }}
+      shards: ${{ steps.plan.outputs.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,62 +55,171 @@ jobs:
             echo "no Rust changes; nothing to mutate"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Rust toolchain
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: cargo-mutants
+        if: steps.diff.outputs.changed == 'true'
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-mutants@27.1.0
+      # Results come only from this repository's branches: a fork's pull
+      # request must not hand this required check its own list of what is
+      # settled.
+      - name: What the last push settled
+        if: >-
+          steps.diff.outputs.changed == 'true' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mutants-state
+          key: mutants-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          restore-keys: mutants-pr-${{ github.event.pull_request.number }}-
+      - name: Mutants to run
+        id: plan
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          cargo mutants --in-diff git.diff --list --json > mutants.json
+          # With no mutant in the diff cargo-mutants prints nothing at all.
+          [ -s mutants.json ] || echo '[]' > mutants.json
+          cargo run --locked -q -p lonca-mutants -- skip mutants.json .mutants-state/state.json > skip.txt
+          total=$(jq length mutants.json)
+          skipped=$(wc -l < skip.txt)
+          count=$((total - skipped))
+          echo "$total mutants in the diff, $skipped settled by the last push, $count to run"
+          # Ten a shard, so a mutant waits for few others. Twenty shards is
+          # what the plan runs at once.
+          shards=$(((count + 9) / 10))
+          [ "$shards" -le 20 ] || shards=20
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "shards=$(jq -cn --argjson n "$shards" '[range($n)]')" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.diff.outputs.changed == 'true'
         with:
-          name: git-diff
-          path: git.diff
+          name: mutants-plan
+          path: |
+            git.diff
+            mutants.json
+            skip.txt
           retention-days: 1
 
+  # Each mutant against its own crate's tests. A survivor here is no verdict:
+  # much of the code is tested from other crates, so the next stage decides.
+  # A timeout goes on to it too, so this one can be short. It is a minimum and
+  # not `--timeout`, which would also cut off the baseline: `-p lonca-daemon`
+  # takes longer than this on a runner.
   shard:
-    name: mutants ${{ matrix.shard }}/20
+    name: own crate ${{ matrix.shard }}
     needs: diff
-    if: needs.diff.outputs.changed == 'true'
+    if: needs.diff.outputs.changed == 'true' && needs.diff.outputs.count != '0'
     runs-on: ubuntu-latest
-    # Every mutant runs the whole workspace: 40 in a shard, two at a time.
-    timeout-minutes: 120
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+        shard: ${{ fromJSON(needs.diff.outputs.shards) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-      # No bubblewrap, on purpose: the same environment as the `test` job
-      # in ci.yml. On ubuntu-latest (24.04) AppArmor blocks bwrap's
-      # unprivileged user namespaces, every sandboxed verification fails,
-      # and the baseline run (not a mutant) fails in the concurrency test.
-      # Sandboxed verification in CI is #54 / #59.
-      # cargo-mutants builds up to two copies of the tree under /tmp; with
-      # this workspace's debug targets the runner's disk runs out (shard
-      # 2/6 of PR #88 died with ENOSPC). The preinstalled toolchains we
-      # never use are the space.
-      - name: Free disk space
-        run: |
-          df -h / | tail -1
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift \
-            /usr/local/share/chromium /usr/local/lib/node_modules 2>/dev/null || true
-          sudo docker image prune -af >/dev/null 2>&1 || true
-          df -h / | tail -1
-      - name: cargo-mutants
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
-        with:
-          tool: cargo-mutants@27.1.0,cargo-nextest@0.9.151
+      - uses: ./.github/actions/mutants-runner
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: git-diff
-      - name: Mutants in the diff, shard ${{ matrix.shard }} of 20
+          name: mutants-plan
+      - name: Mutants of shard ${{ matrix.shard }} against their own crate
         env:
           SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
         run: |
+          mkdir mutants.out
+          cp skip.txt mutants.out/previously_caught.txt
           set +e
-          cargo mutants --in-diff git.diff --shard "$SHARD/20" --no-shuffle -j 2
+          cargo mutants --in-diff git.diff --iterate --shard "$SHARD/$SHARDS" --no-shuffle -j 2 \
+            --test-workspace=false --minimum-test-timeout 60
+          rc=$?
+          set -e
+          # 0 all caught, 2 missed, 3 timeouts; anything else is a run error.
+          case $rc in 0|2|3) ;; *) echo "cargo mutants failed ($rc)"; exit 1 ;; esac
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mutants-diff-${{ matrix.shard }}
+          path: mutants.out
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # What the first stage settled, in one list every workspace shard starts
+  # from. `--iterate` filters before `--shard`, so all of them must read the
+  # same list, or shards would disagree on what is in which and miss mutants.
+  survivors:
+    name: left for the workspace
+    needs: [diff, shard]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.left.outputs.shards }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutants-diff-*
+          path: stage1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutants-plan
+      - name: Mutants the first stage left
+        id: left
+        run: |
+          # `find`, as a shard with no mutant left no files.
+          find stage1 \( -name caught.txt -o -name unviable.txt \) -exec cat {} + > settled.txt
+          cat skip.txt settled.txt | sort -u > done.txt
+          jq -r '.[].name' mutants.json | sort -u > all.txt
+          comm -23 all.txt done.txt > left.txt
+          echo "left for the workspace:"
+          cat left.txt
+          left=$(wc -l < left.txt)
+          # Two a shard: each pays a whole workspace run, about three minutes.
+          shards=$(((left + 1) / 2))
+          [ "$shards" -le 8 ] || shards=8
+          echo "shards=$(jq -cn --argjson n "$shards" '[range($n)]')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutants-done
+          path: done.txt
+          retention-days: 1
+
+  # The verdict: what survives the whole workspace fails the check.
+  workspace:
+    name: workspace ${{ matrix.shard }}
+    needs: survivors
+    if: needs.survivors.outputs.shards != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.survivors.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/mutants-runner
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutants-plan
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutants-done
+      - name: Mutants of shard ${{ matrix.shard }} against the workspace
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        run: |
+          mkdir mutants.out
+          cp done.txt mutants.out/previously_caught.txt
+          set +e
+          cargo mutants --in-diff git.diff --iterate --shard "$SHARD/$SHARDS" --no-shuffle -j 2
           rc=$?
           set -e
           # 0 all caught, 2 missed, 3 timeouts (counted as caught, see
@@ -131,14 +245,14 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: mutants-diff-${{ matrix.shard }}
+          name: mutants-workspace-${{ matrix.shard }}
           path: mutants.out
           retention-days: 7
           if-no-files-found: ignore
 
   mutants:
     name: mutants
-    needs: [diff, shard]
+    needs: [diff, shard, survivors, workspace]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -147,10 +261,54 @@ jobs:
         env:
           DIFF: ${{ needs.diff.result }}
           SHARDS: ${{ needs.shard.result }}
+          SURVIVORS: ${{ needs.survivors.result }}
+          WORKSPACE: ${{ needs.workspace.result }}
         run: |
-          echo "diff: $DIFF, shards: $SHARDS"
+          echo "diff: $DIFF, own crate: $SHARDS, left: $SURVIVORS, workspace: $WORKSPACE"
           case "$DIFF" in success) ;; *) echo "::error::the diff job failed"; exit 1 ;; esac
-          case "$SHARDS" in success|skipped) ;; *) echo "::error::a shard found survivors or failed"; exit 1 ;; esac
+          case "$SHARDS" in success|skipped) ;; *) echo "::error::a shard failed"; exit 1 ;; esac
+          case "$SURVIVORS" in success|skipped) ;; *) echo "::error::the list of survivors failed"; exit 1 ;; esac
+          case "$WORKSPACE" in success|skipped) ;; *) echo "::error::a shard found survivors or failed"; exit 1 ;; esac
+
+  # What the next push of this pull request need not repeat. A red run keeps
+  # its results too: that is the run a fix follows. Nothing waits for this
+  # job, and losing it only costs the next push a whole run.
+  remember:
+    name: keep the results
+    needs: [diff, survivors, workspace]
+    if: >-
+      !cancelled() && needs.survivors.result == 'success' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutants-plan
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutants-done
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutants-workspace-*
+          path: stage2
+      - name: The settled mutants, by their function's text
+        run: |
+          mkdir -p stage2 .mutants-state
+          find stage2 \( -name caught.txt -o -name unviable.txt \) -exec cat {} + > settled.txt
+          cat settled.txt >> done.txt
+          cargo run --locked -q -p lonca-mutants -- record mutants.json done.txt .mutants-state/state.json
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mutants-state
+          key: mutants-pr-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # A night with nothing new on main has nothing new to find.
   recent:
@@ -193,31 +351,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-      # No bubblewrap, on purpose: the same environment as the `test` job
-      # in ci.yml. On ubuntu-latest (24.04) AppArmor blocks bwrap's
-      # unprivileged user namespaces, every sandboxed verification fails,
-      # and the baseline run (not a mutant) fails in the concurrency test.
-      # Sandboxed verification in CI is #54 / #59.
-      # cargo-mutants builds up to two copies of the tree under /tmp; with
-      # this workspace's debug targets the runner's disk runs out (shard
-      # 2/6 of PR #88 died with ENOSPC). The preinstalled toolchains we
-      # never use are the space.
-      - name: Free disk space
-        run: |
-          df -h / | tail -1
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift \
-            /usr/local/share/chromium /usr/local/lib/node_modules 2>/dev/null || true
-          sudo docker image prune -af >/dev/null 2>&1 || true
-          df -h / | tail -1
-      - name: cargo-mutants
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
-        with:
-          tool: cargo-mutants@27.1.0,cargo-nextest@0.9.151
+      - uses: ./.github/actions/mutants-runner
       - name: Mutants, shard ${{ matrix.shard }} of 20
         env:
           SHARD: ${{ matrix.shard }}

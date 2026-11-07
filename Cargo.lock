@@ -2297,6 +2297,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lonca-mutants"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "lonca-net"
 version = "0.1.2"
 

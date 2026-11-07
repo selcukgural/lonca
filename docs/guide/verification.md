@@ -157,6 +157,27 @@ limit_open_files = 4096         # RLIMIT_NOFILE
   every figure below what a process maps at its start, so it is not applied
   there.
 
+## Quota
+
+```toml
+[quota]
+session_seconds = 0   # per session, with those made from it or continuing it
+day_seconds = 0       # per repository and UTC day
+```
+
+`0` means no limit. What counts is the time a check ran by the clock, every
+attempt of a retried one, as `duration_ms` in the log; a check the cache
+answered costs nothing, a failed one costs what it took. A batch's run is
+shared by its changes.
+
+Past a quota a proposal is denied with `verification_quota:session` or
+`verification_quota:day`, and a change the session queued before is rejected
+without running its checks. While a change's checks run, its agent can not
+withdraw it (`verifying`). The run that crosses the quota finishes. `lonca
+status --json` shows what each session has used (`verification_ms`) and what
+the day has (`verification_day_ms`). A human raises a quota with a policy
+update; a day spent by agents also stops a human's proposals until then.
+
 ## Starters
 
 **Rust (rustup).** `cargo` under rustup needs `HOME`, `RUSTUP_HOME` and

@@ -29,7 +29,7 @@ use lonca_core::paths::{
     validate_path_pattern, validate_repo_path, validate_symbol_pattern,
 };
 
-use crate::config::{CRITICAL_ESCALATE, CVal, CedarOutcome, PolicyBundle, Verification};
+use crate::config::{CRITICAL_ESCALATE, CVal, CedarOutcome, PolicyBundle, Quota, Verification};
 use crate::state::{
     AFFECTED_LEASE, ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, INTEREST_BLOCK, LEASES_KEPT,
     RELEASED, RESERVATION_WINDOW, Session, State,
@@ -979,6 +979,7 @@ pub fn decide(
                         v.deny("conflicts_with_merge");
                     }
                     verify_evidence(state, [change], ctx, &mut v);
+                    check_quota(state, [change], ctx, &mut v);
                     // `State::apply` has no policy: the switch travels in
                     // the decision.
                     if !cfg.leases.release_on_integrate {
@@ -1004,6 +1005,8 @@ pub fn decide(
             }
             let changes = merged.iter().map(|(change, _)| change);
             verify_evidence(state, changes, ctx, &mut v);
+            let changes = merged.iter().map(|(change, _)| change);
+            check_quota(state, changes, ctx, &mut v);
             if !cfg.leases.release_on_integrate {
                 v.info.push(LEASES_KEPT.into());
             }
@@ -1172,6 +1175,36 @@ fn verify_evidence<'a>(
     }
 }
 
+fn check_quota<'a>(
+    state: &State,
+    changes: impl IntoIterator<Item = &'a lonca_core::ChangeId>,
+    ctx: &Ctx,
+    v: &mut Verdict,
+) {
+    for c in changes.into_iter().filter_map(|c| state.changes.get(c)) {
+        let quota = &ctx.policy.config.quota;
+        for problem in quota_problems(state, &c.actor, ctx.time_ms, quota) {
+            v.deny(problem);
+        }
+    }
+}
+
+/// The quotas `actor` is past at `time_ms`. Also what the daemon asks before
+/// it starts a verification: what is past a quota is not run.
+pub fn quota_problems(state: &State, actor: &Actor, time_ms: i64, quota: &Quota) -> Vec<String> {
+    let past = |limit: u64, spent: u64| limit > 0 && spent >= limit.saturating_mul(1000);
+    let mut problems = Vec::new();
+    if let Some(session) = actor.session()
+        && past(quota.session_seconds, state.session_spent(session))
+    {
+        problems.push("verification_quota:session".to_string());
+    }
+    if past(quota.day_seconds, state.day_spent(time_ms)) {
+        problems.push("verification_quota:day".to_string());
+    }
+    problems
+}
+
 /// What is wrong with `evidence` under `vc`. Also what the daemon asks before
 /// it logs a batch, so that a batch that would be denied is split instead.
 pub fn evidence_problems(vc: &Verification, evidence: &[Attestation]) -> Vec<String> {
@@ -1258,6 +1291,9 @@ fn propose(
         v.deny("missing_facts");
         return;
     };
+    for problem in quota_problems(state, actor, t, &cfg.quota) {
+        v.deny(problem);
+    }
     if !state.trunk_history.contains(base) {
         v.deny("unknown_base");
     }

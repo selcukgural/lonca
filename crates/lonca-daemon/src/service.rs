@@ -20,7 +20,7 @@ use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileMap, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::config::{Profile, UnparsedFiles, Verification};
-use lonca_policy::decide::{evidence_problems, level_for, valid_token};
+use lonca_policy::decide::{evidence_problems, level_for, quota_problems, valid_token};
 use lonca_policy::details;
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
@@ -565,6 +565,32 @@ fn same_proposal(state: &State, change: ChangeId, commit: &GitId, base: &GitId) 
     rec.is_some_and(|c| c.commit == *commit && c.base == *base)
 }
 
+/// The changes a run is for, while it runs. An agent can not withdraw one
+/// then: the run would end unlogged, and so cost its session nothing.
+struct Running<'a> {
+    set: &'a Mutex<BTreeSet<ChangeId>>,
+    held: Vec<ChangeId>,
+}
+
+impl Running<'_> {
+    fn hold(&mut self, changes: impl IntoIterator<Item = ChangeId>) {
+        let mut set = self.set.lock().unwrap_or_else(|e| e.into_inner());
+        for c in changes {
+            set.insert(c);
+            self.held.push(c);
+        }
+    }
+}
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        let mut set = self.set.lock().unwrap_or_else(|e| e.into_inner());
+        for c in &self.held {
+            set.remove(c);
+        }
+    }
+}
+
 pub struct Service {
     pub home: Home,
     pub counters: Counters,
@@ -574,6 +600,8 @@ pub struct Service {
     /// as long as the daemon: its environment is part of what passed.
     verified: Mutex<Verified>,
     verification_runs: AtomicU64,
+    /// Changes whose checks are running, see [`Running`].
+    running: Mutex<BTreeSet<ChangeId>>,
     settings: Settings,
     inner: Mutex<Inner>,
     wake: (Mutex<u64>, Condvar),
@@ -614,6 +642,7 @@ impl Service {
             verifier: Verifier::new(home.scratch()),
             verified: Mutex::default(),
             verification_runs: AtomicU64::new(0),
+            running: Mutex::default(),
             home,
             counters: Counters::default(),
             clock,
@@ -877,7 +906,16 @@ impl Service {
             "change.propose" => self.propose(req, params(p)?),
             "change.withdraw" => {
                 let c: ChangeRef = params(p)?;
-                self.agent_op(req, |_| Ok(Op::ChangeWithdraw { change: c.change }))
+                // Asked under the lock that the queue takes the change under.
+                self.agent_op(req, |_| {
+                    if self.running_lock().contains(&c.change) {
+                        return Err((
+                            "verifying".into(),
+                            "its checks are running; withdraw it once they end".into(),
+                        ));
+                    }
+                    Ok(Op::ChangeWithdraw { change: c.change })
+                })
             }
             "facts.preview" => self.facts_preview(req, params(p)?),
             "negotiate" => {
@@ -1373,6 +1411,7 @@ impl Service {
                     "harness": x.harness,
                     "taint": x.taint, "active": s.session_active(&x.id, now), "expires_ms": x.expires_ms,
                     "last_seen_ms": x.heartbeat.map(|h| h.seen_ms),
+                    "verification_ms": s.session_spent(&x.id),
                     "continued_from": x.continued_from, "continued_by": x.continued_by,
                     "unproposed": x.unproposed,
                 })
@@ -1443,6 +1482,7 @@ impl Service {
         Ok(json!({
             "interests": interests, "reservations": s.reservations_at(now),
             "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "frozen": s.frozen, "queue": s.queue,
+            "verification_day_ms": s.day_spent(now),
             "unparsed_files": unparsed, "below_hardened": below_hardened,
             "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
             "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now, "daemon_key": s.daemon_key,
@@ -3168,6 +3208,7 @@ impl Service {
     /// be merged or verified here ends the stack in front of it: it is not
     /// the changes ahead of it that wait for that.
     fn process_batch(&self, repo: &str) -> Result<Option<SignedOp>> {
+        let mut running = self.running();
         let (store, jobs, reaches, trunk, vcfg) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
@@ -3179,7 +3220,12 @@ impl Service {
             let policy = r.policy()?;
             let vcfg = policy.config.verification.clone();
             let size = policy.config.queue.batch_size as usize;
+            let t = r.chain.entry_time(self.now());
             let state = &r.chain.state;
+            let quota = &policy.config.quota;
+            let free = |c: &&ChangeId| {
+                quota_problems(state, &state.changes[*c].actor, t, quota).is_empty()
+            };
             let job = |c: &ChangeId| {
                 (
                     *c,
@@ -3188,9 +3234,13 @@ impl Service {
                 )
             };
             let reach = |c: &ChangeId| state.changes[c].facts.reaches_others();
-            let jobs: Vec<_> = state.queue.iter().take(size).map(job).collect();
+            let held = state.queue.iter().take(size).take_while(free);
+            let jobs: Vec<_> = held.map(job).collect();
             let reaches: Vec<_> = state.queue.iter().take(size).map(reach).collect();
             let trunk = state.trunk.clone().expect("initialized");
+            if jobs.len() >= 2 {
+                running.hold(jobs.iter().map(|j| j.0));
+            }
             (r.store.clone(), jobs, reaches, trunk, vcfg)
         };
         // At most the policy's size, so never two under the default.
@@ -3265,7 +3315,8 @@ impl Service {
 
     /// The change at the head of the queue, alone.
     fn process_head(&self, repo: &str) -> Result<Option<SignedOp>> {
-        let (store, change, commit, base, trunk, vcfg, reuse) = {
+        let mut running = self.running();
+        let (store, change, commit, base, trunk, vcfg, reuse, past) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
                 return Ok(None);
@@ -3283,11 +3334,25 @@ impl Service {
             let policy = r.policy()?;
             let vcfg = policy.config.verification.for_change(reaches);
             let reuse = policy.config.queue.batch_size > 1;
-            (r.store.clone(), change, commit, base, trunk, vcfg, reuse)
+            let t = r.chain.entry_time(self.now());
+            let state = &r.chain.state;
+            let actor = &state.changes[&change].actor;
+            let past = !quota_problems(state, actor, t, &policy.config.quota).is_empty();
+            running.hold([change]);
+            (
+                r.store.clone(),
+                change,
+                commit,
+                base,
+                trunk,
+                vcfg,
+                reuse,
+                past,
+            )
         };
         let integ = integrate(&store, ENGINE_CURRENT, &base, &trunk, &commit)?;
         let mut evidence = Vec::new();
-        if let Some(m) = &integ.merged {
+        if let Some(m) = integ.merged.as_ref().filter(|_| !past) {
             let changed = (&integ.files, integ.touched.as_slice());
             evidence = self.verify(repo, &store, &vcfg, changed, m, reuse)?;
         }
@@ -3299,6 +3364,16 @@ impl Service {
         {
             return Ok(None);
         }
+        // Not verified, so it can only stand as what `decide` refuses: past
+        // midnight, or under a wider policy, it is verified after all.
+        let now = self.now();
+        let t = r.chain.entry_time(now);
+        let quota = r.policy()?.config.quota.clone();
+        let actor = &r.chain.state.changes[&change].actor;
+        if past && quota_problems(&r.chain.state, actor, t, &quota).is_empty() {
+            drop(inner);
+            return self.process_head(repo);
+        }
         let op = Op::ChangeIntegrate {
             change,
             trunk_before: trunk.clone(),
@@ -3308,7 +3383,7 @@ impl Service {
         let mut sub = Submission::new(Actor::Daemon, op);
         sub.evidence = evidence;
         sub.symbols_engine = Some(ENGINE_CURRENT);
-        let signed = r.submit(sub, self.now())?;
+        let signed = r.submit(sub, now)?;
         if signed.entry.decision.is_allow()
             && let Some(m) = &integ.merged
         {
@@ -3323,6 +3398,17 @@ impl Service {
     /// How often the configured checks of a tree ran.
     pub fn verification_runs(&self) -> u64 {
         self.verification_runs.load(Ordering::Relaxed)
+    }
+
+    fn running_lock(&self) -> std::sync::MutexGuard<'_, BTreeSet<ChangeId>> {
+        self.running.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn running(&self) -> Running<'_> {
+        Running {
+            set: &self.running,
+            held: Vec::new(),
+        }
     }
 
     fn verified_lock(&self) -> std::sync::MutexGuard<'_, Verified> {

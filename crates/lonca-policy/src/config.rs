@@ -178,6 +178,15 @@ max_rounds = 4
 # of them, with a failure bisected. 1 verifies each change on its own.
 batch_size = 1
 
+[quota]
+# Seconds of verification by the clock, as the log records them; 0 means no
+# limit. What a session may use, with the sessions made from it and those that
+# continue it, and what the repository may use in a day (UTC). Past either a
+# proposal is refused and what is queued is rejected unverified, with
+# `verification_quota:session` or `verification_quota:day`.
+session_seconds = 0
+day_seconds = 0
+
 [reverts]
 window_minutes = 5
 
@@ -310,6 +319,7 @@ pub struct Config {
     pub approvals: Approvals,
     pub negotiation: Negotiation,
     pub queue: Queue,
+    pub quota: Quota,
     pub reverts: Reverts,
     pub integrity: Integrity,
     /// Harness profiles of this repository, over the built-in ones.
@@ -565,6 +575,16 @@ pub struct Negotiation {
 pub struct Queue {
     /// How many changes at the head of the queue are verified as one.
     pub batch_size: u32,
+}
+
+/// What verification may cost. Each key: 0 means no limit.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Quota {
+    /// Per session, with the sessions made from it and those continuing it.
+    pub session_seconds: u64,
+    /// Per repository and UTC day.
+    pub day_seconds: u64,
 }
 
 /// The most changes one batch can hold: bisection stays short, and one log

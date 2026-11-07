@@ -327,6 +327,7 @@ with a signed `daemon.rotate` through `human.submit`.
 {
   "repo": string, "trunk": id, "policy": id, "frozen": string | null,
   "queue": [change id], "next_seq": integer, "head_hash": hex, "now_ms": time,
+  "verification_day_ms": integer,
   "daemon_key": hex, "below_hardened": [string],
   "humans": {"<name>": {"alg": string, "public": hex, "recovery": hex | null}},
   "sessions": [session], "leases": [lease], "changes": [change], "pending": [pending]
@@ -335,13 +336,18 @@ with a signed `daemon.rotate` through `human.submit`.
 
 - **below_hardened**: what this repository's policy leaves below the hardened
   profile, on a hardened daemon. Always empty on a cooperative one.
+- **verification_day_ms**: milliseconds of verification in the UTC day of
+  `now_ms`, for `[quota] day_seconds`.
 
 - **session**: `{"id", "agent", "task", "parent": string | null,
   "level": "unobserved" | "hooks" | "hooks_sandbox" | "isolated",
   "taint": string | null, "active": boolean, "expires_ms": time,
-  "last_seen_ms": time | null, "continued_from": string | null,
+  "last_seen_ms": time | null, "verification_ms": integer,
+  "continued_from": string | null,
   "continued_by": string | null, "unproposed": {"paths": [path], "total":
-  integer, "rounds": integer, "seen_ms": time} | null}`. `last_seen_ms` is
+  integer, "rounds": integer, "seen_ms": time} | null}`. `verification_ms` is
+  what the session's line has used of `[quota] session_seconds`: the session,
+  those it was made from or continues, and theirs. `last_seen_ms` is
   the last heartbeat; `null` means none yet. `continued_from` and
   `continued_by` link the sessions of one workspace; `parent` is a
   capability's origin. `unproposed` is what the workspace held the last time
@@ -486,7 +492,7 @@ bytes is `ceil(n / 3) * 4`. `lonca-cli` does this in `fetch`
 ```
 
 `evidence` are the checks of the change's last `change.integrate`
-entry (empty before one); `log` is the tail of the check's output
+entry (empty before one); `duration_ms` covers every attempt; `log` is the tail of the check's output
 (32 KiB at most, `log_truncated` when cut), null for a redacted or
 missing log. `not_found` for an unknown change.
 
@@ -822,6 +828,7 @@ the queue itself, and stays 0 under protocol 1.
 | `too_large` | a request line over its method's limit; a `blobs` page, or one file, does not fit the line cap |
 | `rate_limited` | the session and those made from it are past `[sessions] ops_per_minute`; nothing is logged, and the message says when to try again. `session.end` and the methods that write nothing to the log are exempt |
 | `busy` | no room for this connection or long line; nothing ran, send it again |
+| `verifying` | `change.withdraw` of a change whose checks are running; nothing is logged. Send it again once they end, if the change is still queued |
 | `closed` | id 0: the connection was closed while quiet; nothing sent after this ran, send it again on a new connection |
 | `timeout` | id 0: the request line took too long; the connection closes |
 | `conflict` | the repository exists |
@@ -860,6 +867,9 @@ The `reasons` of a decision. The ones a runner acts on:
 - `verification_failed:<check>`, `verification_error:<check>`,
   `merge_conflict`, `conflict:<symbol>`: the integration failed; the
   change's status says more.
+- `verification_quota:session`, `verification_quota:day`: past `[quota]`;
+  on a proposal nothing is queued, on an integration the checks did not run.
+  The session's quota does not come back; the day's does at midnight UTC.
 - `session_ended`, `session_inactive`, `unknown_session`,
   `session_ttl`: the session is over; start a new one, or continue the
   workspace (`lonca session start --continue`).

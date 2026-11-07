@@ -2432,8 +2432,59 @@ queue, and what it is held to, stands like this:
   makes it fail. What must not depend on `PATH`, `/bin/sh` and the sandbox's
   own program, is absolute already.
 
-The per-session and global quota of §5.9 is a separate change: it has to be in
-the log for `decide()`.
+## What verification may cost (#59)
+
+Design §5.9 asks for a verification quota per session and for everything,
+past which no proposal is taken. `[quota] session_seconds` and `day_seconds`,
+both 0 (off) by default.
+
+- **Time by the clock, not CPU time.** The design says CPU minutes. A command's
+  CPU time can be read only for what its leader waited for: what leaves the
+  group or runs in another process is not counted, so it would be the agent's
+  own code deciding what it is charged. The time a run held the queue is what
+  the queue loses, nothing in the run can hide it, and the log has it already
+  as `duration_ms`, in old entries too. A run's CPU time is at most its clock
+  time times the cores.
+- **Recorded, never recomputed.** The state adds up the `duration_ms` of every
+  integration's evidence, so the auditor's replay reads the same numbers. A
+  check the cache answered (`reused`) costs nothing. `duration_ms` now covers
+  every attempt of a retried check; it was the last one, so a check that
+  failed slowly and passed fast would have hidden the rest.
+- **A run costs whatever came of it.** A failure took its time too.
+- **The first session of a line pays**: what it was made from and what it
+  continues, so neither a child nor a continuation starts over. One run of a
+  batch is shared evenly by its changes. A human's change pays only the day.
+- **Past a quota a proposal is denied** (`verification_quota:session` or
+  `:day`), not escalated, **and what the session queued earlier is rejected
+  without a run.** The daemon asks the same question before it starts a run,
+  and `decide()` refuses such an integration even with a pass in its evidence.
+  Without that a session could queue many proposals before its first run is
+  logged and overrun the quota by all of them; this way it overruns by the one
+  run that crosses it.
+- **The day is the UTC day of the entry's time.** A burst around midnight can
+  use two days' worth. A sliding window would keep a list of runs in the
+  state; one counter is enough for a ceiling.
+- **The daemon looks at the quota before the merge and logs after it.** If
+  midnight or a wider policy came between, the change goes through the checks
+  instead of being logged with no evidence, which `required = false` would let
+  through.
+- **No log format.** A policy that predates the keys can not hold them (unknown
+  keys are refused), so old entries decide as before. A human changes the
+  quota with `policy.update`, which no quota holds. A day spent by agents also
+  stops a human's proposal; the way out is the policy, or the next day.
+- **A run that is not logged costs nothing, so an agent can not end one.**
+  While a change's checks run, its agent's `change.withdraw` is refused with
+  `verifying` and nothing is logged; withdrawing a change mid-run and
+  proposing it again would otherwise verify for ever at no cost. Human
+  operations are not held back. A run can still end unlogged when trunk or
+  the policy changes under it, which only a human does.
+- **Not counted**: the syntax check, and the runs of a batch's bisection that
+  are never logged: at most log2 of `batch_size` for each logged run, none at
+  the default size of 1. With batches a quota holds to within a factor of 1 +
+  log2 `batch_size`. A batch's run is split evenly, and what the division
+  leaves (under one millisecond per change) is not charged to a session.
+- **A table of its own**, not `[verification]`: the verifier's cache is keyed
+  by a digest of that table, and a quota does not change what a run proves.
 
 ## Open questions (carried from the design)
 

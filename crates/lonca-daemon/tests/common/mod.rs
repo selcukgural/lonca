@@ -79,7 +79,7 @@ impl Env {
             require_root_settings: false,
             git: "git".into(),
             line_cap: lonca_daemon::protocol::MAX_LINE,
-            proxy: None,
+            proxy: Some("127.0.0.1:8471".into()),
         };
         let svc = Self::open_service(&root, &settings, &clock);
         Env {

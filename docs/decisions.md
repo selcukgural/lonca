@@ -2227,6 +2227,16 @@ claude-code".
   try it. A level can not rise past the first report, so what stands is the report
   sent when the harness started.
 
+## What a level reads in the file
+
+- **The proxy's port is the daemon's own.** `is = "proxy_port"` compares the value with
+  where this daemon's proxy listens, so a sandbox pointed at another port does not count
+  as Lonca's. A daemon with no proxy has no such port, and the check holds for nobody:
+  nothing watches that network. `is = "number"` stays for a value with no such meaning,
+  and for tables already signed. `ping` says where the proxy is, for `lonca doctor`.
+- **Every program, not one.** Each Lonca hook in each list must have its program out of
+  a user's reach. A harness runs them all, so the weakest one decides.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

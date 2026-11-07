@@ -426,11 +426,11 @@ fn hook_entries<'a>(settings: &'a Value, list: &str) -> Vec<&'a Value> {
 
 /// What failed of a list of checks, as notes. A list with nothing in it
 /// proves nothing.
-fn unmet(checks: &[Check], doc: &Value, what: &str) -> Vec<String> {
+fn unmet(checks: &[Check], doc: &Value, proxy_port: Option<u16>, what: &str) -> Vec<String> {
     if checks.is_empty() {
         return vec![format!("the profile names nothing that locks {what}")];
     }
-    let failed = checks.iter().filter(|c| !c.holds(doc));
+    let failed = checks.iter().filter(|c| !c.holds(doc, proxy_port));
     failed
         .map(|c| format!("{what}: {} is not as required", c.at))
         .collect()
@@ -443,9 +443,27 @@ fn read_capped(path: &Path) -> Option<Vec<u8>> {
     (bytes.len() as u64 <= MAX_SETTINGS).then_some(bytes)
 }
 
+/// Every list has a hook, and every hook's program is out of reach: a hook
+/// runs whichever list names it.
+fn programs_protected(lists: &[Vec<&Value>], protected: impl Fn(&Path) -> bool) -> bool {
+    let program = |e: &&Value| {
+        let command = e.get("command").and_then(Value::as_str).unwrap_or_default();
+        protected(Path::new(
+            command.split_whitespace().next().unwrap_or_default(),
+        ))
+    };
+    !lists.is_empty() && lists.iter().all(|l| !l.is_empty() && l.iter().all(program))
+}
+
 /// Inspects a harness's administrator settings, read as its profile says.
-/// `require_root` is false only in tests.
-pub fn inspect(locked: &Locked, path: &Path, require_root: bool) -> Inspection {
+/// `require_root` is false only in tests; `proxy_port` is where the daemon's
+/// proxy listens, if one runs.
+pub fn inspect(
+    locked: &Locked,
+    path: &Path,
+    require_root: bool,
+    proxy_port: Option<u16>,
+) -> Inspection {
     let mut ins = Inspection::default();
     let Ok(meta) = fs::metadata(path) else {
         ins.notes
@@ -496,25 +514,16 @@ pub fn inspect(locked: &Locked, path: &Path, require_root: bool) -> Inspection {
             ));
         }
     }
-    let only_ones = unmet(&locked.hooks, &s, "hooks");
+    let only_ones = unmet(&locked.hooks, &s, proxy_port, "hooks");
     ins.managed_hooks =
         !lists.is_empty() && lists.iter().all(|l| !l.is_empty()) && only_ones.is_empty();
     ins.notes.extend(only_ones);
-    let binary = lists
-        .first()
-        .and_then(|l| l.first())
-        .and_then(|e| e.get("command").and_then(Value::as_str))
-        .and_then(|c| c.split_whitespace().next())
-        .map(PathBuf::from);
-    ins.hook_binary_protected = match &binary {
-        Some(b) => !require_root || protected_path(b),
-        None => false,
-    };
+    ins.hook_binary_protected = programs_protected(&lists, |p| !require_root || protected_path(p));
     if !ins.hook_binary_protected {
         ins.notes
             .push("the hook program must live in root-owned, non-writable directories".into());
     }
-    let sandbox = unmet(&locked.sandbox, &s, "sandbox");
+    let sandbox = unmet(&locked.sandbox, &s, proxy_port, "sandbox");
     ins.locked_sandbox = sandbox.is_empty();
     ins.notes.extend(sandbox);
     ins
@@ -1167,6 +1176,11 @@ run = { kind = "shell", fields = ["line"] }
             .unwrap()
     }
 
+    /// With the proxy where the files of these tests say it is.
+    fn inspect(locked: &Locked, path: &Path, require_root: bool) -> Inspection {
+        super::inspect(locked, path, require_root, Some(8471))
+    }
+
     #[test]
     fn inspection_of_managed_settings() {
         let dir = tempfile::tempdir().unwrap();
@@ -1250,6 +1264,56 @@ run = { kind = "shell", fields = ["line"] }
             fs::write(&p, serde_json::to_vec(&d).unwrap()).unwrap();
             assert!(inspect(&l, &p, false).managed_hooks, "{matcher:?}");
         }
+    }
+
+    /// A sandbox whose traffic goes elsewhere is not watched by Lonca.
+    #[test]
+    fn the_sandbox_must_name_the_daemon_s_own_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("m.json");
+        let doc = json!({"sandbox": {
+            "enabled": true,
+            "failIfUnavailable": true,
+            "allowUnsandboxedCommands": false,
+            "network": {"httpProxyPort": 8471},
+        }});
+        fs::write(&p, serde_json::to_vec(&doc).unwrap()).unwrap();
+        let l = claude_code();
+        assert!(super::inspect(&l, &p, false, Some(8471)).locked_sandbox);
+        for port in [Some(9000), None] {
+            let i = super::inspect(&l, &p, false, port);
+            assert!(!i.locked_sandbox, "{port:?}");
+            assert!(i.notes.iter().any(|n| n.contains("httpProxyPort")), "{i:?}");
+        }
+    }
+
+    /// Every list is read, and every hook in it.
+    #[test]
+    fn every_hook_program_is_looked_at() {
+        let hook = |c: &str| json!({"command": c});
+        let (a, b, c) = (
+            hook("/a/lonca hook"),
+            hook("/b/lonca hook"),
+            hook("/c/lonca hook"),
+        );
+        let lists = vec![vec![&a, &b], vec![&c]];
+        assert!(programs_protected(&lists, |_| true));
+        for bad in ["/a/lonca", "/b/lonca", "/c/lonca"] {
+            assert!(
+                !programs_protected(&lists, |p| p != Path::new(bad)),
+                "{bad}"
+            );
+        }
+        assert!(!programs_protected(&[], |_| true), "no list");
+        assert!(
+            !programs_protected(&[vec![&a], vec![]], |_| true),
+            "a list with none"
+        );
+        let nameless = json!({});
+        assert!(
+            !programs_protected(&[vec![&nameless]], |p| p.is_absolute()),
+            "no command names no program"
+        );
     }
 
     /// A hook of something else in the file watches nothing for Lonca.

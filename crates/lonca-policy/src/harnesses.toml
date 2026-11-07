@@ -46,7 +46,7 @@ sandbox = [
   { at = "/sandbox/enabled", equals = true },
   { at = "/sandbox/failIfUnavailable", equals = true },
   { at = "/sandbox/allowUnsandboxedCommands", equals = false },
-  { at = "/sandbox/network/httpProxyPort", is = "number" },
+  { at = "/sandbox/network/httpProxyPort", is = "proxy_port" },
   { at = "/sandbox/excludedCommands", is = "empty" },
 ]
 

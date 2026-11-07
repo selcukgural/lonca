@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### A level reads the proxy's port and every hook
+
+A harness table can now say `is = "proxy_port"`: the value must be the port the daemon's
+own proxy listens on, and with no proxy running the check does not hold. The built-in
+Claude Code table uses it for `httpProxyPort`, so the managed settings and `--proxy` must
+agree; the hardened installers already write the same port to both. Every Lonca hook in
+every list must now have its program in root-owned directories. `ping` returns `proxy`.
+
 ### A session names its harness (log format 20)
 
 `session start --harness <name>` now puts the name in what you sign, and an observation

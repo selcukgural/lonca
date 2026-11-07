@@ -266,6 +266,13 @@ impl Jail {
     }
 }
 
+/// A name for the sandbox of the run in `dir`, whose name is random, where it
+/// takes one to find what is left in a sandbox: see [`Jail::mark`].
+pub fn mark_of(sandbox: Sandbox, what: &str, dir: &Path) -> Option<String> {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+    (sandbox == Sandbox::Seatbelt).then(|| format!("lonca.{what}.{name}"))
+}
+
 /// Whether `dir` may be opened by being on `PATH`: not a tree that holds
 /// something closed, such as the home directory itself.
 pub fn may_expose(dir: &OsStr, closed: &[PathBuf]) -> bool {
@@ -322,6 +329,15 @@ pub fn program_trees(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_seatbelt_marks_a_sandbox_and_the_mark_is_the_runs_alone() {
+        let dir = Path::new("/scratch/verify-abc");
+        let marked = mark_of(Sandbox::Seatbelt, "verify", dir);
+        assert_eq!(marked.as_deref(), Some("lonca.verify.verify-abc"));
+        assert_eq!(mark_of(Sandbox::Bubblewrap, "verify", dir), None);
+        assert_eq!(mark_of(Sandbox::None, "verify", dir), None);
+    }
+
     use super::*;
 
     fn jail() -> Jail {

@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Read;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use lonca_core::canonical::sha256_hex;
@@ -20,10 +20,10 @@ use lonca_symbols::engine::{ENGINE_CURRENT, reads_size};
 use lonca_symbols::{Lang, parse};
 
 pub mod jail;
+mod process;
+pub mod sweep;
 
 use jail::Jail;
-
-const OUTPUT_TAIL: usize = 64 * 1024;
 
 const BWRAP: [&str; 3] = ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"];
 
@@ -205,7 +205,7 @@ impl Verifier {
         let secrets = named.into_iter().flatten().filter_map(real).collect();
         let store = self.scratch.parent().and_then(|p| real(p.to_path_buf()));
         let passed: Vec<PathBuf> = cfg.env_passthrough.iter().filter_map(|n| env(n)).collect();
-        let path = std::env::var_os("PATH").unwrap_or_default();
+        let path = command_path(cfg);
         let closed = Closed {
             secrets,
             store,
@@ -236,7 +236,8 @@ impl Verifier {
         let tmp = root.join("tmp");
         let _ = fs::create_dir_all(&home);
         let _ = fs::create_dir_all(&tmp);
-        let jail = self.jail(&tree, vec![home.clone(), tmp.clone()], cfg);
+        let mut jail = self.jail(&tree, vec![home.clone(), tmp.clone()], cfg);
+        jail.mark = jail::mark_of(self.sandbox, "verify", root);
         let argv: [OsString; 3] = ["/bin/sh".into(), "-c".into(), cmd.into()];
         let mut command = jail.command(self.sandbox, &argv).unwrap_or_else(|| {
             let mut c = Command::new("/bin/sh");
@@ -246,17 +247,11 @@ impl Verifier {
         command
             .current_dir(&tree)
             .env_clear()
-            .env(
-                "PATH",
-                std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
-            )
+            .env("PATH", command_path(cfg))
             .env("HOME", &home)
             .env("TMPDIR", &tmp)
             .env("LANG", "C.UTF-8")
-            .env("LONCA_VERIFY", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .env("LONCA_VERIFY", "1");
         let mut passed: Vec<String> = Vec::new();
         for name in &cfg.env_passthrough {
             // The sandbox's own: nothing else can be written.
@@ -283,46 +278,22 @@ impl Verifier {
         );
         let started = Instant::now();
         let mut details = BTreeMap::new();
-        let mut child = match command.spawn() {
-            Ok(c) => c,
+        let running = match process::start(command, cfg) {
+            Ok(r) => r,
             Err(e) => {
                 details.insert("error".into(), format!("spawn: {e}"));
                 return (CheckResult::Error, details, header);
             }
         };
-        let mut so = child.stdout.take().expect("piped");
-        let mut se = child.stderr.take().expect("piped");
-        let t_out = std::thread::spawn(move || {
-            let mut v = Vec::new();
-            let _ = so.read_to_end(&mut v);
-            v
-        });
-        let t_err = std::thread::spawn(move || {
-            let mut v = Vec::new();
-            let _ = se.read_to_end(&mut v);
-            v
-        });
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(s)) => break Some(s),
-                Ok(None) if started.elapsed() > timeout => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(_) => break None,
-            }
-        };
-        let mut log = t_out.join().unwrap_or_default();
-        log.extend(t_err.join().unwrap_or_default());
-        let start = log.len().saturating_sub(OUTPUT_TAIL);
-        let log = format!("{header}{}", String::from_utf8_lossy(&log[start..]));
+        let ended = process::watch(running, timeout, jail.mark.as_deref());
+        let log = format!("{header}{}", String::from_utf8_lossy(&ended.output));
+        let left = ended.left.is_some();
+        details.extend(ended.left);
         details.insert(
             "duration_ms".into(),
             started.elapsed().as_millis().to_string(),
         );
-        let result = match status {
+        let result = match ended.status {
             None => {
                 details.insert("error".into(), "timeout".into());
                 CheckResult::Error
@@ -334,14 +305,30 @@ impl Verifier {
                         .map(|c| c.to_string())
                         .unwrap_or_else(|| "signal".into()),
                 );
-                if s.success() {
-                    CheckResult::Pass
-                } else {
-                    CheckResult::Fail
-                }
+                details.extend(s.signal().map(|n| ("signal".into(), n.to_string())));
+                outcome(s.success(), left)
             }
         };
         (result, details, log)
+    }
+}
+
+/// What a command that ended comes to. What is still running can change the
+/// tree and the outcome, so a pass can not stand on it.
+fn outcome(success: bool, left: bool) -> CheckResult {
+    match (success, left) {
+        (_, true) => CheckResult::Error,
+        (true, false) => CheckResult::Pass,
+        (false, false) => CheckResult::Fail,
+    }
+}
+
+/// The commands' `PATH`: the policy's, or else the daemon's.
+fn command_path(cfg: &Verification) -> OsString {
+    if cfg.path.is_empty() {
+        std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into())
+    } else {
+        std::env::join_paths(&cfg.path).unwrap_or_default()
     }
 }
 
@@ -494,6 +481,14 @@ mod tests {
     }
 
     #[test]
+    fn what_is_left_running_stands_in_the_way_of_a_pass() {
+        assert_eq!(outcome(true, false), CheckResult::Pass);
+        assert_eq!(outcome(false, false), CheckResult::Fail);
+        assert_eq!(outcome(true, true), CheckResult::Error);
+        assert_eq!(outcome(false, true), CheckResult::Error);
+    }
+
+    #[test]
     fn pass_fail_and_skip_after_failure() {
         let (dir, store, files, tree) = setup(&[("ok.txt", "yes\n")]);
         let v = Verifier::new(dir.path().join("scratch"));
@@ -526,6 +521,316 @@ mod tests {
         let r = v.run(&store, &files, &tree, &c).unwrap();
         assert_eq!(r[0].result, CheckResult::Error);
         assert_eq!(r[0].details["error"], "timeout");
+    }
+
+    fn log_of(store: &Store, a: &Attestation) -> String {
+        String::from_utf8(store.read_blob(a.log.as_ref().unwrap()).unwrap()).unwrap()
+    }
+
+    /// Both ways of leaving something behind that keeps the output open.
+    #[test]
+    fn what_a_command_leaves_running_does_not_hold_the_run() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let c = cfg(None, Some("(sleep 1000000 &); exit 0"));
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        let mut c = cfg(None, Some("(sleep 1000000 &); sleep 1000000"));
+        c.timeout_seconds = 1;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Error);
+        assert_eq!(r[0].details["error"], "timeout");
+    }
+
+    /// Bare, because a sandbox ends this some other way: the group is what
+    /// is under test.
+    #[test]
+    fn nothing_in_the_group_outlives_the_command() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier {
+            sandbox: Sandbox::None,
+            scratch: dir.path().join("scratch"),
+        };
+        let (exited, timed_out) = (dir.path().join("exited"), dir.path().join("timed-out"));
+        let after =
+            |file: &Path, end: &str| format!("(sleep 1; touch '{}') & {end}", file.display());
+        let c = cfg(None, Some(&after(&exited, "exit 0")));
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        let mut c = cfg(None, Some(&after(&timed_out, "sleep 1000000")));
+        c.timeout_seconds = 0;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].details["error"], "timeout");
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(!exited.exists(), "it ran on after the command exited");
+        assert!(!timed_out.exists(), "it ran on after the timeout");
+    }
+
+    /// With no sandbox, what left the group can not be reached. It still
+    /// must not hold anything up, and the result is the command's own.
+    #[test]
+    fn what_left_the_group_is_waited_for_only_briefly() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier {
+            sandbox: Sandbox::None,
+            scratch: dir.path().join("scratch"),
+        };
+        let cmd = "exec /usr/bin/perl -MPOSIX -e 'fork and exit; POSIX::setsid(); sleep 20'";
+        if !Path::new("/usr/bin/perl").exists() {
+            return;
+        }
+        let started = Instant::now();
+        let r = v.run(&store, &files, &tree, &cfg(None, Some(cmd))).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        assert!(started.elapsed() < Duration::from_secs(12));
+    }
+
+    /// The leader of a group can move to another one, and leave nothing in
+    /// its own for a kill to reach, unless it leads a session.
+    #[test]
+    fn a_command_can_not_take_itself_out_of_reach() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier {
+            sandbox: Sandbox::None,
+            scratch: dir.path().join("scratch"),
+        };
+        if !Path::new("/usr/bin/perl").exists() {
+            return;
+        }
+        let cmd = "exec /usr/bin/perl -MPOSIX -e '\
+                   my $c = fork; if (!$c) { POSIX::setpgid(0, 0); sleep 20; exit } \
+                   select(undef, undef, undef, 0.2); POSIX::setpgid(0, $c); sleep 20'";
+        let mut c = cfg(None, Some(cmd));
+        c.timeout_seconds = 1;
+        let started = Instant::now();
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(12), "{:?}", r[0]);
+        assert_eq!(r[0].details["error"], "timeout");
+    }
+
+    /// A process whose program is gone has no path, and is no zombie.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_sandbox_finds_what_deleted_its_own_program() {
+        let (dir, store, mut files, _) = setup(&[("a", "")]);
+        let source = dir.path().join("tool.c");
+        fs::write(
+            &source,
+            "#include <stdio.h>\n#include <unistd.h>\n\
+             int main(int c, char **v) {\n\
+               unlink(v[0]);\n\
+               if (fork()) return 0;\n\
+               setsid();\n\
+               FILE *f = fopen(\"pid\", \"w\");\n\
+               fprintf(f, \"%d\", getpid());\n\
+               fclose(f);\n\
+               sleep(30);\n\
+             }\n",
+        )
+        .unwrap();
+        let built = dir.path().join("tool");
+        let cc = std::process::Command::new("/usr/bin/cc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&built)
+            .output();
+        if !cc.is_ok_and(|o| o.status.success()) {
+            eprintln!("no compiler; skipping");
+            return;
+        }
+        files.insert(
+            "tool".into(),
+            FileEntry {
+                mode: FileMode::Executable,
+                blob: store.write_blob(&fs::read(&built).unwrap()).unwrap(),
+            },
+        );
+        let tree = store.write_tree(&files).unwrap();
+        let v = Verifier::new(dir.path().join("scratch"));
+        let name = format!("left-{}", std::process::id());
+        // The command fails unless that process is alive.
+        let cmd = format!("./tool {name} && sleep 1 && kill -0 \"$(cat pid)\"");
+        let r = v
+            .run(&store, &files, &tree, &cfg(None, Some(&cmd)))
+            .unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{}", log_of(&store, &r[0]));
+        let found = std::process::Command::new("/usr/bin/pgrep")
+            .args(["-f", &name])
+            .output()
+            .unwrap();
+        let _ = std::process::Command::new("/usr/bin/pkill")
+            .args(["-f", &name])
+            .status();
+        assert!(found.stdout.is_empty(), "still running");
+    }
+
+    /// Only Seatbelt can leave something running out of the group.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_sandbox_keeps_nothing_that_left_the_group() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let name = format!("left-by-{}", dir.path().display());
+        let cmd = format!(
+            "exec /usr/bin/perl -MPOSIX -e 'fork and exit; POSIX::setsid(); sleep 30' '{name}'"
+        );
+        let r = v
+            .run(&store, &files, &tree, &cfg(None, Some(&cmd)))
+            .unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        assert!(!r[0].details.contains_key("left_running"), "{:?}", r[0]);
+        let found = std::process::Command::new("/usr/bin/pgrep")
+            .args(["-f", &name])
+            .output()
+            .unwrap();
+        assert!(found.stdout.is_empty(), "still running");
+    }
+
+    #[test]
+    fn the_log_has_the_streams_as_they_were_written() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let cmd = "echo 1 >&2; echo 2; echo 3 >&2; echo 4";
+        let r = v.run(&store, &files, &tree, &cfg(None, Some(cmd))).unwrap();
+        assert!(log_of(&store, &r[0]).ends_with("\n1\n2\n3\n4\n"));
+    }
+
+    #[test]
+    fn the_log_has_both_streams_and_only_the_end_of_them() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let cmd = "echo out; echo err >&2; head -c 200000 /dev/zero | tr '\\0' x; echo; echo last";
+        let r = v.run(&store, &files, &tree, &cfg(None, Some(cmd))).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        let log = log_of(&store, &r[0]);
+        assert!(log.ends_with("x\nlast\n"), "{}", &log[log.len() - 40..]);
+        assert!(!log.contains("out\n"), "the beginning is gone");
+        let r = v
+            .run(
+                &store,
+                &files,
+                &tree,
+                &cfg(None, Some("echo out; echo err >&2")),
+            )
+            .unwrap();
+        let log = log_of(&store, &r[0]);
+        assert!(log.contains("out\n") && log.contains("err\n"), "{log}");
+        assert!(log.len() < 64 * 1024 + 1024);
+    }
+
+    #[test]
+    fn the_limits_reach_the_command() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let mut c = cfg(None, Some("ulimit -t; ulimit -n"));
+        c.limit_cpu_seconds = 7;
+        c.limit_open_files = 64;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        assert!(
+            log_of(&store, &r[0]).ends_with("\n7\n64\n"),
+            "{:?}",
+            log_of(&store, &r[0])
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_limits_processes_and_address_space_too() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let mut c = cfg(None, Some("cat /proc/self/limits"));
+        c.limit_processes = 2000;
+        c.limit_address_bytes = 1 << 34;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        let log = log_of(&store, &r[0]);
+        let limit = |name: &str| {
+            let line = log.lines().find(|l| l.starts_with(name));
+            line.and_then(|l| l[name.len()..].split_whitespace().next().map(String::from))
+        };
+        assert_eq!(limit("Max processes").as_deref(), Some("2000"), "{log}");
+        let bytes = (1u64 << 34).to_string();
+        assert_eq!(limit("Max address space"), Some(bytes), "{log}");
+    }
+
+    /// A writer that does not ignore the signal ends with it. `exec`, and
+    /// bare, for the signal to be the leader's own: a shell or bubblewrap
+    /// turns it into the exit code 128 + its number.
+    #[test]
+    fn a_file_at_its_limit_ends_the_writer_and_the_evidence_says_how() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier {
+            sandbox: Sandbox::None,
+            scratch: dir.path().join("scratch"),
+        };
+        let cmd = "exec dd if=/dev/zero of=big bs=1024 count=1024";
+        let mut c = cfg(None, Some(cmd));
+        c.limit_file_bytes = 64 * 1024;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Fail, "{:?}", r[0]);
+        assert_eq!(r[0].details["exit"], "signal");
+        assert_eq!(r[0].details["signal"], libc::SIGXFSZ.to_string());
+    }
+
+    #[test]
+    fn a_file_stops_at_its_limit_with_efbig() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let cmd = "trap '' XFSZ; dd if=/dev/zero of=big bs=1024 count=1024 2>&1";
+        let mut c = cfg(None, Some(cmd));
+        c.limit_file_bytes = 64 * 1024;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_ne!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        let log = log_of(&store, &r[0]);
+        assert!(log.contains("File too large"), "{log}");
+    }
+
+    /// Never on a developer's Mac: there the limit does not exist.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_fork_bomb_stays_inside_its_limits() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let mut c = cfg(None, Some("b() { b | b; }; b"));
+        c.limit_processes = 512;
+        c.timeout_seconds = 2;
+        let started = Instant::now();
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        // It can die out at the limit, or be killed at the timeout.
+        assert!(started.elapsed() < Duration::from_secs(15), "{:?}", r[0]);
+        let log = log_of(&store, &r[0]);
+        assert!(log.contains("fork"), "nothing was refused: {log}");
+    }
+
+    #[test]
+    fn the_policy_names_the_path() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let tools = dir.path().canonicalize().unwrap().join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let tool = tools.join("the-tool");
+        fs::write(&tool, "#!/bin/sh\necho from-the-tool\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut c = cfg(None, Some("the-tool; echo \"$PATH\""));
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert!(!log_of(&store, &r[0]).contains("from-the-tool"));
+        let daemon = std::env::var("PATH").unwrap();
+        assert!(
+            log_of(&store, &r[0]).contains(&daemon),
+            "the daemon's by default"
+        );
+        c.path = vec![tools.display().to_string(), "/usr/bin".into()];
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        let log = log_of(&store, &r[0]);
+        assert!(log.contains("from-the-tool"), "on it, and readable: {log}");
+        assert!(
+            log.ends_with(&format!("\n{}:/usr/bin\n", tools.display())),
+            "{log}"
+        );
     }
 
     #[test]

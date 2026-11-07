@@ -110,6 +110,17 @@ env = {}
 # user. Lonca's stores stay closed. See docs/guide/verification.md.
 # read = ["~/.cargo/registry", "~/.cargo/bin", "~/.rustup"]
 read = []
+# The commands' PATH, as absolute directories; empty means the daemon's own.
+# path = ["/usr/bin", "/bin"]
+path = []
+# What each process of a command may use; 0 means no limit. A limit the
+# daemon runs under already is never raised. Processes and address space
+# hold on Linux only. See docs/guide/verification.md.
+limit_cpu_seconds = 0
+limit_address_bytes = 0
+limit_processes = 16384
+limit_file_bytes = 8589934592
+limit_open_files = 4096
 
 [observation]
 # Sessions that nothing observes are treated like tainted sessions.
@@ -394,6 +405,21 @@ pub struct Verification {
     pub env: std::collections::BTreeMap<String, String>,
     /// Trees the commands may read besides the system's.
     pub read: Vec<String>,
+    /// The commands' `PATH`; empty means the daemon's own.
+    pub path: Vec<String>,
+    /// `RLIMIT_CPU`; each `limit_` key: 0 means no limit. Off by default: it
+    /// adds up a process's threads, so a test run on many cores meets it
+    /// long before `timeout_seconds`, which is what holds the time.
+    pub limit_cpu_seconds: u64,
+    /// `RLIMIT_AS`, Linux only. Off by default: runtimes reserve far more
+    /// than they use.
+    pub limit_address_bytes: u64,
+    /// `RLIMIT_NPROC`, Linux only: it counts the account, not the command.
+    pub limit_processes: u64,
+    /// `RLIMIT_FSIZE`.
+    pub limit_file_bytes: u64,
+    /// `RLIMIT_NOFILE`.
+    pub limit_open_files: u64,
 }
 
 impl Verification {
@@ -461,6 +487,12 @@ pub fn valid_read_path(p: &str) -> bool {
         None => p.to_string(),
     };
     crate::decide::valid_scratch_root(&absolute)
+}
+
+/// An entry of `verification.path`: an absolute, normalized directory that
+/// can stand in a `PATH`.
+pub fn valid_command_path(p: &str) -> bool {
+    crate::decide::valid_scratch_root(p) && !p.contains(':')
 }
 
 /// A plausible environment variable name.
@@ -635,6 +667,12 @@ impl Default for Verification {
             env_passthrough: vec![],
             env: std::collections::BTreeMap::new(),
             read: vec![],
+            path: vec![],
+            limit_cpu_seconds: 0,
+            limit_address_bytes: 0,
+            limit_processes: 16384,
+            limit_file_bytes: 8 << 30,
+            limit_open_files: 4096,
         }
     }
 }
@@ -833,6 +871,16 @@ impl PolicyBundle {
         if let Some(bad) = v.read.iter().find(|p| !valid_read_path(p)) {
             return Err(format!(
                 "{CONFIG_FILE}: verification.read: not an absolute path or ~/path: {bad}"
+            ));
+        }
+        if v.path.len() > 64 {
+            return Err(format!(
+                "{CONFIG_FILE}: verification: at most 64 path entries"
+            ));
+        }
+        if let Some(bad) = v.path.iter().find(|p| !valid_command_path(p)) {
+            return Err(format!(
+                "{CONFIG_FILE}: verification.path: not an absolute directory: {bad}"
             ));
         }
         if v.env_passthrough.len() + v.env.len() > 64 {
@@ -1054,6 +1102,30 @@ mod tests {
         for rule in ["migrations-no-agent-delete", "auth-needs-two-humans"] {
             assert!(policy.contains(rule), "the rules stay: {rule}");
         }
+    }
+
+    #[test]
+    fn verification_path_is_absolute_directories_that_fit_a_path() {
+        let parse = |paths: &str| {
+            let config = DEFAULT_CONFIG.replace("path = []", &format!("path = {paths}"));
+            PolicyBundle::parse(&config, DEFAULT_POLICY).map(|b| b.config.verification.path)
+        };
+        assert_eq!(
+            parse(r#"["/usr/bin", "/bin"]"#).unwrap(),
+            ["/usr/bin", "/bin"]
+        );
+        for bad in ["bin", "~/bin", "/usr/bin/", "/usr/../bin", "/a:/b", ""] {
+            let e = parse(&format!("[{bad:?}]")).unwrap_err();
+            assert!(e.contains("verification.path"), "{bad}: {e}");
+        }
+        let full = vec!["\"/a\""; 64].join(",");
+        assert!(parse(&format!("[{full}]")).is_ok());
+        let over = vec!["\"/a\""; 65].join(",");
+        assert!(
+            parse(&format!("[{over}]"))
+                .unwrap_err()
+                .contains("at most 64")
+        );
     }
 
     #[test]

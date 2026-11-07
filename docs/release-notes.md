@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Nothing of a verification outlives it
+
+A build or test command now runs as a session whose process group is killed when it ends,
+however it ends, so in a sandbox a test can no longer leave a server running, and a background
+process that keeps the output open no longer holds the queue. A check out of time is an error
+with evidence and the next change goes on. The log keeps the last 64 KiB of stdout and stderr as
+they were written. The program a command runs directly can not make a process group of its own.
+
+Each process of a command now has limits, **in existing repositories too, since a `lonca.toml`
+without the keys takes the defaults**: `limit_processes` 16384 (Linux), `limit_file_bytes` 8 GiB,
+`limit_open_files` 4096. `limit_cpu_seconds` and `limit_address_bytes` (Linux) are off unless set.
+`path` sets the commands' `PATH`. See `docs/guide/verification.md`, "Limits".
+
 ### Limits on the socket
 
 One client can no longer tie the daemon up. Connections are capped (the longest-quiet one makes

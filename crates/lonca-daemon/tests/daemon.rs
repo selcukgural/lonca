@@ -354,6 +354,66 @@ fn failing_verification_rejects_and_keeps_trunk() {
     assert_ne!(e.trunk(), base);
 }
 
+/// A check that never ends is a failed check, on record, and not a queue
+/// that stands behind it for good.
+#[test]
+fn a_verification_out_of_time_fails_with_evidence_and_the_queue_goes_on() {
+    let mut e = Env::new();
+    e.init(None);
+    let hangs = "if grep -q 'a \\* 3' src/lib.rs; then (sleep 1000000 &); sleep 1000000; fi\n";
+    e.human_change(
+        vec![file("src/lib.rs", LIB), file("check.sh", hangs)],
+        "seed",
+    );
+    e.svc.process_all();
+    let config = lonca_policy::config::DEFAULT_CONFIG
+        .replace(
+            "# test = \"cargo test --offline\"",
+            "test = \"sh check.sh\"",
+        )
+        .replace("timeout_seconds = 900", "timeout_seconds = 1");
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+
+    let token = e.session("s1", &["src/**"]);
+    e.bind(&token);
+    e.wrote(&token, "src/lib.rs");
+    e.lease(&token, "src/lib.rs#charge");
+    let base = e.trunk();
+    let change = |text: &str| vec![file("src/lib.rs", &LIB.replacen("    a\n", text, 1))];
+    let stuck = e.propose(&token, &base, change("    a * 3\n"), &["src/lib.rs#charge"]);
+    let next = e.propose(&token, &base, change("    a * 2\n"), &["src/lib.rs#charge"]);
+    let got = |e: &mut Env, r: &serde_json::Value| {
+        e.ok(
+            "change.get",
+            Some("demo"),
+            None,
+            json!({"change": r["change"]}),
+        )
+    };
+    assert_eq!(e.svc.process_all(), 2, "neither stands in the queue");
+    let c = got(&mut e, &stuck);
+    assert_eq!(c["status"]["status"], "rejected");
+    let reason = c["status"]["reasons"][0].as_str().unwrap();
+    assert_eq!(reason, "verification_error:tests");
+    let log = lonca_core::oplog::OpLog::new(&e.store())
+        .read_all()
+        .unwrap();
+    let on_record = log.iter().flat_map(|o| &o.entry.evidence).any(|a| {
+        a.result == lonca_core::ops::CheckResult::Error
+            && a.details.get("error").map(String::as_str) == Some("timeout")
+    });
+    assert!(on_record, "the timeout is evidence");
+    assert_ne!(e.trunk(), base);
+    assert_eq!(got(&mut e, &next)["status"]["status"], "integrated");
+}
+
 #[test]
 fn import_existing_repository_and_fast_forward_pulls() {
     let mut e = Env::new();

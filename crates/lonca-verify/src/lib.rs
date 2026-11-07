@@ -537,12 +537,38 @@ mod tests {
         if v.sandbox == Sandbox::None {
             return;
         }
-        let home = dirs_home();
-        let probe = format!("ls {} >/dev/null 2>&1", home.display());
-        let mut c = cfg(None, Some(&probe));
-        c.env_passthrough = vec!["HOME".into()];
-        let r = v.run(&store, &files, &tree, &c).unwrap();
-        assert_eq!(r[0].result, CheckResult::Fail, "the home stays closed");
+        // Something real in the home directory, not on the way to a directory
+        // on PATH: those are mounted, so the home itself can be listed, and
+        // shows nothing else. This test must not write there.
+        let path: Vec<PathBuf> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap()).collect();
+        let held = fs::read_dir(dirs_home())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path());
+        let held = held
+            .into_iter()
+            .find(|p| !path.iter().any(|d| d.starts_with(p)));
+        if let Some(held) = held {
+            let probe = format!("test -e '{}'", held.display());
+            let mut c = cfg(None, Some(&probe));
+            c.env_passthrough = vec!["HOME".into()];
+            let r = v.run(&store, &files, &tree, &c).unwrap();
+            assert_eq!(
+                r[0].result,
+                CheckResult::Fail,
+                "{} stays closed",
+                held.display()
+            );
+            let shown = format!("ls -A '{}'", dirs_home().display());
+            let mut c = cfg(None, Some(&shown));
+            c.env_passthrough = vec!["HOME".into()];
+            let r = v.run(&store, &files, &tree, &c).unwrap();
+            let log =
+                String::from_utf8(store.read_blob(r[0].log.as_ref().unwrap()).unwrap()).unwrap();
+            let name = held.file_name().unwrap().to_string_lossy();
+            assert!(!log.lines().any(|l| l == name), "{name} is listed: {log}");
+        }
         let store_file = dir.path().join("store/key");
         fs::create_dir_all(store_file.parent().unwrap()).unwrap();
         fs::write(&store_file, "secret").unwrap();

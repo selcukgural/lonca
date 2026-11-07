@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 use crate::ctx::{self, call};
 use crate::mcp;
 use crate::setup::{self, Prepared};
+use crate::sweep;
 use crate::workspace::{Workspace, fetch};
 
 /// What the command gets of the launcher's environment, besides `--env`.
@@ -469,6 +470,7 @@ fn plan(
         proxy_port: proxy.map(|p| p.port()),
         relay,
         loopback: a.loopback,
+        mark: (sandbox == Sandbox::Seatbelt).then(|| mark_of(run)),
     };
     Ok(Plan {
         sandbox,
@@ -476,6 +478,12 @@ fn plan(
         env,
         proxy,
     })
+}
+
+/// A name of this run alone: its directory's is random.
+fn mark_of(run: &Path) -> String {
+    let name = run.file_name().unwrap_or_default().to_string_lossy();
+    format!("lonca.run.{name}")
 }
 
 /// Fails before anything is signed if the operating system will not run the
@@ -585,9 +593,14 @@ fn in_sandbox(plan: &Plan, a: &Args, start: Start, token: &str) -> Result<ExitSt
         .envs(plan.env.iter().map(|(k, v)| (k, v)));
     let mut child = spawn(command)?;
     let output = carry_streams(&mut child);
-    let status = wait(&mut child, &STOP, GRACE)?;
+    let status = wait(&mut child, &STOP, GRACE);
+    // Before the session ends: nothing of the sandbox writes here after it.
+    let left = plan.jail.mark.as_deref().map(sweep::end_what_is_left);
+    if let Some(left @ 1..) = left {
+        eprintln!("lonca run: {left} process(es) of the sandbox would not end");
+    }
     drain(output, DRAIN);
-    Ok(status)
+    status
 }
 
 /// Waits until the output has ended, or for `within`: something the command
@@ -858,6 +871,22 @@ mod tests {
     fn env_of<'a>(p: &'a Plan, name: &str) -> Vec<&'a str> {
         let hits = p.env.iter().filter(|(k, _)| k == name);
         hits.map(|(_, v)| v.as_str()).collect()
+    }
+
+    /// Seatbelt alone needs telling its processes from others', and the
+    /// mark must be this run's.
+    #[test]
+    fn a_plan_marks_a_seatbelt_sandbox_with_the_run_s_own_name() {
+        let t = Planned::new();
+        let p = t
+            .plan(Sandbox::Seatbelt, &t.args(), &t.prepared(None))
+            .unwrap();
+        assert_eq!(p.jail.mark.as_deref(), Some("lonca.run.run"));
+        let t = Planned::new();
+        let p = t
+            .plan(Sandbox::Bubblewrap, &t.args(), &t.prepared(None))
+            .unwrap();
+        assert_eq!(p.jail.mark, None);
     }
 
     #[test]

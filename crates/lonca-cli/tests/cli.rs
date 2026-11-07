@@ -5118,6 +5118,57 @@ fn a_run_keeps_the_setup_of_the_named_harness_and_no_other() {
     assert!(why.contains("differ from the commit"), "{why}");
 }
 
+/// Forks twice and leaves the session, as a daemon does; prints the pid of
+/// what stays.
+#[cfg(target_os = "macos")]
+const LEAVES_ONE_RUNNING: &str = r#"/usr/bin/perl -MPOSIX -e '
+    fork and exit; POSIX::setsid(); fork and exit;
+    print "$$\n"; close STDIN; close STDOUT; close STDERR;
+    exec "/bin/sleep", "300"'"#;
+
+#[cfg(target_os = "macos")]
+fn alive(pid: &str) -> bool {
+    let kill = Command::new("/bin/kill").args(["-0", pid]).output();
+    kill.unwrap().status.success()
+}
+
+#[cfg(target_os = "macos")]
+fn gone_soon(pid: &str) -> bool {
+    for _ in 0..50 {
+        if !alive(pid) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+/// Nothing of the sandbox goes on writing the workspace, and what is in no
+/// sandbox of this run is not touched: a sandbox that allows everything
+/// answers yes to any name.
+#[cfg(target_os = "macos")]
+#[test]
+fn what_a_command_leaves_running_ends_with_it() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let mut other = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(allow default)", "/bin/sleep", "300"])
+        .spawn()
+        .unwrap();
+    let o = in_sandbox(&e, &ws, LEAVES_ONE_RUNNING).unwrap();
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let left = text(&o.stdout);
+    let pid = left.trim();
+    assert!(!pid.is_empty(), "{}", text(&o.stderr));
+    let gone = gone_soon(pid);
+    let untouched = other.try_wait().unwrap().is_none();
+    let _ = other.kill();
+    let _ = other.wait();
+    let _ = Command::new("/bin/kill").args(["-9", pid]).output();
+    assert!(gone, "{pid} outlived the run");
+    assert!(untouched, "another sandbox's process was ended");
+}
+
 #[test]
 fn a_sandbox_reads_only_what_the_human_named() {
     let e = Env::new();

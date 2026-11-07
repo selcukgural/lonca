@@ -2102,6 +2102,22 @@ no hook, no settings file, no vendor.
   the policy (`human.prepare_isolate` gives both, so a human needs no agent token); any
   other counts as a difference. So a harness set up by hand with no name stops a run:
   `--harness` is what the human signs. A file `--no-setup` kept out stays out.
+- **Nothing of the sandbox outlives its command.** On Linux the pid namespace ends with
+  the command. On macOS a process that forked twice and called `setsid` is in no group
+  a signal reaches, and it could go on writing the workspace with its token dead. So
+  each profile allows a Mach name only that run uses, nothing provides it, and when
+  the command has ended the launcher asks of every process whether its profile allows
+  that name (`sandbox_check`), kills those that do, and asks again until none is left,
+  before the session ends. A path can not be the mark: asked from outside, it answers
+  no even for what the profile allows (macOS 27.2, measured). Also asked of a second
+  name, because a sandbox that allows every Mach name answers yes to any. A sandboxed
+  process can not take the mark off: `sandbox-exec` in the profile fails. Three gaps
+  stay. A chain of processes that each fork and exit at once is gone before a signal
+  lands (measured): the launcher gives up after about 3 s and says how many would not
+  end. Such a process has a dead token and writes only a workspace whose session is
+  over, and a later run refuses that workspace. If the launcher itself is killed nothing
+  sweeps, where Linux has `--die-with-parent`. If `sandbox_check` stops answering, what
+  was left runs on, as it did before this.
 - **Not covered.** Something still running outside can write the workspace after the
   check, and attributes of the workspace's own directory stay. That is §3.1 of the
   design: one account, harder and visible.

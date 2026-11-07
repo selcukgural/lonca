@@ -162,6 +162,7 @@ Inside, the command:
 | keeps | none of your environment but `PATH`, locale, `TERM`, `USER`; `--env NAME` or `--env NAME=VALUE` adds to it |
 | has | three pipes for its streams, no terminal: use the harness's non-interactive mode |
 
+- Nothing the command starts outlives it, a daemon that left its session included.
 - Use `lonca` inside as anywhere else, it is on `PATH`: `lonca mcp`, `lonca propose`,
   and hooks if the harness has them. `LONCA_WORKSPACE`, `LONCA_SOCKET` and
   `LONCA_TOKEN_FILE` are set for it. `.lonca/session` is gone when the run begins.

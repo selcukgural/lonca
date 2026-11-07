@@ -125,7 +125,7 @@ cd /work/w1
 lonca run --session ses_… --env ANTHROPIC_API_KEY -- claude -p "fix the bug"
 # OpenCode, which runs a private server here and listens on loopback:
 lonca run --session ses_… --loopback --env PWD=$PWD -- \
-      opencode run --standalone -m <model> "fix the bug"
+      opencode run --standalone -m <model> "fix the bug" </dev/null
 ```
 
 You sign for the sandbox, so run it yourself or give it to something that holds
@@ -133,6 +133,11 @@ your key, never to the agent. The exit code is the command's. The session ends
 with the command, and what was left unproposed is on the record and printed. Each
 run takes a new session in a new workspace: a session something has already used, or
 a workspace that differs from its commit, is refused.
+
+The command's stdin is a pipe from yours, never your terminal. A command that reads
+stdin to its end before it starts waits for you with no output, as `opencode run`
+does. Give it `</dev/null`. The same goes for a runner that starts one with an open
+pipe.
 
 Inside, the command:
 
@@ -298,6 +303,14 @@ from "done". `lonca session end` records the same, for a harness with no
 stop event.
 
 A mark means work was left. Its absence proves nothing: only a proposal does.
+
+OpenCode has no stop event of its own. Its plugin answers from the session hook
+`experimental.idle`, which is the last moment of a turn: what the hook adds keeps the
+turn going, so `opencode run` stays open until the agent has proposed. Seen working
+with OpenCode 2.2.5. The name says experimental: if OpenCode drops it, an agent ends
+its turn as on a harness with no stop event, and `lonca session end` still records
+what was left. A subagent's work is its parent's to deliver, so only the parent is
+sent back.
 
 Only Claude Code has a locked setup so far (`hook.bind` gives
 `hooks_sandbox` with its managed settings). Other harnesses are

@@ -3432,6 +3432,19 @@ fn opencode_is_set_up_from_its_built_in_profile() {
             .contains("outside the workspace"),
         "{out}"
     );
+    let event = json!({
+        "hook_event_name": "before_tool", "tool_name": "patch", "cwd": ws,
+        "tool_input": {"patchText": "*** Begin Patch\n*** Add File: /etc/hosts\n+x\n*** End Patch"},
+    });
+    let o = e.hook_as(&ws, &event.to_string(), &["hook", "--harness", "opencode"]);
+    let out: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert!(
+        out["deny"]
+            .as_str()
+            .unwrap()
+            .contains("outside the workspace"),
+        "{out}"
+    );
 }
 
 /// An agent that stops with work nobody proposed, through the documented

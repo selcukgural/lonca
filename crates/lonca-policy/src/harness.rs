@@ -435,6 +435,13 @@ mod tests {
     }
 
     #[test]
+    fn opencode_starting_a_subagent_touches_nothing_by_itself() {
+        let tools = &built_in()["opencode"].tools;
+        assert_eq!(tools["subagent"].kind, ToolKind::Inert);
+        assert_eq!(tools["patch"].kind, ToolKind::Write);
+    }
+
+    #[test]
     fn a_harness_with_no_stop_event_has_no_stop() {
         let mut p = built_in()["codex"].clone();
         p.events.stop = None;

@@ -179,7 +179,7 @@ pub struct Locked {
     pub format: Format,
     /// Where the hook lists are, as JSON pointers: each needs a Lonca hook
     /// for every tool, in a group of `hooks` and at most a `matcher` of `*`.
-    /// The first names the hook program.
+    /// Every such hook's program must be out of a user's reach.
     pub hook_lists: Vec<String>,
     /// What a Lonca hook's entry must say besides its command.
     #[serde(default)]
@@ -208,20 +208,27 @@ pub struct Check {
 #[serde(rename_all = "snake_case")]
 pub enum Shape {
     Number,
+    /// The port the daemon's own proxy listens on.
+    ProxyPort,
     /// Missing or an empty list.
     Empty,
 }
 
 impl Check {
     fn needs_a_value(&self) -> bool {
-        self.equals.is_some() || self.is == Some(Shape::Number)
+        self.equals.is_some() || matches!(self.is, Some(Shape::Number | Shape::ProxyPort))
     }
 
-    pub fn holds(&self, doc: &Value) -> bool {
+    /// `proxy_port` is where the daemon's proxy listens: with none, a check
+    /// for it holds for nobody.
+    pub fn holds(&self, doc: &Value, proxy_port: Option<u16>) -> bool {
         let value = doc.pointer(&self.at);
         match (&self.equals, self.is) {
             (Some(want), None) => value == Some(want),
             (None, Some(Shape::Number)) => value.is_some_and(Value::is_number),
+            (None, Some(Shape::ProxyPort)) => {
+                proxy_port.is_some() && value.and_then(Value::as_u64) == proxy_port.map(u64::from)
+            }
             (None, Some(Shape::Empty)) => {
                 value.is_none_or(|v| v.as_array().is_some_and(Vec::is_empty))
             }
@@ -559,23 +566,40 @@ mod tests {
     fn a_check_holds_only_for_what_it_names() {
         let doc = serde_json::json!({"a": {"on": true, "port": 8471, "list": [], "full": ["x"], "text": "s"}});
         let on = |at| check(at, Some(Value::Bool(true)), None);
-        assert!(on("/a/on").holds(&doc));
-        assert!(!on("/a/port").holds(&doc));
-        assert!(!on("/a/missing").holds(&doc));
+        let holds = |c: Check| c.holds(&doc, None);
+        assert!(holds(on("/a/on")));
+        assert!(!holds(on("/a/port")));
+        assert!(!holds(on("/a/missing")));
         let number = |at| check(at, None, Some(Shape::Number));
-        assert!(number("/a/port").holds(&doc));
-        assert!(!number("/a/on").holds(&doc));
-        assert!(!number("/a/missing").holds(&doc));
+        assert!(holds(number("/a/port")));
+        assert!(!holds(number("/a/on")));
+        assert!(!holds(number("/a/missing")));
         let empty = |at| check(at, None, Some(Shape::Empty));
-        assert!(empty("/a/list").holds(&doc));
-        assert!(empty("/a/missing").holds(&doc));
-        assert!(!empty("/a/full").holds(&doc));
+        assert!(holds(empty("/a/list")));
+        assert!(holds(empty("/a/missing")));
+        assert!(!holds(empty("/a/full")));
+        assert!(!holds(empty("/a/text")), "not a list: it says something");
+        assert!(!holds(check("/a/on", None, None)));
+        assert!(!holds(check(
+            "/a/on",
+            Some(Value::Bool(true)),
+            Some(Shape::Empty)
+        )));
+    }
+
+    #[test]
+    fn a_proxy_port_is_the_daemon_s_own() {
+        let doc = serde_json::json!({"port": 8471, "text": "8471", "big": 73007});
+        let port = |at| check(at, None, Some(Shape::ProxyPort));
+        assert!(port("/port").holds(&doc, Some(8471)));
+        assert!(!port("/port").holds(&doc, Some(8472)), "someone else's");
+        assert!(!port("/port").holds(&doc, None), "no proxy runs");
+        assert!(!port("/text").holds(&doc, Some(8471)));
+        assert!(!port("/missing").holds(&doc, None));
         assert!(
-            !empty("/a/text").holds(&doc),
-            "not a list: it says something"
+            !port("/big").holds(&doc, Some(7471)),
+            "not cut down to a port"
         );
-        assert!(!check("/a/on", None, None).holds(&doc));
-        assert!(!check("/a/on", Some(Value::Bool(true)), Some(Shape::Empty)).holds(&doc));
     }
 
     fn locked() -> Locked {
@@ -642,13 +666,14 @@ mod tests {
             ..locked()
         });
         assert!(broken(&p).contains("absolute"));
-        let number = vec![check("/port", None, Some(Shape::Number))];
-        p.locked = Some(Locked {
-            hooks: number,
-            sandbox: vec![],
-            ..locked()
-        });
-        p.check().unwrap();
+        for shape in [Shape::Number, Shape::ProxyPort] {
+            p.locked = Some(Locked {
+                hooks: vec![check("/port", None, Some(shape))],
+                sandbox: vec![],
+                ..locked()
+            });
+            p.check().unwrap();
+        }
     }
 
     #[test]

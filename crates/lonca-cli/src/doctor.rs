@@ -135,6 +135,12 @@ fn version_check(ping: &Value) -> Check {
 /// In cooperative mode hooks are an extra: without them a session counts as
 /// unobserved and a human reviews every change. In hardened mode they are
 /// what the mode is.
+/// Where the daemon says its proxy listens.
+fn proxy_port_of(ping: &Value) -> Option<u16> {
+    let addr = ping["proxy"].as_str()?.parse::<std::net::SocketAddr>();
+    addr.ok().map(|a| a.port())
+}
+
 fn hooks_check(ins: &Inspection, hardened: bool) -> Check {
     if ins.managed_hooks && ins.locked_sandbox && ins.hook_binary_protected {
         return pass("hooks", "locked by managed settings");
@@ -349,6 +355,7 @@ pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
     let mut checks = vec![mode_check(&trust)];
     let path = std::env::var_os("PATH");
     let mut reachable = false;
+    let mut proxy_port = None;
     if let Ok(t) = &trust {
         let socket = ctx::socket();
         checks.push(socket_check(t, &socket));
@@ -356,6 +363,7 @@ pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
             Ok(mut c) => match c.call("ping", json!({})) {
                 Ok(ping) => {
                     reachable = true;
+                    proxy_port = proxy_port_of(&ping);
                     checks.push(version_check(&ping));
                 }
                 Err(e) => checks.push(fail("daemon", e.to_string(), "restart the daemon")),
@@ -365,7 +373,7 @@ pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
         for locked in built_in().values().filter_map(|p| p.locked.as_ref()) {
             let named = || locked.file_here().map(PathBuf::from);
             if let Some(file) = managed_settings.clone().or_else(named) {
-                let ins = inspect(locked, &file, t.is_hardened());
+                let ins = inspect(locked, &file, t.is_hardened(), proxy_port);
                 checks.push(hooks_check(&ins, t.is_hardened()));
             }
         }
@@ -445,6 +453,14 @@ mod tests {
         assert_eq!(version_check(&at("0.0.0", PROTOCOL)).level, Level::Warn);
         assert_eq!(version_check(&at(v, PROTOCOL + 1)).level, Level::Fail);
         assert_eq!(version_check(&json!({})).level, Level::Fail);
+    }
+
+    #[test]
+    fn the_proxy_is_where_the_daemon_says() {
+        let port = |proxy: Value| proxy_port_of(&json!({"proxy": proxy}));
+        assert_eq!(port(json!("127.0.0.1:8471")), Some(8471));
+        assert_eq!(port(json!("p")), None);
+        assert_eq!(port(Value::Null), None);
     }
 
     #[test]

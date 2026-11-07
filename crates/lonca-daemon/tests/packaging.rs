@@ -26,7 +26,8 @@ fn installer_settings_pass_inspection() {
         let dir = render(script);
         let profile = &lonca_policy::harness::built_in()["claude-code"];
         let locked = profile.locked.as_ref().unwrap();
-        let ins = lonca_daemon::hooks::inspect(locked, &dir.join("managed-settings.json"), false);
+        let file = dir.join("managed-settings.json");
+        let ins = lonca_daemon::hooks::inspect(locked, &file, false, Some(8471));
         assert!(ins.managed_hooks, "{script}: {:?}", ins.notes);
         assert!(ins.locked_sandbox, "{script}: {:?}", ins.notes);
         assert!(ins.hook_binary_protected, "{script}: {:?}", ins.notes);

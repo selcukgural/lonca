@@ -117,6 +117,36 @@ fn a_level_is_read_for_the_harness_the_session_started_under() {
     assert_eq!(of("s2"), Value::Null);
 }
 
+/// A sandbox that sends its traffic anywhere but this daemon's proxy is not
+/// one Lonca sees through, whatever else the file locks.
+#[test]
+fn a_sandbox_on_another_port_is_not_locked_for_lonca() {
+    let mut e = Env::new();
+    e.init(None);
+    let locked = e.session("locked", &["src/**"]);
+    e.bind(&locked);
+    assert_eq!(
+        e.ok("ping", None, None, json!({}))["proxy"],
+        "127.0.0.1:8471"
+    );
+
+    let file = e.settings.managed_settings.clone().unwrap();
+    let mut settings: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    settings["sandbox"]["network"]["httpProxyPort"] = json!(9000);
+    std::fs::write(&file, serde_json::to_vec(&settings).unwrap()).unwrap();
+
+    let t = e.session("s1", &["src/**"]);
+    let r = bind(&mut e, &t, "claude-code");
+    assert_eq!(r["level"], "hooks", "{r}");
+    let notes = r["notes"].as_array().unwrap();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("httpProxyPort")),
+        "{r}"
+    );
+}
+
 /// A first report that says the machine is open is not taken back by a
 /// second that says it is shut, and the answer is the level that stands.
 #[test]

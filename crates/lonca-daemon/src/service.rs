@@ -78,6 +78,12 @@ impl Settings {
             ..Self::default()
         }
     }
+
+    /// Where the proxy listens, when it listens at an address.
+    pub fn proxy_port(&self) -> Option<u16> {
+        let addr = self.proxy.as_deref()?.parse::<std::net::SocketAddr>();
+        addr.ok().map(|a| a.port())
+    }
 }
 
 impl Default for Settings {
@@ -709,6 +715,7 @@ impl Service {
                 "protocol": PROTOCOL,
                 "daemon_key": self.public_key(),
                 "next_key": self.next_key(),
+                "proxy": self.settings.proxy,
             })),
             "human.login" => self.login(req, params(p)?),
             "human.logout" => self.logout(req),
@@ -2679,7 +2686,12 @@ impl Service {
             self.settings.managed_settings.clone().or_else(named)
         });
         let ins = match (locked, file) {
-            (Some(l), Some(file)) => hooks::inspect(l, &file, self.settings.require_root_settings),
+            (Some(l), Some(file)) => hooks::inspect(
+                l,
+                &file,
+                self.settings.require_root_settings,
+                self.settings.proxy_port(),
+            ),
             _ => hooks::Inspection {
                 notes: vec![match named {
                     None => "the session was started with no harness named".to_string(),
@@ -3305,6 +3317,17 @@ mod tests {
         assert_eq!(strict.managed_settings, file);
         assert_eq!(strict.proxy.as_deref(), Some("p"));
         assert!(!Settings::for_daemon(true, None, None).require_root_settings);
+    }
+
+    #[test]
+    fn the_proxy_s_port_is_read_from_its_address() {
+        let port = |proxy: Option<&str>| {
+            Settings::for_daemon(false, None, proxy.map(String::from)).proxy_port()
+        };
+        assert_eq!(port(Some("127.0.0.1:8471")), Some(8471));
+        assert_eq!(port(Some("[::1]:8472")), Some(8472));
+        assert_eq!(port(Some("p")), None);
+        assert_eq!(port(None), None);
     }
 
     #[test]

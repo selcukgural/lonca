@@ -172,11 +172,12 @@ unknown method: `unknown_method`, whatever the token.
 *public.* `params: {}`.
 
 ```json
-{"version": "0.1.0", "protocol": 1, "daemon_key": hex, "next_key": hex | null}
+{"version": "0.1.0", "protocol": 1, "daemon_key": hex, "next_key": hex | null, "proxy": "host:port" | null}
 ```
 
 `daemon_key` is the Ed25519 public key the daemon signs log entries
-with; `next_key` is set during a key rotation.
+with; `next_key` is set during a key rotation; `proxy` is where the
+daemon's network proxy listens, null when none runs.
 
 ### `human.login`
 

@@ -351,8 +351,8 @@ a profile of yours with no table keeps the built-in one:
 file = { macos = "/Library/Application Support/Acme/managed.toml", linux = "/etc/acme/managed.toml" }
 format = "toml"                      # or "json"
 # Each list, as a JSON pointer, needs a Lonca hook for every tool: a group of `hooks`,
-# with a `command`, and at most a `matcher` of "*". The first list names the hook
-# program, which must be root-owned as well.
+# with a `command`, and at most a `matcher` of "*". Every such hook's program must be
+# root-owned as well.
 hook_lists = ["/hooks/before", "/hooks/after"]
 # What a Lonca hook must say besides its command, if a harness needs it to block.
 hook_fields = { on_error = "block" }
@@ -363,7 +363,7 @@ hooks = [{ at = "/managed_hooks_only", equals = true }]
 # and the level stops at `hooks`.
 sandbox = [
   { at = "/sandbox/enabled", equals = true },
-  { at = "/sandbox/proxy_port", is = "number" },
+  { at = "/sandbox/proxy_port", is = "proxy_port" },   # where the daemon's proxy listens
   { at = "/sandbox/excluded", is = "empty" },    # missing or an empty list
 ]
 ```

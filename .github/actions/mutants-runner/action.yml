@@ -14,14 +14,20 @@ runs:
     # unprivileged user namespaces, every sandboxed verification fails,
     # and the baseline run (not a mutant) fails in the concurrency test.
     # Sandboxed verification in CI is #54 / #59.
-    # cargo-mutants builds up to two copies of the tree under /tmp; with
-    # this workspace's debug targets the runner's disk runs out (shard
-    # 2/6 of PR #88 died with ENOSPC). The preinstalled toolchains we
-    # never use are the space.
+    # cargo-mutants builds up to two copies of the tree under /tmp, about 12 GB
+    # with this workspace's debug targets. A runner with 14 GB free died of
+    # ENOSPC (shard 2/6 of PR #88), so the preinstalled toolchains we never use
+    # go when space is short. They take one to three minutes to delete, and
+    # today's runners start with 86 GB free.
     - name: Free disk space
       shell: bash
       run: |
         df -h / | tail -1
+        free=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+        if [ "$free" -ge 30 ]; then
+          echo "${free} GB free, enough"
+          exit 0
+        fi
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
           /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift \
           /usr/local/share/chromium /usr/local/lib/node_modules 2>/dev/null || true

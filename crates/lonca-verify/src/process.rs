@@ -209,7 +209,7 @@ fn read_some(pipe: &mut Option<File>, tail: &mut Tail) {
     let Some(file) = pipe else {
         return;
     };
-    let mut buffer = [0; 64 * 1024];
+    let mut buffer = [0; OUTPUT_TAIL];
     let closed = match file.read(&mut buffer) {
         Ok(0) => true,
         Ok(read) => {

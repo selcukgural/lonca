@@ -316,18 +316,19 @@ fn only_the_daemons_closing_line_goes_again() {
     let dir = tempfile::tempdir().unwrap();
     let sock = dir.path().join("s");
     // Another code on id 0, and the code on a request's own id: both are
-    // answers, and a request that may have run is not sent twice.
+    // answers, and a request that may have run is not sent twice. A client
+    // for each: the server closes after each answer, and a request sent as
+    // that happens can end either way.
     let d = scripted(
         &sock,
         &[
             r#"{"id":0,"ok":false,"error":{"code":"invalid","message":"m"}}"#,
-            r#"{"id":2,"ok":false,"error":{"code":"closed","message":"m"}}"#,
+            r#"{"id":1,"ok":false,"error":{"code":"closed","message":"m"}}"#,
         ],
     );
-    let mut c = client_of(&sock);
-    assert_eq!(c.call("ping", json!({})).unwrap_err().0.code, "invalid");
-    assert_eq!(c.call("ping", json!({})).unwrap_err().0.code, "closed");
-    drop(c);
+    let code = || client_of(&sock).call("ping", json!({})).unwrap_err().0.code;
+    assert_eq!(code(), "invalid");
+    assert_eq!(code(), "closed");
     d.join().unwrap();
 }
 

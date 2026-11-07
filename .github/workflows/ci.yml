@@ -27,3 +27,23 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+
+  # `lonca run` on Linux, with a real bubblewrap. The `test` job has none, so
+  # there these tests see no sandbox and stop early; macOS has Seatbelt.
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      # AppArmor blocks bwrap's unprivileged user namespaces on 24.04.
+      - name: Bubblewrap
+        run: |
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: cargo test -p lonca-cli --test cli --locked -- a_run_ a_command_ a_sandbox a_scratch what_runs the_network_of stopping_the ps_can

@@ -7,6 +7,8 @@ use common::*;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
+use lonca_core::ops::{Op, OpKind, Scope};
+
 fn bind_with_workspace(e: &mut Env, token: &str, workspace: &Path) {
     e.bind(token);
     let r = e.ok(
@@ -157,5 +159,207 @@ fn proxy_refuses_without_sessions_private_targets_and_denied_networks() {
     assert!(
         status.contains("403") && body.contains("denied by repository policy"),
         "{status} {body}"
+    );
+}
+
+// ---------------------------------------------------------------- isolated sessions
+
+fn isolate_op(session: &str) -> Op {
+    Op::SessionIsolate {
+        session: session.into(),
+        sandbox: "seatbelt".into(),
+        profile: "ab".repeat(32),
+    }
+}
+
+/// `lonca run`'s step: the session is isolated and has a new token.
+fn isolate(e: &mut Env, session: &str, workspace: &Path) -> String {
+    let mut body = e.sign(&isolate_op(session));
+    body["workspace"] = json!(workspace);
+    let r = e.ok("human.submit", Some("demo"), None, body);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    r["token"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn isolating_replaces_the_token_and_only_a_human_can_do_it() {
+    let mut e = Env::new();
+    e.init(None);
+    let old = e.session("s1", &["src/**"]);
+    let ws = e.root.join("ws1");
+    std::fs::create_dir_all(&ws).unwrap();
+
+    // Not with the agent's own token.
+    let body = e.sign(&isolate_op("s1"));
+    let refused = e
+        .call("human.submit", Some("demo"), Some(&old), body)
+        .unwrap_err();
+    assert_eq!(refused.0, "forbidden", "{refused:?}");
+
+    let new = isolate(&mut e, "s1", &ws);
+    assert_ne!(new, old);
+    let dead = e
+        .call("session.heartbeat", None, Some(&old), json!({}))
+        .unwrap_err();
+    assert_eq!(dead.0, "unauthenticated", "{dead:?}");
+    e.ok("session.heartbeat", None, Some(&new), json!({}));
+}
+
+#[test]
+fn a_hook_in_a_sandbox_changes_nothing_and_logs_nothing() {
+    let mut e = Env::new();
+    e.init(None);
+    e.session("s1", &["src/**"]);
+    let ws = e.root.join("ws1");
+    std::fs::create_dir_all(&ws).unwrap();
+    let token = isolate(&mut e, "s1", &ws);
+    let before = e.store().ref_get("refs/lonca/oplog").unwrap();
+    let r = e.ok(
+        "hook.bind",
+        None,
+        Some(&token),
+        json!({"harness": "codex", "harness_session": "h", "sudo_without_password": true}),
+    );
+    assert_eq!(r["level"], "isolated", "{r}");
+    assert_eq!(r["scratch"], json!([]), "{r}");
+    assert_eq!(e.store().ref_get("refs/lonca/oplog").unwrap(), before);
+}
+
+#[test]
+fn what_a_sandbox_is_built_from_comes_from_the_log() {
+    let mut e = Env::new();
+    e.init(None);
+    let trunk = e.trunk();
+    let scratch = e.root.join("scratch").display().to_string();
+    let mut scope = Scope {
+        paths: vec!["src/**".into()],
+        symbols: None,
+        ops: vec![OpKind::ChangePropose],
+        max_files: None,
+        max_lines: None,
+        scratch: vec![scratch.clone()],
+    };
+    scope.paths.sort();
+    let expires_ms = e.now() + 60_000;
+    let start = Op::SessionStart {
+        session: "s1".into(),
+        agent: "a".into(),
+        model: None,
+        task: String::new(),
+        scope,
+        expires_ms,
+        continues: None,
+    };
+    e.human(start);
+    let r = e.ok(
+        "human.prepare_isolate",
+        Some("demo"),
+        None,
+        json!({"session": "s1", "base": trunk}),
+    );
+    assert_eq!(r["scratch"], json!([scratch]), "{r}");
+    assert!(r["proxy"].is_null(), "{r}");
+    assert_eq!(r["base_known"], true, "{r}");
+    assert_eq!(
+        r["home"].as_str(),
+        Some(e.root.join("home").to_str().unwrap()),
+        "{r}"
+    );
+    let elsewhere = lonca_core::GitId::of_blob(b"not a commit of this log");
+    let r = e.ok(
+        "human.prepare_isolate",
+        Some("demo"),
+        None,
+        json!({"session": "s1", "base": elsewhere}),
+    );
+    assert_eq!(r["base_known"], false, "{r}");
+    let missing = e
+        .call(
+            "human.prepare_isolate",
+            Some("demo"),
+            None,
+            json!({"session": "nobody", "base": trunk}),
+        )
+        .unwrap_err();
+    assert_eq!(missing.0, "not_found", "{missing:?}");
+}
+
+/// A tunnel opened from `cwd`, as a command in a sandbox would.
+fn tunnel_from(cwd: &Path, proxy: u16, target: &str) -> String {
+    let script = format!(
+        "exec 3<>/dev/tcp/127.0.0.1/{proxy}; printf 'CONNECT {target} HTTP/1.1\\r\\n\\r\\n' >&3; cat <&3"
+    );
+    let out = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn an_isolated_session_is_watched_through_the_proxy() {
+    let mut e = Env::new();
+    e.init(None);
+    let proxy = start_proxy(&e);
+    let up = upstream();
+    e.session("s1", &["src/**"]);
+    let ws = e.root.join("ws1");
+    std::fs::create_dir_all(&ws).unwrap();
+    isolate(&mut e, "s1", &ws);
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
+        "allow_private_network = false",
+        "allow_private_network = true",
+    );
+    set_policy(&mut e, &config);
+
+    // From anywhere: whoever uses the proxy, the isolated session answers
+    // for it when the connection can not be attributed.
+    let elsewhere = e.root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    for cwd in [&elsewhere, &ws] {
+        let out = tunnel_from(cwd, proxy, &format!("127.0.0.1:{up}"));
+        assert!(out.contains("hello from upstream"), "{out}");
+    }
+    let t = taints(&mut e);
+    assert!(t["s1"].as_str().unwrap().contains("fetch 127.0.0.1"), "{t}");
+}
+
+#[test]
+fn the_agents_own_host_is_recorded_and_taints_nothing_even_where_the_network_is_closed() {
+    let mut e = Env::new();
+    e.init(None);
+    let proxy = start_proxy(&e);
+    let up = upstream();
+    e.session("s1", &["src/**"]);
+    let ws = e.root.join("ws1");
+    std::fs::create_dir_all(&ws).unwrap();
+    isolate(&mut e, "s1", &ws);
+    let config = lonca_policy::config::DEFAULT_CONFIG
+        .replace(
+            "allow_private_network = false",
+            "allow_private_network = true",
+        )
+        .replace("network = \"taint\"", "network = \"deny\"")
+        .replace("agent_hosts = []", "agent_hosts = [\"127.0.0.1\"]");
+    set_policy(&mut e, &config);
+
+    let out = tunnel_from(&ws, proxy, &format!("127.0.0.1:{up}"));
+    assert!(out.contains("hello from upstream"), "{out}");
+    let refused = tunnel_from(&ws, proxy, &format!("localhost:{up}"));
+    assert!(!refused.contains("hello from upstream"), "{refused}");
+    assert!(refused.contains("403"), "{refused}");
+
+    let t = taints(&mut e);
+    assert!(
+        t["s1"].as_str().unwrap().contains("fetch localhost"),
+        "the host the policy does not name taints: {t}"
+    );
+    let log = e.ok("log", Some("demo"), None, json!({}));
+    let text = log.to_string();
+    assert!(
+        text.contains(r#""host":"127.0.0.1"#),
+        "on the record: {text}"
     );
 }

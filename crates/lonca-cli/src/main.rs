@@ -8,11 +8,13 @@ mod gitdir;
 mod hook;
 mod keys;
 mod mcp;
+mod run;
 mod setup;
 mod undo;
 mod workspace;
 mod wsfs;
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -95,6 +97,40 @@ enum Cmd {
     /// Agent harnesses.
     #[command(subcommand)]
     Harness(HarnessCmd),
+    /// Run any command as a session's agent, in a sandbox Lonca owns: it
+    /// gets `level: isolated` with no hook installed, and the session ends
+    /// with it. The exit code is the command's.
+    Run {
+        /// The session, started with `lonca session start`.
+        #[arg(long)]
+        session: String,
+        /// The session's workspace (default: this directory).
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Pass NAME, or set NAME=VALUE, in the sandbox.
+        #[arg(long, value_name = "NAME[=VALUE]")]
+        env: Vec<String>,
+        /// A tree in the home directory the command may read.
+        #[arg(long, value_name = "PATH")]
+        read: Vec<PathBuf>,
+        /// macOS: let the command listen on loopback. Every local service
+        /// opens with it, and some run things outside the sandbox.
+        #[arg(long)]
+        loopback: bool,
+        #[arg(long = "as")]
+        human: Option<String>,
+        /// The command and its arguments.
+        #[arg(last = true, required = true)]
+        command: Vec<OsString>,
+    },
+    /// Inside a sandbox with no network: the proxy on loopback.
+    #[command(name = "__relay", hide = true)]
+    Relay {
+        port: u16,
+        socket: PathBuf,
+        #[arg(last = false, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<OsString>,
+    },
     /// Print the rules an agent works by, with neutral tool names.
     Rules,
     /// Workspaces.
@@ -992,11 +1028,24 @@ fn run(cmd: Cmd) -> Result<()> {
                 None => home,
             };
             let defaults = lonca_daemon::Settings::default();
+            let proxy_listener = match no_proxy {
+                true => None,
+                false => lonca_daemon::proxy::bind(&proxy)
+                    .inspect_err(|e| {
+                        eprintln!("lonca daemon: proxy not started on {proxy}: {e}");
+                    })
+                    .ok(),
+            };
+            let proxy_addr = proxy_listener
+                .as_ref()
+                .and_then(|l| l.local_addr().ok())
+                .map(|a| a.to_string());
             let settings = lonca_daemon::Settings {
                 require_root_settings: !allow_user_owned_settings,
                 managed_settings: managed_settings.unwrap_or(defaults.managed_settings),
                 git: defaults.git,
                 line_cap: defaults.line_cap,
+                proxy: proxy_addr.clone(),
             };
             let svc =
                 lonca_daemon::Service::open(home.clone(), settings, lonca_daemon::system_clock())?;
@@ -1018,15 +1067,13 @@ fn run(cmd: Cmd) -> Result<()> {
             };
             let listener = lonca_daemon::server::bind_with(&home.socket(), &access)?;
             svc.spawn_worker();
-            if !no_proxy {
-                match lonca_daemon::proxy::bind(&proxy) {
-                    Ok(l) => {
-                        let s = svc.clone();
-                        std::thread::spawn(move || lonca_daemon::proxy::serve(l, s));
-                        eprintln!("lonca daemon: network proxy on {proxy}");
-                    }
-                    Err(e) => eprintln!("lonca daemon: proxy not started on {proxy}: {e}"),
-                }
+            if let Some(l) = proxy_listener {
+                let s = svc.clone();
+                std::thread::spawn(move || lonca_daemon::proxy::serve(l, s));
+                eprintln!(
+                    "lonca daemon: network proxy on {}",
+                    proxy_addr.as_deref().unwrap_or(&proxy)
+                );
             }
             eprintln!(
                 "lonca daemon: listening on {} (key {})",
@@ -1332,6 +1379,31 @@ fn run(cmd: Cmd) -> Result<()> {
                 None => Ok(()),
             }
         }
+        Cmd::Run {
+            session,
+            workspace,
+            env,
+            read,
+            loopback,
+            human,
+            command,
+        } => {
+            let code = run::run(run::Args {
+                session,
+                workspace,
+                env,
+                read,
+                loopback,
+                human,
+                command,
+            })?;
+            std::process::exit(code)
+        }
+        Cmd::Relay {
+            port,
+            socket,
+            command,
+        } => std::process::exit(run::relay_in(port, &socket, &command)?),
         Cmd::Harness(HarnessCmd::Setup {
             harness,
             print,

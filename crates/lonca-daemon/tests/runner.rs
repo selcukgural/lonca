@@ -547,6 +547,7 @@ fn trees_are_fetched_in_pages() {
     // a file over it is refused by name, two small files fit.
     let settings = Settings {
         line_cap: 4096,
+        proxy: None,
         ..e.settings.clone()
     };
     let budget = page_budget(4096);
@@ -1237,6 +1238,7 @@ fn a_checkout_fetches_trunk_as_a_bundle_and_learns_how_far_behind_it_is() {
     // one page, by size.
     let settings = Settings {
         line_cap: 256,
+        proxy: None,
         ..e.settings.clone()
     };
     let c = e.clock.clone();

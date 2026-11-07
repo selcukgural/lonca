@@ -17,7 +17,11 @@ use lonca_core::{FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::config::Verification;
 use lonca_symbols::{Lang, parse};
 
+pub mod jail;
+
 const OUTPUT_TAIL: usize = 64 * 1024;
+
+const BWRAP: [&str; 3] = ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sandbox {
@@ -33,13 +37,20 @@ impl Sandbox {
         let exists = |p: &str| Path::new(p).exists();
         if cfg!(target_os = "macos") && exists("/usr/bin/sandbox-exec") {
             Sandbox::Seatbelt
-        } else if ["/usr/bin/bwrap", "/bin/bwrap", "/usr/local/bin/bwrap"]
-            .iter()
-            .any(|p| exists(p))
-        {
+        } else if BWRAP.iter().any(|p| exists(p)) {
             Sandbox::Bubblewrap
         } else {
             Sandbox::None
+        }
+    }
+
+    /// The program that holds a command in this sandbox, by absolute path:
+    /// `PATH` is the environment's to change.
+    pub fn program(self) -> Option<&'static str> {
+        match self {
+            Sandbox::Seatbelt => Some("/usr/bin/sandbox-exec"),
+            Sandbox::Bubblewrap => BWRAP.iter().copied().find(|p| Path::new(p).exists()),
+            Sandbox::None => None,
         }
     }
 

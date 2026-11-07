@@ -382,6 +382,7 @@ Operation kinds (`op.op`) and their fields:
 | `policy.update` | `policy` (id) |
 | `session.start` | `session`, `agent`, `model`, `task`, `scope`, `expires_ms` |
 | `session.bind` | `session`, `checks`, `level` |
+| `session.isolate` | `session`, `sandbox`, `profile` (SHA-256 of the sandbox's definition) |
 | `session.end` / `cap.revoke` / `taint` | `session`, `reason` |
 | `cap.attenuate` | `parent`, `child`, `agent`, `scope`, `expires_ms`, `leases` (when not empty) |
 | `lease.acquire` | `set`, `items`, `intent`, `ttl_ms` |
@@ -522,10 +523,25 @@ branch; `{"op": op (import.external)}`. Errors: `up_to_date`,
 
 *human.* `{"remote": string}`. `{"op": op (bridge.push)}`.
 
+### `human.prepare_isolate`
+
+*human.* `{"session": string, "base": commit}`. What a sandbox for the
+session is built from: `{"scratch": [string], "proxy": "host:port" | null,
+"home": string, "base_known": boolean}`. The scratch roots are the log's,
+never a workspace file's; `proxy` is `null` when the daemon runs none;
+`home` is the daemon's directory, which the sandbox closes; `base_known`
+says whether `base` was ever trunk. Errors: `not_found`.
+
 ### `human.submit`
 
 *human* (a `human.recover` operation needs no session: its recovery-key
-signature is the credential). `{"op": op, "sig": human signature}`.
+signature is the credential). `{"op": op, "sig": human signature,
+"workspace": string | null}`. `workspace` goes with `session.isolate`:
+the absolute path connections through the proxy are attributed by, not
+logged. Only the human who started a session can isolate it, only before
+anything has used it (`session_used`: a heartbeat, an observation, a lease,
+a change, a child, a continuation), and not a capability's child, which
+takes its level from its parent.
 Any human operation: the prepared ones above, `session.start`,
 `cap.revoke`, `approve`, `reject`, `freeze`, `unfreeze`, `redact`, the
 key operations, `daemon.rotate`, `daemon.recover`. The signer must be the
@@ -533,6 +549,8 @@ session's human. Result: logged, plus:
 
 - `session.start`, allowed: `"token"`, the agent's session token.
   Returned once; give it to the agent, never log it.
+- `session.isolate`, allowed: `"token"`, the session's new token. The old
+  one stops at this entry.
 - `bridge.push`, allowed: `"push"`, git's porcelain output.
 
 Errors: `invalid` (the operation does not fit: a `repo.init` here, a

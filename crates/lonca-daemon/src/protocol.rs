@@ -84,6 +84,18 @@ pub struct FileChange {
 pub struct HumanSubmit {
     pub op: Op,
     pub sig: HumanSignature,
+    /// `session.isolate`: the workspace, which the proxy attributes
+    /// connections to. Not logged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+}
+
+/// `human.prepare_isolate`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrepareIsolate {
+    pub session: String,
+    /// The commit the workspace says it stands on.
+    pub base: GitId,
 }
 
 /// `human.login`: opens a human session. The signature is over a

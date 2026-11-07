@@ -14,7 +14,9 @@
 
 use std::collections::BTreeSet;
 
-use lonca_core::oplog::{FORMAT_AFFECTED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS};
+use lonca_core::oplog::{
+    FORMAT_AFFECTED, FORMAT_ISOLATE, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS,
+};
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckKind, CheckResult, Continuation, Decision, ENGINE_DEFS,
@@ -131,6 +133,7 @@ fn is_human_op(op: &Op) -> bool {
             | Op::DaemonRecover { .. }
             | Op::PolicyUpdate { .. }
             | Op::SessionStart { .. }
+            | Op::SessionIsolate { .. }
             | Op::SessionEnd { .. }
             | Op::CapRevoke { .. }
             | Op::LeaseRelease { .. }
@@ -320,6 +323,30 @@ pub fn valid_token(s: &str, max: usize) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
 
+/// Whether anything on the record came from a session or was left to it.
+fn session_used(state: &State, s: &Session) -> bool {
+    s.level == ObservationLevel::Isolated
+        || s.heartbeat.is_some()
+        || s.taint.is_some()
+        || s.shell_seen
+        || !s.writes.is_empty()
+        || s.continued_from.is_some()
+        || state.leases.values().any(|l| l.session == s.id)
+        || state
+            .changes
+            .values()
+            .any(|c| c.actor.session() == Some(s.id.as_str()))
+        || state
+            .sessions
+            .values()
+            .any(|c| c.parent.as_ref() == Some(&s.id))
+}
+
+/// A SHA-256 digest as the log writes it: 64 lowercase hex digits.
+fn valid_digest(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// Observation level implied by the checks a harness hook reported.
 pub fn level_for(c: &BindChecks) -> ObservationLevel {
     if !c.managed_hooks || !c.hook_binary_protected || c.sudo_without_password {
@@ -464,15 +491,24 @@ fn sorted(v: &[String]) -> Vec<String> {
     v
 }
 
-fn session_context(state: &State, actor: &Actor) -> Vec<(&'static str, CVal)> {
-    let (tainted, level) = match actor.session().and_then(|s| state.sessions.get(s)) {
-        Some(s) => (s.taint.is_some(), format!("{:?}", s.level).to_lowercase()),
-        None => (false, "none".into()),
+fn session_context(state: &State, actor: &Actor, format: u32) -> Vec<(&'static str, CVal)> {
+    let (tainted, level, task) = match actor.session().and_then(|s| state.sessions.get(s)) {
+        Some(s) => (
+            s.taint.is_some(),
+            format!("{:?}", s.level).to_lowercase(),
+            s.task.clone(),
+        ),
+        None => (false, "none".into(), String::new()),
     };
-    vec![
+    let mut context = vec![
         ("tainted", CVal::Bool(tainted)),
         ("observation", CVal::Str(level)),
-    ]
+    ];
+    // Old entries replay as they were: `context has task` was false.
+    if format >= FORMAT_ISOLATE {
+        context.push(("task", CVal::Str(task)));
+    }
+    context
 }
 
 pub fn decide(
@@ -698,6 +734,41 @@ pub fn decide(
             }
             if *level != level_for(checks) {
                 v.deny("bind_level_mismatch");
+            }
+            // A hook in a sandbox must not take the session's level from it.
+            if state
+                .sessions
+                .get(session)
+                .is_some_and(|s| s.level == ObservationLevel::Isolated)
+            {
+                v.deny("session_isolated");
+            }
+        }
+        Op::SessionIsolate {
+            session,
+            sandbox,
+            profile,
+        } => {
+            match state.sessions.get(session) {
+                None => v.deny("unknown_session"),
+                // A sandbox is vouched for by the one who started what runs
+                // in it; a child takes its level from its parent.
+                Some(s) if s.parent.is_some() => v.deny("session_is_a_child"),
+                Some(s) if !matches!(actor, Actor::Human { name } if *name == s.root_human) => {
+                    v.deny("not_own_session")
+                }
+                // Whatever this session did so far was done outside.
+                Some(s) if session_used(state, s) => v.deny("session_used"),
+                Some(_) => {}
+            }
+            if !state.session_active(session, t) {
+                v.deny("session_inactive");
+            }
+            if !valid_token(sandbox, 32) || sandbox == "none" {
+                v.deny("invalid_sandbox");
+            }
+            if !valid_digest(profile) {
+                v.deny("invalid_profile");
             }
         }
         Op::SessionEnd { session, .. } | Op::CapRevoke { session, .. } => {
@@ -1059,7 +1130,7 @@ pub fn decide(
 
     // 3. Repository policy. Changes are evaluated per file inside `propose`.
     if !matches!(actor, Actor::Daemon) && !matches!(op, Op::ChangePropose { .. }) {
-        let ctxv = session_context(state, actor);
+        let ctxv = session_context(state, actor, ctx.format);
         v.cedar(ctx.policy.evaluate(actor, op.kind().as_str(), ctxv));
     }
     // A daemon key switch can not wait for approval: a recovery is signed
@@ -1326,7 +1397,13 @@ fn propose(
             // Observation/effect consistency: a file the session changed but
             // never wrote through an observed tool, with no shell activity
             // that could explain it.
-            if s.level >= ObservationLevel::Hooks && !s.shell_seen {
+            // In a sandbox nothing reports tool calls: the workspace against
+            // its base is what happened.
+            if matches!(
+                s.level,
+                ObservationLevel::Hooks | ObservationLevel::HooksSandbox
+            ) && !s.shell_seen
+            {
                 for p in &files {
                     if !s.writes.contains(*p) {
                         v.escalate(format!("unobserved_write:{p}"), 1);
@@ -1336,7 +1413,7 @@ fn propose(
         }
     }
 
-    let mut base_ctx = session_context(state, actor);
+    let mut base_ctx = session_context(state, actor, ctx.format);
     for (action, list) in [
         ("file.add", &f.added_files),
         ("file.modify", &f.modified_files),

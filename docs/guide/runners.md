@@ -100,7 +100,8 @@ lonca session start --repo demo --agent claude --paths 'src/**' \
   never has two live sessions. A session can be continued once.
 - **Taint carries over**, with the observation level and what was seen
   written, because the workspace may hold what the tainted session
-  wrote. A fresh directory is the only clean start.
+  wrote. A fresh directory is the only clean start. `isolated` is the one
+  level that does not carry over, and a continued session can not get it.
 - **Leases do not**, and the worker leases again; `lease_needed` says
   what. Items pinned to a change in flight stay pinned to it and pass to
   the new session, so the worker can sync and propose on top of it, and
@@ -111,6 +112,78 @@ lonca session start --repo demo --agent claude --paths 'src/**' \
   of the scope.
 - Revoking any session of the chain withdraws what all of them have in
   flight.
+
+## Any agent, in a sandbox
+
+`lonca run` holds any command in a sandbox Lonca builds. It needs no hook and
+nothing from the harness, and the session gets `level: isolated`:
+
+```sh
+lonca session start --repo demo --agent worker --paths 'src/**' \
+      --workspace /work/w1 --scratch /work/w1-scratch --json
+cd /work/w1
+lonca run --session ses_… --env ANTHROPIC_API_KEY -- claude -p "fix the bug"
+# OpenCode, which runs a private server here and listens on loopback:
+lonca run --session ses_… --loopback --env PWD=$PWD -- \
+      opencode run --standalone -m <model> "fix the bug"
+```
+
+You sign for the sandbox, so run it yourself or give it to something that holds
+your key, never to the agent. The exit code is the command's. The session ends
+with the command, and what was left unproposed is on the record and printed. Each
+run takes a new session in a new workspace: a session something has already used, or
+a workspace that differs from its commit, is refused.
+
+Inside, the command:
+
+| | |
+|---|---|
+| writes | the workspace, the scratch roots, a `HOME` and `TMPDIR` of its own, which are deleted at the end |
+| reads | the system's directories, the workspace, the directories on `PATH`, its own program, and `--read PATH` |
+| can not read | your home directory, other workspaces, shared temp directories, Lonca's stores and keys, even with `--read` |
+| reaches | `lonca`'s socket and the proxy, nothing else: no DNS, no other socket, no Keychain |
+| keeps | none of your environment but `PATH`, locale, `TERM`, `USER`; `--env NAME` or `--env NAME=VALUE` adds to it |
+| has | three pipes for its streams, no terminal: use the harness's non-interactive mode |
+
+- Use `lonca` inside as anywhere else, it is on `PATH`: `lonca mcp`, `lonca propose`,
+  and hooks if the harness has them. `LONCA_WORKSPACE`, `LONCA_SOCKET` and
+  `LONCA_TOKEN_FILE` are set for it. The token in `.lonca/session` stopped working when the run began.
+- Your tools usually need more than `PATH`: `--read ~/.rustup --env RUSTUP_HOME`.
+  A harness that keeps state in its home directory will start empty; point it at a
+  scratch root with `--env`.
+- With no sandbox on the machine it stops; it never runs the command bare. macOS has
+  `sandbox-exec`; on Linux install bubblewrap. Ubuntu 24.04 also needs
+  `kernel.apparmor_restrict_unprivileged_userns=0`.
+
+**The network.** Every connection goes through the daemon's proxy and is logged, and
+any of them taints the session, so its changes wait for a human. That includes the
+agent talking to its own model. Name that host in the policy, and it is logged but
+taints nothing, under `network = "deny"` as well:
+
+```toml
+[observation]
+agent_hosts = ["api.anthropic.com"]
+```
+
+A harness that listens on loopback (OpenCode runs a local server) needs `--loopback`
+on macOS. Seatbelt can not tell its listener from the machine's, so every local
+service opens with it, and one that runs things for its caller is a way out of the
+sandbox. On Linux the sandbox has a loopback of its own and the flag does nothing.
+The log shows it: `sandbox: seatbelt-loopback`.
+
+This is a channel to that vendor under any key the agent can find, so name only what
+the agent needs. A daemon started with `--no-proxy` leaves the sandbox with no
+network at all. A model on this machine (`ollama`) also needs
+`allow_private_network = true`.
+
+**Requiring it.** Cedar sees the level, so a policy can ask for a sandbox by path or
+by task:
+
+```cedar
+@id("auth-in-a-sandbox")
+forbid(principal is Lonca::Agent, action == Lonca::Action::"file.modify", resource)
+when { context.path like "src/auth/*" && context.observation != "isolated" };
+```
 
 ## Setting up a harness
 

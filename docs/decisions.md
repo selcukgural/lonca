@@ -1004,6 +1004,7 @@ A01/A07, zero trust: every request authenticated).
 | `human.prepare_policy` | human | writes a policy commit |
 | `human.prepare_import` | human | `git fetch` from a remote |
 | `human.prepare_push` | human | the push operation to sign |
+| `human.prepare_isolate` | human | what a sandbox is built from: scratch roots and proxy |
 | `human.submit` | human | a signed human operation; `human.recover` alone needs no session |
 | `lease.acquire` | agent | |
 | `lease.release` | agent | |
@@ -1962,6 +1963,91 @@ came of it (issue #43).
   modifiers in front of `public int a, b` are not in the fields' signatures. A value
   nested deeper than one declarator stays in the signature (C# `int a = 1;`,
   Kotlin), and a Rust macro call is all signature: both err towards one notice more.
+
+## Isolated mode: `lonca run` (#115)
+
+`lonca run --session ID -- <any command>` runs the command in a sandbox Lonca
+builds. The session gets `level: isolated`, which needs nothing from a harness:
+no hook, no settings file, no vendor.
+
+- **A new operation, not `session.bind`.** The issue had `session.bind` with
+  `level: isolated`, but `bind` is a daemon operation whose level is computed
+  from what a hook reported. The daemon can not see a sandbox, and an agent must
+  not be able to say it is in one, so the claim is a human's: `session.isolate`
+  (log format 19), signed by the human who started the session, naming the kind
+  of sandbox and the SHA-256 of its definition. That digest is evidence, like an
+  attestation: it records what was vouched for and nothing recomputes it.
+- **The level goes with a new token.** An allowed `session.isolate` replaces the
+  token. The one in `.lonca/session` may have been seen by anything that ran
+  before, so it stops there; the new one goes to a file outside the workspace,
+  and only the sandbox is told where (`LONCA_TOKEN_FILE`).
+- **The level ends with the sandbox, and starts with a clean slate.** The session
+  ends when the command does, and `session start --continue` does not inherit
+  `isolated`, though it inherits every other level: what continues has not been
+  shown to run in a sandbox. A hook inside the sandbox can not lower the level:
+  `hook.bind` answers without logging, and `decide()` refuses a `session.bind` on
+  such a session. Only a session nothing has used can be isolated (`session_used`:
+  a heartbeat, an observation, a lease, a change, a child, a continuation), since
+  whatever it did before was done outside. So a run takes a new session in a new
+  workspace.
+- **Work from outside can not pass for the sandbox's.** `lonca run` compares the
+  workspace with the commit it stands on as the daemon has it, ignored files
+  included, and that commit must have been trunk; scratch roots must be empty.
+  Nothing the workspace says about itself counts: `--session` is required although
+  `workspace.json` names it, and the scratch roots come from the log
+  (`human.prepare_isolate`), since an edited list, or a link in place of a root,
+  would widen the sandbox. A scratch root that is not what the log says stops the run.
+- **The profile refuses by default.** The verifier's profile allows everything
+  and closes a list, which is right for a project's own build. This one is for a
+  hostile process: on macOS `(allow default)` would leave Launch Services and
+  launchd open, and they start processes outside the sandbox. Tested by trying:
+  `launchctl submit`, `osascript` and `security list-keychains` fail, while `claude`,
+  `codex`, `opencode`, `node`, `python3`, `git` and `cargo` run.
+- **Reading is closed by default too.** Only the system's own directories open by
+  themselves. A list of known secrets misses the `.env` of another project, and other
+  workspaces hold session tokens. What the command needs comes back by name: `PATH`,
+  the program's own directory, and `--read`; none of these follow a link under a
+  tree the agent can write. Lonca's stores, the daemon's directory and human keys
+  stay closed, and a `--read` or scratch root that overlaps them is refused. `HOME`
+  and `TMPDIR` are the run's own, and are gone afterwards; a harness that wants its
+  state kept is pointed at a scratch root with `--env`.
+- **Pipes, not the terminal.** The command leads a session of its own and holds three
+  pipes the launcher carries, and no other descriptor. With the terminal it could
+  push text into the shell that started it (`TIOCSTI`), or read what is typed next,
+  and inherited descriptors are ways out no sandbox rule sees. Ctrl-C reaches it
+  through the launcher. A full-screen harness needs a relayed pseudo-terminal, which
+  this does not do: use its non-interactive mode.
+- **Effects need no hook.** `unobserved_write` compares what hooks saw with the
+  diff, so it is off at this level. The workspace against its base is what
+  happened, and every check on a proposal runs as usual.
+- **The agent's own host.** All of the agent's traffic goes through the proxy, its
+  calls to its model included, and any connection taints. So
+  `observation.agent_hosts` names hosts that are part of the agent: logged, not
+  tainting, allowed even under `network = "deny"`. Exact names only. No log format,
+  since the proxy decides this and the observation records it. A model's API is a
+  channel out to that vendor, under any account the agent has a key for: naming a
+  host is accepting that.
+- **Linux has no loopback to share.** bubblewrap's `--unshare-net` leaves the agent
+  no route to the proxy, so a small relay runs inside (`lonca __relay`) and the
+  launcher carries each connection over a Unix socket. On macOS the profile allows
+  the proxy's port.
+- **Loopback on macOS is the human's to open.** Harnesses listen on it: OpenCode
+  runs a local server and talks to it. Seatbelt can not tell a command's own
+  listener from the machine's (measured: with the rule, a connection to a service
+  outside the sandbox goes through), and some of those services do work outside the
+  sandbox; on this machine that was OpenCode's own server. So `--loopback` is off
+  by default, and using it changes the digest and the sandbox's name in the log,
+  `seatbelt-loopback`. Unix sockets under the writable trees work either way. On
+  Linux the sandbox has a loopback of its own.
+- **`ps` reports nothing on macOS.** A sandboxed process can not start a setuid
+  program, and programs that walk their process tree stop at that. `(with
+  no-sandbox)` would let it out, but `ps` outside reads the environment of every
+  process of the user, and a copy without the bit is killed for its signature. So
+  a `ps` that exits 0 with no output comes first on `PATH`.
+- **Requiring it.** Cedar sees `context.observation`, and now `context.task`, so a
+  policy can ask for a sandbox by path or by task. No new key was needed.
+- **Not built.** A container backend, which is one more `Sandbox` arm. `sandbox-exec`
+  is deprecated by Apple and still ships.
 
 ## Open questions (carried from the design)
 

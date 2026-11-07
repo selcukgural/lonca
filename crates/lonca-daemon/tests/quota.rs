@@ -170,6 +170,36 @@ fn a_change_under_its_checks_can_not_be_withdrawn() {
     assert_eq!(r["decision"]["outcome"], "deny", "{r}");
 }
 
+/// The same while a batch runs: every change in it is held, not only the
+/// head.
+#[test]
+fn a_change_in_a_batch_under_its_checks_can_not_be_withdrawn() {
+    let mut e = repo(("batch_size = 1", "batch_size = 2"));
+    let token = agent(&mut e, "s1");
+    let first = propose(&mut e, &token, "    a * 2\n");
+    let second = refund(&mut e, &token);
+    let runs = e.svc.verification_runs();
+    let svc = e.svc.clone();
+    let queue = std::thread::spawn(move || svc.process_all());
+    let started = std::time::Instant::now();
+    while e.svc.verification_runs() == runs {
+        assert!(started.elapsed().as_secs() < 30, "the run never started");
+        std::thread::yield_now();
+    }
+    for r in [&first, &second] {
+        let withdraw = json!({"change": r["change"]});
+        let err = e.call("change.withdraw", None, Some(&token), withdraw);
+        assert_eq!(err.unwrap_err().0, "verifying");
+    }
+    assert_eq!(queue.join().unwrap(), 2);
+    assert_eq!(e.svc.verification_runs(), runs + 1, "one run for both");
+    for r in [&first, &second] {
+        let c = get(&mut e, &r["change"]);
+        assert_eq!(c["status"]["status"], "integrated", "{c}");
+    }
+    audited(&e);
+}
+
 /// A batch stops in front of a change past its quota; that change is
 /// rejected alone, unrun, and the one behind it is verified.
 #[test]

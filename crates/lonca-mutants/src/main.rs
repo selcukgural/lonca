@@ -627,3 +627,10 @@ mod tests {
         assert_eq!(run(&args, Path::new(".")), Err(USAGE.to_string()));
     }
 }
+
+// TEMPORARY PROBE, dropped before merge: no test reaches this, so its mutants
+// must fail the check after the workspace stage.
+#[allow(dead_code)]
+fn probe(a: u32) -> bool {
+    a > 1
+}

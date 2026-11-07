@@ -34,6 +34,10 @@ minimum_test_timeout = 600
 # cargo-mutants 27.1.0 does not apply exclude_re (or --re) to "delete field
 # ... from struct expression" mutants; exclude those with exclude_globs or
 # kill them with a test.
+# Compiled on macOS only, and mutants run on Linux: a mutant there changes
+# nothing that runs. The end-to-end tests of `lonca run` hold it on macOS.
+exclude_globs = ["crates/lonca-daemon/src/peer_other.rs"]
+
 exclude_re = [
   # `lonca run` ending its session: the guard tells "already over" from any
   # other failure, which only a daemon gone in the middle of a run produces,

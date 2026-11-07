@@ -5,7 +5,7 @@
 //! [`Attestation`]s in the operation log and never recomputed on replay.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -190,40 +190,27 @@ impl Verifier {
         Ok(out)
     }
 
-    /// The sandbox a command runs in. It is the agent's code that runs, so
-    /// this is the same sandbox as the agent's own, with no way out at all:
-    /// no socket, no proxy, and of what is closed only what the policy
-    /// names. `tree` and `writable` are this run's.
+    /// The sandbox a command runs in, from this process's environment.
     fn jail(&self, tree: &Path, writable: Vec<PathBuf>, cfg: &Verification) -> Jail {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let mut secrets: Vec<PathBuf> = [
-            std::env::var_os("LONCA_HOME").map(PathBuf::from),
-            std::env::var_os("LONCA_HUMANS").map(PathBuf::from),
+        let env = |name: &str| std::env::var_os(name).map(PathBuf::from);
+        let home = env("HOME");
+        let named = [
+            env("LONCA_HOME"),
+            env("LONCA_HUMANS"),
             home.as_ref().map(|h| h.join(".lonca")),
             home.as_ref().map(|h| h.join(".config/lonca")),
-        ]
-        .into_iter()
-        .flatten()
-        .filter_map(|p| p.canonicalize().ok())
-        .collect();
-        // The store holds this run's tree, so it can not be closed as a
-        // whole here; `opened` keeps every read off it.
-        let store = self.scratch.parent().and_then(|p| p.canonicalize().ok());
-        let real = home.as_ref().and_then(|h| h.canonicalize().ok());
-        let mut stores = secrets.clone();
-        stores.extend(store);
-        secrets.retain(|s| !tree.starts_with(s));
-        let closed: Vec<PathBuf> = stores.iter().cloned().chain(real.clone()).collect();
+        ];
+        let real = |p: PathBuf| p.canonicalize().ok();
+        let secrets = named.into_iter().flatten().filter_map(real).collect();
+        let store = self.scratch.parent().and_then(|p| real(p.to_path_buf()));
+        let passed: Vec<PathBuf> = cfg.env_passthrough.iter().filter_map(|n| env(n)).collect();
         let path = std::env::var_os("PATH").unwrap_or_default();
-        let mut readable = jail::program_trees(&path, &[], &closed, &[tree.to_path_buf()]);
-        readable.extend(opened(cfg, home.as_deref(), &stores, real.as_deref()));
-        Jail {
-            workspace: tree.to_path_buf(),
-            writable,
-            readable,
+        let closed = Closed {
             secrets,
-            ..Default::default()
-        }
+            store,
+            home,
+        };
+        held_jail(tree, writable, &closed, &path, &passed, cfg)
     }
 
     fn env(&self, cmd: &str) -> String {
@@ -357,12 +344,57 @@ impl Verifier {
     }
 }
 
-/// What the policy opens for reading: `verification.read`, and directories
-/// it passes through the environment, as they really are. What holds or lies
-/// in something closed stays closed, and so does the home directory as a
-/// whole, which is what `HOME` in `env_passthrough` would otherwise open.
+/// What stays closed to a command.
+struct Closed {
+    /// Lonca's keys and stores.
+    secrets: Vec<PathBuf>,
+    /// The daemon's directory. It holds the run's own tree, so it can not be
+    /// closed as a whole: nothing that is opened may touch it.
+    store: Option<PathBuf>,
+    home: Option<PathBuf>,
+}
+
+/// The sandbox of a command. It is the agent's code that runs, so this is the
+/// agent's own sandbox, with no way out at all: no socket, no proxy, and of
+/// what is closed only what the policy names.
+fn held_jail(
+    tree: &Path,
+    writable: Vec<PathBuf>,
+    closed: &Closed,
+    path: &OsStr,
+    passed: &[PathBuf],
+    cfg: &Verification,
+) -> Jail {
+    let home = closed.home.as_deref();
+    let real = home.and_then(|h| h.canonicalize().ok());
+    let stores: Vec<PathBuf> = closed
+        .secrets
+        .iter()
+        .chain(&closed.store)
+        .cloned()
+        .collect();
+    let held: Vec<PathBuf> = stores.iter().chain(&real).cloned().collect();
+    let mut readable = jail::program_trees(path, &[], &held, &[tree.to_path_buf()]);
+    readable.extend(opened(cfg, passed, home, &stores, real.as_deref()));
+    Jail {
+        workspace: tree.to_path_buf(),
+        writable,
+        readable,
+        secrets: stores
+            .into_iter()
+            .filter(|s| !tree.starts_with(s))
+            .collect(),
+        ..Default::default()
+    }
+}
+
+/// What the policy opens for reading: `verification.read`, and the directories
+/// in `passed`, the values of `env_passthrough`, as they really are. What holds
+/// or lies in something closed stays closed, and so does the home directory as
+/// a whole, which is what `HOME` in `env_passthrough` would otherwise open.
 fn opened(
     cfg: &Verification,
+    passed: &[PathBuf],
     home: Option<&Path>,
     closed: &[PathBuf],
     real_home: Option<&Path>,
@@ -371,10 +403,9 @@ fn opened(
         Some(rest) => home.map(|h| h.join(rest)),
         None => Some(PathBuf::from(p)),
     });
-    let passed = cfg.env_passthrough.iter();
-    let passed = passed.filter_map(|n| std::env::var_os(n).map(PathBuf::from));
+    let passed = passed.iter().filter(|p| p.is_absolute() && p.is_dir());
     let mut out = Vec::new();
-    for p in named.chain(passed.filter(|p| p.is_absolute() && p.is_dir())) {
+    for p in named.chain(passed.cloned()) {
         let Ok(p) = p.canonicalize() else {
             continue;
         };
@@ -629,14 +660,91 @@ mod tests {
             ..Default::default()
         };
         let closed = [store.clone()];
-        let got = opened(&c, Some(&home), &closed, Some(&home));
+        let got = opened(&c, &[], Some(&home), &closed, Some(&home));
         assert_eq!(got, std::slice::from_ref(&cargo));
         // With no home known, `~` means nothing.
         assert!(
-            opened(&c, None, &closed, None)
+            opened(&c, &[], None, &closed, None)
                 .iter()
                 .all(|p| p != &root.join(".cargo"))
         );
+    }
+
+    #[test]
+    fn a_value_passed_opens_only_if_it_is_an_absolute_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("file");
+        fs::write(&file, "x").unwrap();
+        let c = Verification::default();
+        // `src` is a directory where the tests run, and only there.
+        let passed = [root.clone(), file, PathBuf::from("src")];
+        assert_eq!(opened(&c, &passed, None, &[], None), [root]);
+    }
+
+    #[test]
+    fn a_jail_closes_what_does_not_hold_the_tree_and_keeps_every_read_off_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let store = root.join("store");
+        let tree = store.join("scratch/verify/tree");
+        let keys = root.join("keys");
+        let home = root.join("home");
+        let bin = home.join(".cargo/bin");
+        for d in [&tree, &keys, &bin] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let closed = Closed {
+            secrets: vec![keys.clone(), store.clone()],
+            store: Some(store.clone()),
+            home: Some(home.clone()),
+        };
+        let path = std::env::join_paths([&bin, &home, &store]).unwrap();
+        let c = Verification {
+            read: vec![keys.display().to_string(), store.display().to_string()],
+            ..Default::default()
+        };
+        let writable = vec![store.join("w")];
+        let passed = std::slice::from_ref(&home);
+        let j = held_jail(&tree, writable.clone(), &closed, &path, passed, &c);
+        assert_eq!(j.workspace, tree);
+        assert_eq!(j.writable, writable);
+        assert_eq!(
+            j.secrets,
+            [keys],
+            "the store holds the tree: closing it closes that"
+        );
+        assert_eq!(
+            j.readable,
+            [bin],
+            "not the home, not the store, not the keys"
+        );
+        assert_eq!(j.socket, None);
+        assert_eq!(j.proxy_port, None);
+        assert_eq!(j.relay, None);
+        assert!(!j.loopback);
+    }
+
+    /// The names a policy could never set still must not pass, and `TMPDIR`
+    /// stays the sandbox's when a policy lists it.
+    #[test]
+    fn what_passes_stops_at_the_forbidden_and_at_tmpdir() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let outer = std::env::temp_dir();
+        // SAFETY: the value set is the one in force, or a name nothing reads.
+        unsafe {
+            std::env::set_var("TMPDIR", &outer);
+            std::env::set_var("CARGO_BUILD_RUSTC", "/no/such/rustc");
+        }
+        let probe = format!(
+            "test -z \"$CARGO_BUILD_RUSTC\" && test \"$TMPDIR\" != '{}'",
+            outer.display()
+        );
+        let mut c = cfg(None, Some(&probe));
+        c.env_passthrough = vec!["CARGO_BUILD_RUSTC".into(), "TMPDIR".into()];
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
     }
 
     fn dirs_home() -> PathBuf {

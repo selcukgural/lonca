@@ -158,12 +158,14 @@ grep = { kind = "read", fields = ["path"] }
 write = { kind = "write", fields = ["path", "filePath"] }
 edit = { kind = "write", fields = ["path", "filePath"] }
 apply_patch = { kind = "write", fields = ["patchText"], headers = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "] }
+patch = { kind = "write", fields = ["patchText"], headers = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "] }
 bash = { kind = "shell", fields = ["command"] }
 shell = { kind = "shell", fields = ["command"] }
 webfetch = { kind = "fetch", fields = ["url"] }
 websearch = { kind = "search" }
 codesearch = { kind = "search" }
 task = { kind = "inert" }
+subagent = { kind = "inert" }
 todowrite = { kind = "inert" }
 todoread = { kind = "inert" }
 skill = { kind = "inert" }
@@ -173,7 +175,7 @@ question = { kind = "inert" }
 # event names of our own. Its `execute` tool runs code, so it is left out of the
 # table below: it taints, and a person approves what the session proposes.
 [opencode.setup]
-note = "OpenCode's execute tool runs code and is not described here, so a session that uses it is tainted and its changes need a person's approval. To decide otherwise, add it to [taint] safe_tools or to a profile of your own."
+note = "OpenCode's execute tool runs code and is not described here, so a session that uses it is tainted and its changes need a person's approval. To decide otherwise, add it to [taint] safe_tools or to a profile of your own. `opencode run` waits for the end of its stdin before it starts: give it </dev/null."
 
 [opencode.setup.env]
 LONCA_SOCKET = "{socket}"
@@ -227,9 +229,11 @@ export default {
     await ctx.tool.hook("execute.after", (event) => {
       hook({ hook_event_name: "after_tool", tool_name: event.tool, tool_input: event.input, session_id: event.sessionID });
     });
-    // OpenCode has no stop hook to answer, so a turn that ended is prompted.
-    // Not one a person interrupted or one that failed. Only a session that
-    // used a tool can hold work, and a failure ends the turn.
+    // What this hook leaves in the session's inbox goes on in the same turn,
+    // so `opencode run` stays open. A turn a person interrupted and one that
+    // failed do not get here. Only a session that used a tool can hold work, a
+    // subagent's is its parent's to deliver, and a session waiting for one has
+    // not stopped. A failure ends the turn.
     const stopped = (sessionID) => {
       const r = spawnSync("lonca", ["hook", "--harness", "opencode", "--fail-open"], {
         cwd: directory,
@@ -239,13 +243,17 @@ export default {
       const out = (r.stdout ?? "").trim();
       return out ? JSON.parse(out).resume : undefined;
     };
-    (async () => {
-      for await (const event of ctx.event.subscribe({ types: ["session.execution.succeeded"] })) {
-        const sessionID = event.data.sessionID;
-        const text = started.has(sessionID) ? stopped(sessionID) : undefined;
-        if (text) await ctx.session.prompt({ sessionID, text });
+    await ctx.session.hook("experimental.idle", async ({ sessionID, background }) => {
+      try {
+        if (!started.has(sessionID)) return;
+        if (background.some((b) => b.sessionID === sessionID && b.kind !== "shell")) return;
+        if ((await ctx.session.get({ sessionID })).parentID) return;
+        const text = stopped(sessionID);
+        if (text) await ctx.session.synthetic({ sessionID, text, metadata: { source: "lonca" } });
+      } catch (e) {
+        console.error(`lonca: ${e}`);
       }
-    })().catch((e) => console.error(`lonca: ${e}`));
+    });
   },
 };
 '''

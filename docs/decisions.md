@@ -970,6 +970,28 @@ started it read "done" and the work stayed in the workspace (issue #121).
   the merge, which differs from the pending proposal, so the agent is told
   to propose again. It costs a round, and #107 makes the new proposal
   replace the old one.
+- **OpenCode is sent back from `experimental.idle` (issue #124).** It has no stop
+  hook, and watching for `session.execution.succeeded` was too late: the event says
+  the turn is over, `opencode run` left at once with the prompt unanswered, and the
+  mark stayed. The runner fires this hook before it decides, and a message waiting
+  in the session's inbox after it means another step. OpenCode's own goal feature
+  goes on the same way. The hook sends a `synthetic` message, as goal does, since
+  these are not a person's words. It leaves out a session with a `parentID`, and one
+  waiting for a subagent: both have stopped nothing. The name is experimental; losing
+  it costs the reminder, not a control, as above.
+- **`opencode run` is not stuck, it is reading.** It reads stdin to its end before it
+  starts, so an open pipe holds it with no output: `</dev/null` ran 5 of 5, an open
+  pipe stalled 3 of 3, and closing the pipe at 12 s let it finish at 15. Neither
+  Lonca's setup nor the provider plays a part, and a directory with no Lonca stalled
+  too. `lonca run` passes stdin on, so a command it runs waits the same way; that stays
+  as it is, since a command may need the input, and the guide says `</dev/null`.
+- **Tool names of OpenCode 2.2.5.** Its `patch` and `subagent` were unknown tools, and
+  so tainted. `apply_patch` and `task` stay for older versions.
+- **Seen working (2026-11-07).** OpenCode 2.2.5 on a free model, told to edit and
+  stop: it said done, was sent back, leased, proposed, and the next stop was clean,
+  both plain and under `lonca run` (`level: isolated`, log order: `unproposed`,
+  `lease.acquire`, `change.propose`, `session.end`). A subagent's edit sent only its
+  parent back.
 
 ## Daemon authentication
 

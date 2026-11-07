@@ -5,7 +5,7 @@
 //!
 //! The profiles are read by the daemon, from the signed policy. What a tool
 //! counts as decides what taints a session, so an agent must not be able to
-//! choose it.
+//! change it.
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
@@ -53,6 +53,10 @@ pub struct Profile {
     /// server and the hooks.
     #[serde(default)]
     pub setup: Setup,
+    /// How to tell that an administrator has locked this harness. Without it
+    /// a session gets no observation level from hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked: Option<Locked>,
 }
 
 fn default_mcp_prefix() -> String {
@@ -154,12 +158,121 @@ impl Profile {
         if self.events.stop.is_some() != self.stop_deny.is_some() {
             return Err("events.stop and stop_deny go together".into());
         }
-        Ok(())
+        self.locked.as_ref().map_or(Ok(()), Locked::check)
     }
 
     /// What this harness puts before the name of a tool of `lonca mcp`.
     pub fn tool_prefix(&self) -> String {
         format!("{}lonca{}", self.mcp_prefix, self.mcp_separator)
+    }
+}
+
+/// How to read a harness's administrator settings: a file only root can write
+/// and what must hold in it. The answer decides a session's observation
+/// level, so a profile that says nothing proves nothing: an empty list holds
+/// for nobody.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Locked {
+    /// The file, by operating system: `macos`, `linux`.
+    pub file: BTreeMap<String, String>,
+    pub format: Format,
+    /// Where the hook lists are, as JSON pointers: each needs a Lonca hook
+    /// for every tool, in a group of `hooks` and at most a `matcher` of `*`.
+    /// The first names the hook program.
+    pub hook_lists: Vec<String>,
+    /// What a Lonca hook's entry must say besides its command.
+    #[serde(default)]
+    pub hook_fields: BTreeMap<String, Value>,
+    /// What makes the file's hooks the only ones.
+    pub hooks: Vec<Check>,
+    /// What locks the shell sandbox with its network through Lonca's proxy.
+    /// A harness with none of its own stops at `hooks`.
+    #[serde(default)]
+    pub sandbox: Vec<Check>,
+}
+
+/// One value in the file: `equals` says what it is, `is` what kind.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Check {
+    /// A JSON pointer.
+    pub at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equals: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is: Option<Shape>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Shape {
+    Number,
+    /// Missing or an empty list.
+    Empty,
+}
+
+impl Check {
+    fn needs_a_value(&self) -> bool {
+        self.equals.is_some() || self.is == Some(Shape::Number)
+    }
+
+    pub fn holds(&self, doc: &Value) -> bool {
+        let value = doc.pointer(&self.at);
+        match (&self.equals, self.is) {
+            (Some(want), None) => value == Some(want),
+            (None, Some(Shape::Number)) => value.is_some_and(Value::is_number),
+            (None, Some(Shape::Empty)) => {
+                value.is_none_or(|v| v.as_array().is_some_and(Vec::is_empty))
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Locked {
+    /// The file on this operating system.
+    pub fn file_here(&self) -> Option<&str> {
+        self.file.get(std::env::consts::OS).map(String::as_str)
+    }
+
+    /// The file's content as JSON, whatever it is written in.
+    pub fn parse(&self, bytes: &[u8]) -> Option<Value> {
+        match self.format {
+            Format::Json => serde_json::from_slice(bytes).ok(),
+            Format::Toml => toml::from_str(std::str::from_utf8(bytes).ok()?).ok(),
+            Format::Text => None,
+        }
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if self.format == Format::Text {
+            return Err("locked.format must be json or toml".into());
+        }
+        if self.file.is_empty() || !self.file.values().all(|f| f.starts_with('/')) {
+            return Err("locked.file needs an absolute path".into());
+        }
+        if self.hook_lists.is_empty() || self.hooks.is_empty() {
+            return Err("locked needs hook_lists and hooks".into());
+        }
+        let pointers = self.hook_lists.iter();
+        let checks = self.hooks.iter().chain(&self.sandbox);
+        if !pointers
+            .chain(checks.clone().map(|c| &c.at))
+            .all(|p| p.starts_with('/'))
+        {
+            return Err("locked: a place in the file is a JSON pointer, from /".into());
+        }
+        if checks.clone().any(|c| c.equals.is_some() == c.is.is_some()) {
+            return Err("locked: a check has either equals or is".into());
+        }
+        // `is = "empty"` holds for a key nobody wrote, so it can only narrow
+        // what something else showed.
+        let shows = |list: &[Check]| list.iter().any(Check::needs_a_value);
+        if !shows(&self.hooks) || !(self.sandbox.is_empty() || shows(&self.sandbox)) {
+            return Err("locked: hooks and sandbox each need a check a value must pass".into());
+        }
+        Ok(())
     }
 }
 
@@ -432,6 +545,144 @@ mod tests {
             let answer = p.stop_deny.as_ref().unwrap();
             assert!(render(answer, "reason", "R").to_string().contains('R'));
         }
+    }
+
+    fn check(at: &str, equals: Option<Value>, is: Option<Shape>) -> Check {
+        Check {
+            at: at.into(),
+            equals,
+            is,
+        }
+    }
+
+    #[test]
+    fn a_check_holds_only_for_what_it_names() {
+        let doc = serde_json::json!({"a": {"on": true, "port": 8471, "list": [], "full": ["x"], "text": "s"}});
+        let on = |at| check(at, Some(Value::Bool(true)), None);
+        assert!(on("/a/on").holds(&doc));
+        assert!(!on("/a/port").holds(&doc));
+        assert!(!on("/a/missing").holds(&doc));
+        let number = |at| check(at, None, Some(Shape::Number));
+        assert!(number("/a/port").holds(&doc));
+        assert!(!number("/a/on").holds(&doc));
+        assert!(!number("/a/missing").holds(&doc));
+        let empty = |at| check(at, None, Some(Shape::Empty));
+        assert!(empty("/a/list").holds(&doc));
+        assert!(empty("/a/missing").holds(&doc));
+        assert!(!empty("/a/full").holds(&doc));
+        assert!(
+            !empty("/a/text").holds(&doc),
+            "not a list: it says something"
+        );
+        assert!(!check("/a/on", None, None).holds(&doc));
+        assert!(!check("/a/on", Some(Value::Bool(true)), Some(Shape::Empty)).holds(&doc));
+    }
+
+    fn locked() -> Locked {
+        built_in()["claude-code"].locked.clone().unwrap()
+    }
+
+    #[test]
+    fn a_locked_table_that_can_not_be_read_is_refused() {
+        let mut p = built_in()["claude-code"].clone();
+        let broken = |p: &Profile| p.check().unwrap_err();
+        p.locked = Some(Locked {
+            format: Format::Text,
+            ..locked()
+        });
+        assert!(broken(&p).contains("json or toml"));
+        p.locked = Some(Locked {
+            hook_lists: vec![],
+            ..locked()
+        });
+        assert!(broken(&p).contains("hook_lists"));
+        p.locked = Some(Locked {
+            hooks: vec![],
+            ..locked()
+        });
+        assert!(broken(&p).contains("hook_lists"));
+        p.locked = Some(Locked {
+            hook_lists: vec!["hooks".into()],
+            ..locked()
+        });
+        assert!(broken(&p).contains("pointer"));
+        p.locked = Some(Locked {
+            sandbox: vec![check("sandbox", Some(Value::Bool(true)), None)],
+            ..locked()
+        });
+        assert!(broken(&p).contains("pointer"));
+        p.locked = Some(Locked {
+            sandbox: vec![check("/x", None, None)],
+            ..locked()
+        });
+        assert!(broken(&p).contains("either"));
+        p.locked = Some(Locked {
+            hooks: vec![check("/x", Some(Value::Bool(true)), Some(Shape::Number))],
+            ..locked()
+        });
+        assert!(broken(&p).contains("either"));
+        let nothing = || vec![check("/no/such/key", None, Some(Shape::Empty))];
+        p.locked = Some(Locked {
+            hooks: nothing(),
+            ..locked()
+        });
+        assert!(broken(&p).contains("a value must pass"));
+        p.locked = Some(Locked {
+            sandbox: nothing(),
+            ..locked()
+        });
+        assert!(broken(&p).contains("a value must pass"));
+        p.locked = Some(Locked {
+            file: BTreeMap::new(),
+            ..locked()
+        });
+        assert!(broken(&p).contains("absolute"));
+        p.locked = Some(Locked {
+            file: BTreeMap::from([("linux".into(), "etc/x".into())]),
+            ..locked()
+        });
+        assert!(broken(&p).contains("absolute"));
+        let number = vec![check("/port", None, Some(Shape::Number))];
+        p.locked = Some(Locked {
+            hooks: number,
+            sandbox: vec![],
+            ..locked()
+        });
+        p.check().unwrap();
+    }
+
+    #[test]
+    fn a_locked_file_is_read_in_its_format() {
+        let mut l = locked();
+        l.format = Format::Json;
+        assert_eq!(l.parse(b"{\"a\":1}").unwrap()["a"], 1);
+        assert_eq!(l.parse(b"a = 1"), None);
+        l.format = Format::Toml;
+        assert_eq!(l.parse(b"a = 1").unwrap()["a"], 1);
+        assert_eq!(l.parse(b"{"), None);
+        assert_eq!(l.parse(&[0xff]), None);
+        l.format = Format::Text;
+        assert_eq!(l.parse(b"a = 1"), None);
+    }
+
+    #[test]
+    fn only_claude_code_is_shown_to_be_lockable_so_far() {
+        let lockable: Vec<&str> = built_in()
+            .iter()
+            .filter(|(_, p)| p.locked.is_some())
+            .map(|(n, _)| n.as_str())
+            .collect();
+        assert_eq!(
+            lockable,
+            ["claude-code"],
+            "a level needs a run that proves it"
+        );
+        assert!(
+            locked()
+                .file_here()
+                .unwrap()
+                .ends_with("managed-settings.json")
+        );
     }
 
     #[test]

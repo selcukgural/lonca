@@ -55,7 +55,8 @@ enum Cmd {
         /// Accept harness settings that are not root-owned (testing only).
         #[arg(long)]
         allow_user_owned_settings: bool,
-        /// Claude Code managed settings to inspect when binding sessions.
+        /// The file to inspect when binding sessions, instead of the one the
+        /// harness's profile names.
         #[arg(long)]
         managed_settings: Option<PathBuf>,
         /// Network proxy for sandboxed commands (loopback only).
@@ -1042,7 +1043,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 .map(|a| a.to_string());
             let settings = lonca_daemon::Settings {
                 require_root_settings: !allow_user_owned_settings,
-                managed_settings: managed_settings.unwrap_or(defaults.managed_settings),
+                managed_settings,
                 git: defaults.git,
                 line_cap: defaults.line_cap,
                 proxy: proxy_addr.clone(),

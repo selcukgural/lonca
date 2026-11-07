@@ -75,7 +75,7 @@ impl Env {
         let root = dir.path().canonicalize().unwrap();
         let clock = Arc::new(AtomicI64::new(T0));
         let settings = Settings {
-            managed_settings: root.join("managed-settings.json"),
+            managed_settings: Some(root.join("managed-settings.json")),
             require_root_settings: false,
             git: "git".into(),
             line_cap: lonca_daemon::protocol::MAX_LINE,
@@ -298,7 +298,7 @@ impl Env {
             "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "network": {"httpProxyPort": 8471}}
         });
         std::fs::write(
-            &self.settings.managed_settings,
+            self.settings.managed_settings.as_ref().unwrap(),
             serde_json::to_vec(&settings).unwrap(),
         )
         .unwrap();

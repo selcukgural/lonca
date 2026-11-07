@@ -5,30 +5,19 @@
 //! reports about the tool calls it executes.
 
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use lonca_core::canonical::sha256_hex;
 use lonca_core::ops::{ObsKind, Observation, Phase};
 use lonca_policy::config::{PolicyBundle, Taint};
-use lonca_policy::harness::{Profile, ToolKind};
+use lonca_policy::harness::{Check, Locked, Profile, ToolKind};
 use serde_json::Value;
 
 use crate::protocol::{HookEvent, HookVerdict};
 
-pub const CLAUDE_MANAGED_SETTINGS_MACOS: &str =
-    "/Library/Application Support/ClaudeCode/managed-settings.json";
-pub const CLAUDE_MANAGED_SETTINGS_LINUX: &str = "/etc/claude-code/managed-settings.json";
-
 /// The name of Lonca's own MCP server.
 const LONCA: &str = "lonca";
-
-pub fn default_managed_settings() -> PathBuf {
-    if cfg!(target_os = "macos") {
-        PathBuf::from(CLAUDE_MANAGED_SETTINGS_MACOS)
-    } else {
-        PathBuf::from(CLAUDE_MANAGED_SETTINGS_LINUX)
-    }
-}
 
 /// What a tool call does, whatever the harness calls it.
 #[derive(Debug, PartialEq, Eq)]
@@ -404,20 +393,30 @@ pub fn protected_path(p: &Path) -> bool {
     true
 }
 
-fn hook_entries<'a>(settings: &'a Value, event: &str) -> Vec<&'a Value> {
+/// The most of an administrator's settings file that is read.
+const MAX_SETTINGS: u64 = 1 << 20;
+
+/// A group that runs for every tool: its hooks and at most a matcher of all.
+/// Anything else may narrow it in a way this code can not read.
+fn for_every_tool(group: &Value) -> bool {
+    let Some(fields) = group.as_object() else {
+        return false;
+    };
+    fields.keys().all(|k| k == "matcher" || k == "hooks")
+        && fields
+            .get("matcher")
+            .is_none_or(|m| matches!(m.as_str(), Some("*" | "")))
+}
+
+/// The hooks of a list that apply to every tool.
+fn hook_entries<'a>(settings: &'a Value, list: &str) -> Vec<&'a Value> {
     settings
-        .get("hooks")
-        .and_then(|h| h.get(event))
+        .pointer(list)
         .and_then(Value::as_array)
         .map(|groups| {
             groups
                 .iter()
-                .filter(|g| {
-                    matches!(
-                        g.get("matcher").and_then(Value::as_str),
-                        None | Some("*") | Some("")
-                    )
-                })
+                .filter(|g| for_every_tool(g))
                 .filter_map(|g| g.get("hooks").and_then(Value::as_array))
                 .flatten()
                 .collect()
@@ -425,46 +424,85 @@ fn hook_entries<'a>(settings: &'a Value, event: &str) -> Vec<&'a Value> {
         .unwrap_or_default()
 }
 
-/// Inspects Claude Code's managed settings. `require_root` is false only in
-/// tests.
-pub fn inspect_claude_code(path: &Path, require_root: bool) -> Inspection {
+/// What failed of a list of checks, as notes. A list with nothing in it
+/// proves nothing.
+fn unmet(checks: &[Check], doc: &Value, what: &str) -> Vec<String> {
+    if checks.is_empty() {
+        return vec![format!("the profile names nothing that locks {what}")];
+    }
+    let failed = checks.iter().filter(|c| !c.holds(doc));
+    failed
+        .map(|c| format!("{what}: {} is not as required", c.at))
+        .collect()
+}
+
+fn read_capped(path: &Path) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let file = fs::File::open(path).ok()?;
+    file.take(MAX_SETTINGS + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_SETTINGS).then_some(bytes)
+}
+
+/// Inspects a harness's administrator settings, read as its profile says.
+/// `require_root` is false only in tests.
+pub fn inspect(locked: &Locked, path: &Path, require_root: bool) -> Inspection {
     let mut ins = Inspection::default();
-    let Ok(bytes) = fs::read(path) else {
+    let Ok(meta) = fs::metadata(path) else {
         ins.notes
             .push(format!("no managed settings at {}", path.display()));
         return ins;
     };
-    ins.config_digest = sha256_hex(&bytes);
+    // In this order: the path comes from a profile, and a read of what no one
+    // has checked could wait for ever while every repository waits behind it.
     if require_root && !protected_path(path) {
         ins.notes
             .push("managed settings are writable by non-root users".into());
         return ins;
     }
-    let Ok(s) = serde_json::from_slice::<Value>(&bytes) else {
-        ins.notes.push("managed settings are not valid JSON".into());
+    let Some(bytes) = meta.is_file().then(|| read_capped(path)).flatten() else {
+        ins.notes.push(format!(
+            "managed settings at {} are not a file of at most {MAX_SETTINGS} bytes",
+            path.display()
+        ));
+        return ins;
+    };
+    ins.config_digest = sha256_hex(&bytes);
+    let Some(s) = locked.parse(&bytes) else {
+        ins.notes
+            .push("managed settings can not be read in their format".into());
         return ins;
     };
     let lonca_hook = |e: &&Value| {
         e.get("command")
             .and_then(Value::as_str)
             .is_some_and(|c| c.contains("lonca") && c.contains("hook"))
-            && e.get("onFailure").and_then(Value::as_str) == Some("block")
+            && locked
+                .hook_fields
+                .iter()
+                .all(|(field, want)| e.get(field) == Some(want))
     };
-    let pre: Vec<&Value> = hook_entries(&s, "PreToolUse")
-        .into_iter()
-        .filter(lonca_hook)
+    let lists: Vec<Vec<&Value>> = locked
+        .hook_lists
+        .iter()
+        .map(|l| {
+            let found = hook_entries(&s, l);
+            found.into_iter().filter(lonca_hook).collect()
+        })
         .collect();
-    let post: Vec<&Value> = hook_entries(&s, "PostToolUse")
-        .into_iter()
-        .filter(lonca_hook)
-        .collect();
-    let managed_only = s.get("allowManagedHooksOnly").and_then(Value::as_bool) == Some(true);
-    ins.managed_hooks = managed_only && !pre.is_empty() && !post.is_empty();
-    if !ins.managed_hooks {
-        ins.notes.push("need allowManagedHooksOnly plus blocking Lonca PreToolUse and PostToolUse hooks for all tools".into());
+    for (list, found) in locked.hook_lists.iter().zip(&lists) {
+        if found.is_empty() {
+            ins.notes.push(format!(
+                "hooks: no blocking Lonca hook for all tools at {list}"
+            ));
+        }
     }
-    let binary = pre
+    let only_ones = unmet(&locked.hooks, &s, "hooks");
+    ins.managed_hooks =
+        !lists.is_empty() && lists.iter().all(|l| !l.is_empty()) && only_ones.is_empty();
+    ins.notes.extend(only_ones);
+    let binary = lists
         .first()
+        .and_then(|l| l.first())
         .and_then(|e| e.get("command").and_then(Value::as_str))
         .and_then(|c| c.split_whitespace().next())
         .map(PathBuf::from);
@@ -476,23 +514,9 @@ pub fn inspect_claude_code(path: &Path, require_root: bool) -> Inspection {
         ins.notes
             .push("the hook program must live in root-owned, non-writable directories".into());
     }
-    let sb = s.get("sandbox");
-    let get = |k: &str| sb.and_then(|v| v.get(k));
-    let excluded_empty = get("excludedCommands")
-        .and_then(Value::as_array)
-        .is_none_or(|a| a.is_empty());
-    ins.locked_sandbox = get("enabled").and_then(Value::as_bool) == Some(true)
-        && get("failIfUnavailable").and_then(Value::as_bool) == Some(true)
-        && get("allowUnsandboxedCommands").and_then(Value::as_bool) == Some(false)
-        && sb
-            .and_then(|v| v.get("network"))
-            .and_then(|n| n.get("httpProxyPort"))
-            .is_some_and(Value::is_number)
-        && excluded_empty;
-    if !ins.locked_sandbox {
-        ins.notes
-            .push("sandbox is not locked with a Lonca proxy port".into());
-    }
+    let sandbox = unmet(&locked.sandbox, &s, "sandbox");
+    ins.locked_sandbox = sandbox.is_empty();
+    ins.notes.extend(sandbox);
     ins
 }
 
@@ -1136,6 +1160,13 @@ run = { kind = "shell", fields = ["line"] }
         assert!(!translate(&e, &off).0[0].external);
     }
 
+    fn claude_code() -> Locked {
+        lonca_policy::harness::built_in()["claude-code"]
+            .locked
+            .clone()
+            .unwrap()
+    }
+
     #[test]
     fn inspection_of_managed_settings() {
         let dir = tempfile::tempdir().unwrap();
@@ -1148,22 +1179,172 @@ run = { kind = "shell", fields = ["line"] }
             },
             "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "network": {"httpProxyPort": 8471}}
         });
+        let l = claude_code();
         fs::write(&p, serde_json::to_vec(&good).unwrap()).unwrap();
-        let i = inspect_claude_code(&p, false);
+        let i = inspect(&l, &p, false);
         assert!(
             i.managed_hooks && i.locked_sandbox && i.hook_binary_protected,
             "{i:?}"
         );
+        assert!(i.notes.is_empty(), "{i:?}");
+        assert_eq!(i.config_digest, sha256_hex(&fs::read(&p).unwrap()));
         // The same file in a user-writable location is not trusted.
-        let strict = inspect_claude_code(&p, true);
+        let strict = inspect(&l, &p, true);
         assert!(!strict.managed_hooks);
+        assert!(strict.notes[0].contains("non-root"), "{strict:?}");
 
         let mut weak = good.clone();
         weak["hooks"]["PreToolUse"][0]["hooks"][0]["onFailure"] = json!("ignore");
         weak["sandbox"]["allowUnsandboxedCommands"] = json!(true);
         fs::write(&p, serde_json::to_vec(&weak).unwrap()).unwrap();
-        let i = inspect_claude_code(&p, false);
+        let i = inspect(&l, &p, false);
         assert!(!i.managed_hooks && !i.locked_sandbox);
+        assert!(
+            i.notes.iter().any(|n| n.contains("/hooks/PreToolUse")),
+            "{i:?}"
+        );
+        assert!(
+            i.notes
+                .iter()
+                .any(|n| n.contains("allowUnsandboxedCommands")),
+            "{i:?}"
+        );
+        assert!(!i.hook_binary_protected, "no blocking hook names a program");
+
+        // Every condition counts on its own, and an excluded command is a
+        // hole in the sandbox.
+        for (at, value) in [
+            ("/allowManagedHooksOnly", json!(false)),
+            ("/hooks/PostToolUse", json!([])),
+        ] {
+            let mut d = good.clone();
+            *d.pointer_mut(at).unwrap() = value;
+            fs::write(&p, serde_json::to_vec(&d).unwrap()).unwrap();
+            assert!(!inspect(&l, &p, false).managed_hooks, "{at}");
+        }
+        let mut d = good.clone();
+        d["sandbox"]["excludedCommands"] = json!(["curl"]);
+        fs::write(&p, serde_json::to_vec(&d).unwrap()).unwrap();
+        assert!(!inspect(&l, &p, false).locked_sandbox);
+
+        // A hook for one tool only leaves the others unwatched, and a group
+        // this code can not read may do the same.
+        for (field, value) in [
+            ("matcher", json!("Bash")),
+            ("matcher", json!(["Bash"])),
+            ("matcher", json!(7)),
+            ("tool_name", json!("Bash")),
+        ] {
+            let mut d = good.clone();
+            d["hooks"]["PreToolUse"][0][field] = value;
+            fs::write(&p, serde_json::to_vec(&d).unwrap()).unwrap();
+            assert!(!inspect(&l, &p, false).managed_hooks, "{field}");
+        }
+        let mut d = good.clone();
+        d["hooks"]["PreToolUse"][0] = json!(["not a group"]);
+        fs::write(&p, serde_json::to_vec(&d).unwrap()).unwrap();
+        assert!(!inspect(&l, &p, false).managed_hooks);
+        for matcher in ["*", ""] {
+            let mut d = good.clone();
+            d["hooks"]["PreToolUse"][0]["matcher"] = json!(matcher);
+            fs::write(&p, serde_json::to_vec(&d).unwrap()).unwrap();
+            assert!(inspect(&l, &p, false).managed_hooks, "{matcher:?}");
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_not_settings_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = claude_code();
+        let refused = |i: Inspection| {
+            assert!(i.notes[0].contains("not a file of at most"), "{i:?}");
+            assert_eq!(i.config_digest, "");
+        };
+        // Opening a FIFO would wait for a writer, for ever.
+        let fifo = dir.path().join("fifo");
+        let status = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(status.unwrap().success());
+        refused(inspect(&l, &fifo, false));
+        refused(inspect(&l, dir.path(), false));
+
+        let p = dir.path().join("m.json");
+        let mut body = b"{}".to_vec();
+        body.resize(MAX_SETTINGS as usize, b' ');
+        fs::write(&p, &body).unwrap();
+        assert_ne!(inspect(&l, &p, false).config_digest, "", "exactly the cap");
+        body.push(b' ');
+        fs::write(&p, &body).unwrap();
+        refused(inspect(&l, &p, false));
+    }
+
+    /// The digest goes into the log, so only a file that passed is hashed.
+    #[test]
+    fn a_file_anyone_can_write_leaves_no_digest() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("m.json");
+        fs::write(&p, "{}").unwrap();
+        assert_eq!(inspect(&claude_code(), &p, true).config_digest, "");
+    }
+
+    #[test]
+    fn inspection_of_what_is_not_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("m.json");
+        let i = inspect(&claude_code(), &p, false);
+        assert!(i.notes[0].contains("no managed settings"), "{i:?}");
+        assert_eq!(i.config_digest, "");
+        fs::write(&p, "not json").unwrap();
+        let i = inspect(&claude_code(), &p, false);
+        assert!(i.notes[0].contains("can not be read"), "{i:?}");
+        assert!(!i.managed_hooks && !i.locked_sandbox && !i.hook_binary_protected);
+    }
+
+    /// A harness is data: a table reads a file in another format, with hooks
+    /// elsewhere, and no field besides the command.
+    #[test]
+    fn a_profile_says_how_to_read_any_harness() {
+        let l: Locked = serde_json::from_value(json!({
+            "file": {"linux": "/etc/acme/locked.toml"},
+            "format": "toml",
+            "hook_lists": ["/h/before", "/h/after"],
+            "hooks": [{"at": "/only_these", "equals": true}],
+        }))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("locked.toml");
+        let body = r#"
+            only_these = true
+            [[h.before]]
+            [[h.before.hooks]]
+            command = "/opt/lonca hook"
+            [[h.after]]
+            [[h.after.hooks]]
+            command = "/opt/lonca hook"
+        "#;
+        fs::write(&p, body).unwrap();
+        let i = inspect(&l, &p, false);
+        assert!(i.managed_hooks && i.hook_binary_protected, "{i:?}");
+        assert!(
+            !i.locked_sandbox,
+            "a profile with no sandbox table proves no sandbox"
+        );
+        assert!(i.notes[0].contains("names nothing"), "{i:?}");
+        fs::write(&p, body.replace("only_these = true", "only_these = false")).unwrap();
+        assert!(!inspect(&l, &p, false).managed_hooks);
+    }
+
+    #[test]
+    fn a_table_with_no_hook_lists_proves_no_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("m.json");
+        fs::write(&p, r#"{"allowManagedHooksOnly": true}"#).unwrap();
+        let mut l = claude_code();
+        l.hook_lists.clear();
+        assert!(!inspect(&l, &p, false).managed_hooks);
+        let mut l = claude_code();
+        l.hooks.clear();
+        let i = inspect(&l, &p, false);
+        assert!(!i.managed_hooks, "{i:?}");
     }
 
     #[test]

@@ -139,7 +139,7 @@ Amaç, aynı kullanıcı hesabı içinde atlatmayı imkânsız kılmak değil (b
 | H1 | Kilitlenebilir, engelleyebilen hook'lar | Sertleştirilmiş; ağ gözlemi yalnızca araç düzeyinde |
 | H2 | H1 + kilitlenebilir ve proxy'lenebilir shell sandbox'ı | Sertleştirilmiş, tam |
 
-Claude Code, 2026-10-16 belgelerine göre H2 koşullarını karşılar. Diğer harness'ların seviyesi belirlenmelidir (§10).
+Claude Code, 2026-10-16 belgelerine göre H2 koşullarını karşılar. Codex 0.167, Gemini CLI 0.67 ve OpenCode 2.2 H0'dır; gerekçeler `docs/decisions.md`, "Harness levels". Hangi harness olursa olsun `lonca run` hook gerektirmeden `isolated` seviyesi verir. Seviye, harness profilindeki `locked` tablosundan okunur: kod değil, veridir.
 
 ### 3.3 Yerel güven sınırı: sistem kullanıcısı ve admin hesapları
 
@@ -562,7 +562,7 @@ Lisansları kullanmadan önce kontrol edilmeli.
 - **Auditor:** Karar fonksiyonu kütüphanesini Gatekeeper ile paylaşacak mı? Paylaşırsa ortak hatalar yakalanmaz.
 - **Tek geliştirici:** "İki insan imzası" yerine ne kullanılacak (imza + bekleme süresi yeterli mi)?
 - **Ekip sunucusu:** Tek sıralayıcı modelinden sunucuya geçiş nasıl olacak?
-- **Harness seviyeleri:** Codex, Cursor ve diğer agent çalıştırıcıları hangi güven seviyesinde (H0/H1/H2)?
+- **Harness seviyeleri:** Cursor ve burada adı geçmeyen agent çalıştırıcıları denenmedi (Codex, Gemini CLI ve OpenCode için bkz. §3.2).
 - **Claude Code ayrıntıları:** `allowManagedHooksOnly`'nin tam etki listesi belgelerde doğrulanamadı; uygulamadan önce test edilmeli.
 - **sudo önbelleği:** Claude Code'un Bash komutları kullanıcının sudo parola önbelleğini kullanabiliyor mu? Test edilmeli (§3.3).
 - **Doküman dili:** Açık kaynak için İngilizce'ye çevrilmeli mi?

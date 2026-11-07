@@ -36,7 +36,7 @@ minimum_test_timeout = 600
 # kill them with a test.
 # Compiled on macOS only, and mutants run on Linux: a mutant there changes
 # nothing that runs. The end-to-end tests of `lonca run` hold it on macOS.
-exclude_globs = ["crates/lonca-daemon/src/peer_other.rs", "crates/lonca-cli/src/sweep.rs"]
+exclude_globs = ["crates/lonca-daemon/src/peer_other.rs", "crates/lonca-verify/src/sweep.rs"]
 
 exclude_re = [
   # `from * got` in `log_pages`: `a_log_is_read_to_its_end_in_pages` and

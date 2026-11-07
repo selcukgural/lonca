@@ -38,7 +38,9 @@ without a pass.
 
 The verifier clears the environment and sets:
 
-- `PATH`: the daemon's own.
+- `PATH`: the daemon's own, or `path` from the policy, a list of absolute
+  directories, which must then hold everything the commands call:
+  `path = ["/usr/local/bin", "/usr/bin", "/bin"]`.
 - `HOME`: a fresh, empty directory inside the work directory (writable).
 - `LANG=C.UTF-8`, `LONCA_VERIFY=1`.
 
@@ -97,6 +99,63 @@ under the tree or `TMPDIR`. Caches it would write to (`~/.cargo/registry`,
 `~/.npm`, `GOCACHE`) are read-only inside the sandbox: warm them outside (run
 the build once as the daemon's user), build offline, or point the cache at the
 scratch home (see below).
+
+## How a command ends
+
+A command that runs out of `timeout_seconds` is an error with the evidence
+`error = timeout`, and the queue goes on with the next change. What a command
+leaves running ends with it, whichever way it ends, as far as this reaches:
+
+- It starts as a session of its own, and its process group is killed when the
+  command exits or runs out of time. So start what a test needs in the test,
+  and end it there. As the leader of that session, a program the command runs
+  directly can not move to a process group of its own: `setpgid` gets `EPERM`.
+- Under bubblewrap the sandbox goes with the command and takes all of it.
+- Under Seatbelt what left the group is found by its sandbox and ended too. If
+  something of it would not end, the evidence says `left_running`, and the check
+  is an error even if the command exited 0.
+- With no sandbox, a process that left the group can not be reached. It holds
+  nothing up: output is read for one more second, and the result is the
+  command's own. This is one more reason for `require_sandbox`.
+
+If the daemon itself is killed, a command under bubblewrap goes with it. Under
+Seatbelt or with no sandbox it runs on to its own end, with nothing timing it;
+the change is verified again when the daemon is back.
+
+The log keeps the last 64 KiB of stdout and stderr, as they were written. If
+the command itself is killed by a signal, the evidence has `exit = signal` and
+the number in `signal`. Under bubblewrap it has the exit code 128 + that number
+instead. A process further down shows only in what the command makes of it: a
+limit that ends a compiler reads as the build's own failure, so look in the log.
+
+## Limits
+
+```toml
+limit_cpu_seconds = 0           # RLIMIT_CPU
+limit_address_bytes = 0         # RLIMIT_AS, Linux only
+limit_processes = 16384         # RLIMIT_NPROC, Linux only
+limit_file_bytes = 8589934592   # RLIMIT_FSIZE
+limit_open_files = 4096         # RLIMIT_NOFILE
+```
+
+`0` means no limit. A limit the daemon runs under already is never raised.
+
+- CPU time, address space, file size and open files hold for each process, not
+  for a command as a whole. The only limit on the whole is `timeout_seconds`.
+- `limit_cpu_seconds` adds up all the threads of a process, so a test run on 32
+  cores uses an hour of it in two minutes. That is why it is off. Past it Linux
+  kills a process. macOS sends `SIGXCPU`, which ends it unless it handles that,
+  and then only `timeout_seconds` does.
+- `limit_file_bytes`: past it the writer gets `SIGXFSZ`, which ends it. One that
+  ignores the signal gets `EFBIG`, "File too large", from the write.
+- `limit_processes` counts every process and thread of the account, not of the
+  command, so set it above what the daemon's user runs anyway. A fork past it
+  fails with `EAGAIN`; root is not held to it. It is not applied on macOS, where
+  the daemon usually shares the account of the person at the machine.
+- `limit_address_bytes` is off because runtimes reserve far more than they use:
+  the JVM, Go and Node fail under any figure that stops anything. macOS refuses
+  every figure below what a process maps at its start, so it is not applied
+  there.
 
 ## Starters
 

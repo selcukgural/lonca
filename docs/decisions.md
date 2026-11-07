@@ -2390,6 +2390,51 @@ cooperative|hardened`. docs/guide/profiles.md lists what each one sets.
   check on hardened installs for a sudo that asks for nothing, and the Linux installer
   stops without bubblewrap, since the service would not start.
 
+## How a verification ends (#59)
+
+Design §5.9 asks for time and memory limits. What a command can do to the
+queue, and what it is held to, stands like this:
+
+- **A session, killed whichever way it ends.** A command starts as a session,
+  and its group is killed on a normal exit too, not only on a timeout: a
+  background process that kept the output open used to hold the run past its
+  timeout for good, and the queue behind it. A group alone is not enough: its
+  leader can move to another group of the session, and a session's leader can
+  not. The exit is seen with `WNOWAIT`, so the leader stays a zombie until the
+  last kill and the group's id can not pass to anyone else. Waiting for the
+  leader has a limit as well. On macOS the sweep of `lonca run` follows, by a
+  mark in the jail; `sweep.rs` moved to `lonca-verify` for that.
+- **A pass can not stand on what is still running.** If the sweep leaves
+  something, the check is an error whatever the command exited with. It can
+  still change the tree the evidence is about.
+- **Output is one pipe**, read non-blocking, keeping only `OUTPUT_TAIL`. Two
+  pipes can not tell which came first, and a failure reads best in order. One
+  second after the kill reading stops, whoever still holds the pipe. With no
+  sandbox that is all that can be done about a process that left the group, and
+  the result is the command's own.
+- **Limits are `setrlimit`, with no way to raise one**: the value is read in the
+  parent and clamped, and one that can not be set fails the spawn, so a command
+  does not run without its limits. They hold per process, or per account for
+  `limit_processes`. A cgroup would hold the whole tree, but it needs a
+  delegated hierarchy that a plain install does not have.
+- **Time has one limit by default, `timeout_seconds`.** `RLIMIT_CPU` adds up a
+  process's threads, so any useful figure fails an ordinary test run on a large
+  machine, as a plain failure against the change.
+- **Memory stays off by default.** `RLIMIT_AS` counts what is reserved, and the
+  JVM, Go and Node reserve far more than they use. So the design's memory limit
+  is a key a repository can set on Linux, not a default.
+- **`limit_processes` and `limit_address_bytes` hold on Linux only.** On macOS
+  the first counts every process of the person at the machine, and the second
+  is refused below what a process maps at its start, which fails every spawn.
+  16384 leaves room for a busy desktop account.
+- **`path` is in the policy, empty by default**, and the hardened profile leaves
+  it so: what a build needs on `PATH` differs by machine, and a wrong value only
+  makes it fail. What must not depend on `PATH`, `/bin/sh` and the sandbox's
+  own program, is absolute already.
+
+The per-session and global quota of §5.9 is a separate change: it has to be in
+the log for `decide()`.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

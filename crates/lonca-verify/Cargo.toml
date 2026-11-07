@@ -6,6 +6,7 @@ license = "Apache-2.0"
 
 [dependencies]
 hex = "0.4.3"
+libc = "0.2.190"
 lonca-core = { version = "0.1.0", path = "../lonca-core" }
 lonca-policy = { version = "0.1.0", path = "../lonca-policy" }
 lonca-symbols = { version = "0.1.0", path = "../lonca-symbols" }

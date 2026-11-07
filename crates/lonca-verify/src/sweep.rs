@@ -8,9 +8,10 @@
 //! profile allows that name. A process can not shed the mark: a sandbox stays
 //! over `exec`, and nothing in one can start another.
 //!
-//! Apart from `run.rs` because mutation testing runs on Linux, where none of
-//! this is compiled: `.cargo/mutants.toml` leaves this file out, and the
-//! end-to-end tests of `lonca run` hold it on macOS.
+//! `lonca run` and the verifier both end with this. It is a file of its own
+//! because mutation testing runs on Linux, where none of this is compiled:
+//! `.cargo/mutants.toml` leaves this file out, and the end-to-end tests of
+//! `lonca run` and the verifier's own hold it on macOS.
 
 /// Ends every process in the sandbox marked `mark`, and what they start
 /// meanwhile. Returns how many would not end.
@@ -58,19 +59,36 @@ const BY_NAME: i32 = 2 | 0x4000_0000;
 
 /// Whether `pid` lives in the sandbox that allows `mark`. `other` is asked
 /// too: an application whose sandbox allows every Mach name would pass for
-/// this one, and this ends what it finds. A zombie has no path.
+/// this one, and this ends what it finds. A zombie needs no ending: it stays
+/// until its parent looks.
 #[cfg(target_os = "macos")]
 fn in_sandbox_of(pid: libc::pid_t, mark: &std::ffi::CStr, other: &std::ffi::CStr) -> bool {
     let lookup = c"mach-lookup".as_ptr();
-    let mut path = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    // SAFETY: the strings outlive the calls and `path` is live, its size
-    // passed with it; a null operation asks whether `pid` is sandboxed at all.
-    unsafe {
+    // SAFETY: the strings outlive the calls; a null operation asks whether
+    // `pid` is sandboxed at all.
+    let marked = unsafe {
         sandbox_check(pid, std::ptr::null(), 0) == 1
             && sandbox_check(pid, lookup, BY_NAME, mark.as_ptr()) == 0
             && sandbox_check(pid, lookup, BY_NAME, other.as_ptr()) == 1
-            && libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) > 0
-    }
+    };
+    marked && !is_zombie(pid)
+}
+
+/// Asked of the process itself: a path says nothing, since a live process
+/// whose program was deleted has none either. What can not be asked is not
+/// taken for a zombie.
+#[cfg(target_os = "macos")]
+fn is_zombie(pid: libc::pid_t) -> bool {
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: an all-zero `proc_bsdinfo` is valid, it is live, and its size
+    // goes with it.
+    let (got, info) = unsafe {
+        let mut info: libc::proc_bsdinfo = std::mem::zeroed();
+        let buffer = (&raw mut info).cast();
+        let got = libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, buffer, size);
+        (got, info)
+    };
+    got == size && info.pbi_status == libc::SZOMB
 }
 
 #[cfg(target_os = "macos")]
@@ -90,4 +108,11 @@ fn all_pids() -> Vec<libc::pid_t> {
 #[cfg(not(target_os = "macos"))]
 pub fn end_what_is_left(_: &str) -> usize {
     0
+}
+
+/// Ends what is left in the sandbox marked `mark`, and says for the evidence
+/// what would not end.
+pub fn what_would_not_end(mark: &str) -> Option<(String, String)> {
+    let left = end_what_is_left(mark);
+    (left > 0).then(|| ("left_running".into(), left.to_string()))
 }

@@ -26,13 +26,12 @@ use lonca_daemon::Client;
 use lonca_daemon::protocol::TreeFile;
 use lonca_policy::config::{env_name_forbidden, valid_env_name};
 use lonca_verify::Sandbox;
-use lonca_verify::jail::{Jail, holding_secrets, program_trees};
+use lonca_verify::jail::{Jail, holding_secrets, mark_of, program_trees};
 use serde_json::{Value, json};
 
 use crate::ctx::{self, call};
 use crate::mcp;
 use crate::setup::{self, Prepared};
-use crate::sweep;
 use crate::workspace::{Workspace, fetch};
 
 /// What the command gets of the launcher's environment, besides `--env`.
@@ -470,7 +469,7 @@ fn plan(
         proxy_port: proxy.map(|p| p.port()),
         relay,
         loopback: a.loopback,
-        mark: (sandbox == Sandbox::Seatbelt).then(|| mark_of(run)),
+        mark: mark_of(sandbox, "run", run),
     };
     Ok(Plan {
         sandbox,
@@ -478,12 +477,6 @@ fn plan(
         env,
         proxy,
     })
-}
-
-/// A name of this run alone: its directory's is random.
-fn mark_of(run: &Path) -> String {
-    let name = run.file_name().unwrap_or_default().to_string_lossy();
-    format!("lonca.run.{name}")
 }
 
 /// Fails before anything is signed if the operating system will not run the
@@ -595,7 +588,11 @@ fn in_sandbox(plan: &Plan, a: &Args, start: Start, token: &str) -> Result<ExitSt
     let output = carry_streams(&mut child);
     let status = wait(&mut child, &STOP, GRACE);
     // Before the session ends: nothing of the sandbox writes here after it.
-    let left = plan.jail.mark.as_deref().map(sweep::end_what_is_left);
+    let left = plan
+        .jail
+        .mark
+        .as_deref()
+        .map(lonca_verify::sweep::end_what_is_left);
     if let Some(left @ 1..) = left {
         eprintln!("lonca run: {left} process(es) of the sandbox would not end");
     }

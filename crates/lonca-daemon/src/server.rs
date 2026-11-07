@@ -66,6 +66,9 @@ pub fn bind_with(path: &Path, access: &Access) -> std::io::Result<UnixListener> 
     Ok(l)
 }
 
+#[cfg(not(target_os = "linux"))]
+pub use crate::peer_other::peer_in_sandbox;
+
 /// The uid of the process on the other end of a Unix socket.
 pub fn peer_uid(s: &UnixStream) -> Option<u32> {
     let fd = s.as_raw_fd();
@@ -102,6 +105,43 @@ pub fn peer_uid(s: &UnixStream) -> Option<u32> {
             )
         };
         (rc == 0).then_some(cred.uid)
+    }
+}
+
+/// How many pid namespaces a process of `status`, the text of
+/// `/proc/<pid>/status`, lies in, as far as the reader can see.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn pid_namespaces(status: &str) -> usize {
+    let line = status.lines().find_map(|l| l.strip_prefix("NSpid:"));
+    line.map_or(0, |l| l.split_whitespace().count())
+}
+
+/// Whether the process that connected lies in a pid namespace below this
+/// one, as bubblewrap's does: in a sandbox, not in this one. The same user can
+/// make such a namespace, and nothing on one account can prove otherwise
+/// (`docs/design.md` §3.1).
+#[cfg(target_os = "linux")]
+pub fn peer_in_sandbox(s: &UnixStream) -> bool {
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: fd is a valid socket; cred/len are live and sized correctly.
+    let rc = unsafe {
+        libc::getsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    let status = |who: String| std::fs::read_to_string(format!("/proc/{who}/status")).ok();
+    match (rc, status(cred.pid.to_string()), status("self".into())) {
+        (0, Some(peer), Some(me)) => pid_namespaces(&peer) > pid_namespaces(&me),
+        _ => false,
     }
 }
 
@@ -149,7 +189,7 @@ fn handle_conn(stream: UnixStream, svc: &Service) -> std::io::Result<()> {
             continue;
         }
         let resp = match serde_json::from_str::<Request>(&line) {
-            Ok(req) => svc.handle(req),
+            Ok(req) => svc.handle_from(req, &|| peer_in_sandbox(&writer)),
             Err(e) => Response::err(0, "invalid", format!("bad request: {e}")),
         };
         write_line(&mut writer, &resp)?;
@@ -160,6 +200,19 @@ fn handle_conn(stream: UnixStream, svc: &Service) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_test_process_is_in_no_sandbox() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        assert!(!peer_in_sandbox(&a));
+    }
+
+    #[test]
+    fn namespaces_are_counted_from_the_status() {
+        assert_eq!(pid_namespaces("Name:\tx\nNSpid:\t1234\nNSsid:\t1\n"), 1);
+        assert_eq!(pid_namespaces("NSpid:\t1234\t2\n"), 2);
+        assert_eq!(pid_namespaces("Name:\tx\n"), 0);
+    }
 
     #[test]
     fn peer_uid_is_ours() {

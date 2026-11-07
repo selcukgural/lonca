@@ -213,6 +213,7 @@ fn a_hook_in_a_sandbox_changes_nothing_and_logs_nothing() {
     let ws = e.root.join("ws1");
     std::fs::create_dir_all(&ws).unwrap();
     let token = isolate(&mut e, "s1", &ws);
+    e.in_sandbox = true;
     let before = e.store().ref_get("refs/lonca/oplog").unwrap();
     let r = e.ok(
         "hook.bind",
@@ -380,4 +381,71 @@ fn a_session_that_is_over_answers_for_no_connection() {
         assert!(!out.contains("hello from upstream"), "{out}");
         assert!(out.contains("no Lonca session"), "{out}");
     }
+}
+
+fn taint_of(e: &mut Env) -> Value {
+    taints(e)["s1"].clone()
+}
+
+#[test]
+fn an_isolated_token_works_in_a_sandbox_only() {
+    let mut e = Env::new();
+    e.init(None);
+    let human = e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    assert_eq!(human["decision"]["outcome"], "allow");
+    e.session("s1", &["src/**"]);
+    let ws = e.root.join("ws1");
+    std::fs::create_dir_all(&ws).unwrap();
+    let token = isolate(&mut e, "s1", &ws);
+
+    e.in_sandbox = true;
+    let held = e.lease(&token, "src/lib.rs#charge");
+    assert_eq!(held["decision"]["outcome"], "allow", "{held}");
+    assert!(taint_of(&mut e).is_null());
+
+    e.in_sandbox = false;
+    // What `lonca run` does from outside goes through and costs nothing.
+    e.ok("session.heartbeat", None, Some(&token), json!({}));
+    assert!(taint_of(&mut e).is_null());
+
+    let refused = e
+        .call(
+            "lease.release",
+            None,
+            Some(&token),
+            json!({"set": "nothing", "items": null}),
+        )
+        .unwrap_err();
+    assert_eq!(refused.0, "not_in_sandbox", "{refused:?}");
+    let reason = taint_of(&mut e);
+    assert!(
+        reason.as_str().unwrap().contains("outside its sandbox"),
+        "{reason}"
+    );
+
+    // Once on the record: a loop outside does not fill the log.
+    let before = e.store().ref_get("refs/lonca/oplog").unwrap();
+    let again = e
+        .call("hook.stop", None, Some(&token), json!({"files": []}))
+        .unwrap_err();
+    assert_eq!(again.0, "not_in_sandbox", "{again:?}");
+    assert_eq!(e.store().ref_get("refs/lonca/oplog").unwrap(), before);
+
+    // The end of the run comes from outside too.
+    e.ok("session.end", None, Some(&token), json!({}));
+}
+
+#[test]
+fn a_session_that_is_not_isolated_is_used_from_anywhere() {
+    let mut e = Env::new();
+    e.init(None);
+    let token = e.session("s1", &["src/**"]);
+    let r = e.call(
+        "lease.release",
+        None,
+        Some(&token),
+        json!({"set": "nothing", "items": null}),
+    );
+    assert_ne!(r.err().map(|x| x.0).as_deref(), Some("not_in_sandbox"));
+    assert!(taint_of(&mut e).is_null());
 }

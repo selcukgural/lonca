@@ -30,7 +30,7 @@ pub struct Jail {
     /// Closed whatever else is allowed: Lonca's stores and keys.
     pub secrets: Vec<PathBuf>,
     /// The daemon's socket, the one socket outside that can be reached.
-    pub socket: PathBuf,
+    pub socket: Option<PathBuf>,
     /// The loopback port of the network proxy, the one way out.
     pub proxy_port: Option<u16>,
     /// Linux: the agent has no network at all, and the socket that takes
@@ -115,7 +115,7 @@ impl Jail {
     /// is how a path is resolved, and it tells nothing of what is beside it.
     fn ancestors(&self) -> BTreeSet<&Path> {
         let trees = self.writes().chain(&self.readable);
-        let trees = trees.chain(std::iter::once(&self.socket));
+        let trees = trees.chain(&self.socket);
         trees.flat_map(|t| t.ancestors().skip(1)).collect()
     }
 
@@ -153,9 +153,11 @@ impl Jail {
         }
         // Network rules look at the address, and the agent's own sockets
         // are at paths it may write anyway.
-        let socket = quoted(&self.socket);
-        out += &format!("(allow network-outbound (literal {socket}))\n");
-        out += &format!("(allow file-read-metadata (literal {socket}))\n");
+        if let Some(socket) = &self.socket {
+            let socket = quoted(socket);
+            out += &format!("(allow network-outbound (literal {socket}))\n");
+            out += &format!("(allow file-read-metadata (literal {socket}))\n");
+        }
         out += &format!("(allow network-bind network-outbound {writes})\n");
         if let Some(port) = self.proxy_port {
             out += &format!("(allow network-outbound (remote ip \"localhost:{port}\"))\n");
@@ -193,7 +195,9 @@ impl Jail {
         for dir in self.writes() {
             flag("--bind", &[dir, dir]);
         }
-        flag("--bind", &[&self.socket, &self.socket]);
+        if let Some(socket) = &self.socket {
+            flag("--bind", &[socket, socket]);
+        }
         if let Some(relay) = &self.relay {
             flag("--bind", &[relay, relay]);
         }
@@ -262,6 +266,53 @@ pub fn may_expose(dir: &OsStr, closed: &[PathBuf]) -> bool {
     dir.is_absolute() && !closed.iter().any(|c| c.starts_with(dir))
 }
 
+/// The closed tree that `tree` holds or lies in.
+pub fn holding_secrets<'a>(tree: &Path, secrets: &'a [PathBuf]) -> Option<&'a PathBuf> {
+    secrets
+        .iter()
+        .find(|s| tree.starts_with(s) || s.starts_with(tree))
+}
+
+/// The trees a program needs of what is closed: the directories on `PATH`,
+/// and the directories of `programs`, each as it is named and as it really
+/// is, since a link on `PATH` leads elsewhere.
+///
+/// Nothing under `writable` is followed: a link the agent made there would
+/// open whatever it points at, the next time a sandbox is built.
+pub fn program_trees(
+    path: &OsStr,
+    programs: &[PathBuf],
+    closed: &[PathBuf],
+    writable: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut add = |dir: Option<PathBuf>| {
+        let Some(named) = dir else {
+            return;
+        };
+        let Ok(dir) = named.canonicalize() else {
+            return;
+        };
+        let inside = |p: &Path| writable.iter().any(|w| p.starts_with(w));
+        if !inside(&named)
+            && !inside(&dir)
+            && may_expose(dir.as_os_str(), closed)
+            && !out.contains(&dir)
+        {
+            out.push(dir);
+        }
+    };
+    for dir in std::env::split_paths(path) {
+        add(Some(dir));
+    }
+    for program in programs {
+        add(program.parent().map(Path::to_path_buf));
+        let real = program.canonicalize().ok();
+        add(real.and_then(|p| p.parent().map(Path::to_path_buf)));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,7 +323,7 @@ mod tests {
             writable: vec!["/w/scratch".into()],
             readable: vec!["/h/.local/bin".into()],
             secrets: vec!["/h/.lonca".into()],
-            socket: "/h/.lonca/s.sock".into(),
+            socket: Some("/h/.lonca/s.sock".into()),
             proxy_port: Some(1234),
             relay: None,
             loopback: false,
@@ -485,6 +536,49 @@ mod tests {
         assert_eq!(args[..1], ["-p"]);
         assert_eq!(args[1], j.seatbelt());
         assert_eq!(args[2..], ["/bin/echo", "hi"]);
+    }
+
+    #[test]
+    fn a_program_brings_its_directories_and_nothing_that_is_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let home = root.join("home");
+        let bin = home.join(".local/bin");
+        let versions = home.join(".local/share/tool/1.0");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&versions).unwrap();
+        std::fs::write(versions.join("tool"), "").unwrap();
+        std::os::unix::fs::symlink(versions.join("tool"), bin.join("tool")).unwrap();
+        let closed = [home.clone()];
+        let path = std::env::join_paths([&home, &bin, Path::new("/no/such/dir")]).unwrap();
+        let got = program_trees(&path, &[bin.join("tool")], &closed, &[]);
+        assert_eq!(got, [bin.clone(), versions]);
+        // What the agent can write leads nowhere, by name or by what it is.
+        let scratch = root.join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+        std::os::unix::fs::symlink(&bin, scratch.join("bin")).unwrap();
+        let path = std::env::join_paths([scratch.join("bin")]).unwrap();
+        assert!(program_trees(&path, &[], &closed, std::slice::from_ref(&scratch)).is_empty());
+        let path = std::env::join_paths([&bin]).unwrap();
+        assert!(program_trees(&path, &[], &closed, &[bin]).is_empty());
+    }
+
+    #[test]
+    fn a_tree_touches_a_secret_from_above_or_from_below() {
+        let secrets = [PathBuf::from("/h/.lonca"), PathBuf::from("/k")];
+        assert_eq!(
+            holding_secrets(Path::new("/h/.lonca/x"), &secrets),
+            Some(&secrets[0])
+        );
+        assert_eq!(
+            holding_secrets(Path::new("/h"), &secrets),
+            Some(&secrets[0])
+        );
+        assert_eq!(
+            holding_secrets(Path::new("/k"), &secrets),
+            Some(&secrets[1])
+        );
+        assert_eq!(holding_secrets(Path::new("/h/other"), &secrets), None);
     }
 
     #[test]

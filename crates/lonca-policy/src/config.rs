@@ -97,10 +97,15 @@ retries = 0
 # daemon's environment at run time; `env` sets fixed values. Names that
 # change what runs (LD_PRELOAD, DYLD_*, RUSTC_WRAPPER, NODE_OPTIONS,
 # PYTHONPATH, GIT_*, ...) are refused. See docs/guide/verification.md.
-# env_passthrough = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR"]
+# env_passthrough = ["HOME", "CARGO_HOME", "RUSTUP_HOME"]
 env_passthrough = []
 # env = { CARGO_NET_OFFLINE = "true" }
 env = {}
+# The commands read the system and the directories on PATH. Anything else
+# they need is named here, as an absolute path or ~/path of the daemon's
+# user. Lonca's stores stay closed. See docs/guide/verification.md.
+# read = ["~/.cargo/registry", "~/.cargo/bin", "~/.rustup"]
+read = []
 
 [observation]
 # Sessions that nothing observes are treated like tainted sessions.
@@ -299,6 +304,8 @@ pub struct Verification {
     pub env_passthrough: Vec<String>,
     /// Environment variables with fixed values.
     pub env: std::collections::BTreeMap<String, String>,
+    /// Trees the commands may read besides the system's.
+    pub read: Vec<String>,
 }
 
 impl Verification {
@@ -356,6 +363,16 @@ pub fn env_name_forbidden(name: &str) -> bool {
                 && name.ends_with(suffix)
         }
     })
+}
+
+/// An entry of `verification.read`: an absolute, normalized path, or one
+/// under the home directory of the daemon's user.
+pub fn valid_read_path(p: &str) -> bool {
+    let absolute = match p.strip_prefix("~/") {
+        Some(rest) => format!("/{rest}"),
+        None => p.to_string(),
+    };
+    crate::decide::valid_scratch_root(&absolute)
 }
 
 /// A plausible environment variable name.
@@ -528,6 +545,7 @@ impl Default for Verification {
             retries: 0,
             env_passthrough: vec![],
             env: std::collections::BTreeMap::new(),
+            read: vec![],
         }
     }
 }
@@ -713,6 +731,16 @@ impl PolicyBundle {
                 return Err(format!("{CONFIG_FILE}: verification: env_forbidden:{name}"));
             }
         }
+        if v.read.len() > 64 {
+            return Err(format!(
+                "{CONFIG_FILE}: verification: at most 64 read paths"
+            ));
+        }
+        if let Some(bad) = v.read.iter().find(|p| !valid_read_path(p)) {
+            return Err(format!(
+                "{CONFIG_FILE}: verification.read: not an absolute path or ~/path: {bad}"
+            ));
+        }
         if v.env_passthrough.len() + v.env.len() > 64 {
             return Err(format!(
                 "{CONFIG_FILE}: verification: at most 64 environment names"
@@ -862,6 +890,30 @@ impl PolicyBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verification_reads_absolute_paths_and_paths_under_the_home() {
+        let with = |paths: &str| {
+            let config = DEFAULT_CONFIG.replace("read = []", &format!("read = {paths}"));
+            PolicyBundle::parse(&config, DEFAULT_POLICY).map(|b| b.config.verification.read)
+        };
+        let good = with(r#"["/opt/tool", "~/.cargo/bin"]"#).unwrap();
+        assert_eq!(good, ["/opt/tool", "~/.cargo/bin"]);
+        for bad in [
+            r#"["relative"]"#,
+            r#"["~"]"#,
+            r#"["~other/x"]"#,
+            r#"["/a/../b"]"#,
+            r#"["~/a/"]"#,
+        ] {
+            let e = with(bad).unwrap_err();
+            assert!(e.contains("verification.read"), "{bad}: {e}");
+        }
+        let many = serde_json::to_string(&vec!["/a"; 65]).unwrap();
+        assert!(with(&many).unwrap_err().contains("at most 64"));
+        let most = serde_json::to_string(&vec!["/a"; 64]).unwrap();
+        assert!(with(&most).is_ok());
+    }
 
     #[test]
     fn agent_hosts_are_plain_lowercase_names() {

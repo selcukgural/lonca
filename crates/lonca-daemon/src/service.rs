@@ -252,6 +252,10 @@ impl Cred {
     }
 }
 
+/// What the launcher of `lonca run` does with an isolated session's token,
+/// from outside the sandbox. Neither reads or changes the repository.
+const LAUNCHER_METHODS: [&str; 2] = ["session.heartbeat", "session.end"];
+
 /// Every method the daemon answers and what it requires. The table in
 /// `docs/decisions.md` ("Daemon authentication") repeats it; a test keeps
 /// the two equal.
@@ -606,8 +610,15 @@ impl Service {
         c.notify_all();
     }
 
+    /// A request from nothing known to be in a sandbox.
     pub fn handle(&self, req: Request) -> Response {
-        let r = match self.dispatch(&req) {
+        self.handle_from(req, &|| false)
+    }
+
+    /// A request; `in_sandbox` asks the operating system about whoever sent
+    /// it, which is only done when it matters.
+    pub fn handle_from(&self, req: Request, in_sandbox: &dyn Fn() -> bool) -> Response {
+        let r = match self.dispatch(&req, in_sandbox) {
             Ok(v) => Response::ok(req.id, v),
             Err((code, msg)) => Response::err(req.id, &code, msg),
         };
@@ -620,7 +631,44 @@ impl Service {
         r
     }
 
-    fn dispatch(&self, req: &Request) -> Hr {
+    /// An isolated session's token works in a sandbox only, but for what
+    /// `lonca run` itself does for it from outside. Refused elsewhere, and
+    /// the session pays: the level no longer says what happened.
+    fn hold_to_sandbox(
+        &self,
+        req: &Request,
+        in_sandbox: &dyn Fn() -> bool,
+    ) -> std::result::Result<(), (String, String)> {
+        if LAUNCHER_METHODS.contains(&req.method.as_str()) {
+            return Ok(());
+        }
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        let held = r.chain.state.sessions.get(&session);
+        let Some(s) = held.filter(|s| s.level == ObservationLevel::Isolated) else {
+            return Ok(());
+        };
+        let clean = s.taint.is_none();
+        if in_sandbox() {
+            return Ok(());
+        }
+        if clean {
+            let t = Op::Taint {
+                session,
+                reason: "its token was used outside its sandbox".into(),
+            };
+            r.submit(Submission::new(Actor::Daemon, t), now).or_fail()?;
+        }
+        fail(
+            "not_in_sandbox",
+            "this session runs in a sandbox, and this request came from outside it",
+        )
+    }
+
+    fn dispatch(&self, req: &Request, in_sandbox: &dyn Fn() -> bool) -> Hr {
         let p = &req.params;
         let Some(&(_, cred)) = METHODS.iter().find(|(m, _)| *m == req.method) else {
             return fail("unknown_method", format!("unknown method {}", req.method));
@@ -634,6 +682,9 @@ impl Service {
             cred
         };
         let auth = self.authorize(req, cred)?;
+        if cred == Cred::Agent {
+            self.hold_to_sandbox(req, in_sandbox)?;
+        }
         match req.method.as_str() {
             "ping" => Ok(json!({
                 "version": env!("CARGO_PKG_VERSION"),

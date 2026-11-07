@@ -771,6 +771,7 @@ within two seconds of a proposal; the call is for tests and scripts.
 | `invalid` | the request does not fit: bad params, missing `repo`, a value out of range |
 | `unauthenticated` | no token, or one that is unknown, ended or expired; a login that did not verify |
 | `forbidden` | a token of the wrong kind, for another repository, or not enrolled; a signature by another human |
+| `not_in_sandbox` | an isolated session's token, on an agent request that came from outside a sandbox; the session is tainted. `session.heartbeat` and `session.end` are exempt |
 | `session_inactive` | `session.heartbeat` of a session that has ended or expired; nothing is logged |
 | `unknown_method` | not in the table |
 | `not_found` | no such repository or change; a path not in the commit (`blobs`) |

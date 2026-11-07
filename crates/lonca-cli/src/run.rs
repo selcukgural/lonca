@@ -26,7 +26,7 @@ use lonca_daemon::Client;
 use lonca_daemon::protocol::TreeFile;
 use lonca_policy::config::{env_name_forbidden, valid_env_name};
 use lonca_verify::Sandbox;
-use lonca_verify::jail::{Jail, may_expose};
+use lonca_verify::jail::{Jail, holding_secrets, program_trees};
 use serde_json::{Value, json};
 
 use crate::ctx::{self, call};
@@ -117,46 +117,6 @@ pub fn find_program(name: &OsStr, path: &OsStr) -> Option<PathBuf> {
     }
     let dirs = std::env::split_paths(path);
     dirs.map(|d| d.join(name)).find(|p| p.is_file())
-}
-
-/// The trees a program needs of what is closed: the directories on `PATH`,
-/// and the directories of the program and of Lonca itself, each as it is
-/// named and as it really is, since a link on `PATH` leads elsewhere.
-///
-/// Nothing under `writable` is followed: a link the agent made there would
-/// open whatever it points at, the next time a sandbox is built.
-pub fn program_trees(
-    path: &OsStr,
-    programs: &[PathBuf],
-    closed: &[PathBuf],
-    writable: &[PathBuf],
-) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = Vec::new();
-    let mut add = |dir: Option<PathBuf>| {
-        let Some(named) = dir else {
-            return;
-        };
-        let Ok(dir) = named.canonicalize() else {
-            return;
-        };
-        let inside = |p: &Path| writable.iter().any(|w| p.starts_with(w));
-        if !inside(&named)
-            && !inside(&dir)
-            && may_expose(dir.as_os_str(), closed)
-            && !out.contains(&dir)
-        {
-            out.push(dir);
-        }
-    };
-    for dir in std::env::split_paths(path) {
-        add(Some(dir));
-    }
-    for program in programs {
-        add(program.parent().map(Path::to_path_buf));
-        let real = program.canonicalize().ok();
-        add(real.and_then(|p| p.parent().map(Path::to_path_buf)));
-    }
-    out
 }
 
 /// macOS will not start a setuid program in a sandbox, and programs that
@@ -504,7 +464,7 @@ fn plan(
         writable,
         readable,
         secrets,
-        socket: socket.canonicalize().unwrap_or(socket),
+        socket: Some(socket.canonicalize().unwrap_or(socket)),
         proxy_port: proxy.map(|p| p.port()),
         relay,
         loopback: a.loopback,
@@ -556,13 +516,6 @@ fn refuse_scratch(root: &Path, real: &Path, secrets: &[PathBuf], home: &Path) ->
         bail!("scratch root {} holds the home directory", root.display());
     }
     Ok(())
-}
-
-/// The closed tree that `tree` holds or lies in.
-fn holding_secrets<'a>(tree: &Path, secrets: &'a [PathBuf]) -> Option<&'a PathBuf> {
-    secrets
-        .iter()
-        .find(|s| tree.starts_with(s) || s.starts_with(tree))
 }
 
 /// Refuses a workspace that is not the commit it says it stands on, as the
@@ -778,31 +731,6 @@ mod tests {
         // A directory of that name is not a program.
         fs::create_dir(a.join("tool")).unwrap();
         assert_eq!(find_program(OsStr::new("tool"), &path), Some(tool));
-    }
-
-    #[test]
-    fn a_program_brings_its_directories_and_nothing_that_is_closed() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let home = root.join("home");
-        let bin = home.join(".local/bin");
-        let versions = home.join(".local/share/tool/1.0");
-        fs::create_dir_all(&bin).unwrap();
-        fs::create_dir_all(&versions).unwrap();
-        fs::write(versions.join("tool"), "").unwrap();
-        std::os::unix::fs::symlink(versions.join("tool"), bin.join("tool")).unwrap();
-        let closed = [home.clone()];
-        let path = std::env::join_paths([&home, &bin, Path::new("/no/such/dir")]).unwrap();
-        let got = program_trees(&path, &[bin.join("tool")], &closed, &[]);
-        assert_eq!(got, [bin.clone(), versions]);
-        // What the agent can write leads nowhere, by name or by what it is.
-        let scratch = root.join("scratch");
-        fs::create_dir(&scratch).unwrap();
-        std::os::unix::fs::symlink(&bin, scratch.join("bin")).unwrap();
-        let path = std::env::join_paths([scratch.join("bin")]).unwrap();
-        assert!(program_trees(&path, &[], &closed, std::slice::from_ref(&scratch)).is_empty());
-        let path = std::env::join_paths([&bin]).unwrap();
-        assert!(program_trees(&path, &[], &closed, &[bin]).is_empty());
     }
 
     #[test]
@@ -1037,24 +965,6 @@ mod tests {
     }
 
     #[test]
-    fn a_tree_touches_a_secret_from_above_or_from_below() {
-        let secrets = [PathBuf::from("/h/.lonca"), PathBuf::from("/k")];
-        assert_eq!(
-            holding_secrets(Path::new("/h/.lonca/x"), &secrets),
-            Some(&secrets[0])
-        );
-        assert_eq!(
-            holding_secrets(Path::new("/h"), &secrets),
-            Some(&secrets[0])
-        );
-        assert_eq!(
-            holding_secrets(Path::new("/k"), &secrets),
-            Some(&secrets[1])
-        );
-        assert_eq!(holding_secrets(Path::new("/h/other"), &secrets), None);
-    }
-
-    #[test]
     fn a_stop_reaches_the_commands_whole_group() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("pid");
@@ -1173,7 +1083,7 @@ mod tests {
         let t = Planned::new();
         let mut p = t.plan(sandbox, &t.args(), &t.prepared(None)).unwrap();
         // No daemon here: bubblewrap would refuse to mount a missing socket.
-        p.jail.socket = t.root.join("run/token");
+        p.jail.socket = Some(t.root.join("run/token"));
         assert!(probe(&p).is_ok());
         p.jail.workspace = t.root.join("gone");
         assert!(probe(&p).is_err());

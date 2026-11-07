@@ -3,6 +3,8 @@
 pub mod client;
 pub mod home;
 pub mod hooks;
+#[cfg(not(target_os = "linux"))]
+mod peer_other;
 pub mod protocol;
 pub mod proxy;
 pub mod repo;

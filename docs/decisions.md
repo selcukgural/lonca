@@ -2085,6 +2085,47 @@ no hook, no settings file, no vendor.
 - **Not built.** A container backend, which is one more `Sandbox` arm. `sandbox-exec`
   is deprecated by Apple and still ships.
 
+## An isolated token works in its sandbox
+
+`session.isolate` puts a token in a sandbox, and a token can be copied. So for an
+isolated session the daemon asks the operating system about whoever sent an agent
+request: `sandbox_check` on macOS, a pid namespace below its own on Linux. From
+outside it answers `not_in_sandbox` and taints the session once, so nothing it does
+integrates alone and the log says why.
+
+- **`session.heartbeat` and `session.end` are exempt.** The launcher sends them from
+  outside, and neither reads nor changes the repository.
+- **A process that exited reads as sandboxed** on macOS, and it can leave its
+  connection to a child, so it must also be seen alive after the answer. A zombie
+  counts as gone: it has no path.
+- **What this shows.** That the peer is in a sandbox, not in this one. As §3.1 of
+  the design says of everything on one user account, the aim is not to make going
+  around it impossible but harder and visible. It ends the plain cases: a token left
+  in a file, a helper started outside by accident.
+- **`sandbox_check` is not a public API.** It has been stable for years, and it
+  fails closed: if it goes away, isolated sessions stop working and the taint shows.
+- **Hardened mode is not measured.** A daemon of another user may not be allowed to
+  ask. That also fails closed.
+
+## The verifier runs in the jail
+
+The merge queue runs a change's own tests, so a sandboxed agent's code came out of
+its sandbox there, under a profile written for a project's trusted build: everything
+allowed, a list closed, reads open on Linux. A verifier is only as strong as `lonca
+run` if it is the same sandbox, so it now is: `Jail`, with no socket and no proxy.
+
+- **This changes what existing policies do.** Builds could read the whole machine,
+  and now read the system and `PATH`. A rustup toolchain under the home directory
+  needs a new line, `verification.read`. It is a policy key because a change to what
+  tests can read is a policy change. It fails loudly, at the first build, and the
+  check stays `fail`, so nothing integrates unverified.
+- **`env_passthrough` opens directories, but not `HOME`.** A policy that passes
+  `CARGO_HOME=/opt/cargo` has said what it uses. `HOME` is passed for its name, so
+  that tools find `~`; opening it would undo the point.
+- **`TMPDIR` is the sandbox's**, even when listed in `env_passthrough`. Nothing
+  else can be written, and the shared temp directories are closed.
+- **No log format.** The check is evidence and its entry looks as it did.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

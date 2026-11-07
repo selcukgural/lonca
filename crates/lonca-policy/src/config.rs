@@ -118,8 +118,8 @@ unobserved_is_tainted = true
 # and marks the session tainted, "deny" refuses them.
 network = "taint"
 # Hosts that are part of the agent itself, such as its model's API
-# ("api.anthropic.com"). Connections to them are logged, go through whatever
-# `network` says, and do not taint the session. Exact names, no wildcards.
+# ("api.anthropic.com"). Connections to them are logged, pass even under
+# "deny", and do not taint the session. Exact names, no wildcards.
 agent_hosts = []
 # Let sandboxed commands reach loopback, private and link-local addresses.
 allow_private_network = false
@@ -210,6 +210,80 @@ when { context.recent_reverts >= 3 };
 forbid(principal is Lonca::Agent, action == Lonca::Action::"change.propose", resource)
 when { context.files > 50 || context.lines > 2000 };
 "#;
+
+/// What a hardened repository changes in [`DEFAULT_CONFIG`]. Each line is
+/// there once (checked by a test), so a default that moves is noticed.
+const HARDENED_SETTINGS: [(&str, &str); 3] = [
+    ("\nrequired = false\n", "\nrequired = true\n"),
+    ("\nrequire_sandbox = false\n", "\nrequire_sandbox = true\n"),
+    ("\nnetwork = \"taint\"\n", "\nnetwork = \"deny\"\n"),
+];
+/// Apart from the rest: a machine may have no key that proves presence.
+const PRESENCE_SETTING: (&str, &str) = (
+    "\nrequire_presence = false\n",
+    "\nrequire_presence = true\n",
+);
+
+/// What opens [`DEFAULT_POLICY`] and what opens a hardened one. The rules
+/// after it are the same.
+const OPEN_POLICY: &str = r#"// Lonca policy. Requests are allowed unless a rule below forbids them.
+"#;
+const OPEN_RULE: &str = "permit(principal, action, resource);\n";
+const HARDENED_POLICY_HEAD: &str = r#"// Lonca policy, hardened. An agent may do what is listed here and nothing
+// else: an action nobody listed is refused, and that includes one a later
+// version of Lonca adds.
+"#;
+const HARDENED_RULE: &str = r#"permit(principal is Lonca::Human, action, resource);
+
+@id("agent-work")
+permit(principal is Lonca::Agent, action in [
+  Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete",
+  Lonca::Action::"change.propose", Lonca::Action::"change.withdraw",
+  Lonca::Action::"lease.acquire", Lonca::Action::"lease.release",
+  Lonca::Action::"lease.renew", Lonca::Action::"lease.interest",
+  Lonca::Action::"negotiate", Lonca::Action::"cap.attenuate",
+  Lonca::Action::"cap.revoke", Lonca::Action::"session.end"
+], resource);
+"#;
+
+/// The settings a repository starts from. `Cooperative` suits a first run
+/// on a laptop; `Hardened` is what a hardened install's boundary is for.
+/// Any other word is refused where it is read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Profile {
+    Cooperative,
+    Hardened,
+}
+
+impl Profile {
+    pub fn name(self) -> &'static str {
+        match self {
+            Profile::Cooperative => "cooperative",
+            Profile::Hardened => "hardened",
+        }
+    }
+
+    /// `lonca.toml` and `policy.cedar` of a new repository. Without
+    /// `presence` a hardened one leaves `require_presence` off, for a
+    /// machine with no key that can prove it.
+    pub fn files(self, presence: bool) -> (String, String) {
+        if self == Profile::Cooperative {
+            return (DEFAULT_CONFIG.to_string(), DEFAULT_POLICY.to_string());
+        }
+        let mut config = DEFAULT_CONFIG.to_string();
+        for (from, to) in HARDENED_SETTINGS {
+            config = config.replace(from, to);
+        }
+        if presence {
+            config = config.replace(PRESENCE_SETTING.0, PRESENCE_SETTING.1);
+        }
+        let policy = DEFAULT_POLICY
+            .replace(OPEN_POLICY, HARDENED_POLICY_HEAD)
+            .replace(OPEN_RULE, HARDENED_RULE);
+        (config, policy)
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -813,6 +887,33 @@ impl PolicyBundle {
             .any(|p| config_pattern_matches(p, path))
     }
 
+    /// Where this repository stands below the hardened profile, for a
+    /// hardened install to say so. A rule is judged by what it does: an
+    /// action no rule could have listed must not pass.
+    pub fn below_hardened(&self) -> Vec<&'static str> {
+        let c = &self.config;
+        let v = &c.verification;
+        let agent = Actor::Agent {
+            name: "agent".into(),
+            session: "session".into(),
+        };
+        let open = self.evaluate(&agent, "lonca.unlisted", vec![]) == CedarOutcome::Allow;
+        [
+            (!c.approvals.require_presence, "approvals.require_presence"),
+            (!v.required, "verification.required"),
+            (!v.require_sandbox, "verification.require_sandbox"),
+            (
+                v.build.is_none() && v.test.is_none(),
+                "verification has no build or test command",
+            ),
+            (c.observation.network != "deny", "observation.network"),
+            (open, "policy.cedar permits actions nobody listed"),
+        ]
+        .into_iter()
+        .filter_map(|(below, what)| below.then_some(what))
+        .collect()
+    }
+
     /// Evaluates one request. Any evaluation error counts as a denial: a
     /// forbid rule that fails to evaluate must not silently stop applying.
     pub fn evaluate(
@@ -910,6 +1011,79 @@ impl PolicyBundle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bundle(profile: Profile, presence: bool) -> PolicyBundle {
+        let (config, policy) = profile.files(presence);
+        PolicyBundle::parse(&config, &policy).unwrap()
+    }
+
+    #[test]
+    fn the_cooperative_profile_is_the_default() {
+        let (config, policy) = Profile::Cooperative.files(true);
+        assert_eq!(config, DEFAULT_CONFIG);
+        assert_eq!(policy, DEFAULT_POLICY);
+        assert_eq!(Profile::Cooperative.name(), "cooperative");
+        assert_eq!(Profile::Hardened.name(), "hardened");
+        let word = serde_json::from_str::<Profile>("\"open\"");
+        assert!(word.is_err(), "an unknown profile is refused");
+    }
+
+    #[test]
+    fn the_hardened_profile_changes_each_setting_it_names() {
+        let c = bundle(Profile::Hardened, true).config;
+        assert!(c.approvals.require_presence);
+        assert!(c.verification.required);
+        assert!(c.verification.require_sandbox);
+        assert_eq!(c.observation.network, "deny");
+
+        let c = bundle(Profile::Hardened, false).config;
+        assert!(!c.approvals.require_presence);
+        assert!(c.verification.required && c.verification.require_sandbox);
+    }
+
+    #[test]
+    fn each_line_the_hardened_profile_changes_is_there_once() {
+        for (from, _) in HARDENED_SETTINGS.into_iter().chain([PRESENCE_SETTING]) {
+            assert_eq!(DEFAULT_CONFIG.matches(from).count(), 1, "{from}");
+        }
+        assert_eq!(DEFAULT_POLICY.matches(OPEN_POLICY).count(), 1);
+        assert_eq!(DEFAULT_POLICY.matches(OPEN_RULE).count(), 1);
+        let (_, policy) = Profile::Hardened.files(true);
+        assert!(!policy.contains(OPEN_RULE), "{policy}");
+        assert!(!policy.contains(OPEN_POLICY), "{policy}");
+        for rule in ["migrations-no-agent-delete", "auth-needs-two-humans"] {
+            assert!(policy.contains(rule), "the rules stay: {rule}");
+        }
+    }
+
+    #[test]
+    fn below_hardened_names_each_setting_that_falls_short() {
+        let cooperative = PolicyBundle::default_bundle();
+        assert_eq!(
+            cooperative.below_hardened(),
+            [
+                "approvals.require_presence",
+                "verification.required",
+                "verification.require_sandbox",
+                "verification has no build or test command",
+                "observation.network",
+                "policy.cedar permits actions nobody listed",
+            ]
+        );
+        let commands = "\nretries = 0\n";
+        let (config, policy) = Profile::Hardened.files(true);
+        let with = |line: &str| {
+            let config = config.replace(commands, &format!("{commands}{line}\n"));
+            PolicyBundle::parse(&config, &policy).unwrap()
+        };
+        let none: [&str; 0] = [];
+        assert_eq!(with("build = \"make\"").below_hardened(), none);
+        assert_eq!(with("test = \"make test\"").below_hardened(), none);
+        assert_eq!(
+            bundle(Profile::Hardened, true).below_hardened(),
+            ["verification has no build or test command"]
+        );
+    }
 
     #[test]
     fn a_session_rate_of_nothing_is_refused() {

@@ -11,9 +11,7 @@ use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileEntry, FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::chain::{Chain, Submission, replay_checked};
-use lonca_policy::config::{
-    CONFIG_FILE, DEFAULT_CONFIG, DEFAULT_POLICY, POLICY_FILE, PolicyBundle,
-};
+use lonca_policy::config::{CONFIG_FILE, POLICY_FILE, PolicyBundle};
 use lonca_policy::events::Told;
 use lonca_policy::state::State;
 
@@ -144,10 +142,6 @@ impl RepoHandle {
         self.head = Some(commit);
         self.chain.commit(&op);
         Ok(op)
-    }
-
-    pub fn write_default_policy(&self, time_ms: i64) -> Result<GitId> {
-        self.write_policy(DEFAULT_CONFIG, DEFAULT_POLICY, None, time_ms)
     }
 
     pub fn write_policy(

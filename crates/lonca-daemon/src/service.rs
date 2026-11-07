@@ -19,7 +19,7 @@ use lonca_core::ops::{
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileMap, GitId, Result, Store};
 use lonca_policy::chain::Submission;
-use lonca_policy::config::{UnparsedFiles, Verification};
+use lonca_policy::config::{Profile, UnparsedFiles, Verification};
 use lonca_policy::decide::{evidence_problems, level_for, valid_token};
 use lonca_policy::details;
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
@@ -28,7 +28,7 @@ use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
 use lonca_policy::state::{ChangeStatus, State};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate};
-use lonca_verify::Verifier;
+use lonca_verify::{Sandbox, Verifier};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -62,6 +62,9 @@ pub struct Settings {
     pub line_cap: usize,
     /// Where the network proxy listens (`host:port`), for `lonca run`.
     pub proxy: Option<String>,
+    /// A hardened install: a new repository starts hardened, and one that
+    /// stands below that is told so.
+    pub hardened: bool,
 }
 
 impl Settings {
@@ -71,11 +74,13 @@ impl Settings {
         allow_user_owned: bool,
         managed_settings: Option<PathBuf>,
         proxy: Option<String>,
+        hardened: bool,
     ) -> Self {
         Self {
             require_root_settings: !allow_user_owned,
             managed_settings,
             proxy,
+            hardened,
             ..Self::default()
         }
     }
@@ -95,7 +100,31 @@ impl Default for Settings {
             git: "git".into(),
             line_cap: MAX_LINE,
             proxy: None,
+            hardened: false,
         }
+    }
+}
+
+/// What a daemon does about the sandbox it found. A hardened one does not
+/// start without one unless told to, and then it says so at every start.
+/// `Ok` carries what to log.
+pub fn sandbox_at_start(
+    hardened: bool,
+    sandbox: Sandbox,
+    allowed: bool,
+) -> std::result::Result<Option<&'static str>, &'static str> {
+    match (sandbox, hardened, allowed) {
+        (Sandbox::None, true, false) => Err(
+            "no sandbox found: a hardened daemon does not run verification without one; \
+             install bubblewrap, or start it with --allow-unsandboxed",
+        ),
+        (Sandbox::None, true, true) => Ok(Some(
+            "--allow-unsandboxed: no sandbox found, verification commands run unsandboxed",
+        )),
+        (Sandbox::None, false, _) => Ok(Some(
+            "no sandbox found: verification commands run unsandboxed",
+        )),
+        _ => Ok(None),
     }
 }
 
@@ -1140,6 +1169,7 @@ impl Service {
                 "repository and human names: letters, digits, '.', '_', '-'",
             );
         }
+        let (profile, presence) = self.starting_profile(&p)?;
         let mut guard = self.lock();
         let inner = &mut *guard;
         if inner.repos.get(&p.repo).is_some_and(|r| r.initialized())
@@ -1196,7 +1226,8 @@ impl Service {
                     .or_fail()?
             }
         };
-        let policy = r.write_default_policy(now).or_fail()?;
+        let (config, rules) = profile.files(presence);
+        let policy = r.write_policy(&config, &rules, None, now).or_fail()?;
         // What a workspace of this tree will meet: files above the change
         // cap can never be proposed back, and a tree above one page is
         // fetched in pages. Said now, not at the first session.
@@ -1240,9 +1271,44 @@ impl Service {
             trunk,
         };
         inner.prepared.insert(p.repo, op.clone());
-        Ok(
-            json!({"op": op, "warnings": warnings, "large_files": large_files, "tree_bytes": tree_bytes}),
-        )
+        Ok(json!({
+            "op": op, "warnings": warnings, "large_files": large_files, "tree_bytes": tree_bytes,
+            "profile": profile.name(),
+        }))
+    }
+
+    /// The profile of a new repository, and whether it asks for presence.
+    /// A key that can not prove presence would be locked out of the
+    /// repository by its own first entry, so that is said before it is
+    /// made; leaving presence off is a word the human has to say.
+    fn starting_profile(
+        &self,
+        p: &PrepareInit,
+    ) -> std::result::Result<(Profile, bool), (String, String)> {
+        let own = if self.settings.hardened {
+            Profile::Hardened
+        } else {
+            Profile::Cooperative
+        };
+        let profile = p.profile.unwrap_or(own);
+        if profile == Profile::Cooperative {
+            return match p.without_presence {
+                true => fail(
+                    "invalid",
+                    "--without-presence goes with the hardened profile",
+                ),
+                false => Ok((profile, false)),
+            };
+        }
+        if !p.without_presence && p.human_key.alg != "p256-se" {
+            return fail(
+                "invalid",
+                "a hardened repository requires presence and this key can not prove it: \
+                 use `lonca human keygen --secure-enclave`, or on a machine with no such \
+                 key pass --without-presence",
+            );
+        }
+        Ok((profile, !p.without_presence))
     }
 
     fn init(&self, auth: &Auth, p: HumanSubmit) -> Hr {
@@ -1291,7 +1357,12 @@ impl Service {
         let mut inner = self.lock();
         let now = self.now();
         let r = Self::repo(&mut inner, &name)?;
-        let unparsed = r.policy().ok().map(|p| p.config.leases.unparsed_files);
+        let policy = r.policy().ok();
+        let unparsed = policy.as_ref().map(|p| p.config.leases.unparsed_files);
+        let below_hardened = match &policy {
+            Some(p) if self.settings.hardened => p.below_hardened(),
+            _ => vec![],
+        };
         let s = &r.chain.state;
         let sessions: Vec<Value> = s
             .sessions
@@ -1372,10 +1443,31 @@ impl Service {
         Ok(json!({
             "interests": interests, "reservations": s.reservations_at(now),
             "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "frozen": s.frozen, "queue": s.queue,
-            "unparsed_files": unparsed,
+            "unparsed_files": unparsed, "below_hardened": below_hardened,
             "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
             "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now, "daemon_key": s.daemon_key,
         }))
+    }
+
+    /// What to say at the start about `sandbox`: the repositories whose
+    /// verification can not pass without one.
+    pub fn sandbox_warnings(&self, sandbox: Sandbox) -> Vec<String> {
+        if sandbox != Sandbox::None {
+            return vec![];
+        }
+        let mut inner = self.lock();
+        let mut out = Vec::new();
+        for (name, r) in &mut inner.repos {
+            if r.policy()
+                .is_ok_and(|p| p.config.verification.require_sandbox)
+            {
+                out.push(format!(
+                    "{name} requires a sandbox and there is none: \
+                     its changes will end in unsandboxed_verification"
+                ));
+            }
+        }
+        out
     }
 
     /// The log from `from`. With `wait_ms` and nothing past `from`, the
@@ -3409,17 +3501,19 @@ mod tests {
     #[test]
     fn the_daemon_trusts_only_root_s_files_unless_told_otherwise() {
         let file = Some(PathBuf::from("/m"));
-        let strict = Settings::for_daemon(false, file.clone(), Some("p".into()));
+        let strict = Settings::for_daemon(false, file.clone(), Some("p".into()), true);
         assert!(strict.require_root_settings);
         assert_eq!(strict.managed_settings, file);
         assert_eq!(strict.proxy.as_deref(), Some("p"));
-        assert!(!Settings::for_daemon(true, None, None).require_root_settings);
+        assert!(strict.hardened);
+        assert!(!Settings::for_daemon(true, None, None, false).require_root_settings);
+        assert!(!Settings::for_daemon(true, None, None, false).hardened);
     }
 
     #[test]
     fn the_proxy_s_port_is_read_from_its_address() {
         let port = |proxy: Option<&str>| {
-            Settings::for_daemon(false, None, proxy.map(String::from)).proxy_port()
+            Settings::for_daemon(false, None, proxy.map(String::from), false).proxy_port()
         };
         assert_eq!(port(Some("127.0.0.1:8471")), Some(8471));
         assert_eq!(port(Some("[::1]:8472")), Some(8472));
@@ -3539,6 +3633,7 @@ mod tests {
                 require_root_settings: false,
                 git: "git".into(),
                 line_cap: MAX_LINE,
+                hardened: false,
                 proxy: None,
             },
             Arc::new(|| 1_760_000_000_000),

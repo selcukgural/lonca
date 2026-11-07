@@ -120,6 +120,13 @@ pub struct PrepareInit {
     pub import_from: Option<String>,
     #[serde(default)]
     pub branch: Option<String>,
+    /// The settings to start from. `None`: the install's own, hardened on a
+    /// hardened daemon.
+    #[serde(default)]
+    pub profile: Option<lonca_policy::config::Profile>,
+    /// A hardened repository on a machine with no presence key.
+    #[serde(default)]
+    pub without_presence: bool,
 }
 
 /// `repo.restore`: a new repository from a backup bundle, a bare store or

@@ -267,17 +267,22 @@ daemon key (foreign, waiting for `daemon.recover`) are not listed.
 
 ```json
 {"repo": string, "human": string, "human_key": {"alg": "ed25519" | "p256-se", "public": hex},
- "import_from": string | null, "branch": string | null}
+ "import_from": string | null, "branch": string | null,
+ "profile": "cooperative" | "hardened" | null, "without_presence": boolean}
 ```
 
 Names: letters, digits, `.`, `_`, `-`, at most 64. `import_from` is a
 remote the daemon fetches `branch` (default `main`) from: an absolute
 path, `https://`, `ssh://` or `user@host:path`. Result `{"op": op,
 "warnings": [string], "large_files": [{"path", "size"}], "tree_bytes":
-integer}`: the `repo.init` operation to sign, and what a workspace of
-this tree will meet (files above the change cap, a tree above one
-page). Errors: `invalid`, `conflict` (the repository exists), `git`
-(the fetch failed).
+integer, "profile": "cooperative" | "hardened"}`: the `repo.init` operation
+to sign, what a workspace of this tree will meet (files above the change
+cap, a tree above one page), and the profile the policy starts from
+(default: `hardened` on a hardened daemon, else `cooperative`). A hardened
+profile refuses a key that can not prove presence unless
+`without_presence` is true, and that word goes with no other profile.
+Errors: `invalid`, `conflict` (the repository exists), `git` (the fetch
+failed).
 
 ### `repo.init`
 
@@ -322,11 +327,14 @@ with a signed `daemon.rotate` through `human.submit`.
 {
   "repo": string, "trunk": id, "policy": id, "frozen": string | null,
   "queue": [change id], "next_seq": integer, "head_hash": hex, "now_ms": time,
-  "daemon_key": hex,
+  "daemon_key": hex, "below_hardened": [string],
   "humans": {"<name>": {"alg": string, "public": hex, "recovery": hex | null}},
   "sessions": [session], "leases": [lease], "changes": [change], "pending": [pending]
 }
 ```
+
+- **below_hardened**: what this repository's policy leaves below the hardened
+  profile, on a hardened daemon. Always empty on a cooperative one.
 
 - **session**: `{"id", "agent", "task", "parent": string | null,
   "level": "unobserved" | "hooks" | "hooks_sandbox" | "isolated",
@@ -925,7 +933,7 @@ Exit codes:
 - `lease interest SYMBOL… --json`: the same shape; `set` is `null`.
 - `events --from N --json`: the `events` result.
 - `init --json`: `{"repo", "trunk", "seq", "decision", "warnings":
-  [string]}`. The warnings are those of `repo.prepare_init`; with
+  [string], "profile"}`. The warnings are those of `repo.prepare_init`; with
   `--json` they are not repeated on stderr.
 - `workspace create --json`: `{"workspace": absolute path, "repo",
   "base"}`.
@@ -986,7 +994,9 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `scope.scratch`, `hook.bind.scratch`, `session start --scratch`
   (#78); `tree[].size`, `blobs`, `repo.prepare_init.warnings` (#79);
   `change.diff`, `change.get.evidence` (#80); the `reject` operation
-  (#81); `trunk.bundle`, `trunk.distance` (#83); sections as symbols
+  (#81); `trunk.bundle`, `trunk.distance` (#83); `profile` and
+  `without_presence` on `repo.prepare_init`, `status.below_hardened` (#54);
+  sections as symbols
   (#46); `--json` on `lease`,
   `init` and `workspace create`, `details` in `propose --json`, and a
   denial exits 1 on every command (#97); `continues` on `session.start`,

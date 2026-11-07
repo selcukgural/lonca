@@ -2354,6 +2354,42 @@ What they refuse is counted in `ping` as `refused`.
   `from` rather than the whole log. `lonca log` and `lonca doctor` read on in pages,
   so a long log still prints whole.
 
+## Secure by default (#54)
+
+The defaults suit a first run on a laptop, and a hardened install used to keep them
+and print advice. A repository now starts from a **profile**: `lonca init --profile
+cooperative|hardened`. docs/guide/profiles.md lists what each one sets.
+
+- **A hardened daemon starts hardened repositories.** The installers do not run
+  `lonca init`, so "the installers' default" can only live in the daemon, which
+  reads the same root-owned file as its clients. `--profile cooperative` still works
+  there: it is a human's word, and `status` and `doctor` go on saying so.
+- **A file key is refused by a hardened profile, not silently let through.**
+  `require_presence` is judged by the policy in force, so genesis passes with any key
+  and the very next human signature is `presence_required`, for good: the policy
+  update that could undo it needs presence too. Linux has no presence key yet (#17).
+  Weakening the profile to fit the key would be silent, so `repo.prepare_init` refuses
+  and names `--without-presence`, which leaves that one setting off and shows up in
+  `below_hardened` from then on. It goes with the hardened profile only.
+- **The list is of what an agent does.** `change.*`, `lease.*`, `negotiate`,
+  `cap.attenuate`, `cap.revoke`, `session.end` and the three `file.*` actions: what
+  `agent_grantable()` allows and an agent's own lifecycle, and a test holds the list
+  to that. Humans keep a blanket `permit`: every op of theirs carries a signature and
+  a list would only lock them out of an op it forgot, the policy update included.
+- **`below_hardened` asks the policy, it does not read it.** An action nobody could
+  have listed is evaluated for an agent; if it passes, the rules are open however they
+  are spelled. A `when` that reads a context key this request lacks evaluates to an
+  error, so such a rule is not seen. It is a warning, not a boundary.
+- **`verification.required` with no command checks nothing**, so that is on the list
+  too, and a fresh hardened repository shows it until a human sets `build` or `test`.
+- **A hardened daemon does not start without a sandbox**; `--allow-unsandboxed` lets
+  it, says so at each start, and `doctor` fails on it. On a cooperative daemon a missing
+  sandbox stays a warning, now at start as well, naming each repository whose
+  `require_sandbox` means its changes will end in `unsandboxed_verification`.
+- **The installers' advice became checks**: `below_hardened` for presence, a `doctor`
+  check on hardened installs for a sudo that asks for nothing, and the Linux installer
+  stops without bubblewrap, since the service would not start.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

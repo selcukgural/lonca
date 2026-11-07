@@ -97,6 +97,10 @@ impl Env {
 
 /// An in-process daemon on `home`, serving `sock`.
 fn start_daemon(root: &Path, home: &Path, sock: &Path) {
+    start_daemon_hardened(root, home, sock, false)
+}
+
+fn start_daemon_hardened(root: &Path, home: &Path, sock: &Path, hardened: bool) {
     let proxy = lonca_daemon::proxy::bind("127.0.0.1:0").unwrap();
     let settings = Settings {
         managed_settings: Some(root.join("managed.json")),
@@ -104,6 +108,7 @@ fn start_daemon(root: &Path, home: &Path, sock: &Path) {
         git: "git".into(),
         line_cap: lonca_daemon::protocol::MAX_LINE,
         proxy: proxy.local_addr().ok().map(|a| a.to_string()),
+        hardened,
     };
     let svc = Service::open(Home::new(home), settings, lonca_daemon::system_clock()).unwrap();
     let listener = lonca_daemon::server::bind(sock).unwrap();
@@ -2758,6 +2763,112 @@ fn doctor_warns_of_a_file_key_in_a_repository_that_requires_presence() {
             .as_str()
             .unwrap()
             .contains("requires presence")
+    );
+}
+
+/// A repository of a hardened install is told apart by what it can do, and
+/// a repository below that is reported by `status` and `doctor` (issue #54).
+#[test]
+fn a_hardened_daemon_starts_hardened_and_reports_what_falls_short() {
+    let dir = tempfile::Builder::new().prefix("lc").tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let sock = root.join("s");
+    start_daemon_hardened(&root, &root.join("home"), &sock, true);
+    let e = Env {
+        _dir: dir,
+        root,
+        sock,
+    };
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+
+    // The install's own profile, which a file key can not meet by accident.
+    let o = e.cmd(r, &["init", "plain"]).output().unwrap();
+    assert!(!o.status.success());
+    assert!(text(&o.stderr).contains("--without-presence"), "{o:?}");
+
+    let hard = ["init", "demo", "--without-presence", "--json"];
+    let out = parse(&e.run(r, &hard));
+    assert_eq!(out["profile"], "hardened", "{out}");
+    let shown = e.run(r, &["policy", "show", "--repo", "demo"]);
+    assert!(shown.contains("network = \"deny\""), "{shown}");
+    assert!(shown.contains("\nrequire_sandbox = true"), "{shown}");
+    assert!(shown.contains("\nrequire_presence = false"), "{shown}");
+
+    let soft = ["init", "soft", "--profile", "cooperative"];
+    let out = e.run(r, &soft);
+    assert!(out.contains("profile cooperative"), "{out}");
+
+    let status = e.run(r, &["status", "--repo", "soft"]);
+    assert!(status.contains("BELOW HARDENED"), "{status}");
+    assert!(status.contains("approvals.require_presence"), "{status}");
+    let status = e.run(r, &["status", "--repo", "demo", "--json"]);
+    let below = parse(&status)["below_hardened"].clone();
+    assert_eq!(
+        below,
+        serde_json::json!([
+            "approvals.require_presence",
+            "verification has no build or test command"
+        ])
+    );
+
+    let me = current_uid().to_string();
+    let out = e
+        .cmd(r, &["doctor", "--json"])
+        .env("LONCA_TEST_DAEMON_UID", &me)
+        .output()
+        .unwrap();
+    let report = parse(&text(&out.stdout));
+    assert_eq!(report["mode"], "hardened", "{report}");
+    let soft = checks(&report, "settings soft");
+    assert_eq!(soft["level"], "warn", "{report}");
+    assert!(soft["detail"].as_str().unwrap().contains("policy.cedar"));
+    assert_eq!(checks(&report, "settings demo")["level"], "warn");
+    assert!(checks(&report, "sudo")["detail"].is_string(), "{report}");
+}
+
+/// An agent gets on with its work in a hardened repository: the list of
+/// actions leaves nothing out that a session needs (issue #54).
+#[test]
+fn an_agent_works_in_a_hardened_repository() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    let init = [
+        "init",
+        "demo",
+        "--profile",
+        "hardened",
+        "--without-presence",
+    ];
+    let out = e.run(r, &init);
+    assert!(out.contains("profile hardened"), "{out}");
+    e.run(r, &["workspace", "create", "hws", "--repo", "demo"]);
+    let hws = r.join("hws");
+    std::fs::create_dir_all(hws.join("src")).unwrap();
+    std::fs::write(hws.join("src/lib.rs"), "pub fn charge() {}\n").unwrap();
+    assert!(e.run(&hws, &["propose", "-i", "seed"]).contains("allow"));
+    e.settle();
+    e.run(r, &session_args("src/**", &["--workspace", "w"]));
+    let ws = r.join("w");
+    let held = parse(&e.run(
+        &ws,
+        &[
+            "lease",
+            "acquire",
+            "-i",
+            "fix",
+            "src/lib.rs#charge",
+            "--json",
+        ],
+    ));
+    assert_eq!(held["decision"]["outcome"], "allow", "{held}");
+    std::fs::write(ws.join("src/lib.rs"), "pub fn charge() { let _ = 1; }\n").unwrap();
+    let out = e.cmd(&ws, &["propose", "-i", "fix"]).output().unwrap();
+    assert!(
+        !text(&out.stdout).contains("policy_default_deny"),
+        "{}",
+        text(&out.stdout)
     );
 }
 

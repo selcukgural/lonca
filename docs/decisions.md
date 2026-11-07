@@ -2049,6 +2049,25 @@ no hook, no settings file, no vendor.
 - **Not built.** A container backend, which is one more `Sandbox` arm. `sandbox-exec`
   is deprecated by Apple and still ships.
 
+## The verifier runs in the jail
+
+The merge queue runs a change's own tests, so a sandboxed agent's code came out of
+its sandbox there, under a profile written for a project's trusted build: everything
+allowed, a list closed, reads open on Linux. A verifier is only as strong as `lonca
+run` if it is the same sandbox, so it now is: `Jail`, with no socket and no proxy.
+
+- **This changes what existing policies do.** Builds could read the whole machine,
+  and now read the system and `PATH`. A rustup toolchain under the home directory
+  needs a new line, `verification.read`. It is a policy key because a change to what
+  tests can read is a policy change. It fails loudly, at the first build, and the
+  check stays `fail`, so nothing integrates unverified.
+- **`env_passthrough` opens directories, but not `HOME`.** A policy that passes
+  `CARGO_HOME=/opt/cargo` has said what it uses. `HOME` is passed for its name, so
+  that tools find `~`; opening it would undo the point.
+- **`TMPDIR` is the sandbox's**, even when listed in `env_passthrough`. Nothing
+  else can be written, and the shared temp directories are closed.
+- **No log format.** The check is evidence and its entry looks as it did.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

@@ -5,6 +5,7 @@
 //! [`Attestation`]s in the operation log and never recomputed on replay.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,8 @@ use lonca_policy::config::Verification;
 use lonca_symbols::{Lang, parse};
 
 pub mod jail;
+
+use jail::Jail;
 
 const OUTPUT_TAIL: usize = 64 * 1024;
 
@@ -61,39 +64,6 @@ impl Sandbox {
             Sandbox::None => "none",
         }
     }
-}
-
-/// Seatbelt profile: no network, writes only inside the work directory and
-/// the system temp directories, no reads of common credential stores.
-pub fn seatbelt_profile(workdir: &Path, home: Option<&Path>) -> String {
-    let q = |p: &Path| {
-        p.display()
-            .to_string()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-    };
-    let mut secrets = String::new();
-    if let Some(h) = home {
-        for d in [
-            ".ssh",
-            ".aws",
-            ".gnupg",
-            ".config/gh",
-            ".docker",
-            ".kube",
-            ".netrc",
-            ".lonca",
-        ] {
-            secrets.push_str(&format!(
-                "(deny file-read* (subpath \"{}\"))\n",
-                q(&h.join(d))
-            ));
-        }
-    }
-    format!(
-        "(version 1)\n(allow default)\n(deny network*)\n(allow network* (remote unix-socket))\n{secrets}(deny file-write*)\n(allow file-write* (subpath \"{w}\") (subpath \"/private/tmp\") (subpath \"/private/var/folders\") (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/dtracehelper\"))\n",
-        w = q(workdir)
-    )
 }
 
 pub struct Verifier {
@@ -220,6 +190,42 @@ impl Verifier {
         Ok(out)
     }
 
+    /// The sandbox a command runs in. It is the agent's code that runs, so
+    /// this is the same sandbox as the agent's own, with no way out at all:
+    /// no socket, no proxy, and of what is closed only what the policy
+    /// names. `tree` and `writable` are this run's.
+    fn jail(&self, tree: &Path, writable: Vec<PathBuf>, cfg: &Verification) -> Jail {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let mut secrets: Vec<PathBuf> = [
+            std::env::var_os("LONCA_HOME").map(PathBuf::from),
+            std::env::var_os("LONCA_HUMANS").map(PathBuf::from),
+            home.as_ref().map(|h| h.join(".lonca")),
+            home.as_ref().map(|h| h.join(".config/lonca")),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p.canonicalize().ok())
+        .collect();
+        // The store holds this run's tree, so it can not be closed as a
+        // whole here; `opened` keeps every read off it.
+        let store = self.scratch.parent().and_then(|p| p.canonicalize().ok());
+        let real = home.as_ref().and_then(|h| h.canonicalize().ok());
+        let mut stores = secrets.clone();
+        stores.extend(store);
+        secrets.retain(|s| !tree.starts_with(s));
+        let closed: Vec<PathBuf> = stores.iter().cloned().chain(real.clone()).collect();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let mut readable = jail::program_trees(&path, &[], &closed, &[tree.to_path_buf()]);
+        readable.extend(opened(cfg, home.as_deref(), &stores, real.as_deref()));
+        Jail {
+            workspace: tree.to_path_buf(),
+            writable,
+            readable,
+            secrets,
+            ..Default::default()
+        }
+    }
+
     fn env(&self, cmd: &str) -> String {
         sha256_hex(format!("{}\0{cmd}", self.sandbox.name()).as_bytes())
     }
@@ -239,50 +245,16 @@ impl Verifier {
     ) -> (CheckResult, BTreeMap<String, String>, String) {
         let tree = root.join("tree");
         let home = root.join("home");
+        let tmp = root.join("tmp");
         let _ = fs::create_dir_all(&home);
-        let real_home = std::env::var_os("HOME").map(PathBuf::from);
-        let mut command = match self.sandbox {
-            Sandbox::Seatbelt => {
-                let mut c = Command::new("/usr/bin/sandbox-exec");
-                c.arg("-p")
-                    .arg(seatbelt_profile(root, real_home.as_deref()))
-                    .arg("/bin/sh")
-                    .arg("-c")
-                    .arg(cmd);
-                c
-            }
-            Sandbox::Bubblewrap => {
-                let mut c = Command::new("bwrap");
-                c.args([
-                    "--ro-bind",
-                    "/",
-                    "/",
-                    "--dev",
-                    "/dev",
-                    "--proc",
-                    "/proc",
-                    "--tmpfs",
-                    "/tmp",
-                ])
-                .arg("--bind")
-                .arg(root)
-                .arg(root)
-                .args([
-                    "--unshare-net",
-                    "--die-with-parent",
-                    "--new-session",
-                    "/bin/sh",
-                    "-c",
-                    cmd,
-                ]);
-                c
-            }
-            Sandbox::None => {
-                let mut c = Command::new("/bin/sh");
-                c.arg("-c").arg(cmd);
-                c
-            }
-        };
+        let _ = fs::create_dir_all(&tmp);
+        let jail = self.jail(&tree, vec![home.clone(), tmp.clone()], cfg);
+        let argv: [OsString; 3] = ["/bin/sh".into(), "-c".into(), cmd.into()];
+        let mut command = jail.command(self.sandbox, &argv).unwrap_or_else(|| {
+            let mut c = Command::new("/bin/sh");
+            c.arg("-c").arg(cmd);
+            c
+        });
         command
             .current_dir(&tree)
             .env_clear()
@@ -291,6 +263,7 @@ impl Verifier {
                 std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into()),
             )
             .env("HOME", &home)
+            .env("TMPDIR", &tmp)
             .env("LANG", "C.UTF-8")
             .env("LONCA_VERIFY", "1")
             .stdin(Stdio::null())
@@ -298,7 +271,8 @@ impl Verifier {
             .stderr(Stdio::piped());
         let mut passed: Vec<String> = Vec::new();
         for name in &cfg.env_passthrough {
-            if lonca_policy::config::env_name_forbidden(name) {
+            // The sandbox's own: nothing else can be written.
+            if lonca_policy::config::env_name_forbidden(name) || name == "TMPDIR" {
                 continue;
             }
             if let Some(v) = std::env::var_os(name) {
@@ -314,7 +288,7 @@ impl Verifier {
             passed.push(format!("{name}="));
         }
         let header = format!(
-            "lonca verify: sandbox {}, env PATH HOME LANG LONCA_VERIFY{}{}\n",
+            "lonca verify: sandbox {}, env PATH HOME TMPDIR LANG LONCA_VERIFY{}{}\n",
             self.sandbox.name(),
             if passed.is_empty() { "" } else { " " },
             passed.join(" ")
@@ -381,6 +355,35 @@ impl Verifier {
         };
         (result, details, log)
     }
+}
+
+/// What the policy opens for reading: `verification.read`, and directories
+/// it passes through the environment, as they really are. What holds or lies
+/// in something closed stays closed, and so does the home directory as a
+/// whole, which is what `HOME` in `env_passthrough` would otherwise open.
+fn opened(
+    cfg: &Verification,
+    home: Option<&Path>,
+    closed: &[PathBuf],
+    real_home: Option<&Path>,
+) -> Vec<PathBuf> {
+    let named = cfg.read.iter().filter_map(|p| match p.strip_prefix("~/") {
+        Some(rest) => home.map(|h| h.join(rest)),
+        None => Some(PathBuf::from(p)),
+    });
+    let passed = cfg.env_passthrough.iter();
+    let passed = passed.filter_map(|n| std::env::var_os(n).map(PathBuf::from));
+    let mut out = Vec::new();
+    for p in named.chain(passed.filter(|p| p.is_absolute() && p.is_dir())) {
+        let Ok(p) = p.canonicalize() else {
+            continue;
+        };
+        let holds_home = real_home.is_some_and(|h| h.starts_with(&p));
+        if !holds_home && jail::holding_secrets(&p, closed).is_none() && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
 }
 
 fn attestation(
@@ -525,6 +528,91 @@ mod tests {
         assert_eq!(r[0].details["sandbox"], v.sandbox.name());
     }
 
+    /// The code a change brings runs here, so what it can reach matters as
+    /// much as in `lonca run`.
+    #[test]
+    fn proposed_code_is_held_like_the_agent_that_wrote_it() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("store/scratch"));
+        if v.sandbox == Sandbox::None {
+            return;
+        }
+        let home = dirs_home();
+        let probe = format!("ls {} >/dev/null 2>&1", home.display());
+        let mut c = cfg(None, Some(&probe));
+        c.env_passthrough = vec!["HOME".into()];
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Fail, "the home stays closed");
+        let store_file = dir.path().join("store/key");
+        fs::create_dir_all(store_file.parent().unwrap()).unwrap();
+        fs::write(&store_file, "secret").unwrap();
+        let probe = format!("cat {}", store_file.display());
+        let mut c = cfg(None, Some(&probe));
+        c.read = vec![dir.path().join("store").display().to_string()];
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Fail, "the store stays closed");
+        let r = v
+            .run(
+                &store,
+                &files,
+                &tree,
+                &cfg(None, Some("echo x > \"$TMPDIR/t\"")),
+            )
+            .unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+    }
+
+    #[test]
+    fn the_policy_opens_a_tree_for_reading() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("store/scratch"));
+        if v.sandbox == Sandbox::None {
+            return;
+        }
+        let tool = dir.path().join("tool");
+        fs::create_dir_all(&tool).unwrap();
+        fs::write(tool.join("config"), "x").unwrap();
+        let probe = format!("cat {}/config", tool.display());
+        let mut c = cfg(None, Some(&probe));
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Fail, "closed until named");
+        c.read = vec![tool.display().to_string()];
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+    }
+
+    #[test]
+    fn what_is_opened_is_named_exists_and_stays_off_what_is_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let home = root.join("home");
+        let cargo = home.join(".cargo");
+        let store = root.join("store");
+        fs::create_dir_all(&cargo).unwrap();
+        fs::create_dir_all(store.join("sub")).unwrap();
+        let c = Verification {
+            read: vec![
+                "~/.cargo".into(),
+                store.display().to_string(),
+                store.join("sub").display().to_string(),
+                root.display().to_string(),
+                home.display().to_string(),
+                "/no/such/tree".into(),
+                cargo.display().to_string(),
+            ],
+            ..Default::default()
+        };
+        let closed = [store.clone()];
+        let got = opened(&c, Some(&home), &closed, Some(&home));
+        assert_eq!(got, std::slice::from_ref(&cargo));
+        // With no home known, `~` means nothing.
+        assert!(
+            opened(&c, None, &closed, None)
+                .iter()
+                .all(|p| p != &root.join(".cargo"))
+        );
+    }
+
     fn dirs_home() -> PathBuf {
         PathBuf::from(std::env::var("HOME").unwrap())
     }
@@ -546,7 +634,10 @@ mod tests {
         assert_eq!(r[0].result, CheckResult::Fail, "nothing passes unasked");
         let log = String::from_utf8(store.read_blob(r[0].log.as_ref().unwrap()).unwrap()).unwrap();
         assert!(log.starts_with("lonca verify: sandbox "), "{log}");
-        assert!(log.contains("env PATH HOME LANG LONCA_VERIFY\n"), "{log}");
+        assert!(
+            log.contains("env PATH HOME TMPDIR LANG LONCA_VERIFY\n"),
+            "{log}"
+        );
 
         let mut c = cfg(None, Some(probe));
         c.env_passthrough = vec![
@@ -612,16 +703,11 @@ mod tests {
             .unwrap();
         let mut c = cfg(Some("cargo build --offline"), Some("cargo test --offline"));
         c.timeout_seconds = 600;
-        c.env_passthrough = [
-            "HOME",
-            "CARGO_HOME",
-            "RUSTUP_HOME",
-            "RUSTUP_TOOLCHAIN",
-            "TMPDIR",
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect();
+        c.env_passthrough = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        c.read = vec!["~/.cargo".into(), "~/.rustup".into()];
         let r = v.run(&store, &files, &tree, &c).unwrap();
         assert_eq!(
             (r[0].result, r[1].result),
@@ -633,7 +719,10 @@ mod tests {
             // Under rustup, the bare run is the failure the guide explains.
             let log =
                 String::from_utf8(store.read_blob(bare[0].log.as_ref().unwrap()).unwrap()).unwrap();
-            assert!(log.contains("env PATH HOME LANG LONCA_VERIFY\n"), "{log}");
+            assert!(
+                log.contains("env PATH HOME TMPDIR LANG LONCA_VERIFY\n"),
+                "{log}"
+            );
         }
     }
 

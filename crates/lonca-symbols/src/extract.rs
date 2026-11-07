@@ -2197,6 +2197,21 @@ mod tests {
         }
     }
 
+    /// What touches an item of a list counts as what stands behind it, as
+    /// what touches it in front does.
+    #[test]
+    fn a_comment_that_touches_a_list_item_is_its_neighbour() {
+        let src = "class C { int a/*c*/, b; }\n";
+        let p = parse(Lang::named("csharp"), src);
+        let comment = src.find("/*c*/").unwrap();
+        let around = |name: &str| find(&p.syms, name).around;
+        assert_eq!(
+            around("C.a"),
+            (Some(src.find(" a").unwrap()), Some(comment))
+        );
+        assert_eq!(around("C.b"), (Some(comment + "/*c*/".len()), None));
+    }
+
     /// What the names and signatures of a file hold, as `level` counts them.
     fn spent_in(syms: &[Sym]) -> usize {
         let own = |s: &Sym| s.name.len() + s.signature.as_ref().map_or(0, String::len);

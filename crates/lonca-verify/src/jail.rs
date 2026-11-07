@@ -42,6 +42,9 @@ pub struct Jail {
     /// A human's choice, shown by [`Jail::name`]. On Linux loopback is the
     /// sandbox's own and always there.
     pub loopback: bool,
+    /// macOS: a Mach name nothing provides, allowed so that a process can
+    /// be told to be in this sandbox from outside it.
+    pub mark: Option<String>,
 }
 
 /// Mach services a command needs to start and that open no way out: name
@@ -133,6 +136,10 @@ impl Jail {
         );
         for name in MACH_SERVICES {
             out += &format!("(allow mach-lookup (global-name \"{name}\"))\n");
+        }
+        if let Some(mark) = &self.mark {
+            let mark = quoted(Path::new(mark));
+            out += &format!("(allow mach-lookup (global-name {mark}))\n");
         }
         let system = MAC_SYSTEM.map(PathBuf::from);
         out += &format!("(allow file-read* {})\n", subpaths(&system));
@@ -327,6 +334,7 @@ mod tests {
             proxy_port: Some(1234),
             relay: None,
             loopback: false,
+            mark: None,
         }
     }
 
@@ -400,6 +408,7 @@ mod tests {
         assert_eq!(j.name(Sandbox::Seatbelt), "seatbelt");
         let open = Jail {
             loopback: true,
+            mark: None,
             ..jail()
         };
         at(
@@ -429,6 +438,12 @@ mod tests {
     fn a_seatbelt_profile_names_only_the_harmless_services() {
         let p = jail().seatbelt();
         assert_eq!(p.matches("(allow mach-lookup").count(), MACH_SERVICES.len());
+        let marked = Jail {
+            mark: Some("lonca.run.x".into()),
+            ..jail()
+        };
+        let line = "(allow mach-lookup (global-name \"lonca.run.x\"))\n";
+        assert!(marked.seatbelt().contains(line));
         for name in MACH_SERVICES {
             at(&p, &format!("(global-name \"{name}\")"));
         }

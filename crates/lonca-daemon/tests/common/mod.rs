@@ -246,8 +246,16 @@ impl Env {
         self.human(op)
     }
 
+    /// A session under Claude Code, the harness [`Env::bind`] locks.
     pub fn session(&mut self, id: &str, paths: &[&str]) -> String {
-        let op = self.session_op(id, paths, None);
+        self.session_under(id, paths, Some("claude-code"))
+    }
+
+    pub fn session_under(&mut self, id: &str, paths: &[&str], harness: Option<&str>) -> String {
+        let mut op = self.session_op(id, paths, None);
+        if let Op::SessionStart { harness: named, .. } = &mut op {
+            *named = harness.map(str::to_string);
+        }
         let r = self.human(op);
         r["token"].as_str().expect("token").to_string()
     }
@@ -284,6 +292,7 @@ impl Env {
             },
             expires_ms: self.now() + 3_600_000,
             continues,
+            harness: Some("claude-code".into()),
         }
     }
 

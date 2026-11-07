@@ -16,8 +16,8 @@ use common::*;
 
 use lonca_audit::{Options, audit};
 use lonca_core::canonical::canonical_bytes;
-use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_LEGACY};
-use lonca_core::ops::{CheckKind, ObsKind};
+use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_LEGACY, OpEntry};
+use lonca_core::ops::{CheckKind, ObsKind, ObservationLevel};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use std::collections::BTreeSet;
 
@@ -391,6 +391,7 @@ fn scratch_roots(e: &mut Env) {
         },
         expires_ms: e.now() + 3_600_000,
         continues: None,
+        harness: None,
     };
     let r = e.human(start);
     allowed(r.clone());
@@ -467,6 +468,7 @@ fn human_keys(e: &mut Env) {
         },
         expires_ms: e.now() + 3_600_000,
         continues: None,
+        harness: None,
     };
     let body = json!({"op": start, "sig": sign_ed25519(&bora, "bora", "demo", &start, e.now())});
     // Bora submits on bora's own session (logins are not log entries).
@@ -695,6 +697,7 @@ fn scratch_roots_in_an_old_format_entry_are_refused() {
         },
         expires_ms: e.now() + 60_000,
         continues: None,
+        harness: None,
     };
     assert_eq!(e.human(start)["decision"]["outcome"], "allow");
     assert!(*formats(&e).last().unwrap() >= 5);
@@ -736,6 +739,7 @@ fn a_reject_in_an_old_format_entry_is_refused() {
     rewrite_log(&e, |entries| {
         for x in entries.iter_mut() {
             x.format = 5;
+            forget_harness(&e, x);
         }
     });
     let err = match open_service(&e) {
@@ -902,6 +906,16 @@ fn golden_v13_log_still_verifies_replays_and_audits() {
     assert!(stopped, "a key met the lease on its name");
 }
 
+/// A log from before format 20 has no harness on a start, and what the human
+/// signed did not either.
+fn forget_harness(e: &Env, x: &mut OpEntry) {
+    if let Op::SessionStart { harness, .. } = &mut x.op {
+        *harness = None;
+        let sig = lonca_policy::human::sign_ed25519(&e.human, "ayse", "demo", &x.op, x.time_ms);
+        x.human = Some(sig);
+    }
+}
+
 #[test]
 fn golden_v14_log_still_verifies_replays_and_audits() {
     let ops = check_golden(
@@ -918,6 +932,29 @@ fn golden_v14_log_still_verifies_replays_and_audits() {
         reasons.into_iter().any(|r| r.starts_with(held)),
         "the old name met the new one"
     );
+}
+
+#[test]
+fn golden_v20_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v20.bundle",
+        "c09b860f11355bf6604dab51ae448b93febfc3adf589948dbd6a5e8c6d721f56",
+        20,
+    );
+    let named = ops.iter().filter(
+        |o| matches!(&o.entry.op, Op::SessionStart { harness: Some(h), .. } if h == "claude-code"),
+    );
+    assert!(named.count() > 0);
+    let bound = ops.iter().filter(|o| {
+        matches!(
+            o.entry.op,
+            Op::SessionBind {
+                level: ObservationLevel::HooksSandbox,
+                ..
+            }
+        )
+    });
+    assert!(bound.count() > 0);
 }
 
 #[test]
@@ -1040,6 +1077,7 @@ fn an_upgraded_daemon_continues_a_v0_log_with_current_entries() {
         for x in entries.iter_mut() {
             x.format = FORMAT_LEGACY;
             x.symbols_engine = None;
+            forget_harness(&e, x);
         }
     });
     let old = formats(&e).len();

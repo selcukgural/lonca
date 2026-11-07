@@ -252,7 +252,8 @@ installers write these for you):
 - The command is `lonca hook` on the worker's `PATH`, or an absolute
   path. In hardened mode it must be the root-owned binary; the
   observation level (`hook.bind`) is `hooks_sandbox` only when the
-  settings are managed, hooks-only, and the sandbox is locked.
+  settings are managed, hooks-only, and the sandbox is locked, and the
+  session was started with `--harness claude-code`.
 
 The MCP server, in `.mcp.json` of the workspace or via
 `claude mcp add lonca -- lonca mcp`:
@@ -325,6 +326,20 @@ sent back.
 with no hook at all.** That is the way to run these three without a person approving
 everything; see "Any agent, in a sandbox". The reasons are in `docs/decisions.md`,
 "Harness levels".
+
+**Name the harness when you start the session.** A level is read only for the one in
+`session start --harness <name>`, which you sign; without it the session is `unobserved`
+on any machine. Where an administrator keeps the hooks, add `--no-setup` to name it and
+write nothing in the workspace:
+
+```sh
+lonca session start --repo demo --agent claude --paths 'src/**' \
+  --workspace /work/w1 --harness claude-code --no-setup
+```
+
+Once set, a level stays or falls for the rest of the session. If the first report was
+low, because of the settings or because `sudo` needed no password, fix that and start a
+new session (`--continue` keeps the workspace).
 
 A level comes from a `locked` table in the profile: a file only root can write and what
 must hold in it. A harness gets one when it can be shown that its hooks hold, also when

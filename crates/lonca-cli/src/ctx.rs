@@ -279,15 +279,21 @@ pub fn describe(repo: &str, op: &Op) -> String {
             agent,
             scope,
             continues,
+            harness,
             ..
         } => {
             let paths = scope.paths.join(", ");
-            match continues {
+            let what = match continues {
                 None => format!("start agent {agent} on {paths}"),
                 Some(c) if c.widen => {
                     format!("WIDEN session {} as agent {agent} on {paths}", c.session)
                 }
                 Some(c) => format!("continue session {} as agent {agent} on {paths}", c.session),
+            };
+            // The human vouches for it: a level is read for this name.
+            match harness {
+                Some(h) => format!("{what}, under {h}"),
+                None => what,
             }
         }
         Op::SessionEnd { session, .. } => format!("end session {session}"),
@@ -578,7 +584,18 @@ mod tests {
             },
             expires_ms: 1,
             continues,
+            harness: None,
         }
+    }
+
+    /// The name a level is read for is part of what is being signed.
+    #[test]
+    fn the_prompt_names_the_harness() {
+        let mut op = start(None);
+        if let Op::SessionStart { harness, .. } = &mut op {
+            *harness = Some("codex".into());
+        }
+        assert!(describe("demo", &op).ends_with("on src/**, docs/**, under codex"));
     }
 
     /// What Touch ID shows is what is being signed: continuing is not

@@ -1199,6 +1199,7 @@ impl Service {
             .map(|x| {
                 json!({
                     "id": x.id, "agent": x.agent, "task": x.task, "parent": x.parent, "level": x.level,
+                    "harness": x.harness,
                     "taint": x.taint, "active": s.session_active(&x.id, now), "expires_ms": x.expires_ms,
                     "last_seen_ms": x.heartbeat.map(|h| h.seen_ms),
                     "continued_from": x.continued_from, "continued_by": x.continued_by,
@@ -2665,8 +2666,14 @@ impl Service {
                 "scratch": scratch,
             }));
         }
+        // The request says what the hook was told it is. Which table counts
+        // is the human's word, from the session's start.
+        let named = s.and_then(|s| s.harness.clone());
         let policy = r.policy().or_fail()?;
-        let locked = policy.config.locked(&b.harness);
+        let locked = named
+            .as_deref()
+            .filter(|n| *n == b.harness)
+            .and_then(|n| policy.config.locked(n));
         let file = locked.and_then(|l| {
             let named = || l.file_here().map(PathBuf::from);
             self.settings.managed_settings.clone().or_else(named)
@@ -2674,7 +2681,13 @@ impl Service {
         let ins = match (locked, file) {
             (Some(l), Some(file)) => hooks::inspect(l, &file, self.settings.require_root_settings),
             _ => hooks::Inspection {
-                notes: vec![format!("no locked profile for harness {}", b.harness)],
+                notes: vec![match named {
+                    None => "the session was started with no harness named".to_string(),
+                    Some(n) if n != b.harness => {
+                        format!("the session was started for {n}, not {}", b.harness)
+                    }
+                    Some(n) => format!("no locked profile for harness {n}"),
+                }],
                 ..Default::default()
             },
         };
@@ -2702,7 +2715,9 @@ impl Service {
             )
             .or_fail()?;
         let mut out = logged(&signed);
-        out["level"] = json!(level);
+        // Where the session stands, which a denial leaves as it was.
+        let held = r.chain.state.sessions.get(&session).map(|s| s.level);
+        out["level"] = json!(held.unwrap_or(ObservationLevel::Unobserved));
         out["notes"] = json!(ins.notes);
         // The roots the hook program names at SessionStart: from the log,
         // never from a file the agent could edit.

@@ -584,9 +584,15 @@ enum SessionCmd {
         /// proposed. Repeatable; recorded in the session's scope.
         #[arg(long)]
         scratch: Vec<PathBuf>,
-        /// Set this harness up in the workspace (`lonca harness setup`).
+        /// The harness you will run the session under: its observation
+        /// level is read for this name. Also sets it up in the workspace
+        /// (`lonca harness setup`).
         #[arg(long)]
         harness: Option<String>,
+        /// With --harness: name it and write nothing, for a harness whose
+        /// hooks an administrator keeps.
+        #[arg(long, requires = "harness")]
+        no_setup: bool,
         #[arg(long = "as")]
         human: Option<String>,
         #[arg(long)]
@@ -1283,6 +1289,7 @@ fn run(cmd: Cmd) -> Result<()> {
             widen,
             scratch,
             harness,
+            no_setup,
             human,
             json: as_json,
         }) => {
@@ -1326,6 +1333,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     session: old.clone(),
                     widen,
                 }),
+                harness: harness.clone(),
             };
             let r = if as_json {
                 let sig = ctx::sign(&human, &repo, &op)?;
@@ -1351,7 +1359,7 @@ fn run(cmd: Cmd) -> Result<()> {
             ws.meta.session = Some(session.clone());
             ws.meta.scratch_roots = scratch.clone();
             ws.save()?;
-            let setup = match &harness {
+            let setup = match harness.as_deref().filter(|_| !no_setup) {
                 Some(h) => Some(
                     setup_harness(&mut ws, h, false)
                         .with_context(|| format!("session {session} started, its setup failed"))?,

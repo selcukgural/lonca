@@ -6621,3 +6621,24 @@ fn what_an_integration_may_join_comes_from_the_state() {
     assert!(!joins(&h, &[]).allows(f));
     h.assert_replay();
 }
+
+/// A session's own leases do not meet: one that holds `f` both `shared` and
+/// `edit` changed it under `edit`, and no later change joins with that.
+#[test]
+fn an_edit_under_an_exclusive_pin_is_exclusive_whatever_else_is_pinned() {
+    let mut h = H::with_policy(shared_policy());
+    h.start_observed("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(
+        h.lease("a", "la", &[("src/a.rs#<file>", LeaseKind::Shared)])
+            .is_allow()
+    );
+    assert!(h.lease("a", "lb", &[(f, LeaseKind::Edit)]).is_allow());
+    h.wrote("a", "src/a.rs");
+    let change = ChangeId::random();
+    assert!(h.propose("a", change, edit(f)).is_allow());
+    let pinned = |set: &str| h.chain.state.leases[set].pins[&change].len();
+    assert_eq!([pinned("la"), pinned("lb")], [1, 1]);
+    assert_eq!(h.chain.state.exclusive_of(change), [f]);
+    h.assert_replay();
+}

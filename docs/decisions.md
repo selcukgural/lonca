@@ -2523,7 +2523,11 @@ to it line by line.
   in front count too. Nothing is joined under a policy without `shared`
   leases, whatever was pinned. All of it comes from the replayed state and
   the policy in force, so the auditor recomputes the same merge and the log
-  carries nothing new.
+  carries nothing new. The daemon merges and verifies without its lock, so before it
+  logs it reads what may be joined again; a policy that changed under the run
+  sends the change back through the merge (a batch's head goes alone). An
+  edit that an exclusive pin of the same change also covers was made under
+  that one, whatever `shared` item the session holds besides.
 - **What a join must hold to.** Lines both sides changed, or lines next to
   each other, stay a conflict naming the symbol. The result must parse and
   keep what the symbol merge keeps (`holds_up`); a joined result that does not

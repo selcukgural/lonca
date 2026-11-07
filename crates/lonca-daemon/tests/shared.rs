@@ -30,10 +30,17 @@ fn edited(text: &str, line: usize, to: &str) -> String {
 }
 
 fn policy(e: &mut Env, shared: bool, batch_size: u32) {
+    policy_testing(e, shared, batch_size, "true");
+}
+
+fn policy_testing(e: &mut Env, shared: bool, batch_size: u32, test: &str) {
     let config = DEFAULT_CONFIG
         .replace("shared = false", &format!("shared = {shared}"))
         .replace("required = false", "required = true")
-        .replace("# test = \"cargo test --offline\"", "test = \"true\"")
+        .replace(
+            "# test = \"cargo test --offline\"",
+            &format!("test = \"{test}\""),
+        )
         .replace("batch_size = 1", &format!("batch_size = {batch_size}"));
     let prep = e.ok(
         "human.prepare_policy",
@@ -208,4 +215,36 @@ fn a_batch_joins_its_members() {
     let all = edited(&edited(&edited(&base_text(), 1, "10"), 3, "30"), 5, "50");
     assert_eq!(trunk_text(&mut e), all);
     audited(&e);
+}
+
+/// The policy changes while a joined merge is being verified: the daemon
+/// reads what may be joined again before it logs, as the auditor reads it
+/// from the policy in force at the entry. One change at a time, and a batch.
+#[test]
+fn a_policy_that_stops_shared_leases_under_a_run_stops_its_join() {
+    for batch_size in [1, 2] {
+        let (mut e, base) = repo(batch_size);
+        policy_testing(&mut e, true, batch_size, "sleep 1");
+        let (a, b) = (agent(&mut e, "a"), agent(&mut e, "b"));
+        let first = propose(&mut e, &a, &base, &edited(&base_text(), 1, "10"));
+        if batch_size == 1 {
+            assert!(e.svc.process_one("demo").unwrap().is_some());
+        }
+        let second = propose(&mut e, &b, &base, &edited(&base_text(), 5, "50"));
+        let runs = e.svc.verification_runs();
+        let svc = e.svc.clone();
+        let queue = std::thread::spawn(move || svc.process_all());
+        let started = std::time::Instant::now();
+        while e.svc.verification_runs() == runs {
+            assert!(started.elapsed().as_secs() < 30, "the run never started");
+            std::thread::yield_now();
+        }
+        policy_testing(&mut e, false, batch_size, "sleep 1");
+        queue.join().unwrap();
+        assert_eq!(status_of(&mut e, &first)["status"], "integrated");
+        let late = status_of(&mut e, &second);
+        assert_eq!(late["status"], "conflicted", "{batch_size}: {late}");
+        assert_eq!(trunk_text(&mut e), edited(&base_text(), 1, "10"));
+        audited(&e);
+    }
 }

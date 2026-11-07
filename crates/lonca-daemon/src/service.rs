@@ -25,7 +25,7 @@ use lonca_policy::details;
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
-use lonca_policy::state::{ChangeStatus, State};
+use lonca_policy::state::{ChangeStatus, Joins, State};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate_joining};
 use lonca_verify::{Sandbox, Verifier};
@@ -3283,7 +3283,8 @@ impl Service {
                 .filter(|e| evidence_problems(&owed, e).is_empty())
             {
                 let merged = prefix.iter().map(|p| (p.0, p.1.clone())).collect();
-                return self.log_batch(repo, trunk, merged, &jobs, evidence);
+                let joins = &joins[..length];
+                return self.log_batch(repo, trunk, merged, (&jobs, joins), evidence);
             }
             length /= 2;
         }
@@ -3295,16 +3296,24 @@ impl Service {
         repo: &str,
         trunk: GitId,
         merged: Vec<(ChangeId, GitId)>,
-        jobs: &[(ChangeId, GitId, GitId)],
+        (jobs, joins): (&[(ChangeId, GitId, GitId)], &[Joins]),
         evidence: Vec<Attestation>,
     ) -> Result<Option<SignedOp>> {
         let mut inner = self.lock();
         let r = inner.repos.get_mut(repo).expect("exists");
+        let config = r.policy()?.config.clone();
         let state = &r.chain.state;
         let still = jobs.iter().take(merged.len()).zip(&state.queue);
         let same = still.filter(|(job, queued)| job.0 == **queued);
         let same = same.filter(|(job, _)| same_proposal(state, job.0, &job.1, &job.2));
         if same.count() != merged.len() || state.trunk.as_ref() != Some(&trunk) {
+            return Ok(None);
+        }
+        // As for one change: what may be joined is read again, and the head
+        // goes alone if it is not what the batch merged with.
+        let members: Vec<ChangeId> = merged.iter().map(|m| m.0).collect();
+        let now = (0..members.len()).map(|k| state.joins(members[k], &members[..k], &config));
+        if !now.eq(joins.iter().cloned()) {
             return Ok(None);
         }
         let tip = merged.last().map(|(_, tip)| tip.clone()).expect("a batch");
@@ -3377,6 +3386,13 @@ impl Service {
             || r.chain.state.trunk.as_ref() != Some(&trunk)
         {
             return Ok(None);
+        }
+        // The auditor reads what may be joined from the policy in force at
+        // the entry: one that changed under the run merges again.
+        let config = &r.policy()?.config;
+        if r.chain.state.joins(change, &[], config) != joins {
+            drop(inner);
+            return self.process_head(repo);
         }
         // Not verified, so it can only stand as what `decide` refuses: past
         // midnight, or under a wider policy, it is verified after all.

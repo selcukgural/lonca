@@ -536,22 +536,28 @@ impl State {
         self.trunk_line.push(commit.clone());
     }
 
-    /// The `shared` items pinned to `change`.
-    fn shared_pins(&self, change: ChangeId) -> Vec<String> {
+    /// The items pinned to `change` that are `shared` (or that are not).
+    fn pins_of(&self, change: ChangeId, shared: bool) -> Vec<String> {
         let pins = self.leases.values().filter_map(|l| l.pins.get(&change));
-        let items = pins.flatten().filter(|i| i.is_shared());
+        let items = pins.flatten().filter(|i| i.is_shared() == shared);
         items.map(|i| i.symbol.clone()).collect()
     }
 
+    fn shared_pins(&self, change: ChangeId) -> Vec<String> {
+        self.pins_of(change, true)
+    }
+
     /// What `change` changes other than under a `shared` item pinned to it.
-    /// A signature, a delete or a rename is never a body.
+    /// An edit an exclusive pin of it covers too was made under that one. A
+    /// signature, a delete or a rename is never a body.
     pub fn exclusive_of(&self, change: ChangeId) -> Vec<String> {
         let Some(c) = self.changes.get(&change) else {
             return vec![];
         };
         let (f, keys) = (&c.facts, self.symbol_keys);
-        let shared = self.shared_pins(change);
-        let alone = |s: &&String| !shared.iter().any(|i| symbols::covers(i, s, keys));
+        let [shared, sole] = [true, false].map(|s| self.pins_of(change, s));
+        let covered = |pins: &[String], s: &str| pins.iter().any(|i| symbols::covers(i, s, keys));
+        let alone = |s: &&String| covered(&sole, s) || !covered(&shared, s);
         let olds = f.renames.iter().map(|[old, _]| old);
         let others = f.signature_changes.iter().chain(&f.deletes).chain(olds);
         f.edits

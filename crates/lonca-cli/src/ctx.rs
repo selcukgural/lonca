@@ -188,7 +188,8 @@ pub fn human_key_path(name: &str) -> PathBuf {
 
 pub fn human_key(name: &str) -> Result<KeyPair> {
     let p = human_key_path(name);
-    KeyPair::load(&p).map_err(|e| anyhow!("human key {}: {e}", p.display()))
+    KeyPair::load(&p, crate::sys::current_uid())
+        .map_err(|e| anyhow!("human key {}: {e}", p.display()))
 }
 
 /// Secure Enclave key blob of a human, if they use one.
@@ -462,7 +463,8 @@ fn sign_login_with(
             sig,
         });
     }
-    let key = KeyPair::load(path).map_err(|e| anyhow!("human key {}: {e}", path.display()))?;
+    let key = KeyPair::load(path, crate::sys::current_uid())
+        .map_err(|e| anyhow!("human key {}: {e}", path.display()))?;
     Ok(lonca_policy::human::sign_login_ed25519(
         &key,
         human,

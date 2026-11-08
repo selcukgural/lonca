@@ -478,7 +478,11 @@ pub fn rewrite_log(e: &Env, edit: impl Fn(&mut Vec<lonca_core::oplog::OpEntry>))
     edit(&mut entries);
     let repo = e.root.join("home/repos/demo.git");
     git(&repo, &["update-ref", "-d", "refs/lonca/oplog"]);
-    let key = KeyPair::load(&e.root.join("home/daemon.key")).unwrap();
+    let key = KeyPair::load(
+        &e.root.join("home/daemon.key"),
+        lonca_daemon::sys::current_uid(),
+    )
+    .unwrap();
     let mut prev = lonca_core::oplog::GENESIS_PREV.to_string();
     let mut head = None;
     for mut entry in entries {

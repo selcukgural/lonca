@@ -27,6 +27,12 @@ pub fn new_session_closing_from(command: &mut Command, close_from: libc::c_int) 
     }
 }
 
+/// The real uid of this process.
+pub fn current_uid() -> u32 {
+    // SAFETY: getuid has no preconditions and can not fail.
+    unsafe { libc::getuid() }
+}
+
 /// Sends `signal` to every process of the group `group`.
 pub fn kill_group(group: libc::pid_t, signal: libc::c_int) {
     // SAFETY: `kill` takes no pointers.

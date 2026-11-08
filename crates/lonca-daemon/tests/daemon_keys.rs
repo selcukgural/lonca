@@ -17,7 +17,9 @@ fn home(e: &Env) -> Home {
 }
 
 fn public_at(p: &Path) -> String {
-    KeyPair::load(p).unwrap().public_hex()
+    KeyPair::load(p, lonca_daemon::sys::current_uid())
+        .unwrap()
+        .public_hex()
 }
 
 fn init_repo(e: &mut Env, repo: &str) {

@@ -17,6 +17,7 @@ use lonca_daemon::Client;
 use serde_json::json;
 
 use crate::ctx::{self, call};
+use crate::sys::current_uid;
 use crate::{human_client, human_client_any, print_decision, submit_outcome};
 
 /// The human to act as, checked before it is used in file names.
@@ -64,7 +65,7 @@ fn next_key(name: &str, secure_enclave: bool) -> Result<NextKey> {
     } else {
         HumanKey {
             alg: "ed25519".into(),
-            public: KeyPair::load_or_create(&path)?.public_hex(),
+            public: KeyPair::load_or_create(&path, current_uid())?.public_hex(),
         }
     };
     Ok(NextKey {
@@ -151,7 +152,7 @@ pub fn rotate(name: &str, repos: &[String], secure_enclave: bool) -> Result<()> 
 }
 
 pub fn recovery_key(name: &str, repos: &[String], out: &Path) -> Result<()> {
-    let rk = KeyPair::load_or_create(out)?;
+    let rk = KeyPair::load_or_create(out, current_uid())?;
     let key = HumanKey {
         alg: "ed25519".into(),
         public: rk.public_hex(),
@@ -187,8 +188,15 @@ pub fn recover(
     recovery_key: &Path,
     secure_enclave: bool,
 ) -> Result<()> {
-    let rk = KeyPair::load(recovery_key)
+    let (rk, open) = KeyPair::load_carried(recovery_key, current_uid())
         .map_err(|e| anyhow::anyhow!("recovery key {}: {e}", recovery_key.display()))?;
+    if open {
+        eprintln!(
+            "warning: others may read the recovery key {}; it is spent once this recovery is \
+             done, and the new key is private",
+            recovery_key.display()
+        );
+    }
     let next = next_key(name, secure_enclave)?;
     let mut failed = vec![];
     for repo in repos {

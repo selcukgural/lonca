@@ -9,7 +9,11 @@ use lonca_core::oplog::{GENESIS_PREV, OpEntry};
 use lonca_core::ops::{Decision, Outcome as Out};
 
 fn key(e: &Env) -> KeyPair {
-    KeyPair::load(&e.root.join("home/daemon.key")).unwrap()
+    KeyPair::load(
+        &e.root.join("home/daemon.key"),
+        lonca_daemon::sys::current_uid(),
+    )
+    .unwrap()
 }
 
 /// Copies the store, lets `edit` change entries, re-chains and re-signs

@@ -272,7 +272,7 @@ impl Env {
         self.human(op)
     }
 
-    fn session_op(&self, id: &str, paths: &[&str], continues: Option<Continuation>) -> Op {
+    pub fn session_op(&self, id: &str, paths: &[&str], continues: Option<Continuation>) -> Op {
         Op::SessionStart {
             session: id.into(),
             agent: format!("bot-{id}"),

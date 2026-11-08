@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### A delegated lease comes back when the child expires
+
+A lease set handed to a child session with `cap.attenuate` went back to the parent only when the
+child ended. Now it goes back as well when the child's time runs out or it misses its heartbeat,
+with the time the set had, if the parent is still there; until now it ended, and another session
+could take it first. Log format 23. See `docs/decisions.md`, "A delegated lease comes back (#40)".
+
 ### Insert leases reserve names; a new file needs its path
 
 An `insert` lease item can list the names of the members it adds (`"names"`, `lonca lease

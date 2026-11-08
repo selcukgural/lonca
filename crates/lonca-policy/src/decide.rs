@@ -228,7 +228,7 @@ fn check_lease_request(
 /// A set moves whole, while it is alive, unpinned (a pin stays with its
 /// change), and only to a session whose scope covers what is in it.
 fn check_handover(state: &State, own: &str, set: &str, scope: &Scope, t: i64, v: &mut Verdict) {
-    let Some(l) = state.leases.get(set).filter(|l| l.session == own) else {
+    let Some(l) = state.leases.get(set).filter(|l| state.holder(l, t) == own) else {
         v.deny("not_own_lease");
         return;
     };
@@ -257,7 +257,7 @@ fn check_yield(
     v: &mut Verdict,
 ) {
     let Some(to) = to else {
-        if state.leases.get(set).map(|l| l.session.as_str()) != Some(own) {
+        if state.leases.get(set).map(|l| state.holder(l, t)) != Some(own) {
             v.deny("not_own_lease");
         }
         return;
@@ -867,7 +867,7 @@ pub fn decide(
                 v.deny(format!("lease_wanted:{}", i.session));
             }
             for held in state.active_leases(t) {
-                if held.lease.session == own {
+                if held.holder == own {
                     continue;
                 }
                 for a in items {
@@ -875,7 +875,7 @@ pub fn decide(
                         if state.conflict(a, b) {
                             v.deny(format!(
                                 "lease_held:{}:{}:{}",
-                                b.symbol, held.lease.session, held.lease.intent
+                                b.symbol, held.holder, held.lease.intent
                             ));
                         }
                     }
@@ -911,7 +911,7 @@ pub fn decide(
             None => v.deny("unknown_lease_set"),
             Some(l) => {
                 if let Some(own) = actor.session()
-                    && !state.descends_from(&l.session, own)
+                    && !state.descends_from(state.holder(l, t), own)
                 {
                     v.deny("not_own_lease");
                 }
@@ -921,10 +921,11 @@ pub fn decide(
             None => v.deny("unknown_lease_set"),
             Some(l) => {
                 let liveness = ctx.format >= FORMAT_LEASE_LIVENESS;
-                if Some(l.session.as_str()) != actor.session() {
+                let holder = state.holder(l, t);
+                if Some(holder) != actor.session() {
                     v.deny("not_own_lease");
                 }
-                if l.expires_ms <= t || (liveness && state.session_lost(&l.session, t)) {
+                if l.expires_ms <= t || (liveness && state.session_lost(holder, t)) {
                     v.deny("lease_expired");
                 }
                 if *ttl_ms <= 0 || *ttl_ms > cfg.leases.max_ttl_minutes * 60_000 {
@@ -1282,11 +1283,11 @@ fn affected_holders(
     };
     let own = |l: &ActiveLease| {
         let me = actor.session();
-        me.is_some_and(|s| state.continues(s, &l.lease.session))
+        me.is_some_and(|s| state.continues(s, l.holder))
     };
     let held = state.active_leases(t).filter(|l| !own(l));
     let held = held.filter(|l| l.items.iter().copied().any(|i| reaches(&i)));
-    held.map(|l| (l.lease.session.clone(), l.lease.set.clone()))
+    held.map(|l| (l.holder.to_string(), l.lease.set.clone()))
         .collect()
 }
 
@@ -1297,7 +1298,7 @@ fn reserved_by_others(state: &State, actor: &Actor, f: &Facts, t: i64) -> Vec<(S
     let keys = state.symbol_keys;
     let own = |l: &ActiveLease| {
         let me = actor.session();
-        me.is_some_and(|s| state.continues(s, &l.lease.session))
+        me.is_some_and(|s| state.continues(s, l.holder))
     };
     let named = |i: &&LeaseItem| i.kind == LeaseKind::Insert && !i.names.is_empty();
     let mut out = BTreeSet::new();
@@ -1306,7 +1307,7 @@ fn reserved_by_others(state: &State, actor: &Actor, f: &Facts, t: i64) -> Vec<(S
             let reserved =
                 |a: &&String| symbols::covers(&item.symbol, a, keys) && symbols::reserves(item, a);
             for a in f.adds.iter().filter(reserved) {
-                out.insert((a.clone(), l.lease.session.clone()));
+                out.insert((a.clone(), l.holder.to_string()));
             }
         }
     }
@@ -1441,7 +1442,7 @@ fn propose(
 
             let held: Vec<ActiveLease> = state
                 .active_leases(t)
-                .filter(|l| l.lease.session == *session)
+                .filter(|l| l.holder == session)
                 .collect();
             let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
             let unparsed = cfg.leases.unparsed_files;

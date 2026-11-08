@@ -43,8 +43,10 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// version 18 adds `affected` to facts and reports who holds it; version 19
 /// adds `session.isolate`; version 20 adds `harness` to `session.start`, and
 /// a level rests on it; version 21 adds the lease kind `shared`; version 22
-/// adds reserved `names` to an `insert` and makes a new file need a lease.
-pub const FORMAT_CURRENT: u32 = 22;
+/// adds reserved `names` to an `insert` and makes a new file need a lease;
+/// version 23 gives a delegated lease back to the parent when the child
+/// expires or stops beating, as when it ends.
+pub const FORMAT_CURRENT: u32 = 23;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -104,6 +106,11 @@ pub const FORMAT_SHARED_LEASES: u32 = 21;
 /// change that adds a file needs an exclusive lease on its `path#<file>`.
 /// Older entries replay as they were.
 pub const FORMAT_INSERT_NAMES: u32 = 22;
+/// The first format in which a lease set delegated to a child session goes
+/// back to the parent that gave it when the child expires or stops beating,
+/// and not only when it ends or is revoked. No new field: older entries
+/// replay as they were.
+pub const FORMAT_GIVE_BACK: u32 = 23;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

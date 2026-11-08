@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::ChangeId;
 use lonca_core::GitId;
 use lonca_core::oplog::{
-    FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS, FORMAT_SYMBOL_KEYS,
-    GENESIS_PREV, OpEntry, SignedOp,
+    FORMAT_GIVE_BACK, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS,
+    FORMAT_SYMBOL_KEYS, GENESIS_PREV, OpEntry, SignedOp,
 };
 use lonca_core::ops::{
     Actor, Attestation, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind,
@@ -176,6 +176,8 @@ impl LeaseSet {
 pub struct ActiveLease<'a> {
     pub lease: &'a LeaseSet,
     pub items: Vec<&'a LeaseItem>,
+    /// The session that holds it at that moment: see [`State::holder`].
+    pub holder: &'a str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -275,6 +277,11 @@ pub struct State {
     /// The log reached [`FORMAT_SYMBOL_KEYS`]: a name stands for every
     /// symbol of that name.
     pub symbol_keys: bool,
+    /// The log reached [`FORMAT_GIVE_BACK`] before the last entry: a set
+    /// delegated to a child that is gone is its parent's. Set after the
+    /// entry's own pruning, so that the entry that reaches the format is
+    /// decided and applied alike.
+    pub gives_back: bool,
     /// Every trunk commit in order, genesis first: how far a base is
     /// behind is its distance from the end.
     pub trunk_line: Vec<GitId>,
@@ -444,10 +451,30 @@ impl State {
         beat.is_some_and(|h| now_ms - h.seen_ms > h.timeout_ms)
     }
 
+    /// The session that holds `l` at `now_ms`: the one it names, unless that
+    /// is a child that expired or stopped beating, from [`FORMAT_GIVE_BACK`]
+    /// on; then the parent that gave it, while that one can act. The set
+    /// moves to it at the next entry (`give_back_absent`), and until then
+    /// it is the parent's all the same.
+    pub fn holder<'a>(&'a self, l: &'a LeaseSet, now_ms: i64) -> &'a str {
+        let parent = l.delegated_from.as_deref();
+        match parent {
+            Some(p)
+                if self.gives_back
+                    && !self.session_present(&l.session, now_ms)
+                    && self.session_present(p, now_ms) =>
+            {
+                p
+            }
+            _ => &l.session,
+        }
+    }
+
     fn lease_alive(&self, l: &LeaseSet, now_ms: i64) -> bool {
+        let holder = self.holder(l, now_ms);
         l.expires_ms > now_ms
-            && self.session_active(&l.session, now_ms)
-            && !self.session_lost(&l.session, now_ms)
+            && self.session_active(holder, now_ms)
+            && !self.session_lost(holder, now_ms)
     }
 
     /// Another active session asked for what `l` holds in the last
@@ -462,7 +489,12 @@ impl State {
         self.leases.values().filter_map(move |l| {
             let alive = self.lease_alive(l, now_ms);
             let items: Vec<&LeaseItem> = l.items.iter().filter(|i| alive || l.pinned(i)).collect();
-            (!items.is_empty()).then_some(ActiveLease { lease: l, items })
+            let holder = self.holder(l, now_ms);
+            (!items.is_empty()).then_some(ActiveLease {
+                lease: l,
+                items,
+                holder,
+            })
         })
     }
 
@@ -664,7 +696,7 @@ impl State {
 
     fn held_against(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
         self.active_leases(now_ms)
-            .filter(|h| h.lease.session != session)
+            .filter(|h| h.holder != session)
             .any(|h| {
                 h.items
                     .iter()
@@ -771,7 +803,7 @@ impl State {
     /// `session` holds exactly `item` at `now_ms`.
     pub fn holds(&self, session: &str, item: &LeaseItem, now_ms: i64) -> bool {
         self.active_leases(now_ms)
-            .any(|h| h.lease.session == session && h.items.contains(&item))
+            .any(|h| h.holder == session && h.items.contains(&item))
     }
 
     /// `session` already waits for something that overlaps `items`.
@@ -861,7 +893,7 @@ impl State {
     fn block_end(&mut self, session: &str, items: &[LeaseItem], now_ms: i64, limit: i64) -> i64 {
         let sets: Vec<&LeaseSet> = self
             .active_leases(now_ms)
-            .filter(|h| h.lease.session != session)
+            .filter(|h| h.holder != session)
             .filter(|h| {
                 h.items
                     .iter()
@@ -893,7 +925,7 @@ impl State {
             return;
         };
         let overlapping = |h: &ActiveLease| {
-            h.lease.session == new.session
+            h.holder == new.session
                 && h.lease.set != set
                 && h.items.iter().any(|b| {
                     let mut items = new.items.iter();
@@ -963,6 +995,7 @@ impl State {
         if pins {
             self.prune_leases(e.time_ms);
         }
+        self.gives_back = e.format >= FORMAT_GIVE_BACK;
         self.settle_reservations(e.time_ms);
         self.charge(e);
         // What the proposal is decided on: its session's leases at this
@@ -1081,7 +1114,7 @@ impl State {
                 .any(|b| mine().any(|a| self.conflict(a, b)))
         };
         let sets = self.active_leases(now_ms);
-        let sets = sets.filter(|h| h.lease.session != session && conflicts(h));
+        let sets = sets.filter(|h| h.holder != session && conflicts(h));
         let sets: Vec<String> = sets.map(|h| h.lease.set.clone()).collect();
         for set in sets {
             if let Some(l) = self.leases.get_mut(&set) {
@@ -1103,7 +1136,7 @@ impl State {
         let needs = needs.unwrap_or_default();
         let pinned: Vec<(String, Vec<LeaseItem>)> = self
             .active_leases(now_ms)
-            .filter(|l| l.lease.session == session)
+            .filter(|l| l.holder == session)
             .map(|l| {
                 let items = l.items.iter().copied();
                 let items = items.filter(|i| needs.iter().any(|n| self.covers_need(n, i, None)));
@@ -1152,6 +1185,7 @@ impl State {
 
     /// Removes what is dead at `now_ms`, so that the active leases stay few.
     fn prune_leases(&mut self, now_ms: i64) {
+        self.give_back_absent(now_ms);
         let dead: Vec<String> = self
             .leases
             .values()
@@ -1269,6 +1303,23 @@ impl State {
         }
         if let Some(s) = self.sessions.get_mut(old) {
             s.continued_by = Some(new.to_string());
+        }
+    }
+
+    /// Every set whose holder is no longer the session it names goes to its
+    /// holder: a parent whose child is gone (see [`State::holder`]).
+    fn give_back_absent(&mut self, now_ms: i64) {
+        let moved: Vec<(String, String)> = self
+            .leases
+            .values()
+            .map(|l| (l.set.clone(), self.holder(l, now_ms).to_string()))
+            .filter(|(set, holder)| self.leases[set].session != *holder)
+            .collect();
+        for (set, holder) in moved {
+            if let Some(l) = self.leases.get_mut(&set) {
+                l.session = holder;
+                l.delegated_from = None;
+            }
         }
     }
 
@@ -1561,7 +1612,7 @@ impl State {
                     // A new set over what the session holds continues the
                     // hold: a fresh id does not reset the limit.
                     let overlapping = self.active_leases(time_ms).filter(|h| {
-                        h.lease.session == session
+                        h.holder == session
                             && h.items.iter().any(|b| {
                                 items
                                     .iter()

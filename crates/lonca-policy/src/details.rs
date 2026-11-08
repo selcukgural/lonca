@@ -68,8 +68,8 @@ impl Detail {
             code: LEASE_HELD,
             symbol: item.symbol.clone(),
             needed_kind,
-            holder_session: Some(l.session.clone()),
-            holder_agent: state.sessions.get(&l.session).map(|s| s.agent.clone()),
+            holder_session: Some(by.holder.to_string()),
+            holder_agent: state.sessions.get(by.holder).map(|s| s.agent.clone()),
             intent: Some(l.intent.clone()),
             expires_ms: pin.is_none().then_some(l.expires_ms),
             set: Some(l.set.clone()),
@@ -85,7 +85,7 @@ pub fn lease_held(state: &State, session: &str, wanted: &[LeaseItem], now_ms: i6
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for held in state.active_leases(now_ms) {
-        if held.lease.session == session {
+        if held.holder == session {
             continue;
         }
         for a in wanted {
@@ -162,7 +162,7 @@ pub fn lease_report(
 ) -> Vec<Detail> {
     let leases: Vec<ActiveLease> = state
         .active_leases(now_ms)
-        .filter(|l| l.lease.session == session)
+        .filter(|l| l.holder == session)
         .collect();
     let mine = || leases.iter().flat_map(|l| l.items.iter().copied());
     let mut out = Vec::new();

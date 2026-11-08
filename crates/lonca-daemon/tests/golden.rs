@@ -92,7 +92,40 @@ fn golden_repo() -> Env {
     reach(&mut e);
     shared(&mut e);
     insert_names(&mut e);
+    give_back(&mut e);
     e
+}
+
+/// From format 23: a child whose time runs out gives the set it was handed
+/// back to its parent, so another session's acquire meets the parent.
+fn give_back(e: &mut Env) {
+    let allowed = |r: Value| assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let a = e.session("s-ga", &["back.md"]);
+    let b = e.session("s-gb", &["back.md"]);
+    let set = e.lease(&a, "back.md#<file>");
+    allowed(set.clone());
+    let set = set["set"].clone();
+    let scope = json!({"paths": ["back.md"], "symbols": null, "ops": ["lease.release"],
+                       "max_files": null, "max_lines": null});
+    let expires = e.now() + 60_000;
+    let child = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&a),
+        json!({"agent": "sub", "scope": scope, "expires_ms": expires, "leases": [set.clone()]}),
+    );
+    allowed(child);
+    e.advance(60_001);
+    let r = e.lease(&b, "back.md#<file>");
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    assert!(
+        r["decision"]["reasons"][0]
+            .as_str()
+            .is_some_and(|x| x.starts_with("lease_held:back.md#<file>:s-ga:")),
+        "{r}"
+    );
+    allowed(e.ok("lease.release", None, Some(&a), json!({ "set": set })));
+    allowed(e.lease(&b, "back.md#<file>"));
 }
 
 /// From format 22: two inserts into one type reserve the names they add, a
@@ -1123,6 +1156,29 @@ fn golden_v22_log_still_verifies_replays_and_audits() {
                 .is_some_and(|f| f.added_files == ["src/fresh.rs"])
     });
     assert_eq!(created.count(), 1);
+}
+
+/// A child expires holding a set it was handed; the next acquire of it by
+/// another session meets the parent.
+#[test]
+fn golden_v23_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v23.bundle",
+        "09a5af4ef0fd73dcec41877fa2ef4c88f71b98aa07fb289c3651a0c04cc31f63",
+        23,
+    );
+    let at = ops
+        .iter()
+        .rposition(|o| matches!(o.entry.op, Op::CapAttenuate { .. }))
+        .expect("a delegation");
+    let met = ops[at..].iter().any(|o| {
+        o.entry
+            .decision
+            .reasons
+            .iter()
+            .any(|r| r.starts_with("lease_held:back.md#<file>:s-ga:"))
+    });
+    assert!(met, "the parent holds what its expired child had");
 }
 
 #[test]

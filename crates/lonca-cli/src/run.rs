@@ -306,7 +306,7 @@ fn wait(child: &mut Child, stop: &AtomicI32, grace: Duration) -> Result<ExitStat
 fn keep_alive(token: &str) -> Result<()> {
     let mut c = ctx::connect()?;
     c.token = Some(token.to_string());
-    std::thread::spawn(move || mcp::keep_alive(c, Default::default()));
+    std::thread::spawn(move || mcp::keep_alive(c, Default::default(), || None));
     Ok(())
 }
 

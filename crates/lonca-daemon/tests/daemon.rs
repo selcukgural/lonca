@@ -92,9 +92,17 @@ fn restart_rebuilds_state_and_keeps_tokens() {
     e.advance(11 * 60_000);
     let s = e.ok("status", Some("demo"), None, json!({}));
     assert!(s["leases"].as_array().unwrap().is_empty());
+    // An expired session's token opens nothing any more (#53).
     e.advance(60 * 60_000);
-    let r = e.call("lease.acquire", None, Some(&token), json!({"items": [{"symbol": "src/a.rs#f", "kind": "edit"}], "intent": "x", "ttl_ms": 1000})).unwrap();
-    assert_eq!(r["decision"]["reasons"][0], "session_inactive");
+    let r = e.call(
+        "lease.acquire",
+        None,
+        Some(&token),
+        json!({"items": [{"symbol": "src/a.rs#f", "kind": "edit"}], "intent": "x", "ttl_ms": 1000}),
+    );
+    let (code, message) = r.unwrap_err();
+    assert_eq!(code, "unauthenticated");
+    assert!(message.contains("--continue"), "{message}");
 }
 
 #[test]

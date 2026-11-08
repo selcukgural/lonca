@@ -2332,20 +2332,25 @@ fn an_expired_sessions_edit_lands_under_its_continuation() {
     let old_token = std::fs::read_to_string(w1.join(".lonca/session")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(1100));
 
-    // The session is over, and it hears so.
-    let args = ["lease", "acquire", "-i", "fix", "src/lib.rs#charge"];
-    refused(&e, &w1, &args, "session_inactive");
-    let out = e
-        .cmd(&w1, &["session", "heartbeat", "--json"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
-    assert!(
-        text(&out.stderr).contains("session_inactive"),
-        "{}",
-        text(&out.stderr)
-    );
-    assert_eq!(text(&out.stdout), "");
+    // The session is over, and it hears so, and what to do: its token
+    // opens nothing any more (#53), whether or not it was swept yet.
+    for args in [
+        &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"][..],
+        &["session", "heartbeat", "--json"],
+    ] {
+        let out = e.cmd(&w1, args).output().unwrap();
+        let said = text(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {said}");
+        assert!(
+            said.contains("unauthenticated") || said.contains("session_inactive"),
+            "{args:?}: {said}"
+        );
+        assert!(
+            said.contains("--continue") || said.contains("ended or expired"),
+            "{said}"
+        );
+        assert_eq!(text(&out.stdout), "");
+    }
 
     let args = session_args("src/**", &["--continue", "w1", "--json"]);
     let c = parse(&e.run(r, &args));
@@ -5574,4 +5579,28 @@ fn a_token_carried_out_of_the_sandbox_stops_working_and_shows() {
     let log = parse(&log).to_string();
     assert!(log.contains("outside its sandbox"), "{log}");
     assert!(!log.contains(r#""op":"lease.acquire""#), "{log}");
+}
+
+/// `lonca session rotate` puts a new token in the workspace, and a running
+/// MCP server goes on with it, since it reads the token for every call
+/// (#53).
+#[test]
+fn a_rotated_token_takes_over_in_the_workspace_and_the_mcp_server() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let file = ws.join(".lonca/session");
+    let old = std::fs::read_to_string(&file).unwrap();
+    let mut mcp = Mcp::start(&e, &ws);
+    let (err, st) = mcp.tool("status", json!({}));
+    assert!(!err, "{st}");
+    let out = e.run(&ws, &["session", "rotate"]);
+    assert!(!out.contains("lonca_"), "a token is never printed: {out}");
+    let new = std::fs::read_to_string(&file).unwrap();
+    assert_ne!(old.trim(), new.trim());
+    let (err, st) = mcp.tool("status", json!({}));
+    assert!(!err, "the server read the new token: {st}");
+    e.run(&ws, &["status"]);
+    std::fs::write(&file, &old).unwrap();
+    let said = fails(&e, &ws, &["status"]);
+    assert!(said.contains("unauthenticated"), "{said}");
 }

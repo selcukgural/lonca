@@ -128,11 +128,12 @@ fn a_leftover_token_of_an_ended_session_is_refused() {
         reason: "done".into(),
     });
     // Even if the token survived (a crash between the log and the token
-    // file), the ended session does not accept it.
+    // file), the daemon drops it when it starts again (#53), and the
+    // ended session would not accept it anyway.
     std::fs::write(&tokens, saved).unwrap();
     e.reopen();
-    assert_eq!(sessions_with_tokens(&e), ["s1"]);
-    assert_eq!(refused(&mut e, &t1), "session ended");
+    assert!(sessions_with_tokens(&e).is_empty());
+    assert!(refused(&mut e, &t1).starts_with("unknown session token"));
 }
 
 #[test]

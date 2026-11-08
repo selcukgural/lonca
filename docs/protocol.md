@@ -747,6 +747,14 @@ as for `hook.stop`: what no standing proposal carries is recorded for
 `status`, and the result adds `"unproposed"` ([path]) and
 `"unproposed_total"` (integer). Without `files` nothing is recorded.
 
+### `session.rotate`
+
+*agent.* `params: {}`. A new token for the caller's session: `{"token":
+string}`. The token the request carried stops working at once. Not logged.
+Refused (`forbidden`) for an isolated session, whose token `lonca run`
+holds. A client that rotates writes the new token where it keeps the old
+one; `lonca session rotate` does that for a workspace.
+
 ### `session.heartbeat`
 
 *agent.* `params: {}`. The session is alive. Logged as an `observe`
@@ -759,7 +767,8 @@ lives by its TTL alone. Pinned items ignore the timeout. Result:
 own leases, on the daemon's clock. Send one every `timeout_ms / 3`.
 `lonca mcp` does, and renews what is about to run out. A session that
 has ended or expired gets the error `session_inactive`, and nothing is
-logged; stop beating.
+logged; once the daemon has swept its token (within seconds), the error is
+`unauthenticated`. Either way, stop beating.
 
 ### `hook.event`
 
@@ -832,7 +841,7 @@ the queue itself, and stays 0 under protocol 1.
 | code | meaning |
 |---|---|
 | `invalid` | the request does not fit: bad params, missing `repo`, a value out of range |
-| `unauthenticated` | no token, or one that is unknown, ended or expired; a login that did not verify |
+| `unauthenticated` | no token, or one that is unknown, ended or expired, or whose session expired (every method but `session.heartbeat` and `session.end`); a login that did not verify |
 | `forbidden` | a token of the wrong kind, for another repository, or not enrolled; a signature by another human |
 | `not_in_sandbox` | an isolated session's token, on an agent request that came from outside a sandbox; the session is tainted. `session.heartbeat` and `session.end` are exempt |
 | `session_inactive` | `session.heartbeat` of a session that has ended or expired; nothing is logged |

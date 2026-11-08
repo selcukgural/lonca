@@ -324,6 +324,40 @@ fn would_prompt(enclave_key: bool, session_expires_ms: Option<i64>, now_ms: i64)
 /// Nothing here prompts: a Secure Enclave key without a live session is
 /// asked to log in first. The errors stay out of the output, since a login
 /// failure names the directory of the keys.
+/// What the security log holds for the last day ([`security.events`]):
+/// counts by kind; a freeze, an integrity alarm or a write behind the
+/// daemon's back is a warning.
+fn security_check(c: &mut lonca_daemon::Client) -> Check {
+    let Ok(r) = ctx::call(c, "security.events", json!({})) else {
+        return warn(
+            "security events",
+            "the daemon did not answer security.events",
+            "upgrade the daemon",
+        );
+    };
+    let counts = r["counts"].as_object().cloned().unwrap_or_default();
+    if counts.is_empty() {
+        return pass("security events", "none in the last 24 hours");
+    }
+    let said: Vec<String> = counts.iter().map(|(k, n)| format!("{k} {n}")).collect();
+    let detail = format!("last 24 hours: {}", said.join(", "));
+    let grave = [
+        "freeze",
+        "integrity_alarm",
+        "unmediated_import",
+        "reconcile_error",
+    ];
+    if grave.iter().any(|k| counts.contains_key(*k)) {
+        warn(
+            "security events",
+            detail,
+            "read the daemon's security.log, and `lonca log` for the entries",
+        )
+    } else {
+        pass("security events", detail)
+    }
+}
+
 fn humans_checks() -> Vec<Check> {
     let Ok(human) = ctx::default_human() else {
         return vec![warn(
@@ -352,7 +386,7 @@ fn humans_checks() -> Vec<Check> {
         .ok()
         .and_then(|r| serde_json::from_value(r).ok())
         .unwrap_or_default();
-    let mut out = vec![pass("human", human.clone())];
+    let mut out = vec![pass("human", human.clone()), security_check(&mut c)];
     for repo in repos {
         match repository_checks(&human, &repo) {
             Ok(checks) => out.extend(checks),

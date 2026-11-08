@@ -1110,6 +1110,7 @@ A01/A07, zero trust: every request authenticated).
 | `hook.stop` | agent | |
 | `harness.setup` | agent | |
 | `queue.run` | any human | drains every merge queue now |
+| `security.events` | any human | the security log of the last day, of the human's repositories |
 
 Credentials, from `Cred` in `service.rs` (the table above is checked
 against it by a test):
@@ -2856,6 +2857,50 @@ could hold any number of connections and move any number of bytes, and
   carries `:port` when the port is not 80 or 443. No new log field.
 - **Attribution fallback** is counted (`proxy_unattributed` in `status`,
   `PROXY …` in `lonca status`).
+
+## Security events outside the log (#56)
+
+The operation log records every decided operation. Much of what an attacker
+tries never reaches a decision, and nothing told anyone of a freeze.
+
+- **`<home>/security.log`**: one JSON object per line, mode 0600, written by
+  the daemon around decisions, never inside `decide()`
+  (`crates/lonca-daemon/src/security.rs`). Fields: `time_ms`, `kind`, and as
+  they apply `repo`, `session`, `method`, `uid`, `code`, `detail`. **Never a
+  token, a request body or file contents**: the fields are fixed, `detail` is
+  at most 300 characters with control characters replaced, and anything
+  shaped like a Lonca token is masked (`lonca_[token]`).
+- **Kinds**: `refused_peer` (a uid the socket does not serve),
+  `auth_failure` (`unauthenticated`, `forbidden`), `oversized_request` (a
+  line past its method's limit), `malformed_request` (not a request),
+  `rate_limited`, `outside_sandbox` (an isolated token used outside its
+  sandbox), `hook_denied` (a hook refused a tool call: the tool and the
+  reason), `reconcile_error`, `unmediated_import` (the ref), `freeze`,
+  `integrity_alarm` (the auditor's freeze flag), `taint` (the daemon tainted
+  a session), `sudo_without_password` (a bind whose hook reports it),
+  `token_rotated` (`session.rotate`, #53). Entries the daemon appends
+  (`freeze`, `import.unmediated`, `taint`) are taken from the repository and
+  written after the request, or by the worker within two seconds.
+- **Kept**: past 8 MiB the file moves to `security.log.1`, replacing the one
+  there, so at most about 16 MiB, the latest events, are kept. The log is
+  the daemon's, like the stores: a backup does not carry it, and an
+  uninstall removes it with the home.
+- **Told at once**: a `freeze` or an `integrity_alarm` runs a notification
+  on a thread of its own, killed after 10 s: the desktop's (`osascript` on
+  macOS, `notify-send` on Linux) for `lonca daemon`, or `--notify-command
+  PROGRAM`, which gets the event as one JSON line on stdin (a webhook or a
+  pager, outside the core); `--no-notify` for none. A hardened daemon runs as
+  its own user, with no desktop of its own: there `lonca status` (`FROZEN`)
+  and `--notify-command` are what reach a human. Tests and the in-process
+  daemon default to none.
+- **For a human**: `security.events` (any human, default the last day):
+  counts by kind and the latest 100 events, of the repositories the human is
+  enrolled in and of none. `lonca doctor` sums it up and warns on a freeze,
+  an integrity alarm, an unmediated import or a reconcile error.
+- **Errors on security paths are said**: `reconcile_all` used to drop a
+  failed `reconcile()` (`let _ =`); it is a `reconcile_error` now. Not done:
+  integrity of the managed settings and the hook binary between binds (a
+  bind checks them), metrics beyond these counts.
 
 ## Open questions (carried from the design)
 

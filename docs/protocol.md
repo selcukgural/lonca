@@ -834,6 +834,16 @@ computes `files`.
 `null` for a harness with no profile, which still gets the rules and the MCP
 server. Not logged.
 
+### `security.events`
+
+*any human.* `{"since_ms": time | null}` (default: one day ago). What the
+daemon's security log holds since then, of the repositories the human is
+enrolled in and of none: `{"since_ms", "counts": {kind: integer}, "events":
+[{"time_ms", "kind", "repo"?, "session"?, "method"?, "uid"?, "code"?,
+"detail"?}]}`, the latest 100. The kinds are listed in `docs/decisions.md`
+("Security events outside the log"); new ones may appear. No event holds a
+token, a request or file contents.
+
 ### `queue.run`
 
 *any human.* `params: {}`. Wakes the daemon's worker, which drains the

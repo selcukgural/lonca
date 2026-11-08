@@ -8,6 +8,7 @@ use base64::Engine;
 use lonca_core::changeid::CHANGE_ID_HEADER;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
+use lonca_core::ops::Op;
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileEntry, FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::chain::{Chain, Submission, replay_checked};
@@ -33,6 +34,9 @@ pub struct RepoHandle {
     policy: Option<(GitId, Arc<PolicyBundle>)>,
     /// How far each session has been told what others want of it.
     pub told: BTreeMap<String, Told>,
+    /// Security events of entries appended since the service last took
+    /// them: freezes, unmediated imports, taints ([`crate::security`]).
+    pub alarms: Vec<crate::security::Event>,
 }
 
 impl RepoHandle {
@@ -45,6 +49,7 @@ impl RepoHandle {
             head: None,
             policy: None,
             told: BTreeMap::new(),
+            alarms: Vec::new(),
         })
     }
 
@@ -86,6 +91,7 @@ impl RepoHandle {
             head,
             policy: None,
             told: BTreeMap::new(),
+            alarms: Vec::new(),
         })
     }
 
@@ -141,7 +147,27 @@ impl RepoHandle {
         let commit = OpLog::new(&self.store).append(&op, self.head.as_ref())?;
         self.head = Some(commit);
         self.chain.commit(&op);
+        self.alarm(&op);
         Ok(op)
+    }
+
+    /// The security event an appended entry is, if any.
+    fn alarm(&mut self, op: &SignedOp) {
+        use crate::security::{Event, kind};
+        let e = &op.entry;
+        if !e.decision.is_allow() {
+            return;
+        }
+        let event = |k: &str| Event::new(e.time_ms, k).repo(&self.name);
+        let found = match &e.op {
+            Op::Freeze { reason } => Some(event(kind::FREEZE).detail(reason)),
+            Op::ImportUnmediated { refname, .. } => Some(event(kind::UNMEDIATED).detail(refname)),
+            Op::Taint { session, reason } => {
+                Some(event(kind::TAINT).session(session).detail(reason))
+            }
+            _ => None,
+        };
+        self.alarms.extend(found);
     }
 
     pub fn write_policy(

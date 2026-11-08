@@ -7509,3 +7509,130 @@ fn a_file_created_since_the_base_is_refused_until_a_sync() {
     assert!(!denied_with(&d, "created_since_base"), "{d:?}");
     h.assert_replay();
 }
+
+// ------------------------------------------------- lease kinds by nesting (#40)
+
+/// Which two kinds held by two sessions meet, for a symbol `a` and a
+/// symbol `b` that `a` is or holds. Rows are `a`'s kind and columns `b`'s,
+/// in the order edit, insert, rename, shared: `X` meets, `.` does not.
+const SAME: [&str; 4] = ["XXXX", "X.XX", "XXXX", "XXX."];
+/// `a` holds `b`, however deep: an insert into `a` is no part of `b`, and
+/// anything but an insert on `a` is all of it.
+const HOLDS: [&str; 4] = ["XXXX", "....", "XXXX", "XXX."];
+const APART: [&str; 4] = ["....", "....", "....", "...."];
+
+const KINDS: [LeaseKind; 4] = [
+    LeaseKind::Edit,
+    LeaseKind::Insert,
+    LeaseKind::Rename,
+    LeaseKind::Shared,
+];
+
+/// Every pair of kinds over a symbol, its container, its container's
+/// container and its file, its sibling and a symbol of another file; each
+/// asked in both orders, since whoever comes first holds.
+#[test]
+fn lease_kinds_meet_by_what_holds_what() {
+    let cases: [(&str, &str, [&str; 4]); 7] = [
+        ("src/a.rs#Outer", "src/a.rs#Outer", SAME),
+        ("src/a.rs#Outer", "src/a.rs#Outer.Inner", HOLDS),
+        ("src/a.rs#Outer", "src/a.rs#Outer.Inner.m", HOLDS),
+        ("src/a.rs#<file>", "src/a.rs#Outer.Inner.m", HOLDS),
+        ("src/a.rs#<file>", "src/a.rs#<file>", SAME),
+        ("src/a.rs#Outer.Inner.m", "src/a.rs#Outer.Inner.n", APART),
+        ("src/a.rs#Outer", "src/b.rs#Outer", APART),
+    ];
+    for (a, b, table) in cases {
+        for (row, ka) in KINDS.iter().enumerate() {
+            for (col, kb) in KINDS.iter().enumerate() {
+                let meets = table[row].as_bytes()[col] == b'X';
+                for a_first in [true, false] {
+                    let mut h = H::with_policy(shared_policy());
+                    h.start_observed("sa", &["src/**"]);
+                    h.start_observed("sb", &["src/**"]);
+                    let ((first, s1, k1), (second, s2, k2)) = if a_first {
+                        ((a, "sa", *ka), (b, "sb", *kb))
+                    } else {
+                        ((b, "sb", *kb), (a, "sa", *ka))
+                    };
+                    assert!(h.lease(s1, "l1", &[(first, k1)]).is_allow());
+                    let d = h.lease(s2, "l2", &[(second, k2)]);
+                    let case = format!("{ka:?} {a} / {kb:?} {b}, a first: {a_first}");
+                    if meets {
+                        let held = format!("lease_held:{first}:{s1}:");
+                        assert!(denied_with(&d, &held), "{case}: {d:?}");
+                    } else {
+                        assert!(d.is_allow(), "{case}: {d:?}");
+                    }
+                    h.assert_replay();
+                }
+            }
+        }
+    }
+}
+
+/// A rename of a container meets an insert into it and into anything in it;
+/// an insert into the file does not meet a rename of what is in the file.
+#[test]
+fn a_rename_meets_inserts_into_what_it_renames() {
+    let mut h = H::new();
+    for s in ["a", "b", "c", "d"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let ty = "src/a.rs#Client";
+    assert!(h.lease("a", "la", &[(ty, LeaseKind::Rename)]).is_allow());
+    for (s, into) in [("b", ty), ("c", "src/a.rs#Client.Inner")] {
+        let d = h.lease(s, "lx", &[(into, LeaseKind::Insert)]);
+        assert!(denied_with(&d, &format!("lease_held:{ty}:a:")), "{d:?}");
+    }
+    let d = h.lease("d", "ld", &[("src/a.rs#<file>", LeaseKind::Insert)]);
+    assert!(d.is_allow(), "{d:?}");
+    // Released, the type takes inserts again.
+    assert!(h.agent("a", release("la")).is_allow());
+    assert!(h.lease("b", "lb", &[(ty, LeaseKind::Insert)]).is_allow());
+    h.assert_replay();
+}
+
+/// A child and its parent hold apart: neither takes what the other holds.
+/// A delegated set is renewed by the child that has it, and goes back to
+/// the parent with the time the child gave it.
+#[test]
+fn a_child_renews_what_it_was_given_and_holds_apart_from_its_parent() {
+    let mut h = three_sessions();
+    let g = "src/a.rs#g";
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("a", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    assert!(h.agent("a", child_op(&h, "a", "kid", &["l1"])).is_allow());
+
+    let d = h.lease("kid", "k1", &[(g, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{g}:a:")), "{d:?}");
+    let d = h.lease("a", "l3", &[(F, LeaseKind::Rename)]);
+    assert!(denied_with(&d, &format!("lease_held:{F}:kid:")), "{d:?}");
+    let d = h.lease("kid", "k1", &[("src/a.rs#h", LeaseKind::Edit)]);
+    assert!(d.is_allow(), "the child's own lease: {d:?}");
+
+    let d = h.agent("a", renew("l1", 10 * MIN));
+    assert!(denied_with(&d, "not_own_lease"), "{d:?}");
+    h.now += 5 * MIN;
+    assert!(h.agent("kid", renew("l1", 10 * MIN)).is_allow());
+    let until = h.now + 10 * MIN;
+    assert_eq!(h.chain.state.leases["l1"].expires_ms, until);
+    let d = h.agent("kid", renew("l2", 10 * MIN));
+    assert!(denied_with(&d, "not_own_lease"), "{d:?}");
+
+    let end = Op::SessionEnd {
+        session: "kid".into(),
+        reason: "done".into(),
+    };
+    assert!(h.agent("kid", end).is_allow());
+    let l = &h.chain.state.leases["l1"];
+    assert_eq!((l.session.as_str(), l.expires_ms), ("a", until));
+    assert!(
+        !h.chain.state.leases.contains_key("k1"),
+        "the child's own set ends with it"
+    );
+    assert!(h.agent("a", renew("l1", 10 * MIN)).is_allow());
+    let d = h.lease("b", "lb", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{F}:a:")), "{d:?}");
+    h.assert_replay();
+}

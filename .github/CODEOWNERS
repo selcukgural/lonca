@@ -1,0 +1,11 @@
+# Who answers for the parts that hold the trust model: the trusted core, the
+# CI that audits it, the supply-chain policy and what installs Lonca. A pull
+# request touching them asks this owner for review.
+/.github/                 @selcukgural
+/deny.toml                @selcukgural
+/rust-toolchain.toml      @selcukgural
+/packaging/               @selcukgural
+/crates/lonca-core/       @selcukgural
+/crates/lonca-policy/     @selcukgural
+/crates/lonca-audit/      @selcukgural
+/SECURITY.md              @selcukgural

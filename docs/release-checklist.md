@@ -1,6 +1,17 @@
 # Release checklist
 
-What CI can not check, because it needs model access.
+## Before tagging
+
+1. `rust-toolchain.toml`: is a newer stable out? Raise it in a pull request of
+   its own, with the clippy fixes it needs, before the release.
+2. Run `ci.yml` and `mutants.yml` on main (`gh workflow run ci.yml --ref main`,
+   `gh workflow run mutants.yml --ref main`); both green.
+3. After the tag: the `sbom` job of `ci.yml` keeps `sbom-cyclonedx` with the
+   run.
+4. Review `docs/security/owasp.md`: every row still true, every gap still has
+   an open issue.
+
+What CI can not check, because it needs model access, follows.
 
 ## A live run per harness
 

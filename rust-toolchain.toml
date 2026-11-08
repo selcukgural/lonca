@@ -1,0 +1,8 @@
+# The compiler, clippy and rustfmt every build uses, here and in CI, so a
+# new stable release can not change a build under it. Raised by hand: bump
+# it in its own pull request, with the clippy fixes it needs, and check it
+# before a release (docs/release-checklist.md).
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

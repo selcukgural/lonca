@@ -75,7 +75,10 @@ cargo mutants -p lonca-policy -j 4          # one crate
 The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,
 `sandbox`) and the mutants run only for a release: on a pushed `v*` tag, and
 on demand before tagging (`gh workflow run ci.yml --ref main`). Pull requests
-and merges to main run neither, and the main ruleset requires no check.
-`cargo-deny` and CodeQL still run on pull requests; they block nothing.
+and merges to main run neither. The main ruleset requires a pull request (no
+direct push) but no check. `cargo-deny`, CodeQL and zizmor (workflow changes)
+run on pull requests; they block nothing. The toolchain is pinned in
+`rust-toolchain.toml`; Actions are GitHub's own plus four named ones
+(docs/decisions.md, "CI and the repository's own settings").
 A PR is merged as soon as it is opened (`gh pr merge --merge`): with no
 required check GitHub refuses `--auto` ("clean status").

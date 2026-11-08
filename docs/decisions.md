@@ -2676,6 +2676,22 @@ denial of service. Bad input must become a denial or an error.
   `#[allow(..., reason = ...)]` that says why.
 - Not done: a `cargo geiger` report of unsafe code in dependencies.
 
+## Keys at rest (#62)
+
+- **A key file is private to its user or it is not loaded.** `KeyPair::load`
+  and `load_or_create` take the uid of the loading process and refuse a key
+  that is a link, belongs to another uid, or gives group or others any access;
+  the error names the mode and the fix. This holds for the daemon's keys and
+  for human file keys. A recovery key is loaded with `load_carried`: it is
+  often on a USB stick whose file system shows every file as readable, so only
+  its owner is checked and an open mode is a warning.
+- **The daemon home must belong to the daemon** (`Home::ensure`), or whoever
+  owns it could replace the key, the tokens and the stores.
+- **One secret per key in memory.** `KeyPair` holds an `Arc<SigningKey>`;
+  `SigningKey` zeroizes on drop, and what was read from or written to disk
+  passes through `Zeroizing` buffers.
+- The inventory of algorithms, keys and secrets is `docs/crypto.md`.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

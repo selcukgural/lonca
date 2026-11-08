@@ -23,6 +23,8 @@ use std::path::{Path, PathBuf};
 
 use lonca_core::canonical::{random_bytes, sha256_hex};
 use lonca_core::keys::KeyPair;
+
+use crate::sys::current_uid;
 use lonca_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -70,8 +72,11 @@ impl Home {
             .unwrap_or_else(|| self.root.join("backups"))
     }
 
+    /// Creates the home, or checks the one there: it must belong to this
+    /// process's user, and it is closed to everyone else (mode 0700).
     pub fn ensure(&self) -> Result<()> {
         fs::create_dir_all(self.repos())?;
+        owned_by(&self.root, current_uid())?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -114,7 +119,7 @@ impl Home {
     }
 
     pub fn load_key(&self) -> Result<KeyPair> {
-        KeyPair::load_or_create(&self.key_path())
+        KeyPair::load_or_create(&self.key_path(), current_uid())
     }
 
     /// Where a rotation keeps the new key until every repository uses it.
@@ -132,7 +137,7 @@ impl Home {
         }
         let current = self.load_key()?;
         let next = if next.exists() {
-            Some(KeyPair::load(&next)?)
+            Some(KeyPair::load(&next, current_uid())?)
         } else {
             None
         };
@@ -141,7 +146,7 @@ impl Home {
 
     /// The next key, created on first use.
     pub fn load_or_create_next_key(&self) -> Result<KeyPair> {
-        KeyPair::load_or_create(&self.next_key_path())
+        KeyPair::load_or_create(&self.next_key_path(), current_uid())
     }
 
     /// Makes the next key the current one once no repository uses the
@@ -153,6 +158,25 @@ impl Home {
         fs::rename(self.next_key_path(), self.key_path())?;
         Ok(())
     }
+}
+
+/// Refuses a home that another user owns: whoever owns it can replace the
+/// key, the tokens and the stores, and a daemon would sign for them.
+fn owned_by(root: &Path, uid: u32) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let owner = fs::metadata(root)?.uid();
+        if owner != uid {
+            return Err(Error::Invalid(format!(
+                "daemon home {} belongs to uid {owner}, not to this daemon (uid {uid}); \
+                 run the daemon as its owner, or give it a home of its own",
+                root.display()
+            )));
+        }
+    }
+    let _ = (root, uid);
+    Ok(())
 }
 
 /// What a token stands for. Agent entries predate human sessions and are
@@ -279,6 +303,24 @@ impl Tokens {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_home_must_belong_to_the_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = Home::new(dir.path().join("h"));
+        home.ensure().unwrap();
+        assert!(owned_by(&home.root, current_uid()).is_ok());
+        let e = owned_by(&home.root, current_uid() + 1)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("belongs to uid"), "{e}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&home.root).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+    }
 
     #[test]
     fn tokens_are_stored_as_hashes_and_both_kinds_survive_a_reload() {

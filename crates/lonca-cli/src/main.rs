@@ -1174,7 +1174,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 return Ok(());
             }
             let p = ctx::human_key_path(&name);
-            let k = KeyPair::load_or_create(&p)?;
+            let k = KeyPair::load_or_create(&p, sys::current_uid())?;
             std::fs::write(ctx::humans_dir().join("default"), &name)?;
             println!("{name}: ed25519 {} ({})", k.public_hex(), p.display());
             println!(

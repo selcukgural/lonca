@@ -205,7 +205,7 @@ jobs:
             echo
             echo '```sh'
             echo 'curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh'
-            echo 'brew install selcukgural/lonca/lonca'
+            echo 'brew tap selcukgural/lonca && brew install lonca'
             echo 'cargo install --locked lonca'
             echo '```'
             echo

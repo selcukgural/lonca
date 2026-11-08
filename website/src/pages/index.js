@@ -122,7 +122,8 @@ lonca pending --repo demo
 lonca approve 17 --repo demo
 lonca-audit verify ~/.lonca/repos/demo.git`;
 
-const other = `brew install selcukgural/lonca/lonca          # Homebrew (macOS, Linux)
+const other = `brew tap selcukgural/lonca                    # Homebrew (macOS, Linux)
+brew install lonca
 cargo install --locked lonca lonca-audit      # crates.io, Rust 1.90+`;
 
 export default function Home() {

@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 description = "The Lonca daemon: the single writer every operation goes through (decide, sign, log, apply)"
 keywords = ["vcs", "agents", "daemon", "lonca"]
 categories = ["development-tools"]

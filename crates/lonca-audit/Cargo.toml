@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 description = "Independent auditor of a Lonca repository: replays every decision of the signed operation log and recomputes its facts and merges"
 keywords = ["vcs", "audit", "agents", "lonca"]
 categories = ["development-tools"]

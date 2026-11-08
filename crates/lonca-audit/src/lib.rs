@@ -401,3 +401,167 @@ pub fn compare(local: &[SignedOp], published: &[SignedOp]) -> Vec<Finding> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    //! The checks that need no daemon: the chain gate in front of the replay,
+    //! and `compare`. The replay, the recomputed facts and merges and the refs
+    //! are tested from real logs in `lonca-daemon/tests/audit.rs`.
+    use super::*;
+    use lonca_core::keys::KeyPair;
+    use lonca_core::oplog::{FORMAT_CURRENT, GENESIS_PREV, OpEntry};
+    use lonca_core::ops::{Actor, Decision, HumanKey};
+
+    fn genesis(key: &KeyPair, store: &Store) -> SignedOp {
+        let tree = store.empty_tree().unwrap();
+        let entry = OpEntry {
+            format: FORMAT_CURRENT,
+            seq: 0,
+            prev: GENESIS_PREV.into(),
+            time_ms: 1000,
+            actor: Actor::Human {
+                name: "ayse".into(),
+            },
+            op: Op::RepoInit {
+                repo: "demo".into(),
+                daemon_key: key.public_hex(),
+                human: "ayse".into(),
+                human_key: HumanKey {
+                    alg: "ed25519".into(),
+                    public: "00".into(),
+                },
+                policy: tree.clone(),
+                trunk: tree,
+            },
+            evidence: vec![],
+            facts: None,
+            symbols_engine: None,
+            decision: Decision::allow(),
+            human: None,
+        };
+        SignedOp::sign(entry, key)
+    }
+
+    fn next(prev: &SignedOp, key: &KeyPair, reason: &str) -> SignedOp {
+        let entry = OpEntry {
+            format: FORMAT_CURRENT,
+            seq: prev.entry.seq + 1,
+            prev: prev.hash.clone(),
+            time_ms: prev.entry.time_ms + 1000,
+            actor: Actor::Daemon,
+            op: Op::Freeze {
+                reason: reason.into(),
+            },
+            evidence: vec![],
+            facts: None,
+            symbols_engine: None,
+            decision: Decision::allow(),
+            human: None,
+        };
+        SignedOp::sign(entry, key)
+    }
+
+    fn log(n: usize, reason: &str) -> (tempfile::TempDir, Store, Vec<SignedOp>) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let mut ops = vec![genesis(&key, &store)];
+        while ops.len() < n {
+            let op = next(ops.last().unwrap(), &key, reason);
+            ops.push(op);
+        }
+        (dir, store, ops)
+    }
+
+    #[test]
+    fn a_broken_chain_is_the_only_finding_and_stops_the_audit() {
+        let (_dir, store, mut ops) = log(3, "a");
+        let rep = audit_ops(&store, &ops, Options::default());
+        assert_eq!(rep.ops, 3);
+        assert_eq!(rep.head_hash, ops[2].hash, "the head of an intact chain");
+        // An entry changed after it was signed.
+        ops[1].entry.time_ms += 1;
+        let rep = audit_ops(&store, &ops, Options::default());
+        assert!(!rep.ok());
+        assert_eq!(rep.ops, 3);
+        assert_eq!(rep.findings.len(), 1, "{:?}", rep.findings);
+        assert_eq!(rep.findings[0].kind, "chain");
+        assert_eq!(rep.findings[0].seq, None);
+        assert!(
+            rep.findings[0].detail.contains("op 1"),
+            "{:?}",
+            rep.findings
+        );
+        assert!(rep.head_hash.is_empty());
+        let rep = audit_ops(&store, &[], Options::default());
+        assert_eq!(rep.ops, 0);
+        assert_eq!(rep.findings[0].kind, "chain");
+    }
+
+    #[test]
+    fn a_report_is_ok_only_with_no_findings() {
+        let mut rep = Report::default();
+        assert!(rep.ok());
+        rep.skip(3, "facts", "objects not present");
+        assert!(rep.ok(), "a skipped check is no finding");
+        assert_eq!(rep.skipped[0].seq, Some(3));
+        rep.find(Some(4), "merge", "differs");
+        assert!(!rep.ok());
+        assert_eq!(
+            rep.findings,
+            vec![Finding {
+                seq: Some(4),
+                kind: "merge".into(),
+                detail: "differs".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn options_by_default_check_deeply_and_the_lonca_refs() {
+        let o = Options::default();
+        assert!(o.deep && o.check_refs && !o.all_refs);
+    }
+
+    #[test]
+    fn a_published_prefix_compares_clean() {
+        let (_dir, _store, ops) = log(4, "a");
+        assert!(compare(&ops, &ops).is_empty());
+        assert!(compare(&ops, &ops[..2]).is_empty());
+        assert!(compare(&ops, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_published_log_longer_than_the_local_one_is_found() {
+        let (_dir, _store, ops) = log(4, "a");
+        let found = compare(&ops[..2], &ops);
+        assert_eq!(
+            found,
+            vec![Finding {
+                seq: Some(2),
+                kind: "anchor".into(),
+                detail: "published log has 4 entries, local only 2".into()
+            }]
+        );
+        // As long: nothing to say.
+        assert!(compare(&ops[..3], &ops[..3]).is_empty());
+    }
+
+    #[test]
+    fn rewritten_history_is_found_once_at_the_first_difference() {
+        let (_dir, _store, local) = log(4, "a");
+        let (_dir2, _store2, published) = log(4, "b");
+        // Same genesis is impossible across two keys, so take ours.
+        let mut published = published;
+        published[0] = local[0].clone();
+        let found = compare(&local, &published);
+        assert_eq!(
+            found,
+            vec![Finding {
+                seq: Some(1),
+                kind: "anchor".into(),
+                detail: "local history differs from what was published".into()
+            }]
+        );
+    }
+}

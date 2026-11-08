@@ -21,6 +21,7 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[cfg(feature = "store")]
 pub(crate) fn git<E: std::fmt::Display>(e: E) -> Error {
     Error::Git(e.to_string())
 }

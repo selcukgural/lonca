@@ -35,6 +35,12 @@ cargo deny check                # advisories, licenses, crates.io only (deny.tom
 - A new operation type needs: `ops.rs` (Op, OpKind, as_str), `decide.rs`
   (who may request it, per-op checks), `state.rs` (effects), and the
   auditor's deep checks if it carries recomputable data.
+- `lonca-client` is what harnesses depend on: protocol types, socket
+  client, daemon checks, session file. It must not pull in the store or
+  the policy (`cargo tree -p lonca-client -e normal` has no gix, no
+  cedar); `lonca-core` builds without its store
+  (`cargo clippy -p lonca-core -p lonca-client --no-default-features`).
+  A protocol number change is a major version of it.
 - Unix socket paths are limited to ~100 bytes; tests use short temp dirs or
   `LONCA_SOCKET`.
 

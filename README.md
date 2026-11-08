@@ -215,7 +215,8 @@ lonca-audit verify ~/.lonca/repos/demo.git
 
 | Crate | Role |
 |---|---|
-| `lonca-core` | Git object store (gitoxide), change ids (jj-compatible), keys, operation log |
+| `lonca-core` | Git object store (gitoxide, feature `store`), change ids (jj-compatible), keys, operation log |
+| `lonca-client` | Client of the daemon socket: protocol types, framing, daemon checks, human session file (for harnesses) |
 | `lonca-policy` | State fold, decision function, Cedar policy, human signatures |
 | `lonca-symbols` | tree-sitter symbols, facts, structural merge, integration |
 | `lonca-verify` | Sandboxed build/test evidence (Seatbelt, bubblewrap) |

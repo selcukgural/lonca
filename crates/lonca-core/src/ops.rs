@@ -7,7 +7,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::changeid::ChangeId;
-use crate::store::GitId;
+use crate::objects::GitId;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

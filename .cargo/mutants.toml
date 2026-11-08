@@ -39,6 +39,9 @@ minimum_test_timeout = 600
 exclude_globs = ["crates/lonca-daemon/src/peer_other.rs", "crates/lonca-verify/src/sweep.rs"]
 
 exclude_re = [
+  # `O_NOFOLLOW | O_NONBLOCK` in the session file reader: two flags with no bit
+  # in common, so `^` is `|`.
+  'replace \| with \^ in open_no_follow',
   # `SEE_EXIT` joins three flags with no bit in common, so `^` is `|`.
   'process\.rs.*replace \| with \^',
   # A change id's byte is `(high << 4) | low` with `low` below 16: the two

@@ -952,10 +952,24 @@ fn the_human_session_file_is_reused_renewed_and_ended() {
     std::fs::write(&session, v.to_string()).unwrap();
     e.run(r, &["status", "--repo", "demo"]);
     assert_eq!(human_tokens(), 5);
+    // A file others may read is not used (lonca_client::session), and the
+    // login that follows writes it back as 0600.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |m: u32| std::fs::Permissions::from_mode(m);
+        std::fs::set_permissions(&session, mode(0o644)).unwrap();
+        let before = std::fs::read_to_string(&session).unwrap();
+        e.run(r, &["status", "--repo", "demo"]);
+        assert_eq!(human_tokens(), 6);
+        assert_ne!(std::fs::read_to_string(&session).unwrap(), before);
+        let now = std::fs::metadata(&session).unwrap().permissions();
+        assert_eq!(now.mode() & 0o777, 0o600);
+    }
     // Logout ends the session at the daemon and forgets the file; twice is fine.
     e.run(r, &["human", "logout"]);
     assert!(!session.exists());
-    assert_eq!(human_tokens(), 4, "the live one was revoked");
+    assert_eq!(human_tokens(), 5, "the live one was revoked");
     e.run(r, &["human", "logout"]);
     // A humans directory that is not a directory: logout reports it
     // (`--as`, so that the identity lookup is not what fails).

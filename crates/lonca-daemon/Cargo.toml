@@ -8,6 +8,7 @@ license = "Apache-2.0"
 base64 = "0.23.1"
 hex = "0.4.3"
 libc = "0.2.190"
+lonca-client = { version = "0.1.0", path = "../lonca-client", features = ["test-env"] }
 lonca-core = { version = "0.1.0", path = "../lonca-core" }
 lonca-net = { version = "0.1.0", path = "../lonca-net" }
 lonca-policy = { version = "0.1.0", path = "../lonca-policy" }

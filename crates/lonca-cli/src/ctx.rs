@@ -371,9 +371,15 @@ pub fn session_path(name: &str) -> PathBuf {
     humans_dir().join(format!("{name}.session"))
 }
 
+/// The session, if there is one `lonca` left (`lonca_client::session`): a
+/// file another user owns, or that others may read, is not used, and the
+/// next login writes it again with the right mode.
 pub fn read_session(name: &str) -> Option<Session> {
-    let bytes = std::fs::read(session_path(name)).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let s = lonca_client::session::read_session(&session_path(name)).ok()??;
+    Some(Session {
+        token: s.token,
+        expires_ms: s.expires_ms,
+    })
 }
 
 fn write_session(name: &str, s: &Session) -> Result<()> {
@@ -387,9 +393,16 @@ fn write_session(name: &str, s: &Session) -> Result<()> {
         opts.mode(0o600);
     }
     use std::io::Write;
-    opts.open(&p)
-        .with_context(|| format!("cannot write {}", p.display()))?
-        .write_all(&serde_json::to_vec(s)?)?;
+    let mut file = opts
+        .open(&p)
+        .with_context(|| format!("cannot write {}", p.display()))?;
+    // The mode on `open` only counts for a new file: an old one keeps its own.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(&serde_json::to_vec(s)?)?;
     Ok(())
 }
 

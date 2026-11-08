@@ -11,16 +11,22 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::canonical::{canonical_bytes, digest_of};
+#[cfg(feature = "store")]
+use crate::canonical::canonical_bytes;
+use crate::canonical::digest_of;
 use crate::error::{Error, Result};
 use crate::keys::{KeyPair, verify_hex};
+#[cfg(feature = "store")]
+use crate::objects::{FileEntry, FileMap, FileMode, GitId};
 use crate::ops::{
     Actor, Attestation, Decision, Facts, HumanSignature, LeaseItem, NegotiationMsg, ObsKind, Op,
 };
-use crate::store::{CommitSpec, FileEntry, FileMap, FileMode, GitId, Store};
+#[cfg(feature = "store")]
+use crate::store::{CommitSpec, Store};
 
 pub const OPLOG_REF: &str = "refs/lonca/oplog";
 pub const GENESIS_PREV: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+#[cfg(feature = "store")]
 const OP_FILE: &str = "op.json";
 
 /// Entries written before the format field existed. The field is left out of
@@ -285,10 +291,13 @@ impl SignedOp {
     }
 }
 
+/// The log in a store.
+#[cfg(feature = "store")]
 pub struct OpLog<'a> {
     store: &'a Store,
 }
 
+#[cfg(feature = "store")]
 impl<'a> OpLog<'a> {
     pub fn new(store: &'a Store) -> Self {
         Self { store }
@@ -463,6 +472,7 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
 }
 
 #[cfg(test)]
+#[cfg(feature = "store")]
 mod tests {
     use super::*;
     use crate::ChangeId;

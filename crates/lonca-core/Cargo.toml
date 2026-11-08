@@ -12,13 +12,20 @@ categories = ["development-tools"]
 base64 = "0.23.1"
 ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
-gix = { version = "0.90.0", default-features = false, features = ["max-performance", "revision", "index", "sha1"] }
+gix = { version = "0.90.0", optional = true, default-features = false, features = ["max-performance", "revision", "index", "sha1"] }
 hex = "0.4.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 thiserror = "2.0.21"
 zeroize = "1.9.1"
+
+[features]
+# The Git object store and the log kept in it. Without it: the operation
+# types, ids, canonical encoding, keys and chain verification, for a client
+# of the daemon (lonca-client).
+default = ["store"]
+store = ["dep:gix"]
 
 [dev-dependencies]
 tempfile = "3.27.0"

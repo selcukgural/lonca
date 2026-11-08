@@ -2801,6 +2801,33 @@ tag.
   store or a remote nothing but Lonca pushes to. A CI clone also has its
   remote's branches and tags, so the example workflow keeps the default.
 
+## The advisor reads agent text and a human reads it (#63)
+
+`lonca advise` stays outside every decision; this hardens both of its ends.
+
+- **Framing.** The change and its diff go to the model as one JSON document,
+  so nothing in them can end a field early, between two delimiter lines
+  named by a fresh random tag that the data does not contain (`framed`). The
+  system prompt says that everything between them is data, including text
+  that looks like the end of it. Before, `<change>…</change><diff>…</diff>`
+  could be closed by a diff that contained `</diff>`.
+- **Output for a terminal.** Every string of the advice keeps only newlines
+  and tabs among control characters, so no ANSI escape survives; C1 controls
+  and bidi controls go too; a field keeps at most 4 000 characters and a list
+  50 items; a risk or severity outside the schema reads `unknown`
+  (`printable`, `clean`). The model may echo what the diff carried.
+- **Provenance.** The advice is labelled: `"provenance": "tainted"` in
+  `--json`, and a line saying it is derived from what an agent wrote on the
+  terminal. If advice is ever stored or shown to agents it carries that
+  label.
+- **The budget fails closed.** A ledger that does not parse refuses the call
+  (and is left as it is); it is written whole (temp file and rename). The lock
+  file records pid and time; a lock older than 10 s was left by a crash and
+  is broken, and a live one that does not go away says who holds it.
+- **https only**: `ANTHROPIC_BASE_URL` must be `https://`, or `http://` to
+  `127.0.0.1`, `localhost` or `[::1]` (a test server), so the key never
+  travels in clear text.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

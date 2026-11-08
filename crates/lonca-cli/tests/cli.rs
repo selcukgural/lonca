@@ -423,6 +423,7 @@ fn advisor_sends_the_diff_and_prints_structured_advice() {
     let printed = text(&out.stdout);
     assert!(
         printed.contains("informational only")
+            && printed.contains("untrusted: derived from what an agent wrote")
             && printed.contains("risk: medium")
             && printed.contains("lib.rs#charge"),
         "{printed}"

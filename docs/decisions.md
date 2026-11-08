@@ -2640,6 +2640,58 @@ next got it, ahead of the parent that had handed it over for a while.
   that reaches format 23 is decided and applied by the same rule. Older logs
   replay as they were.
 
+## Unsafe code, panics and overflow (#61)
+
+A panic in the daemon stops the single writer, and so every repository: a
+denial of service. Bad input must become a denial or an error.
+
+- **Unsafe code is refused** by `[workspace.lints.rust] unsafe_code = "deny"`
+  in every crate, and crates with no FFI at all (`lonca-core`, `lonca-policy`,
+  `lonca-audit`, `lonca-symbols`, `lonca-net`, `lonca-mutants`)
+  `#![forbid(unsafe_code)]`. The libc calls live in modules that say
+  `#![allow(unsafe_code)]` and give a `// SAFETY:` reason on every block:
+  `lonca-daemon/src/sys.rs` (uid, peer credentials, descriptor limit, group
+  lookup), `lonca-daemon/src/peer_other.rs` (macOS sandbox questions),
+  `lonca-verify/src/process.rs` and `sweep.rs` (process control) and
+  `lonca-cli/src/sys.rs` (sessions, signals). A test that sets the
+  environment allows it on that test alone. Unsafe code anywhere else does
+  not compile.
+- **Groups are looked up with `getgrnam_r`.** `getgrnam` returns static
+  storage shared by every thread.
+- **The release profile checks overflow** (`overflow-checks = true`). Where a
+  number comes from a request or a policy, `decide()` and the state use
+  `saturating_*` / `checked_*`: policy minutes saturate when turned into
+  milliseconds (so a check against them fails closed), `bridge.push`'s
+  `oplog_seq + 1` is checked, and ends of leases and sessions saturate. A
+  number at the end of its type is denied, not a panic
+  (`extreme_numbers_are_denied_without_a_panic`). Nothing that could be
+  reached by a log before this changes: those numbers never overflowed, so
+  old logs replay as they were.
+- **Panic lints on the trusted core.** `lonca-core`, `lonca-policy` and
+  `lonca-audit` warn on `unwrap_used`, `expect_used` and `indexing_slicing`
+  (CI runs clippy with `-D warnings`, so they fail it); `clippy.toml` lets
+  tests panic. Indexing became `get`, `first` and `split_first`; an
+  `expect` that holds by construction (constant policy and profiles, the
+  OS random source, serializing Lonca's own types) stays with an
+  `#[allow(..., reason = ...)]` that says why.
+- Not done: a `cargo geiger` report of unsafe code in dependencies.
+
+## Keys at rest (#62)
+
+- **A key file is private to its user or it is not loaded.** `KeyPair::load`
+  and `load_or_create` take the uid of the loading process and refuse a key
+  that is a link, belongs to another uid, or gives group or others any access;
+  the error names the mode and the fix. This holds for the daemon's keys and
+  for human file keys. A recovery key is loaded with `load_carried`: it is
+  often on a USB stick whose file system shows every file as readable, so only
+  its owner is checked and an open mode is a warning.
+- **The daemon home must belong to the daemon** (`Home::ensure`), or whoever
+  owns it could replace the key, the tokens and the stores.
+- **One secret per key in memory.** `KeyPair` holds an `Arc<SigningKey>`;
+  `SigningKey` zeroizes on drop, and what was read from or written to disk
+  passes through `Zeroizing` buffers.
+- The inventory of algorithms, keys and secrets is `docs/crypto.md`.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

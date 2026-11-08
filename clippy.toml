@@ -1,0 +1,5 @@
+# Panic lints (`unwrap_used`, `expect_used`, `indexing_slicing`) are on for
+# the trusted crates (see their lib.rs); test code may still panic.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-indexing-slicing-in-tests = true

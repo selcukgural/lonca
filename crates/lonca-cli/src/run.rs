@@ -12,7 +12,7 @@ use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -246,21 +246,7 @@ fn spawn(mut command: Command) -> Result<Child> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let close_from = 3;
-    // SAFETY: between fork and exec, this calls only async-signal-safe
-    // functions and touches no memory shared with the parent.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::setsid() < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let top = libc::sysconf(libc::_SC_OPEN_MAX).clamp(256, 65536) as libc::c_int;
-            for fd in close_from..top {
-                libc::close(fd);
-            }
-            Ok(())
-        });
-    }
+    crate::sys::new_session_closing_from(&mut command, 3);
     Ok(command.spawn()?)
 }
 
@@ -303,13 +289,11 @@ fn wait(child: &mut Child, stop: &AtomicI32, grace: Duration) -> Result<ExitStat
         let signal = stop.load(Ordering::SeqCst);
         match stopping {
             None if signal != 0 => {
-                // SAFETY: `kill` takes no pointers.
-                unsafe { libc::kill(-group, libc::SIGTERM) };
+                crate::sys::kill_group(group, libc::SIGTERM);
                 stopping = Some(Instant::now());
             }
             Some(at) if at.elapsed() > grace => {
-                // SAFETY: as above.
-                unsafe { libc::kill(-group, libc::SIGKILL) };
+                crate::sys::kill_group(group, libc::SIGKILL);
             }
             _ => {}
         }
@@ -614,10 +598,8 @@ fn drain(output: Vec<Receiver<()>>, within: Duration) {
 pub fn run(a: Args) -> Result<i32> {
     // From the start: a signal between the isolation and the command must
     // reach the command, not end the launcher with the session still alive.
-    for s in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        // SAFETY: the handler only stores to an atomic.
-        unsafe { libc::signal(s, on_signal as *const () as libc::sighandler_t) };
-    }
+    // The handler only stores to an atomic.
+    crate::sys::on_signals(&[libc::SIGINT, libc::SIGTERM, libc::SIGHUP], on_signal);
     let sandbox = Sandbox::detect();
     if sandbox == Sandbox::None {
         bail!("no sandbox on this machine (macOS: sandbox-exec; Linux: install bubblewrap)");
@@ -1034,10 +1016,7 @@ mod tests {
         let stop = AtomicI32::new(libc::SIGTERM);
         let status = wait(&mut child, &stop, Duration::from_secs(20)).unwrap();
         assert_eq!(exit_code(status), 128 + libc::SIGTERM);
-        let alive = || {
-            // SAFETY: `kill` takes no pointers; signal 0 only asks.
-            unsafe { libc::kill(helper, 0) == 0 }
-        };
+        let alive = || crate::sys::alive(helper);
         for _ in 0..200 {
             if !alive() {
                 return;
@@ -1070,8 +1049,7 @@ mod tests {
         assert_eq!(exit_code(status), 128 + libc::SIGKILL);
         assert!(started.elapsed() >= Duration::from_millis(300));
         for _ in 0..200 {
-            // SAFETY: `kill` takes no pointers; signal 0 only asks.
-            if unsafe { libc::kill(helper, 0) } != 0 {
+            if !crate::sys::alive(helper) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -1094,8 +1072,10 @@ mod tests {
         let mut c = Command::new("/bin/sh");
         c.args(["-c", "exec sleep 0"]);
         let mut child = spawn(c).unwrap();
-        // SAFETY: both take a pid and no pointers.
-        let (leader, id) = unsafe { (libc::getsid(child.id() as i32), libc::getsid(0)) };
+        let (leader, id) = (
+            crate::sys::session_of(child.id() as i32),
+            crate::sys::session_of(0),
+        );
         assert_ne!(leader, id);
         assert!(child.stdin.is_some() && child.stdout.is_some() && child.stderr.is_some());
         assert_eq!(carry_streams(&mut child).len(), 2);

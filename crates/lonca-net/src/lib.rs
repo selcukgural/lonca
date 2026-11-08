@@ -11,6 +11,8 @@
 //! It has no dependencies and knows nothing about who uses it: the gate
 //! holds all the policy.
 
+#![forbid(unsafe_code)]
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};

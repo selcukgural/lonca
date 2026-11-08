@@ -16,6 +16,8 @@
 //! directory's tree. `done.txt` has one mutant name per line: those that need
 //! no further run.
 
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};

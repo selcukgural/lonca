@@ -40,6 +40,10 @@ impl GitId {
 
     /// The id Git gives `bytes` as a blob (SHA-1 repositories), without
     /// writing anything.
+    #[allow(
+        clippy::expect_used,
+        reason = "compute_hash fails only for a hash kind gix was built without; SHA-1 is always there"
+    )]
     pub fn of_blob(bytes: &[u8]) -> Self {
         let oid = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, bytes)
             .expect("hashing a buffer can not fail");
@@ -413,18 +417,21 @@ fn insert(
     full: &str,
 ) -> Result<()> {
     let clash = || Error::Invalid(format!("path {full:?} is both a file and a directory"));
-    if comps.len() == 1 {
-        if let Some(Node::Dir(_)) = dir.get(comps[0]) {
+    let Some((first, rest)) = comps.split_first() else {
+        return Err(Error::Invalid(format!("empty path {full:?}")));
+    };
+    if rest.is_empty() {
+        if let Some(Node::Dir(_)) = dir.get(*first) {
             return Err(clash());
         }
-        dir.insert(comps[0].to_string(), Node::File(entry.clone()));
+        dir.insert(first.to_string(), Node::File(entry.clone()));
         return Ok(());
     }
     let node = dir
-        .entry(comps[0].to_string())
+        .entry(first.to_string())
         .or_insert_with(|| Node::Dir(BTreeMap::new()));
     match node {
-        Node::Dir(d) => insert(d, &comps[1..], entry, full),
+        Node::Dir(d) => insert(d, rest, entry, full),
         Node::File(_) => Err(clash()),
     }
 }

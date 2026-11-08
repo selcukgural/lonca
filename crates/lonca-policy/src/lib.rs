@@ -6,6 +6,11 @@
 //! - [`chain::Chain`] combines both into the single-writer sequencer the daemon
 //!   runs; the auditor replays the same functions over a stored log.
 
+#![forbid(unsafe_code)]
+// The trusted core: a panic in the single writer stops every repository,
+// so bad input must become an error or a denial (clippy.toml lets tests panic).
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
 pub mod chain;
 pub mod config;
 pub mod decide;

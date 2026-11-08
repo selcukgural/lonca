@@ -3,6 +3,9 @@
 //! its output stops soon after, whoever still holds the pipe. A command that
 //! was never heard of again would stand in the queue for good.
 
+// Process control is libc calls; each unsafe block says why it is sound.
+#![allow(unsafe_code)]
+
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, ErrorKind, Read};

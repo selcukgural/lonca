@@ -15,6 +15,10 @@ use serde_json::Value;
 
 const BUILT_IN: &str = include_str!("harnesses.toml");
 
+#[allow(
+    clippy::expect_used,
+    reason = "the built-in profiles are a constant; every test that starts a session parses them"
+)]
 static PROFILES: LazyLock<BTreeMap<String, Profile>> =
     LazyLock::new(|| toml::from_str(BUILT_IN).expect("built-in harness profiles parse"));
 

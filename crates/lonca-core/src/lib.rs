@@ -4,6 +4,11 @@
 //! Nothing in this crate talks to the network, calls an AI model or reads the
 //! clock. Time enters only as data (`time_ms` fields) chosen by the daemon.
 
+#![forbid(unsafe_code)]
+// The trusted core: a panic in the single writer stops every repository,
+// so bad input must become an error or a denial (clippy.toml lets tests panic).
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
 pub mod canonical;
 pub mod changeid;
 pub mod error;

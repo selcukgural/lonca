@@ -24,8 +24,11 @@ impl ChangeId {
     pub fn to_reverse_hex(&self) -> String {
         let mut out = String::with_capacity(32);
         for b in self.0 {
-            out.push(REVERSE_HEX[(b >> 4) as usize] as char);
-            out.push(REVERSE_HEX[(b & 0x0f) as usize] as char);
+            for nibble in [b >> 4, b & 0x0f] {
+                if let Some(&c) = REVERSE_HEX.get(usize::from(nibble)) {
+                    out.push(char::from(c));
+                }
+            }
         }
         out
     }
@@ -36,8 +39,9 @@ impl ChangeId {
             return None;
         }
         let mut out = [0u8; 16];
-        for (i, slot) in out.iter_mut().enumerate() {
-            *slot = (value(bytes[2 * i])? << 4) | value(bytes[2 * i + 1])?;
+        let (pairs, _) = bytes.as_chunks::<2>();
+        for (slot, &[high, low]) in out.iter_mut().zip(pairs) {
+            *slot = (value(high)? << 4) | value(low)?;
         }
         Some(Self(out))
     }

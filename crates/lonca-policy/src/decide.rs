@@ -329,6 +329,13 @@ fn check_new_key(state: &State, k: &HumanKey, v: &mut Verdict) {
     }
 }
 
+/// Minutes from the policy as milliseconds. A policy is signed by humans but
+/// may still carry a number too large: it saturates, so a check against it
+/// fails closed instead of overflowing.
+fn minutes(m: i64) -> i64 {
+    m.saturating_mul(60_000)
+}
+
 pub fn valid_token(s: &str, max: usize) -> bool {
     !s.is_empty()
         && s.len() <= max
@@ -737,7 +744,9 @@ pub fn decide(
                 v.deny("task_too_long");
             }
             validate_scope(scope, &mut v);
-            if *expires_ms <= t || *expires_ms - t > cfg.sessions.max_ttl_minutes * 60_000 {
+            if *expires_ms <= t
+                || expires_ms.saturating_sub(t) > minutes(cfg.sessions.max_ttl_minutes)
+            {
                 v.deny("session_ttl");
             }
             if let Some(c) = continues {
@@ -852,11 +861,13 @@ pub fn decide(
             ttl_ms,
         } => {
             let own = actor.session().unwrap_or_default();
-            let s = &state.sessions[own];
+            let Some(s) = state.sessions.get(own) else {
+                return Decision::deny("unknown_session");
+            };
             if !valid_token(set, 64) || state.leases.contains_key(set) {
                 v.deny("invalid_lease_set");
             }
-            if *ttl_ms <= 0 || *ttl_ms > cfg.leases.max_ttl_minutes * 60_000 {
+            if *ttl_ms <= 0 || *ttl_ms > minutes(cfg.leases.max_ttl_minutes) {
                 v.deny("lease_ttl");
             }
             check_lease_request(s, items, intent, ctx, state.symbol_keys, &mut v);
@@ -884,14 +895,10 @@ pub fn decide(
         }
         Op::LeaseInterest { items, intent } => {
             let own = actor.session().unwrap_or_default();
-            check_lease_request(
-                &state.sessions[own],
-                items,
-                intent,
-                ctx,
-                state.symbol_keys,
-                &mut v,
-            );
+            let Some(s) = state.sessions.get(own) else {
+                return Decision::deny("unknown_session");
+            };
+            check_lease_request(s, items, intent, ctx, state.symbol_keys, &mut v);
             // Nothing to wait for means nothing to hold: an interest in a
             // free symbol would be a way to reserve it.
             if !state.taken(own, items, t) {
@@ -928,14 +935,14 @@ pub fn decide(
                 if l.expires_ms <= t || (liveness && state.session_lost(holder, t)) {
                     v.deny("lease_expired");
                 }
-                if *ttl_ms <= 0 || *ttl_ms > cfg.leases.max_ttl_minutes * 60_000 {
+                if *ttl_ms <= 0 || *ttl_ms > minutes(cfg.leases.max_ttl_minutes) {
                     v.deny("lease_ttl");
                 }
                 // Interest is a denied acquire, retried at least as often
                 // as the longest TTL.
                 if liveness
-                    && t - l.acquired_ms >= cfg.leases.max_hold_minutes * 60_000
-                    && state.contended(l, t, cfg.leases.max_ttl_minutes * 60_000)
+                    && t.saturating_sub(l.acquired_ms) >= minutes(cfg.leases.max_hold_minutes)
+                    && state.contended(l, t, minutes(cfg.leases.max_ttl_minutes))
                 {
                     v.deny("lease_hold_limit");
                 }
@@ -1115,7 +1122,7 @@ pub fn decide(
             oplog_hash,
             ..
         } => {
-            if *oplog_seq + 1 != state.next_seq || *oplog_hash != state.head_hash {
+            if oplog_seq.checked_add(1) != Some(state.next_seq) || *oplog_hash != state.head_hash {
                 v.deny("stale_anchor");
             }
         }
@@ -1393,7 +1400,10 @@ fn propose(
         Actor::Daemon => v.deny("not_a_daemon_op:change.propose"),
         Actor::Human { .. } => {}
         Actor::Agent { session, .. } => {
-            let s = &state.sessions[session];
+            let Some(s) = state.sessions.get(session) else {
+                v.deny("unknown_session");
+                return;
+            };
             for p in &files {
                 if !s.scope.paths.iter().any(|pat| path_matches(pat, p)) {
                     v.deny(format!("scope_path:{p}"));
@@ -1404,7 +1414,7 @@ fn propose(
             }
             if s.scope
                 .max_lines
-                .is_some_and(|m| f.lines_added + f.lines_removed > m)
+                .is_some_and(|m| f.lines_added.saturating_add(f.lines_removed) > m)
             {
                 v.deny("scope_max_lines");
             }
@@ -1525,7 +1535,7 @@ fn propose(
             v.cedar(policy.evaluate(actor, action, c));
         }
     }
-    let window = cfg.reverts.window_minutes * 60_000;
+    let window = minutes(cfg.reverts.window_minutes);
     let mine: BTreeSet<&String> = f.edits.iter().chain(&f.deletes).chain(&f.adds).collect();
     // A revert of `Name` is one of `Name(key)`, and the other way around,
     // and it follows the symbol to its new name.
@@ -1542,7 +1552,7 @@ fn propose(
     let recent_reverts = state
         .reverts
         .iter()
-        .filter(|(at, syms)| t - at <= window && syms.iter().any(reverted))
+        .filter(|(at, syms)| t.saturating_sub(*at) <= window && syms.iter().any(reverted))
         .count() as i64;
     // A policy names a symbol as a person does: by its name, too.
     let bare_ids = mine.iter().filter(|_| state.symbol_keys).filter_map(|s| {
@@ -1576,7 +1586,7 @@ fn propose(
         ("files", CVal::Long(files.len() as i64)),
         (
             "lines",
-            CVal::Long((f.lines_added + f.lines_removed) as i64),
+            CVal::Long(i64::from(f.lines_added.saturating_add(f.lines_removed))),
         ),
         ("recent_reverts", CVal::Long(recent_reverts)),
         ("is_revert", CVal::Bool(claim.revert_of.is_some())),

@@ -2,7 +2,6 @@
 //! How many, for how long and how long a line: `crate::limits`.
 
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::Arc;
@@ -72,44 +71,7 @@ pub fn bind_with(path: &Path, access: &Access) -> std::io::Result<UnixListener> 
 #[cfg(not(target_os = "linux"))]
 pub use crate::peer_other::peer_in_sandbox;
 
-/// The uid of the process on the other end of a Unix socket.
-pub fn peer_uid(s: &UnixStream) -> Option<u32> {
-    let fd = s.as_raw_fd();
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd"
-    ))]
-    {
-        let mut uid: libc::uid_t = 0;
-        let mut gid: libc::gid_t = 0;
-        // SAFETY: fd is a valid socket for the lifetime of `s`; the out
-        // pointers point to live stack variables.
-        let rc = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
-        (rc == 0).then_some(uid)
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let mut cred = libc::ucred {
-            pid: 0,
-            uid: 0,
-            gid: 0,
-        };
-        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        // SAFETY: fd is a valid socket; cred/len are live and sized correctly.
-        let rc = unsafe {
-            libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                &mut cred as *mut _ as *mut libc::c_void,
-                &mut len,
-            )
-        };
-        (rc == 0).then_some(cred.uid)
-    }
-}
+pub use crate::sys::peer_uid;
 
 /// How many pid namespaces a process of `status`, the text of
 /// `/proc/<pid>/status`, lies in, as far as the reader can see.
@@ -125,25 +87,12 @@ fn pid_namespaces(status: &str) -> usize {
 /// (`docs/design.md` §3.1).
 #[cfg(target_os = "linux")]
 pub fn peer_in_sandbox(s: &UnixStream) -> bool {
-    let mut cred = libc::ucred {
-        pid: 0,
-        uid: 0,
-        gid: 0,
-    };
-    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: fd is a valid socket; cred/len are live and sized correctly.
-    let rc = unsafe {
-        libc::getsockopt(
-            s.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            &mut cred as *mut _ as *mut libc::c_void,
-            &mut len,
-        )
-    };
     let status = |who: String| std::fs::read_to_string(format!("/proc/{who}/status")).ok();
-    match (rc, status(cred.pid.to_string()), status("self".into())) {
-        (0, Some(peer), Some(me)) => pid_namespaces(&peer) > pid_namespaces(&me),
+    let Some(cred) = crate::sys::peer_cred(s) else {
+        return false;
+    };
+    match (status(cred.pid.to_string()), status("self".into())) {
+        (Some(peer), Some(me)) => pid_namespaces(&peer) > pid_namespaces(&me),
         _ => false,
     }
 }
@@ -153,15 +102,7 @@ pub fn group_id(name: &str) -> Option<u32> {
     if let Ok(n) = name.parse() {
         return Some(n);
     }
-    let c = std::ffi::CString::new(name).ok()?;
-    // SAFETY: getgrnam reads a NUL-terminated string and returns a pointer
-    // into static storage (or null); we copy the gid out immediately.
-    let g = unsafe { libc::getgrnam(c.as_ptr()) };
-    if g.is_null() {
-        None
-    } else {
-        Some(unsafe { (*g).gr_gid })
-    }
+    crate::sys::group_named(name)
 }
 
 pub fn serve(listener: UnixListener, svc: Arc<Service>) {
@@ -428,9 +369,7 @@ mod tests {
     #[test]
     fn peer_uid_is_ours() {
         let (a, _b) = UnixStream::pair().unwrap();
-        // SAFETY: getuid has no preconditions.
-        let me = unsafe { libc::getuid() };
-        assert_eq!(peer_uid(&a), Some(me));
+        assert_eq!(peer_uid(&a), Some(crate::sys::current_uid()));
     }
 
     #[test]

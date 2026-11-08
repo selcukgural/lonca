@@ -9,6 +9,8 @@
 //! `--freeze-flag` writes a flag file on findings; the daemon freezes the
 //! repository when it sees it. That file is the auditor's only write.
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 

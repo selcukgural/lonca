@@ -11,3 +11,6 @@ lonca-core = { version = "0.1.0", path = "../lonca-core" }
 lonca-policy = { version = "0.1.0", path = "../lonca-policy" }
 lonca-symbols = { version = "0.1.0", path = "../lonca-symbols" }
 tempfile = "3.27.0"
+
+[lints]
+workspace = true

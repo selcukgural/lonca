@@ -162,7 +162,10 @@ const RETRY_BEAT_MS: i64 = 30_000;
 
 /// A tool's `ttl_minutes`, or the default.
 fn ttl_ms(args: &Value) -> i64 {
-    args["ttl_minutes"].as_i64().unwrap_or(DEFAULT_TTL_MINUTES) * 60_000
+    args["ttl_minutes"]
+        .as_i64()
+        .unwrap_or(DEFAULT_TTL_MINUTES)
+        .saturating_mul(60_000)
 }
 
 /// Three chances before the timeout a heartbeat's answer names.

@@ -77,7 +77,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 | CICD-SEC-6 Insufficient Credential Hygiene | met | no long-lived secrets in CI; secret scanning with push protection | — |
 | CICD-SEC-7 Insecure System Configuration | met | pinned toolchain, timeouts, actions allowlist and SHA pinning required | — |
 | CICD-SEC-8 Ungoverned 3rd Party Services | met | four named third-party actions, nothing else | — |
-| CICD-SEC-9 Improper Artifact Integrity Validation | gap | SBOM of a release (#60) | signed, verifiable release binaries #7 |
+| CICD-SEC-9 Improper Artifact Integrity Validation | met | each release archive has a build provenance attestation (`gh attestation verify`), `SHA256SUMS` and a CycloneDX SBOM (`release.yml`, #7, #60) | — |
 | CICD-SEC-10 Insufficient Logging and Visibility | met | Actions logs, Scorecard, CodeQL; the auditor workflow for pushed repositories (`docs/ci/lonca-audit.yml`) | — |
 
 ## ASVS 5.0, Level 2

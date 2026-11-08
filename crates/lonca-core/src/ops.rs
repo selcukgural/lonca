@@ -451,6 +451,12 @@ pub enum ObsKind {
         paths: Vec<String>,
         total: u64,
     },
+    /// `lonca mcp` ran `tool` and the harness's before-tool event for that
+    /// call never reached the daemon: the session's hooks are not running.
+    /// `tool` is the MCP tool's name, without the harness's prefix.
+    Unhooked {
+        tool: String,
+    },
 }
 
 /// The most paths one [`ObsKind::Unproposed`] names.

@@ -93,7 +93,40 @@ fn golden_repo() -> Env {
     shared(&mut e);
     insert_names(&mut e);
     give_back(&mut e);
+    unhooked(&mut e);
     e
+}
+
+/// From format 24: a call to `lonca mcp` whose before-tool event never came
+/// marks the session `unhooked`, and what it proposes waits for a human
+/// under that word.
+fn unhooked(e: &mut Env) {
+    e.advance(lonca_daemon::hooked::START_GRACE_MS);
+    let fresh = "src/hookless.rs";
+    let t = e.session("s-uh", &["src/**"]);
+    e.bind(&t);
+    e.wrote(&t, fresh);
+    let items = json!([{"symbol": "src/hookless.rs#<file>", "kind": "edit"}]);
+    let args = json!({"items": items, "intent": "a file", "ttl_ms": 600_000});
+    let r = e.ok("lease.acquire", None, Some(&t), args);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let r = e.ok("mcp.call", None, Some(&t), json!({"tool": "propose"}));
+    assert_eq!(r["hooked"], false, "{r}");
+    let base = e.trunk();
+    let files = vec![file(fresh, "pub fn hookless() {}\n")];
+    let preview = json!({"base": base, "files": files});
+    let r = e.ok("facts.preview", None, Some(&t), preview);
+    let adds: Vec<String> = serde_json::from_value(r["facts"]["adds"].clone()).unwrap();
+    let claim = Claim {
+        intent: "a file".into(),
+        adds,
+        ..Default::default()
+    };
+    let args = json!({"base": base, "files": files, "claim": claim});
+    let r = e.ok("change.propose", None, Some(&t), args);
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let reasons = r["decision"]["reasons"].to_string();
+    assert!(reasons.contains("unhooked_session"), "{r}");
 }
 
 /// From format 23: a child whose time runs out gives the set it was handed
@@ -1179,6 +1212,30 @@ fn golden_v23_log_still_verifies_replays_and_audits() {
             .any(|r| r.starts_with("lease_held:back.md#<file>:s-ga:"))
     });
     assert!(met, "the parent holds what its expired child had");
+}
+
+/// A session marked `unhooked`, and its proposal escalated under that word.
+#[test]
+fn golden_v24_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v24.bundle",
+        "7b30d64f144ec4afa56b73d8ba4e3d56ed895622e7b955cf0dd2c50bf4d20efc",
+        24,
+    );
+    let marks = ops.iter().filter(|o| {
+        matches!(&o.entry.op, Op::Observe { session, events }
+            if session == "s-uh" && matches!(&events[0].kind, ObsKind::Unhooked { tool } if tool == "propose"))
+    });
+    assert_eq!(marks.count(), 1);
+    let escalated = ops.iter().filter(|o| {
+        o.entry.actor.session() == Some("s-uh")
+            && o.entry
+                .decision
+                .reasons
+                .iter()
+                .any(|r| r == "unhooked_session")
+    });
+    assert_eq!(escalated.count(), 1);
 }
 
 #[test]

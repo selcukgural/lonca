@@ -59,9 +59,12 @@ pub mod kind {
     pub const SUDO_WITHOUT_PASSWORD: &str = "sudo_without_password";
     /// A session got a new token (`session.rotate`).
     pub const TOKEN_ROTATED: &str = "token_rotated";
+    /// A call to `lonca mcp` came with no before-tool event: the session's
+    /// hooks are not running (#190).
+    pub const UNHOOKED: &str = "unhooked";
 
     /// Every kind, for `docs/decisions.md` and the tests.
-    pub const ALL: [&str; 14] = [
+    pub const ALL: [&str; 15] = [
         REFUSED_PEER,
         AUTH_FAILURE,
         OVERSIZED,
@@ -76,6 +79,7 @@ pub mod kind {
         TAINT,
         SUDO_WITHOUT_PASSWORD,
         TOKEN_ROTATED,
+        UNHOOKED,
     ];
 
     /// The kinds a human is told of as they happen.

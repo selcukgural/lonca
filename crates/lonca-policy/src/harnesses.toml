@@ -3,7 +3,9 @@
 # update: a new harness needs no new Lonca. See docs/guide/runners.md.
 
 [claude-code]
-events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse", stop = "Stop" }
+# `before_tool_mcp`: PreToolUse fires for MCP tools too (matcher "*"), seen in
+# a run; see "A session whose hooks do not run (#190)" in docs/decisions.md.
+events = { session_start = "SessionStart", before_tool = "PreToolUse", after_tool = "PostToolUse", stop = "Stop", before_tool_mcp = true }
 deny = { hookSpecificOutput = { hookEventName = "PreToolUse", permissionDecision = "deny", permissionDecisionReason = "{reason}" } }
 context = { hookSpecificOutput = { hookEventName = "SessionStart", additionalContext = "{context}" } }
 tool_context = { hookSpecificOutput = { hookEventName = "PostToolUse", additionalContext = "{context}" } }

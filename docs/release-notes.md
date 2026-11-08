@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### A session whose hooks do not run is marked and tainted
+
+`lonca mcp` now tells the daemon which tool it runs (`mcp.call`). On Claude Code, whose
+`PreToolUse` fires for MCP tools too, the hook's event must come first; a call with none
+means the harness is not running the session's hooks, and the session is marked
+`unhooked`: logged once, a security event, tainted, `unobserved` from then on. What it
+proposes waits for a person (`unhooked_session`) and a critical path is refused
+(`unhooked_critical_path`). `status.sessions[]` adds `bound_ms`, `last_hook_ms` and
+`unhooked`, so a runner can stop a session the daemon has not seen. Log format 24. Other
+harnesses are checked once a run shows the same (`events.before_tool_mcp` in a profile).
+See `docs/decisions.md`, "A session whose hooks do not run (#190)".
+
 ### A clean stop is on the record
 
 `status.sessions[].unproposed` was `null` both for a session that stopped or ended with nothing

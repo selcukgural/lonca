@@ -34,6 +34,8 @@ pub struct RepoHandle {
     policy: Option<(GitId, Arc<PolicyBundle>)>,
     /// How far each session has been told what others want of it.
     pub told: BTreeMap<String, Told>,
+    /// What each session's hooks were heard saying since the daemon started.
+    pub hooked: BTreeMap<String, crate::hooked::Hooked>,
     /// Security events of entries appended since the service last took
     /// them: freezes, unmediated imports, taints ([`crate::security`]).
     pub alarms: Vec<crate::security::Event>,
@@ -49,6 +51,7 @@ impl RepoHandle {
             head: None,
             policy: None,
             told: BTreeMap::new(),
+            hooked: BTreeMap::new(),
             alarms: Vec::new(),
         })
     }
@@ -91,6 +94,7 @@ impl RepoHandle {
             head,
             policy: None,
             told: BTreeMap::new(),
+            hooked: BTreeMap::new(),
             alarms: Vec::new(),
         })
     }
@@ -165,6 +169,12 @@ impl RepoHandle {
             Op::Taint { session, reason } => {
                 Some(event(kind::TAINT).session(session).detail(reason))
             }
+            Op::Observe { session, events } => events.iter().find_map(|ev| match &ev.kind {
+                lonca_core::ops::ObsKind::Unhooked { tool } => {
+                    Some(event(kind::UNHOOKED).session(session).detail(tool))
+                }
+                _ => None,
+            }),
             _ => None,
         };
         self.alarms.extend(found);

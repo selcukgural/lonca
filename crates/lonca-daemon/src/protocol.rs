@@ -352,6 +352,13 @@ pub struct HookStop {
     pub files: Vec<LocalFile>,
 }
 
+/// `mcp.call`: `lonca mcp` is about to run one of its tools, by the name it
+/// has in `tools/list`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct McpCall {
+    pub tool: String,
+}
+
 /// `session.end`: what the workspace held, when the client knows.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SessionEnd {

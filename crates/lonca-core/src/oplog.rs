@@ -45,8 +45,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// a level rests on it; version 21 adds the lease kind `shared`; version 22
 /// adds reserved `names` to an `insert` and makes a new file need a lease;
 /// version 23 gives a delegated lease back to the parent when the child
-/// expires or stops beating, as when it ends.
-pub const FORMAT_CURRENT: u32 = 23;
+/// expires or stops beating, as when it ends; version 24 adds the
+/// `unhooked` observation, which taints a session.
+pub const FORMAT_CURRENT: u32 = 24;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -111,6 +112,9 @@ pub const FORMAT_INSERT_NAMES: u32 = 22;
 /// and not only when it ends or is revoked. No new field: older entries
 /// replay as they were.
 pub const FORMAT_GIVE_BACK: u32 = 23;
+/// The first format with the `unhooked` observation: a call to `lonca mcp`
+/// whose before-tool event never came. From here it taints the session.
+pub const FORMAT_UNHOOKED: u32 = 24;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -182,6 +186,13 @@ impl OpEntry {
                 if items.iter().any(LeaseItem::is_shared) =>
             {
                 FORMAT_SHARED_LEASES
+            }
+            Op::Observe { ref events, .. }
+                if events
+                    .iter()
+                    .any(|e| matches!(e.kind, ObsKind::Unhooked { .. })) =>
+            {
+                FORMAT_UNHOOKED
             }
             Op::Observe { ref events, .. }
                 if events
@@ -1052,6 +1063,46 @@ mod tests {
             at(&observe(ObsKind::Heartbeat), 2).min_format(),
             FORMAT_LEGACY
         );
+    }
+
+    #[test]
+    fn the_unhooked_observation_needs_format_24() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let observe = |kinds: Vec<ObsKind>| Op::Observe {
+            session: "s".into(),
+            events: kinds
+                .into_iter()
+                .map(|kind| crate::ops::Observation {
+                    phase: crate::ops::Phase::Pre,
+                    kind,
+                    external: false,
+                })
+                .collect(),
+        };
+        let at = |op: &Op, format| OpEntry {
+            format,
+            op: op.clone(),
+            ..next(&g, 2000)
+        };
+        let unhooked = || ObsKind::Unhooked {
+            tool: "propose".into(),
+        };
+        let mark = observe(vec![unhooked()]);
+        assert_eq!(at(&mark, 24).min_format(), FORMAT_UNHOOKED);
+        // With an older kind beside it, the newer one decides.
+        let unproposed = ObsKind::Unproposed {
+            paths: vec![],
+            total: 0,
+        };
+        let both = observe(vec![unproposed, unhooked()]);
+        assert_eq!(at(&both, 24).min_format(), FORMAT_UNHOOKED);
+        let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(&mark, format), &key)]);
+        assert!(chain(24).is_ok());
+        let err = chain(23).unwrap_err();
+        assert!(err.to_string().contains("needs log format 24"), "{err}");
     }
 
     #[test]

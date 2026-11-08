@@ -392,6 +392,17 @@ Once set, a level stays or falls for the rest of the session. If the first repor
 low, because of the settings or because `sudo` needed no password, fix that and start a
 new session (`--continue` keeps the workspace).
 
+**A harness without hooks is unobserved, whatever it is.** A session whose hook never
+sent `hook.bind` stays `unobserved`. And where the daemon can tell, it checks that the
+hooks keep running: Claude Code fires `PreToolUse` for MCP tools too, so each call to
+`lonca mcp` must come after its event. One that does not marks the session `unhooked`
+(a flag, a setting or a new version skipped the hooks): it is tainted, `unobserved` for
+good, what it proposes waits for a person (`unhooked_session`) and a critical path is
+refused (`unhooked_critical_path`). `status.sessions[]` has `bound_ms` (`null`: never
+bound), `last_hook_ms` and `unhooked`; a runner that wants observed workers stops a
+session with either of the first two missing or with the mark, and starts it again in a
+harness that runs its hooks.
+
 A level comes from a `locked` table in the profile: a file only root can write and what
 must hold in it. A harness gets one when it can be shown that its hooks hold, also when
 they fail. The table is part of a whole profile (start from `lonca harness show <name>`);
@@ -442,6 +453,9 @@ tool_context = { say = "{context}" }
 # How it names MCP tools; these are the defaults (mcp__server__tool).
 mcp_prefix = "mcp__"
 mcp_separator = "__"
+# Add `before_tool_mcp = true` to `events` only once a run has shown that
+# `before_tool` fires for MCP tools as well: then a call to `lonca mcp` with no
+# such event before it marks the session `unhooked`.
 
 [harnesses.acme.tools]
 open = { kind = "read", fields = ["path"] }
@@ -506,6 +520,8 @@ status 2 or a `deny` answer into its own refusal. A harness with no hooks at all
 - **PostToolUse**: writes inside the workspace are recorded; a
   proposal that changes a file no observed tool wrote is denied or
   escalated (`unobserved_write:<path>`).
+- **No hook at all**: a call to `lonca mcp` with no `PreToolUse` before it
+  marks the session `unhooked`, which taints it (see "Observation levels").
 
 Taint means: the session read content from outside (a web page, an
 untrusted path, another MCP server). Its changes need a human's

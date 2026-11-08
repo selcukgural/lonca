@@ -3,11 +3,12 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/selcukgural/lonca"
-rust-version = "1.85"
+rust-version = "1.90"
+homepage = "https://selcukgural.github.io/lonca/"
 
 # Unsafe code is refused everywhere; the few modules that call libc say so
 # with `#![allow(unsafe_code)]` and a `// SAFETY:` comment on every block.

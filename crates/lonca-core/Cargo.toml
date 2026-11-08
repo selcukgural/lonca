@@ -1,10 +1,12 @@
 [package]
 name = "lonca-core"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Deterministic building blocks of Lonca: change ids, the signed operation log, keys and the Git store"
-license = "Apache-2.0"
-repository = "https://github.com/selcukgural/lonca"
 keywords = ["vcs", "git", "agents", "oplog"]
 categories = ["development-tools"]
 

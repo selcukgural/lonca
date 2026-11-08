@@ -1,0 +1,224 @@
+name: release
+
+# A tag `vX.Y.Z` (the workspace version in Cargo.toml) builds Lonca for
+# macOS arm64 and x86_64 and Linux x86_64 and arm64 (static, musl) and
+# drafts that tag's GitHub release with:
+#
+#   lonca-<target>.tar.gz   lonca, lonca-audit, install-hardened.sh (and on
+#                           macOS uninstall-hardened.sh and lonca-se, the
+#                           Secure Enclave helper, ad-hoc signed), LICENSE and
+#                           README.md, all at its top
+#   SHA256SUMS              of every archive
+#   lonca-sbom.cdx.tar.gz   CycloneDX bills of materials of the workspace
+#
+# and a build provenance attestation for each archive
+# (`gh attestation verify lonca-<target>.tar.gz --repo selcukgural/lonca`).
+# The notes are the version's section of docs/release-notes.md (`## X.Y.Z`).
+#
+# The release stays a draft: ci.yml and mutants.yml run on the same tag, and
+# a maintainer publishes the draft once both are green. Publishing starts
+# registries.yml (crates.io); the Homebrew tap and install.sh read the
+# latest published release.
+#
+# Run by hand (workflow_dispatch) it only builds, so the four builds can be
+# tried before a tag.
+#
+# The builds run third-party code (crates' build scripts) and see no
+# credential; only the draft job may write the release or mint the token the
+# attestation needs, in the `release` environment (tags `v*` only).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      # Every build runs to its end, so one failure shows all there are;
+      # the draft needs all four anyway.
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            swift: arm64-apple-macosx12.0
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            swift: x86_64-apple-macosx12.0
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      TARGET: ${{ matrix.target }}
+      SWIFT_TARGET: ${{ matrix.swift }}
+      REF_TYPE: ${{ github.ref_type }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The tag is the version in Cargo.toml
+        if: github.ref_type == 'tag'
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "tag $TAG is not v$version (Cargo.toml)" >&2
+            exit 1
+          fi
+      - name: Rust toolchain (rust-toolchain.toml) and the target
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - name: musl's C compiler (tree-sitter grammars)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET" -p lonca -p lonca-audit
+      - name: Runs and says its version
+        # The x86_64 macOS build is made on Apple silicon, which may not run it.
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          said=$("target/$TARGET/release/lonca" --version)
+          test "$said" = "lonca $version" || { echo "said: $said" >&2; exit 1; }
+      - name: Static on Linux
+        if: runner.os == 'Linux'
+        run: |
+          # `file` says "statically linked", or "static-pie linked" for a
+          # position-independent one.
+          for b in lonca lonca-audit; do
+            file "target/$TARGET/release/$b" | tee /dev/stderr |
+              grep -Eq 'statically linked|static-pie linked'
+          done
+      - name: The Secure Enclave helper (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          swiftc -O -target "$SWIFT_TARGET" packaging/macos/lonca-se/main.swift \
+            -o "target/$TARGET/release/lonca-se"
+          # Ad-hoc signature, as build-lonca-se.sh does (docs/release-checklist.md).
+          codesign -s - -f "target/$TARGET/release/lonca-se"
+          lipo -archs "target/$TARGET/release/lonca-se"
+      - name: Package
+        run: |
+          mkdir -p pack dist
+          cp "target/$TARGET/release/lonca" "target/$TARGET/release/lonca-audit" \
+            LICENSE README.md pack/
+          # `sudo ./install-hardened.sh --bin .` from the unpacked archive.
+          if [ "$RUNNER_OS" = macOS ]; then
+            cp "target/$TARGET/release/lonca-se" packaging/macos/install-hardened.sh \
+              packaging/macos/uninstall-hardened.sh pack/
+          else
+            cp packaging/linux/install-hardened.sh pack/
+          fi
+          (cd pack && tar -czf "../dist/lonca-$TARGET.tar.gz" -- *)
+          tar -tzvf "dist/lonca-$TARGET.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lonca-${{ matrix.target }}
+          path: dist/lonca-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  # A CycloneDX bill of materials of every crate, attached to the release.
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-cyclonedx@0.5.10
+      - run: cargo cyclonedx --format json
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf dist/lonca-sbom.cdx.tar.gz crates/*/*.cdx.json
+          tar -tzf dist/lonca-sbom.cdx.tar.gz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lonca-sbom
+          path: dist/lonca-sbom.cdx.tar.gz
+          if-no-files-found: error
+
+  draft:
+    if: github.ref_type == 'tag'
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: write # the release and its files
+      id-token: write # the OIDC token the provenance attestation is signed with
+      attestations: write # the attestation itself
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: lonca-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          # The four archives (lonca-<arch>-<vendor>-<os>.tar.gz) and the SBOM.
+          set -- lonca-*-*.tar.gz
+          test "$#" -eq 4
+          sha256sum "$@" lonca-sbom.cdx.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/lonca-*-*.tar.gz
+      - name: The notes, from docs/release-notes.md
+        run: |
+          version=${TAG#v}
+          # The lines under `## X.Y.Z` (a date may follow), up to the next `## `.
+          awk -v v="$version" '
+            /^## / { on = ($2 == v) ; next }
+            on { print }
+          ' docs/release-notes.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "docs/release-notes.md has no section ## $version" >&2
+            exit 1
+          fi
+          {
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo 'curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh'
+            echo 'brew install selcukgural/lonca/lonca'
+            echo 'cargo install --locked lonca'
+            echo '```'
+            echo
+            echo "Check an archive: \`gh attestation verify lonca-<target>.tar.gz --repo $GITHUB_REPOSITORY\`."
+          } >> notes.md
+      - name: The draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "$REPO" \
+            --verify-tag \
+            --draft \
+            --title "Lonca $TAG" \
+            --notes-file notes.md

@@ -93,5 +93,10 @@ direct push) but no check. `cargo-deny`, CodeQL and zizmor (workflow changes)
 run on pull requests; they block nothing. The toolchain is pinned in
 `rust-toolchain.toml`; Actions are GitHub's own plus four named ones
 (docs/decisions.md, "CI and the repository's own settings").
+A `v*` tag also runs `release.yml` (binaries, SHA256SUMS, SBOM,
+attestations, a *draft* release); publishing the draft runs
+`registries.yml` (crates.io). Steps: `docs/release-checklist.md`. The CLI's
+package is `lonca` (`-p lonca`, directory `crates/lonca-cli`); every crate
+shares the workspace version.
 A PR is merged as soon as it is opened (`gh pr merge --merge`): with no
 required check GitHub refuses `--auto` ("clean status").

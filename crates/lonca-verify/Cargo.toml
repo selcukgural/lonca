@@ -1,15 +1,21 @@
 [package]
 name = "lonca-verify"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Sandboxed build and test runs of Lonca's merge queue, recorded as evidence"
+keywords = ["vcs", "sandbox", "ci", "agents"]
+categories = ["development-tools"]
 
 [dependencies]
 hex = "0.4.3"
 libc = "0.2.190"
-lonca-core = { version = "0.1.0", path = "../lonca-core" }
-lonca-policy = { version = "0.1.0", path = "../lonca-policy" }
-lonca-symbols = { version = "0.1.0", path = "../lonca-symbols" }
+lonca-core = { version = "0.2.0", path = "../lonca-core" }
+lonca-policy = { version = "0.2.0", path = "../lonca-policy" }
+lonca-symbols = { version = "0.2.0", path = "../lonca-symbols" }
 tempfile = "3.27.0"
 
 [lints]

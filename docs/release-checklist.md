@@ -6,10 +6,41 @@
    its own, with the clippy fixes it needs, before the release.
 2. Run `ci.yml` and `mutants.yml` on main (`gh workflow run ci.yml --ref main`,
    `gh workflow run mutants.yml --ref main`); both green.
-3. After the tag: the `sbom` job of `ci.yml` keeps `sbom-cyclonedx` with the
-   run.
+3. Try the four builds: `gh workflow run release.yml --ref main` (builds
+   only, drafts nothing).
 4. Review `docs/security/owasp.md`: every row still true, every gap still has
    an open issue.
+5. MSRV: `cargo +<rust-version> check --workspace --all-targets --locked`
+   with the workspace's `rust-version`; raise it if a dependency asks more.
+
+## Releasing
+
+1. In a pull request: the workspace `version` in `Cargo.toml` and every
+   internal dependency's `version = "…"` set to the new version
+   (`cargo build` updates `Cargo.lock`), and `## Unreleased` in
+   `docs/release-notes.md` renamed `## X.Y.Z (YYYY-MM-DD)`, with a new empty
+   `## Unreleased` above it. Merge it.
+2. Tag main and push the tag: `git tag -a vX.Y.Z -m "Lonca X.Y.Z"`, `git
+   push origin vX.Y.Z`. `release.yml` drafts the release; `ci.yml` and
+   `mutants.yml` run on the tag.
+3. Both green, and the draft has four archives, `SHA256SUMS` and
+   `lonca-sbom.cdx.tar.gz`: check one archive with `gh attestation verify
+   lonca-aarch64-apple-darwin.tar.gz --repo selcukgural/lonca`.
+4. crates.io. A crate that is not on crates.io yet is published by hand
+   from the tag, by its owner, in dependency order:
+   `git checkout vX.Y.Z && cargo publish --workspace --exclude lonca-mutants
+   --locked`. Then on crates.io, for each new crate: Settings → Trusted
+   Publishing → GitHub, `selcukgural/lonca`, workflow `registries.yml`,
+   environment `release`. When every crate has it, set the repository
+   variable `PUBLISH_CRATES` to `true` (`gh variable set PUBLISH_CRATES
+   --body true`); from then on step 5 publishes them.
+5. Publish the draft (`gh release edit vX.Y.Z --draft=false`).
+   `registries.yml` publishes the crates (when `PUBLISH_CRATES` is on).
+6. Homebrew: `gh workflow run update.yml --repo selcukgural/homebrew-lonca`
+   (it also runs every day); then `brew upgrade lonca` or `brew install
+   selcukgural/lonca/lonca` gives the new version.
+7. `curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh` installs
+   the new version on a clean machine or account.
 
 What CI can not check, because it needs model access, follows.
 

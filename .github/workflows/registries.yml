@@ -1,0 +1,83 @@
+name: registries
+
+# When a maintainer publishes a release (release.yml only drafts it), this
+# puts the same version of every crate on crates.io (`cargo install lonca`).
+# It is off until the repository variable PUBLISH_CRATES says `true`.
+#
+# No registry token is kept anywhere. crates.io trusts this repository's
+# registries.yml in the `release` environment (tags `v*` only) and hands out
+# a token that lives for one job. Trusted publishing needs the crate to
+# exist, so each crate's first version is published by hand
+# (docs/release-checklist.md); then, on crates.io, each crate's settings →
+# Trusted Publishing → GitHub: selcukgural/lonca, workflow registries.yml,
+# environment release.
+#
+# The Homebrew tap (selcukgural/homebrew-lonca) and install.sh read the
+# latest published release themselves.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - name: The tag names the version in Cargo.toml
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "the tag $TAG does not name Cargo.toml's version $version" >&2
+            exit 1
+          fi
+
+  # Packages and builds what would go up, as crates.io would. Building runs
+  # every dependency's build scripts, so this job can mint no token.
+  crates-check:
+    if: vars.PUBLISH_CRATES == 'true'
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Package and build the workspace, without uploading
+        run: cargo publish --workspace --exclude lonca-mutants --locked --dry-run
+
+  # Uploads what crates-check built, from the same tag. It builds nothing
+  # (`--no-verify`), so no dependency's code runs while the token exists.
+  crates:
+    needs: crates-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # exchanged for a crates.io token that lives for this job
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      - name: Publish, in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --workspace --exclude lonca-mutants --locked --no-verify

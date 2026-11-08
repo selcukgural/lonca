@@ -1,14 +1,20 @@
 [package]
 name = "lonca-policy"
-version = "0.1.0"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Lonca's deterministic decision layer: the pure decide() function, state replay, Cedar policies and human keys"
+keywords = ["vcs", "policy", "cedar", "agents"]
+categories = ["development-tools"]
 
 [dependencies]
 cedar-policy = "4.13.0"
 ed25519-dalek = "3.0.0"
 hex = "0.4.3"
-lonca-core = { version = "0.1.0", path = "../lonca-core" }
+lonca-core = { version = "0.2.0", path = "../lonca-core" }
 p256 = { version = "0.14.0", features = ["ecdsa"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

@@ -1,10 +1,12 @@
 [package]
 name = "lonca-client"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Client of the Lonca daemon socket: protocol types, framing, daemon checks and the human session file"
-license = "Apache-2.0"
-repository = "https://github.com/selcukgural/lonca"
 keywords = ["vcs", "agents", "lonca", "client"]
 categories = ["development-tools", "api-bindings"]
 
@@ -16,7 +18,7 @@ test-env = []
 
 [dependencies]
 libc = "0.2.190"
-lonca-core = { version = "0.1.0", path = "../lonca-core", default-features = false }
+lonca-core = { version = "0.2.0", path = "../lonca-core", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 

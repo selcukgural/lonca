@@ -283,7 +283,9 @@ daemon key (foreign, waiting for `daemon.recover`) are not listed.
 
 Names: letters, digits, `.`, `_`, `-`, at most 64. `import_from` is a
 remote the daemon fetches `branch` (default `main`) from: an absolute
-path, `https://`, `ssh://` or `user@host:path`. Result `{"op": op,
+path, `https://`, `ssh://` or `user@host:path`; a local path outside the
+daemon home (its backups excepted) and, where the daemon was given
+`--local-root`, under one of those, or `forbidden`. Result `{"op": op,
 "warnings": [string], "large_files": [{"path", "size"}], "tree_bytes":
 integer, "profile": "cooperative" | "hardened"}`: the `repo.init` operation
 to sign, what a workspace of this tree will meet (files above the change
@@ -570,11 +572,15 @@ the files do not parse.
 
 *human.* `{"remote": string, "branch": string | null}`. Fetches the
 branch; `{"op": op (import.external)}`. Errors: `up_to_date`,
-`not_fast_forward` (the branch does not contain trunk), `git`.
+`not_fast_forward` (the branch does not contain trunk), `git`, `forbidden`
+(a local path the daemon may not read, see `repo.prepare_init`).
 
 ### `human.prepare_push`
 
-*human.* `{"remote": string}`. `{"op": op (bridge.push)}`.
+*human.* `{"remote": string}`. `{"op": op (bridge.push)}`. The push runs
+when the signed operation is submitted and allowed, after the entry is
+logged; `human.submit` then adds `"push"` (git's porcelain output), or
+fails with `git` while the entry stands.
 
 ### `human.prepare_isolate`
 
@@ -857,7 +863,7 @@ the queue itself, and stays 0 under protocol 1.
 | `denied` | a signed operation the log refused before anything was written (`repo.init`, recoveries) |
 | `foreign_key` | the repository is on another daemon key |
 | `up_to_date`, `not_fast_forward` | import conditions |
-| `git` | the git subprocess failed; the message is its stderr |
+| `git` | the git subprocess failed (the message is its stderr), or ran past its time limit and was stopped |
 | `integrity` | the log does not verify or replay |
 | `unsupported` | a log format or engine this daemon does not know |
 | `internal` | an I/O or JSON error in the daemon |

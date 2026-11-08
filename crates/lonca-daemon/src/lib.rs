@@ -1,6 +1,7 @@
 //! The Lonca daemon: the Gatekeeper every write goes through.
 
 pub mod client;
+pub mod gitcmd;
 pub mod home;
 pub mod hooks;
 pub mod limits;

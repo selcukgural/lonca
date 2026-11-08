@@ -30,6 +30,12 @@ pub fn raise_open_files(wanted: u64) -> u64 {
     l.rlim_cur
 }
 
+/// Sends `signal` to every process of the group `group`.
+pub fn kill_group(group: libc::pid_t, signal: libc::c_int) {
+    // SAFETY: `kill` takes no pointers.
+    unsafe { libc::kill(-group, signal) };
+}
+
 /// The credentials of the process on the other end of `s` (Linux).
 #[cfg(target_os = "linux")]
 pub fn peer_cred(s: &UnixStream) -> Option<libc::ucred> {

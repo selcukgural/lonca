@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -57,6 +56,12 @@ pub struct Settings {
     /// Require managed settings and the hook program to be root-owned.
     pub require_root_settings: bool,
     pub git: String,
+    /// How long one git command may run (fetch and push included).
+    pub git_timeout: std::time::Duration,
+    /// Where a local-path remote may lie, besides the backups directory.
+    /// `None`: anywhere outside the daemon home (cooperative). A hardened
+    /// daemon starts with an empty list unless told otherwise.
+    pub local_roots: Option<Vec<PathBuf>>,
     /// The longest response line (`MAX_LINE` outside tests): `blobs`
     /// refuses a page that would not fit.
     pub line_cap: usize,
@@ -98,6 +103,8 @@ impl Default for Settings {
             managed_settings: None,
             require_root_settings: true,
             git: "git".into(),
+            git_timeout: crate::gitcmd::DEFAULT_TIMEOUT,
+            local_roots: None,
             line_cap: MAX_LINE,
             proxy: None,
             hardened: false,
@@ -675,6 +682,76 @@ impl Service {
                 .map_err(|e| Error::Invalid(format!("{}: {}", e.0, e.1)))?;
         }
         Ok(svc)
+    }
+
+    /// How this daemon runs git: a clean environment, its own git home,
+    /// a time limit ([`crate::gitcmd`]).
+    fn git_runner(&self) -> crate::gitcmd::Git {
+        crate::gitcmd::Git {
+            bin: self.settings.git.clone(),
+            home: self.home.root.join("git-home"),
+            timeout: self.settings.git_timeout,
+        }
+    }
+
+    fn git(
+        &self,
+        git_dir: &std::path::Path,
+        args: &[&str],
+    ) -> std::result::Result<String, (String, String)> {
+        use crate::gitcmd::Failure;
+        self.git_runner().run(git_dir, args).map_err(|f| match f {
+            Failure::Start(e) => ("internal".to_string(), format!("git: {e}")),
+            Failure::Timeout(t) => (
+                "git".to_string(),
+                format!(
+                    "git did not finish within {} s and was stopped",
+                    t.as_secs()
+                ),
+            ),
+            Failure::Exit(said) => ("git".to_string(), said),
+        })
+    }
+
+    /// A remote the daemon may fetch from or push to. A local path must
+    /// exist and lie outside the daemon home (its backups excepted): the
+    /// stores of other repositories, the key and the tokens live there, and
+    /// git would read them with the daemon's rights. Where
+    /// `local_roots` is set, it must lie under one of them, or in the
+    /// backups.
+    fn check_remote(&self, r: &str) -> std::result::Result<(), (String, String)> {
+        validate_remote(r)?;
+        if !r.starts_with('/') {
+            return Ok(());
+        }
+        let refuse = |why: &str| fail("forbidden", format!("local remote {r}: {why}"));
+        let Ok(path) = std::fs::canonicalize(r) else {
+            return refuse("it does not exist");
+        };
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let backups = canon(&self.home.backups());
+        if path.starts_with(&backups) {
+            return Ok(());
+        }
+        if path.starts_with(canon(&self.home.root)) {
+            return refuse("inside the daemon home");
+        }
+        match &self.settings.local_roots {
+            None => Ok(()),
+            Some(roots) if roots.iter().any(|root| path.starts_with(canon(root))) => Ok(()),
+            Some(_) => {
+                refuse("outside the directories this daemon may read (`lonca daemon --local-root`)")
+            }
+        }
+    }
+
+    /// A branch to fetch: Lonca's own test, then git's.
+    fn check_branch(&self, b: &str) -> std::result::Result<(), (String, String)> {
+        validate_branch(b)?;
+        if !crate::gitcmd::branch_ok(&self.git_runner(), b) {
+            return fail("invalid", "invalid branch name");
+        }
+        Ok(())
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -1260,10 +1337,9 @@ impl Service {
         let trunk = match &p.import_from {
             Some(src) => {
                 let branch = p.branch.clone().unwrap_or_else(|| "main".into());
-                validate_remote(src)?;
-                validate_branch(&branch)?;
-                git(
-                    &self.settings.git,
+                self.check_remote(src)?;
+                self.check_branch(&branch)?;
+                self.git(
                     r.store.path(),
                     &[
                         "fetch",
@@ -1761,7 +1837,7 @@ impl Service {
         let mut args: Vec<&str> = vec!["rev-list", "--objects"];
         args.extend(have.iter().map(String::as_str));
         args.push("refs/heads/main");
-        let objects = git(&self.settings.git, store.path(), &args)?;
+        let objects = self.git(store.path(), &args)?;
         let mut hidden: Vec<&str> = Vec::new();
         for line in objects.lines() {
             let (id, path) = line.split_once(' ').unwrap_or((line, ""));
@@ -1791,7 +1867,7 @@ impl Service {
         let mut args: Vec<&str> = vec!["bundle", "create", "-q", &tmp_s];
         args.extend(have.iter().map(String::as_str));
         args.push("refs/heads/main");
-        let made = git(&self.settings.git, store.path(), &args);
+        let made = self.git(store.path(), &args);
         let bytes = made.and_then(|_| std::fs::read(&tmp).map_err(|e| from_err(e.into())));
         let _ = std::fs::remove_file(&tmp);
         let bytes = bytes?;
@@ -1899,7 +1975,7 @@ impl Service {
                 "--",
             ];
             args.extend(paths.iter().map(String::as_str));
-            for line in git(&self.settings.git, store.path(), &args)?.lines() {
+            for line in self.git(store.path(), &args)?.lines() {
                 let mut it = line.split('\t');
                 let (a, d, path) = (it.next(), it.next(), it.next());
                 if let (Some(a), Some(d), Some(path)) = (a, d, path) {
@@ -1907,7 +1983,7 @@ impl Service {
                 }
             }
             args[3] = "--patch";
-            diff = git(&self.settings.git, store.path(), &args)?;
+            diff = self.git(store.path(), &args)?;
         }
         let (diff, truncated) = truncate_at_line(diff, DIFF_CAP_BYTES);
         let files: Vec<Value> = paths
@@ -2009,15 +2085,14 @@ impl Service {
 
     fn prepare_import(&self, auth: &Auth, p: PrepareRemote) -> Hr {
         let name = auth.repo()?;
-        validate_remote(&p.remote)?;
+        self.check_remote(&p.remote)?;
         let branch = p.branch.unwrap_or_else(|| "main".into());
-        validate_branch(&branch)?;
+        self.check_branch(&branch)?;
         let store = {
             let mut inner = self.lock();
             Self::repo(&mut inner, &name)?.store.clone()
         };
-        git(
-            &self.settings.git,
+        self.git(
             store.path(),
             &[
                 "fetch",
@@ -2049,7 +2124,7 @@ impl Service {
 
     fn prepare_push(&self, auth: &Auth, p: PrepareRemote) -> Hr {
         let name = auth.repo()?;
-        validate_remote(&p.remote)?;
+        self.check_remote(&p.remote)?;
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
         let s = &r.chain.state;
@@ -2099,8 +2174,7 @@ impl Service {
         let seq = r.chain.state.next_seq - 1;
         let file = dir.join(format!("{name}-{seq:06}.bundle"));
         let tmp = dir.join(format!("{name}-{seq:06}.bundle.tmp"));
-        git(
-            &self.settings.git,
+        self.git(
             r.store.path(),
             &["bundle", "create", "-q", &tmp.to_string_lossy(), "--all"],
         )?;
@@ -2129,7 +2203,7 @@ impl Service {
                 "repository names: letters, digits, '.', '_', '-'",
             );
         }
-        validate_remote(&p.from)?;
+        self.check_remote(&p.from)?;
         let mut guard = self.lock();
         let inner = &mut *guard;
         let path = self.home.repo_path(&p.repo);
@@ -2145,8 +2219,7 @@ impl Service {
             );
         }
         let fetched = Store::init_bare(&path).or_fail().and_then(|store| {
-            git(
-                &self.settings.git,
+            self.git(
                 store.path(),
                 &[
                     "fetch",
@@ -2291,6 +2364,7 @@ impl Service {
         );
         sub.human = Some(p.sig);
         let workspace = p.workspace.filter(|w| Path::new(w).is_absolute());
+        let mut push: Option<(PathBuf, String)> = None;
         match &p.op {
             Op::RepoInit { .. } => return fail("invalid", "use repo.init"),
             Op::ChangePropose {
@@ -2367,23 +2441,11 @@ impl Service {
                     .ref_cas(TRUNK_REF, commit, Some(trunk_before))
                     .or_fail()?;
             }
+            // Pushed below, once the lock is let go: a slow remote must
+            // not hold up every other request.
             Op::BridgePush { remote, .. } => {
                 let r = Self::repo(inner, &name)?;
-                let pushed = git(
-                    &self.settings.git,
-                    r.store.path(),
-                    &[
-                        "push",
-                        "--porcelain",
-                        "--",
-                        remote,
-                        "refs/heads/main:refs/heads/main",
-                        "refs/lonca/oplog:refs/lonca/oplog",
-                        "refs/lonca/policy:refs/lonca/policy",
-                        "refs/lonca/changes/*:refs/lonca/changes/*",
-                    ],
-                )?;
-                out["push"] = json!(pushed);
+                push = Some((r.store.path().to_path_buf(), remote.clone()));
             }
             // The old token was seen outside the sandbox, so it stops here:
             // from now on the level belongs to whoever holds the new one.
@@ -2415,6 +2477,23 @@ impl Service {
             }
             Op::ChangePropose { .. } => self.notify_queue(),
             _ => {}
+        }
+        drop(guard);
+        if let Some((dir, remote)) = push {
+            let pushed = self.git(
+                &dir,
+                &[
+                    "push",
+                    "--porcelain",
+                    "--",
+                    &remote,
+                    "refs/heads/main:refs/heads/main",
+                    "refs/lonca/oplog:refs/lonca/oplog",
+                    "refs/lonca/policy:refs/lonca/policy",
+                    "refs/lonca/changes/*:refs/lonca/changes/*",
+                ],
+            )?;
+            out["push"] = json!(pushed);
         }
         Ok(out)
     }
@@ -3658,28 +3737,6 @@ fn set_mode(_p: &std::path::Path, _mode: u32) -> std::result::Result<(), (String
     Ok(())
 }
 
-fn git(
-    bin: &str,
-    git_dir: &std::path::Path,
-    args: &[&str],
-) -> std::result::Result<String, (String, String)> {
-    let out = Command::new(bin)
-        .arg("--git-dir")
-        .arg(git_dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ALLOW_PROTOCOL", "file:https:ssh")
-        .output()
-        .map_err(|e| ("internal".to_string(), format!("git: {e}")))?;
-    if !out.status.success() {
-        return fail(
-            "git",
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 /// Is `ancestor` reachable from `commit` through parents?
 pub fn is_ancestor(store: &Store, ancestor: &GitId, commit: &GitId) -> Result<bool> {
     let mut seen = std::collections::BTreeSet::new();
@@ -3843,6 +3900,7 @@ mod tests {
                 line_cap: MAX_LINE,
                 hardened: false,
                 proxy: None,
+                ..Settings::default()
             },
             Arc::new(|| 1_760_000_000_000),
         )

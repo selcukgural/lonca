@@ -2725,6 +2725,45 @@ and `tokens.json` kept it for good.
   before every tool call and every heartbeat, so a rotation or a revocation
   takes effect at once; a hook is a new process each time.
 
+## The daemon's git (#57)
+
+The daemon starts `git` for fetches (init, import, restore), pushes (the
+bridge) and a few plumbing reads. It used to inherit the daemon's whole
+environment and read the system's and the user's git configuration; in
+cooperative mode that is the developer's, which an agent running as the
+developer can write. A `url.<x>.insteadOf` there changed which remote the
+daemon fetched from.
+
+- **A clean environment** (`crates/lonca-daemon/src/gitcmd.rs`): the child
+  starts from nothing and gets `PATH`, `SSH_AUTH_SOCK` (so a cooperative
+  daemon pushes over SSH as the developer's own `git push` would), `LANG`,
+  `LC_ALL` and `TMPDIR`; then `HOME=<daemon home>/git-home`,
+  `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0`,
+  `GIT_ALLOW_PROTOCOL=file:https:ssh`, and `-c core.hooksPath=/dev/null -c
+  credential.interactive=never`. `GIT_CONFIG_*`, `GIT_SSH_COMMAND`, `GIT_DIR`
+  and the rest do not reach it. **Credentials** for HTTPS remotes go in
+  `<daemon home>/git-home/.gitconfig`, a file of the daemon's user: that is
+  the only configuration besides the store's own.
+- **A time limit**: one git command runs at most `Settings::git_timeout`
+  (10 minutes), in a process group of its own, which is killed whole when the
+  time is up (ssh and the remote helpers with it). The error is `git`, "did
+  not finish within … s".
+- **No push under the lock.** `bridge.push` is logged under the service lock
+  as before; the push itself runs after the lock is let go, so a slow remote
+  holds up nobody. `human.prepare_import` already fetched outside it. The
+  fetches of `repo.prepare_init` and `repo.restore` still run under the lock,
+  bounded by the time limit: they create a repository and happen once.
+- **Local-path remotes** must exist and lie outside the daemon home, apart
+  from its backups directory: the stores of other repositories, the key and
+  the tokens are there, and git would read them with the daemon's rights (a
+  human of one repository could import another's store). The path is
+  resolved first, so a link to the home is refused too. `lonca daemon
+  --local-root DIR` (repeatable) narrows them to those directories and the
+  backups; a hardened daemon starts with none, so it reads only its backups
+  unless given one. Refused: `forbidden`.
+- **Branches** to fetch pass Lonca's own test and then `git check-ref-format
+  --branch`.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

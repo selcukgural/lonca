@@ -413,7 +413,8 @@ fn a_restore_refuses_what_it_can_not_trust_and_leaves_nothing_behind() {
     let err = o
         .restore("demo", &e.root.join("missing.bundle"))
         .unwrap_err();
-    assert_eq!(err.0, "git", "{err:?}");
+    assert_eq!(err.0, "forbidden", "{err:?}");
+    assert!(err.1.contains("does not exist"), "{err:?}");
     assert!(
         !o.home.join("repos/demo.git").exists(),
         "nothing left behind"

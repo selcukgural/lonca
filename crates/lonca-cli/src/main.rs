@@ -77,6 +77,12 @@ enum Cmd {
         /// then runs unsandboxed, and every start says so.
         #[arg(long)]
         allow_unsandboxed: bool,
+        /// A directory local-path remotes (imports, restores, pushes) may lie
+        /// under, besides the backups (repeatable). Without one a hardened
+        /// daemon reads only its backups; a cooperative one anything outside
+        /// its home.
+        #[arg(long = "local-root")]
+        local_roots: Vec<PathBuf>,
     },
     /// Human identities: file keys or Secure Enclave keys.
     #[command(subcommand)]
@@ -1085,6 +1091,7 @@ fn run(cmd: Cmd) -> Result<()> {
             socket_group,
             allow_uids,
             allow_unsandboxed,
+            local_roots,
         } => {
             let hardened = lonca_daemon::trust::Trust::load()?.is_hardened();
             let sandbox = lonca_verify::Sandbox::detect();
@@ -1112,12 +1119,15 @@ fn run(cmd: Cmd) -> Result<()> {
                 .as_ref()
                 .and_then(|l| l.local_addr().ok())
                 .map(|a| a.to_string());
-            let settings = lonca_daemon::Settings::for_daemon(
+            let mut settings = lonca_daemon::Settings::for_daemon(
                 allow_user_owned_settings,
                 managed_settings,
                 proxy_addr.clone(),
                 hardened,
             );
+            if hardened || !local_roots.is_empty() {
+                settings.local_roots = Some(local_roots);
+            }
             let svc =
                 lonca_daemon::Service::open(home.clone(), settings, lonca_daemon::system_clock())?;
             for line in svc.sandbox_warnings(sandbox) {

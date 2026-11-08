@@ -64,6 +64,11 @@ pub struct Settings {
     /// `None`: anywhere outside the daemon home (cooperative). A hardened
     /// daemon starts with an empty list unless told otherwise.
     pub local_roots: Option<Vec<PathBuf>>,
+    /// Where the developer leaves Git bundles to import or restore (a
+    /// hardened install's `--import-dir`). Only a bundle directly in it is
+    /// read, and only from the daemon's own copy (`import.rs`); nothing is
+    /// ever pushed there.
+    pub import_dir: Option<PathBuf>,
     /// The longest response line (`MAX_LINE` outside tests): `blobs`
     /// refuses a page that would not fit.
     pub line_cap: usize,
@@ -109,6 +114,7 @@ impl Default for Settings {
             git_timeout: crate::gitcmd::DEFAULT_TIMEOUT,
             notify: crate::security::Notify::Off,
             local_roots: None,
+            import_dir: None,
             line_cap: MAX_LINE,
             proxy: None,
             hardened: false,
@@ -139,6 +145,25 @@ pub fn sandbox_at_start(
     }
 }
 
+/// Where a daemon's local-path remotes may lie (`Settings::local_roots`).
+/// A hardened one reads its backups and its import directory only: git is
+/// given a `--local-root` path as it is, so a link swapped in after the
+/// check, or a repository whose `alternates` name a store, would reach the
+/// daemon home through it.
+pub fn local_roots_at_start(
+    hardened: bool,
+    roots: Vec<PathBuf>,
+) -> std::result::Result<Option<Vec<PathBuf>>, &'static str> {
+    match (hardened, roots.is_empty()) {
+        (true, false) => Err(
+            "--local-root is not for a hardened daemon: leave bundles in its import directory (--import-dir)",
+        ),
+        (true, true) => Ok(Some(roots)),
+        (false, true) => Ok(None),
+        (false, false) => Ok(Some(roots)),
+    }
+}
+
 /// How many entries a `log` answer holds, for the `limit` it was asked with.
 fn log_page(limit: Option<u64>) -> usize {
     limit.unwrap_or(LOG_PAGE).min(LOG_PAGE) as usize
@@ -156,6 +181,24 @@ fn encoded_len(bytes: u64) -> u64 {
 }
 
 type Hr = std::result::Result<Value, (String, String)>;
+
+/// What git fetches from: the remote as given, or the daemon's copy of a
+/// bundle from the import directory (removed when this goes).
+enum Source {
+    Given(String),
+    Copied(crate::import::Copy),
+}
+
+impl Source {
+    /// What git is given. Keep the source until git is done: a copy goes
+    /// with it.
+    fn arg(&self) -> String {
+        match self {
+            Source::Given(r) => r.clone(),
+            Source::Copied(c) => c.path().to_string_lossy().into_owned(),
+        }
+    }
+}
 
 /// What [`report_unproposed`] found.
 struct LeftBehind {
@@ -672,6 +715,8 @@ pub struct Service {
 impl Service {
     pub fn open(home: Home, settings: Settings, clock: Clock) -> Result<Arc<Self>> {
         home.ensure()?;
+        // What a daemon killed during a copy left behind (`import.rs`).
+        let _ = std::fs::remove_dir_all(home.imports());
         let (current, next) = home.load_keys()?;
         let keys = DaemonKeys { current, next };
         let tokens = Tokens::load(&home.tokens_path())?;
@@ -788,6 +833,11 @@ impl Service {
         if path.starts_with(&backups) {
             return Ok(());
         }
+        if let Some(dir) = &self.settings.import_dir
+            && path.starts_with(canon(dir))
+        {
+            return refuse("the import directory is only read, from a bundle copied first");
+        }
         if path.starts_with(canon(&self.home.root)) {
             return refuse("inside the daemon home");
         }
@@ -798,6 +848,46 @@ impl Service {
                 refuse("outside the directories this daemon may read (`lonca daemon --local-root`)")
             }
         }
+    }
+
+    /// A remote to fetch from: `check_remote`, or a bundle directly in the
+    /// import directory, which git reads from the daemon's copy. Anything
+    /// else below the import directory is refused.
+    fn source(&self, r: &str) -> std::result::Result<Source, (String, String)> {
+        validate_remote(r)?;
+        let Some(dir) = self.import_dir_given(r) else {
+            self.check_remote(r)?;
+            return Ok(Source::Given(r.to_string()));
+        };
+        let refuse = |why: &str| fail("forbidden", format!("local remote {r}: {why}"));
+        let path = Path::new(r);
+        let canon = |p: &Path| std::fs::canonicalize(p).ok();
+        let (Some(name), Some(parent)) = (path.file_name(), path.parent()) else {
+            return refuse("name a bundle directly in the import directory");
+        };
+        if canon(parent).as_deref() != Some(dir.as_path()) {
+            return refuse("name a bundle directly in the import directory");
+        }
+        let into = self.home.imports();
+        match crate::import::copy_bundle(
+            &dir,
+            name,
+            &into,
+            &random_id("imp"),
+            crate::import::MAX_BUNDLE,
+        ) {
+            Ok(copy) => Ok(Source::Copied(copy)),
+            Err(why) => refuse(&why),
+        }
+    }
+
+    /// The import directory, resolved, when `r` names something below it.
+    fn import_dir_given(&self, r: &str) -> Option<PathBuf> {
+        let dir = std::fs::canonicalize(self.settings.import_dir.as_ref()?).ok()?;
+        let path = Path::new(r);
+        let below = |p: &Path| p.starts_with(&dir);
+        let parent = path.parent().and_then(|p| std::fs::canonicalize(p).ok());
+        (below(path) || parent.as_deref().is_some_and(below)).then_some(dir)
     }
 
     /// A branch to fetch: Lonca's own test, then git's.
@@ -1063,6 +1153,7 @@ impl Service {
                 "daemon_key": self.public_key(),
                 "next_key": self.next_key(),
                 "proxy": self.settings.proxy,
+                "hardened": self.settings.hardened,
                 "refused": self.counters.to_json(),
             })),
             "human.login" => self.login(req, params(p)?),
@@ -1436,6 +1527,13 @@ impl Service {
             );
         }
         let (profile, presence) = self.starting_profile(&p)?;
+        // A copy from the import directory is made before the lock: it may
+        // take a while, and nobody waits for it.
+        let src = p
+            .import_from
+            .as_deref()
+            .map(|s| self.source(s))
+            .transpose()?;
         let mut guard = self.lock();
         let inner = &mut *guard;
         if inner.repos.get(&p.repo).is_some_and(|r| r.initialized())
@@ -1456,10 +1554,9 @@ impl Service {
         }
         let r = inner.repos.get_mut(&p.repo).expect("inserted");
         r.chain.set_key(inner.keys.for_new().clone());
-        let trunk = match &p.import_from {
+        let trunk = match &src {
             Some(src) => {
                 let branch = p.branch.clone().unwrap_or_else(|| "main".into());
-                self.check_remote(src)?;
                 self.check_branch(&branch)?;
                 self.git(
                     r.store.path(),
@@ -1467,7 +1564,7 @@ impl Service {
                         "fetch",
                         "--no-tags",
                         "--",
-                        src,
+                        &src.arg(),
                         &format!("+{branch}:refs/lonca/import/initial"),
                     ],
                 )?;
@@ -2219,7 +2316,7 @@ impl Service {
 
     fn prepare_import(&self, auth: &Auth, p: PrepareRemote) -> Hr {
         let name = auth.repo()?;
-        self.check_remote(&p.remote)?;
+        let src = self.source(&p.remote)?;
         let branch = p.branch.unwrap_or_else(|| "main".into());
         self.check_branch(&branch)?;
         let store = {
@@ -2232,7 +2329,7 @@ impl Service {
                 "fetch",
                 "--no-tags",
                 "--",
-                &p.remote,
+                &src.arg(),
                 &format!("+{branch}:refs/lonca/incoming"),
             ],
         )?;
@@ -2337,7 +2434,7 @@ impl Service {
                 "repository names: letters, digits, '.', '_', '-'",
             );
         }
-        self.check_remote(&p.from)?;
+        let src = self.source(&p.from)?;
         let mut guard = self.lock();
         let inner = &mut *guard;
         let path = self.home.repo_path(&p.repo);
@@ -2360,7 +2457,7 @@ impl Service {
                     "-q",
                     "--no-tags",
                     "--",
-                    &p.from,
+                    &src.arg(),
                     "+refs/heads/*:refs/heads/*",
                     "+refs/lonca/*:refs/lonca/*",
                 ],

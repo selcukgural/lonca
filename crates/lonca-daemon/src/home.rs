@@ -105,6 +105,12 @@ impl Home {
         self.repos().join(format!("{name}.git"))
     }
 
+    /// The daemon's copies of bundles from the import directory, each
+    /// removed after its fetch; emptied at every start.
+    pub fn imports(&self) -> PathBuf {
+        self.root.join("imports")
+    }
+
     pub fn scratch(&self) -> PathBuf {
         self.root.join("scratch")
     }

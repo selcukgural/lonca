@@ -80,9 +80,17 @@ enum Cmd {
         /// A directory local-path remotes (imports, restores, pushes) may lie
         /// under, besides the backups (repeatable). Without one a hardened
         /// daemon reads only its backups; a cooperative one anything outside
-        /// its home.
+        /// its home. Refused by a hardened daemon: git is given these paths
+        /// as they are, so a hardened install takes bundles through
+        /// --import-dir instead.
         #[arg(long = "local-root")]
         local_roots: Vec<PathBuf>,
+        /// A directory the developer may write Git bundles into, for
+        /// `init --import` and `restore` (hardened installs). The daemon reads
+        /// only a regular file directly in it, from a copy of its own, and
+        /// never pushes there.
+        #[arg(long)]
+        import_dir: Option<PathBuf>,
         /// Run this program for a freeze or an integrity alarm, with the
         /// event as one JSON line on its stdin (a webhook, a pager), instead
         /// of the desktop's notification.
@@ -102,6 +110,9 @@ enum Cmd {
     /// Create a repository, optionally importing an existing Git branch.
     Init {
         repo: String,
+        /// A Git remote or local path to import `--branch` from. A hardened
+        /// install reads a local one only as a bundle in its import directory
+        /// (`git bundle create /var/lib/lonca-import/x.bundle main`).
         #[arg(long)]
         import: Option<String>,
         #[arg(long)]
@@ -320,7 +331,9 @@ enum Cmd {
     Restore {
         /// Name of the repository to create.
         repo: String,
-        /// The bundle, bare store directory or remote URL.
+        /// The bundle, bare store directory or remote URL. A hardened
+        /// install reads a local one only as a bundle in its import directory
+        /// (`/Library/Lonca/import`, `/var/lib/lonca-import`) or its backups.
         #[arg(long)]
         from: String,
     },
@@ -1110,6 +1123,7 @@ fn run(cmd: Cmd) -> Result<()> {
             allow_uids,
             allow_unsandboxed,
             local_roots,
+            import_dir,
             notify_command,
             no_notify,
         } => {
@@ -1145,9 +1159,10 @@ fn run(cmd: Cmd) -> Result<()> {
                 proxy_addr.clone(),
                 hardened,
             );
-            if hardened || !local_roots.is_empty() {
-                settings.local_roots = Some(local_roots);
-            }
+            settings.local_roots =
+                lonca_daemon::service::local_roots_at_start(hardened, local_roots)
+                    .map_err(anyhow::Error::msg)?;
+            settings.import_dir = import_dir;
             if let Some(p) = notify_command {
                 settings.notify = lonca_daemon::security::Notify::Command(p);
             } else if no_notify {

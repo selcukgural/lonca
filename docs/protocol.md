@@ -213,12 +213,16 @@ unknown method: `unknown_method`, whatever the token.
 
 ```json
 {"version": "0.1.0", "protocol": 1, "daemon_key": hex, "next_key": hex | null, "proxy": "host:port" | null,
- "refused": {"busy": integer, "evicted": integer, "idle": integer, "slow": integer, "too_large": integer, "rate_limited": integer}}
+ "hardened": boolean, "refused": {"busy": integer, "evicted": integer, "idle": integer, "slow": integer, "too_large": integer, "rate_limited": integer}}
 ```
 
 `daemon_key` is the Ed25519 public key the daemon signs log entries
 with; `next_key` is set during a key rotation; `proxy` is where the
-daemon's network proxy listens, null when none runs. `refused` counts,
+daemon's network proxy listens, null when none runs. `hardened` is true
+for a daemon of a hardened install (its uid named in the root-owned
+`daemon.toml`): a harness reads it at start instead of guessing from
+files. Whether its own hooks are the locked ones shows after the first
+hook, as the session's level (`status`). `refused` counts,
 since the daemon started, what its limits turned away: none of that is in
 any log.
 
@@ -292,7 +296,10 @@ Names: letters, digits, `.`, `_`, `-`, at most 64. `import_from` is a
 remote the daemon fetches `branch` (default `main`) from: an absolute
 path, `https://`, `ssh://` or `user@host:path`; a local path outside the
 daemon home (its backups excepted) and, where the daemon was given
-`--local-root`, under one of those, or `forbidden`. Result `{"op": op,
+`--local-root`, under one of those, or `forbidden`. A daemon given
+`--import-dir` also reads a Git bundle directly in that directory (a
+regular file, not a link), from a copy of its own; anything else below
+it is `forbidden`, and so is a push there. Result `{"op": op,
 "warnings": [string], "large_files": [{"path", "size"}], "tree_bytes":
 integer, "profile": "cooperative" | "hardened"}`: the `repo.init` operation
 to sign, what a workspace of this tree will meet (files above the change
@@ -314,7 +321,8 @@ otherwise). Errors: `invalid` (not prepared by this daemon), `denied`
 ### `repo.restore`
 
 *bootstrap.* `{"repo": string, "from": string}`: creates the repository
-from a backup bundle, a bare store or a remote Lonca pushed to. Result:
+from a backup bundle, a bare store or a remote Lonca pushed to; `from`
+follows the rules of `import_from` above. Result:
 
 ```json
 {"repo": string, "seq": integer, "head_hash": hex, "daemon_key": hex, "foreign": boolean}

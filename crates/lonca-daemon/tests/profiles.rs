@@ -5,7 +5,7 @@ mod common;
 use common::*;
 
 use lonca_daemon::repo::RepoHandle;
-use lonca_daemon::service::sandbox_at_start;
+use lonca_daemon::service::{local_roots_at_start, sandbox_at_start};
 use lonca_policy::config::PolicyBundle;
 use lonca_verify::Sandbox;
 
@@ -166,6 +166,19 @@ fn a_repository_that_needs_a_sandbox_is_named_at_the_start() {
     assert!(warned[0].contains("unsandboxed_verification"), "{warned:?}");
     assert_eq!(e.svc.sandbox_warnings(Sandbox::Seatbelt), bare);
     assert_eq!(e.svc.sandbox_warnings(Sandbox::Bubblewrap), bare);
+}
+
+/// A hardened daemon reads local remotes in its backups and its import
+/// directory only; a cooperative one anywhere outside its home unless
+/// narrowed (#10).
+#[test]
+fn a_hardened_daemon_takes_no_local_root() {
+    let roots = vec![PathBuf::from("/srv/git")];
+    let e = local_roots_at_start(true, roots.clone()).unwrap_err();
+    assert!(e.contains("--import-dir"), "{e}");
+    assert_eq!(local_roots_at_start(true, vec![]), Ok(Some(vec![])));
+    assert_eq!(local_roots_at_start(false, vec![]), Ok(None));
+    assert_eq!(local_roots_at_start(false, roots.clone()), Ok(Some(roots)));
 }
 
 #[test]

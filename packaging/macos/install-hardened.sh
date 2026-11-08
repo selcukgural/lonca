@@ -6,6 +6,10 @@
 #                                                          write the generated
 #                                                          files to DIR only
 #
+# Run it again from a newer archive to upgrade: it stops the daemon, replaces
+# the binaries and the generated files, and starts it again. The stores, the
+# key and the backups stay. uninstall-hardened.sh removes the install.
+#
 # What it does (design §3.3):
 #   - creates the system user _lonca and the group lonca (the developer joins it)
 #   - installs lonca, lonca-audit and lonca-se root-owned in /Library/Lonca/bin
@@ -13,6 +17,8 @@
 #     agents running as the developer can not read the key or write the stores
 #   - writes `lonca backup` bundles to /Library/Lonca/backups, readable by
 #     group lonca, so the developer can copy them off the machine
+#   - reads Git bundles the developer leaves in /Library/Lonca/import, for
+#     `lonca init --import` and `lonca restore`, and nothing else of theirs
 #   - runs the daemon from launchd as _lonca; its socket accepts the
 #     developer's uid only
 #   - names the daemon's uid in /Library/Lonca/daemon.toml, root-owned: clients
@@ -29,6 +35,7 @@ BIN_DIR=$PREFIX/bin
 HOME_DIR=$PREFIX/home
 RUN_DIR=$PREFIX/run
 BACKUP_DIR=$PREFIX/backups
+IMPORT_DIR=$PREFIX/import
 SOCKET=$RUN_DIR/lonca.sock
 DAEMON_CONFIG=$PREFIX/daemon.toml
 PLIST=/Library/LaunchDaemons/dev.lonca.daemon.plist
@@ -70,6 +77,7 @@ plist() {
     <string>--socket-group</string><string>lonca</string>
     <string>--allow-uid</string><string>$1</string>
     <string>--proxy</string><string>127.0.0.1:$PROXY_PORT</string>
+    <string>--import-dir</string><string>$IMPORT_DIR</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -165,12 +173,22 @@ if ! dscl . -read /Users/_lonca >/dev/null 2>&1; then
     dscl . -create /Users/_lonca RealName "Lonca daemon"
     dscl . -create /Users/_lonca IsHidden 1
 fi
+# An upgrade: the old daemon stops before its binaries are replaced.
+upgrade=""
+if [ -e "$PLIST" ]; then
+    upgrade=1
+    launchctl bootout system "$PLIST" 2>/dev/null || true
+fi
+
 dseditgroup -o edit -a "$dev_user" -t user lonca
 dseditgroup -o edit -a _lonca -t user lonca
 
 install -d -o root -g wheel -m 0755 "$PREFIX" "$BIN_DIR"
 install -d -o _lonca -g lonca -m 0700 "$HOME_DIR"
 install -d -o _lonca -g lonca -m 0750 "$RUN_DIR" "$BACKUP_DIR"
+# Group lonca writes, the setgid bit gives each file that group, the sticky
+# bit keeps one from removing another's file.
+install -d -o root -g lonca -m 3770 "$IMPORT_DIR"
 for b in lonca lonca-audit lonca-se; do
     if [ -x "$src_bin/$b" ]; then
         install -o root -g wheel -m 0755 "$src_bin/$b" "$BIN_DIR/$b"
@@ -196,14 +214,29 @@ else
 fi
 
 launchctl bootout system "$PLIST" 2>/dev/null || true
+# The old daemon's socket outlives it: gone, the wait below sees the new one.
+rm -f "$SOCKET"
 launchctl bootstrap system "$PLIST"
+i=0
+while [ ! -S "$SOCKET" ] && [ $i -lt 40 ]; do
+    sleep 0.25
+    i=$((i + 1))
+done
+if [ ! -S "$SOCKET" ]; then
+    echo "the daemon did not start: see $HOME_DIR/daemon.log (sudo cat)" >&2
+    exit 1
+fi
+version=$("$BIN_DIR/lonca" --version)
+done_word=installed
+[ -n "$upgrade" ] && done_word=upgraded
 
 cat <<EOF
 
-Lonca daemon installed and started as _lonca.
+$version $done_word, running as _lonca.
   socket:  $SOCKET   (export LONCA_SOCKET=$SOCKET in your shell profile)
   state:   $HOME_DIR (unreadable for your account)
   backups: $BACKUP_DIR (lonca backup; readable by group lonca)
+  imports: $IMPORT_DIR (leave Git bundles here)
   hooks:   $MANAGED
 
 Log out and in again (or run 'newgrp lonca') so your account joins group lonca.
@@ -211,6 +244,12 @@ Log out and in again (or run 'newgrp lonca') so your account joins group lonca.
 A new repository starts from the hardened profile, which asks for human
 signatures with user presence:
     $BIN_DIR/lonca human keygen --secure-enclave <name>
+To bring a project's history along, bundle it into the import directory
+first (the daemon reads the file through group lonca):
+    git -C ~/src/project bundle create $IMPORT_DIR/project.bundle main
+    $BIN_DIR/lonca init <repo> --import $IMPORT_DIR/project.bundle
+A repository of a cooperative daemon comes the same way: 'lonca backup', copy
+the bundle into $IMPORT_DIR, 'lonca restore <repo> --from <that file>'.
 
 '$BIN_DIR/lonca doctor' checks the rest: repositories below the hardened
 profile, and a sudo that asks for no password (design §3.3), for which add

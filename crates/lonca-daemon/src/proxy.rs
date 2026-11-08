@@ -18,12 +18,22 @@ impl lonca_net::Gate for Service {
         let verdict = self.proxy_connect(
             peer_cwd(request.peer, request.local).as_deref(),
             request.host,
+            request.port,
+            request.peer,
         );
         lonca_net::Verdict {
             allow: verdict.allow,
             allow_private: verdict.allow_private,
             reason: verdict.reason,
         }
+    }
+
+    fn finished(&self, request: &lonca_net::Request<'_>, _outcome: lonca_net::Outcome) {
+        self.proxy_finished(request.peer);
+    }
+
+    fn carried(&self, request: &lonca_net::Request<'_>, bytes: u64) -> bool {
+        self.proxy_carried(request.peer, bytes)
     }
 }
 

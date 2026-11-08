@@ -139,7 +139,19 @@ network = "taint"
 # "deny", and do not taint the session. Exact names, no wildcards.
 agent_hosts = []
 # Let sandboxed commands reach loopback, private and link-local addresses.
+# Cloud metadata addresses (169.254.169.254, fd00:ec2::254, ...) stay closed.
 allow_private_network = false
+# Destination ports a connection through the proxy may go to.
+allow_ports = [80, 443]
+# Hosts that pass even under network = "deny", each saying whether it
+# taints: { host = "registry.npmjs.org", taint = false } for an exact name,
+# { host = "*.crates.io", taint = true } for every name below crates.io
+# (not crates.io itself).
+allow_hosts = []
+# Connections one session may hold open through the proxy at once, and the
+# bytes it may move through it while the daemon runs (both directions).
+max_connections = 16
+max_bytes = 1073741824
 # What a change to a critical path costs a session nobody fully observes:
 # "deny" refuses it, "escalate" makes it wait for a human like any other
 # change of that session. Applies while unobserved_is_tainted is on.
@@ -544,7 +556,41 @@ pub struct Observation {
     pub network: String,
     pub agent_hosts: Vec<String>,
     pub allow_private_network: bool,
+    pub allow_ports: Vec<u16>,
+    pub allow_hosts: Vec<HostRule>,
+    pub max_connections: u32,
+    pub max_bytes: u64,
     pub unobserved_critical: String,
+}
+
+/// A host the proxy lets through under `network = "deny"` (`allow_hosts`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostRule {
+    /// An exact name, or `*.suffix` for every name below `suffix`.
+    pub host: String,
+    /// Whether a connection to it taints the session.
+    pub taint: bool,
+}
+
+impl HostRule {
+    /// Whether `host` (lowercased, as the proxy has it) is this rule's.
+    pub fn matches(&self, host: &str) -> bool {
+        match self.host.strip_prefix("*.") {
+            Some(suffix) => host
+                .strip_suffix(suffix)
+                .is_some_and(|rest| rest.len() > 1 && rest.ends_with('.')),
+            None => self.host == host,
+        }
+    }
+}
+
+impl Observation {
+    /// The rule of `allow_hosts` that lets `host` through, the first that
+    /// matches.
+    pub fn host_rule(&self, host: &str) -> Option<&HostRule> {
+        self.allow_hosts.iter().find(|r| r.matches(host))
+    }
 }
 
 /// Which observations taint a session (`[taint]`). Policy data: the
@@ -725,6 +771,10 @@ impl Default for Observation {
             network: "taint".into(),
             agent_hosts: Vec::new(),
             allow_private_network: false,
+            allow_ports: vec![80, 443],
+            allow_hosts: Vec::new(),
+            max_connections: 16,
+            max_bytes: 1 << 30,
             unobserved_critical: CRITICAL_DENY.into(),
         }
     }
@@ -881,15 +931,36 @@ impl PolicyBundle {
         }
         // The proxy compares lowercased names, and a wildcard or a stray
         // character here would be a rule that silently never matches.
-        if let Some(h) = config.observation.agent_hosts.iter().find(|h| {
-            h.is_empty()
-                || h.len() > 253
-                || !h
-                    .bytes()
+        let name_ok = |h: &str| {
+            !h.is_empty()
+                && h.len() <= 253
+                && !h.starts_with('.')
+                && h.bytes()
                     .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-'))
-        }) {
+        };
+        if let Some(h) = config.observation.agent_hosts.iter().find(|h| !name_ok(h)) {
             return Err(format!(
                 "{CONFIG_FILE}: observation.agent_hosts: not a host name: {h}"
+            ));
+        }
+        if let Some(r) = config.observation.allow_hosts.iter().find(|r| {
+            let name = r.host.strip_prefix("*.").unwrap_or(&r.host);
+            !name_ok(name) || (r.host.starts_with("*.") && !name.contains('.'))
+        }) {
+            return Err(format!(
+                "{CONFIG_FILE}: observation.allow_hosts: not a host name or *.suffix \
+                 (a suffix with a dot): {}",
+                r.host
+            ));
+        }
+        if config.observation.allow_ports.contains(&0) {
+            return Err(format!(
+                "{CONFIG_FILE}: observation.allow_ports: 0 is no port"
+            ));
+        }
+        if config.observation.max_connections == 0 || config.observation.max_bytes == 0 {
+            return Err(format!(
+                "{CONFIG_FILE}: observation.max_connections and observation.max_bytes must be positive"
             ));
         }
         for (key, word) in [
@@ -1117,6 +1188,49 @@ mod tests {
     fn bundle(profile: Profile, presence: bool) -> PolicyBundle {
         let (config, policy) = profile.files(presence);
         PolicyBundle::parse(&config, &policy).unwrap()
+    }
+
+    #[test]
+    fn a_host_rule_is_a_name_or_the_names_below_a_suffix() {
+        let rule = |h: &str| HostRule {
+            host: h.into(),
+            taint: false,
+        };
+        assert!(rule("crates.io").matches("crates.io"));
+        assert!(!rule("crates.io").matches("static.crates.io"));
+        let below = rule("*.crates.io");
+        assert!(below.matches("static.crates.io") && below.matches("a.b.crates.io"));
+        for not in ["crates.io", "evilcrates.io", ".crates.io", "crates.io.evil"] {
+            assert!(!below.matches(not), "{not}");
+        }
+        let with = |rules: &str| {
+            let c = DEFAULT_CONFIG.replace("allow_hosts = []", &format!("allow_hosts = {rules}"));
+            PolicyBundle::parse(&c, DEFAULT_POLICY)
+        };
+        assert!(
+            with(r#"[{ host = "*.crates.io", taint = true }, { host = "a.b", taint = false }]"#)
+                .is_ok()
+        );
+        for bad in [
+            r#"[{ host = "*.com", taint = true }]"#,
+            r#"[{ host = "*", taint = true }]"#,
+            r#"[{ host = "Crates.io", taint = true }]"#,
+            r#"[{ host = "a b", taint = true }]"#,
+            r#"[{ host = "a.b" }]"#,
+            r#"[{ host = "a.b", taint = true, extra = 1 }]"#,
+        ] {
+            assert!(with(bad).is_err(), "{bad}");
+        }
+        let ports = DEFAULT_CONFIG.replace("allow_ports = [80, 443]", "allow_ports = [0]");
+        assert!(PolicyBundle::parse(&ports, DEFAULT_POLICY).is_err());
+        let conns = DEFAULT_CONFIG.replace("max_connections = 16", "max_connections = 0");
+        assert!(PolicyBundle::parse(&conns, DEFAULT_POLICY).is_err());
+        let first = PolicyBundle::default_bundle();
+        let o = &first.config.observation;
+        assert_eq!(
+            (o.allow_ports.clone(), o.max_connections, o.max_bytes),
+            (vec![80, 443], 16, 1 << 30)
+        );
     }
 
     #[test]

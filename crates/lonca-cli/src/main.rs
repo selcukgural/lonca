@@ -2366,6 +2366,11 @@ fn print_status(s: &Value) {
     if let Some(line) = below_hardened_note(s) {
         println!("{line}");
     }
+    if let Some(n) = s["proxy_unattributed"].as_u64().filter(|n| *n > 0) {
+        println!(
+            "PROXY  {n} connection(s) could not be traced to a process, so every proxied session answered for them"
+        );
+    }
     let q = s["queue"].as_array().map(|a| a.len()).unwrap_or(0);
     println!("queue  {q} change(s)");
     println!("{}", unparsed_note(s));

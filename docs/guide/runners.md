@@ -194,6 +194,33 @@ the agent needs. A daemon started with `--no-proxy` leaves the sandbox with no
 network at all. A model on this machine (`ollama`) also needs
 `allow_private_network = true`.
 
+The proxy holds every connection to the policy:
+
+```toml
+[observation]
+# Destination ports; anything else is refused before it is resolved.
+allow_ports = [80, 443]
+# Hosts that pass even under network = "deny", each saying whether it taints.
+# An exact name, or "*.suffix" for every name below the suffix (not the
+# suffix itself). The first rule that matches counts.
+allow_hosts = [
+  { host = "registry.npmjs.org", taint = false },
+  { host = "*.crates.io", taint = true },
+]
+# Per session: connections open at once, and bytes moved through the proxy
+# (both ways) while the daemon runs. Past the bytes a connection is cut.
+max_connections = 16
+max_bytes = 1073741824
+```
+
+A local model on port 11434 needs that port in `allow_ports` too. Cloud metadata
+addresses (`169.254.169.254`, `fd00:ec2::254` and the like) are never reachable,
+`allow_private_network` or not. Every attempt is in the log, refused or not, with
+the port when it is not 80 or 443 (`"host": "localhost:11434"`). When the daemon
+can not tell which process opened a connection (`lsof` gave no answer), every
+session the proxy serves answers for it; `lonca status` says how often that
+happened since the daemon started (`PROXY …`, `proxy_unattributed` in `--json`).
+
 **Requiring it.** Cedar sees the level, so a policy can ask for a sandbox by path or
 by task:
 

@@ -1721,6 +1721,10 @@ impl Service {
         let r = Self::repo(&mut inner, &name)?;
         let policy = r.policy().ok();
         let unparsed = policy.as_ref().map(|p| p.config.leases.unparsed_files);
+        // Names only: a command can hold paths and environment details.
+        let policy_checks: Option<Vec<&String>> = policy
+            .as_ref()
+            .map(|p| p.config.verification.checks.keys().collect());
         let below_hardened = match &policy {
             Some(p) if self.settings.hardened => p.below_hardened(),
             _ => vec![],
@@ -1811,7 +1815,8 @@ impl Service {
             .collect();
         Ok(json!({
             "interests": interests, "reservations": s.reservations_at(now),
-            "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "frozen": s.frozen, "queue": s.queue,
+            "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "policy_checks": policy_checks,
+            "frozen": s.frozen, "queue": s.queue,
             "verification_day_ms": s.day_spent(now),
             "unparsed_files": unparsed, "below_hardened": below_hardened,
             "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,

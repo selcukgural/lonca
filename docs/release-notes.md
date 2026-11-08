@@ -16,6 +16,14 @@ running before). Linux has `uninstall-hardened.sh` too. `ping` says
 `hardened`. A hardened daemon no longer starts with `--local-root`. macOS has not been installed for real yet. See
 `docs/decisions.md`, "Hardened mode in the field (#10)".
 
+### `status` names the policy's checks
+
+`status` has `policy_checks`: the names of the named checks the policy in
+force defines (`verification.checks`), sorted, `null` when the policy can
+not be read. A runner can refuse a check name nobody defined when it is
+written, not at the human's yes. Names only; a check's command never
+reaches a client. The protocol number stays 1: a field was added.
+
 ### Crates and Homebrew
 
 Every published crate has a README on crates.io; `lonca-client` and

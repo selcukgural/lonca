@@ -352,7 +352,8 @@ with a signed `daemon.rotate` through `human.submit`.
 
 ```json
 {
-  "repo": string, "trunk": id, "policy": id, "frozen": string | null,
+  "repo": string, "trunk": id, "policy": id, "policy_checks": [check name] | null,
+  "frozen": string | null,
   "queue": [change id], "next_seq": integer, "head_hash": hex, "now_ms": time,
   "verification_day_ms": integer,
   "daemon_key": hex, "below_hardened": [string],
@@ -361,6 +362,11 @@ with a signed `daemon.rotate` through `human.submit`.
 }
 ```
 
+- **policy_checks**: the names of the checks the policy in force defines
+  (`verification.checks`), sorted: the names `approve.checks` accepts, so a
+  client can refuse a misspelt one before the approval does
+  (`unknown_check:<name>`). Names only, never a command. `null` when the
+  policy can not be read, as `runs`.
 - **below_hardened**: what this repository's policy leaves below the hardened
   profile, on a hardened daemon. Always empty on a cooperative one.
 - **verification_day_ms**: milliseconds of verification in the UTC day of

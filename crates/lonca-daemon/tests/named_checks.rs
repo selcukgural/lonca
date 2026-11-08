@@ -79,6 +79,12 @@ fn audited(e: &Env) {
 #[test]
 fn a_check_named_at_approval_runs_and_is_on_the_record() {
     let (mut e, base) = repo("{ api = \"test -f src/lib.rs\", e2e = \"exit 5\" }", "{}");
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(st["policy_checks"], json!(["api", "e2e"]), "{st}");
+    assert!(
+        !st.to_string().contains("test -f"),
+        "a command reached a client: {st}"
+    );
     let (seq, change) = waiting(&mut e, &base, "s1", "src/lib.rs");
     let p = listed(&mut e, "pending", "seq", &json!(seq));
     assert_eq!(p["runs"], json!(["tests"]), "{p}");
@@ -187,5 +193,34 @@ fn the_policy_names_a_check_for_a_path() {
     assert!(none, "{:?}", last.evidence);
     let passed = last.evidence.iter().all(|a| a.result == CheckResult::Pass);
     assert!(passed);
+    audited(&e);
+}
+
+/// `status` names the checks of the policy in force, sorted, so a runner
+/// can refuse a name before the approval does; none defined is `[]`, and a
+/// new policy is seen at once.
+#[test]
+fn status_lists_the_checks_the_policy_in_force_defines() {
+    let (mut e, _) = repo("{}", "{}");
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(st["policy_checks"], json!([]), "{st}");
+
+    // The table form, which comes out the same as the inline one.
+    let config = DEFAULT_CONFIG.replace("\nchecks = {}\n", "\n")
+        + "\n[verification.checks]\nzeta = \"true\"\napi = \"true\"\n";
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": DEFAULT_POLICY}),
+    );
+    let op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(st["policy_checks"], json!(["api", "zeta"]), "{st}");
+
+    let token = e.session("s1", &["**"]);
+    let st = e.ok("status", Some("demo"), Some(&token), json!({}));
+    assert_eq!(st["policy_checks"], json!(["api", "zeta"]), "{st}");
     audited(&e);
 }

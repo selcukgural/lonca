@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.2.0 (2026-11-08)
+
+The first release. Its tests ran on Ubuntu, macOS and in the bubblewrap
+sandbox; the mutation run did not gate it (docs/decisions.md, "Mutation
+testing"), and what it finds afterwards is fixed in 0.2.x.
+
 ### Releases: prebuilt binaries, crates.io and Homebrew
 
 The first release with prebuilt binaries: `lonca` and `lonca-audit` for macOS

@@ -130,7 +130,7 @@ nothing from the harness, and the session gets `level: isolated`:
 lonca session start --repo demo --agent worker --paths 'src/**' \
       --workspace /work/w1 --scratch /work/w1-scratch --json
 cd /work/w1
-lonca run --session ses_… --env ANTHROPIC_API_KEY -- claude -p "fix the bug"
+lonca run --session ses_… --env CLAUDE_CODE_OAUTH_TOKEN -- claude -p "fix the bug"
 # OpenCode, which runs a private server here and listens on loopback:
 lonca run --session ses_… --loopback --env PWD=$PWD -- \
       opencode run --standalone -m <model> "fix the bug" </dev/null
@@ -159,7 +159,7 @@ Inside, the command:
 | reads | the system's directories, the workspace, the directories on `PATH`, its own program, and `--read PATH` |
 | can not read | your home directory, other workspaces, shared temp directories, Lonca's stores and keys, even with `--read` |
 | reaches | `lonca`'s socket and the proxy, nothing else: no DNS, no other socket, no Keychain |
-| keeps | none of your environment but `PATH`, locale, `TERM`, `USER`; `--env NAME` or `--env NAME=VALUE` adds to it |
+| keeps | none of your environment but `PATH`, locale, `TERM`, `USER`; the harness's `env` and `run_env` from its profile (below) and `--env NAME` or `--env NAME=VALUE` add to it, yours over the profile's |
 | has | three pipes for its streams, no terminal: use the harness's non-interactive mode |
 
 - Nothing the command starts outlives it, a daemon that left its session included.
@@ -169,6 +169,16 @@ Inside, the command:
 - Your tools usually need more than `PATH`: `--read ~/.rustup --env RUSTUP_HOME`.
   A harness that keeps state in its home directory will start empty; point it at a
   scratch root with `--env`.
+- The harness named with `session start --harness` gets the environment its profile
+  sets for a run: `claude-code` gets `CLAUDE_CODE_TMPDIR` set to the sandbox's
+  `TMPDIR`, since Claude Code makes `/tmp/claude-<uid>` whatever `TMPDIR` says and
+  exits when the sandbox keeps it out of `/tmp`. What the run sets itself (`PATH`,
+  `HOME`, `TMPDIR`, `LONCA_*`, the proxy) stays the run's.
+- Its login does not come in. Claude Code keeps it in your home directory and, on
+  macOS, the Keychain, both closed to the sandbox, so `claude -p` answers "Not logged
+  in". Give it a credential with `--env`: `claude setup-token` prints a long-lived
+  token for a subscription, passed as `CLAUDE_CODE_OAUTH_TOKEN`; an API key goes as
+  `ANTHROPIC_API_KEY`. Its settings start empty in the run's own `HOME`.
 - With no sandbox on the machine it stops; it never runs the command bare. macOS has
   `sandbox-exec`; on Linux install bubblewrap. Ubuntu 24.04 also needs
   `kernel.apparmor_restrict_unprivileged_userns=0`.
@@ -449,6 +459,10 @@ note = "What a person has to know."
 [harnesses.acme.setup.env]
 LONCA_SOCKET = "{socket}"
 
+# Besides env, only inside `lonca run`: {home} and {tmp} are the sandbox's own.
+[harnesses.acme.setup.run_env]
+ACME_CACHE = "{tmp}/acme"
+
 # format is json, toml or text. {rules}, {socket} and {workspace} are filled in.
 [[harnesses.acme.setup.files]]
 path = ".acme/config.json"
@@ -457,7 +471,9 @@ content = { server = { command = "lonca", args = ["mcp"], cwd = "{workspace}" } 
 ```
 
 `kind` is `read`, `write`, `shell`, `fetch`, `search` or `inert`. `fields`
-are tried in order. `headers` are for a tool whose paths are inside a text.
+are tried in order. `env` and `run_env` name no variable that changes what a
+program loads (`PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS` and the like, as for
+`--env`); `run_env` names none of Lonca's own either. `headers` are for a tool whose paths are inside a text.
 `events.stop` and `stop_deny`, the answer that sends the agent back with
 `{reason}` filled in, are optional and go together. `tool_context` is how news
 from other agents reaches one that is busy editing; without it the news waits

@@ -12,6 +12,11 @@ stop_deny = { decision = "block", reason = "{reason}" }
 [claude-code.setup]
 flags = ["--mcp-config", { file = ".mcp.json" }, "--settings", { file = ".claude/settings.local.json" }]
 
+# Claude Code makes /tmp/claude-<uid> whatever TMPDIR says, and exits when the
+# sandbox keeps it out of /tmp. Its settings go to $HOME/.claude, the run's own.
+[claude-code.setup.run_env]
+CLAUDE_CODE_TMPDIR = "{tmp}"
+
 [[claude-code.setup.files]]
 path = ".mcp.json"
 format = "json"

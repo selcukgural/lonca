@@ -8,7 +8,8 @@ use std::fs;
 use anyhow::{Context, Result, bail};
 use lonca_core::paths::{is_workspace_metadata, validate_repo_path};
 use lonca_daemon::Client;
-use lonca_policy::harness::{Filled, Setup, rules};
+use lonca_policy::config::{env_name_forbidden, valid_env_name};
+use lonca_policy::harness::{Filled, RunHoles, Setup, rules};
 use serde_json::{Value, json};
 
 use crate::ctx;
@@ -17,9 +18,11 @@ use crate::wsfs;
 
 pub struct Prepared {
     harness: String,
-    known: bool,
+    setup: Option<Setup>,
     filled: Filled,
     rules: String,
+    socket: String,
+    workspace: String,
     mcp: Value,
 }
 
@@ -59,15 +62,17 @@ fn filled_in(ws: &Workspace, harness: &str, setup: Value) -> Result<Prepared> {
     };
     Ok(Prepared {
         harness: harness.to_string(),
-        known: setup.is_some(),
-        filled,
-        rules,
         mcp: json!({
             "command": "lonca",
             "args": ["mcp"],
             "cwd": workspace,
             "env": {"LONCA_SOCKET": socket, "LONCA_WORKSPACE": workspace},
         }),
+        setup,
+        filled,
+        rules,
+        socket,
+        workspace,
     })
 }
 
@@ -93,6 +98,52 @@ impl Prepared {
         Ok(paths)
     }
 
+    /// What the harness is started with inside `lonca run`'s sandbox, whose
+    /// own `HOME` and `TMPDIR` are `home` and `tmp`: the setup's `env`, then
+    /// its `run_env`. Lonca's own names are left to the run, which sets them;
+    /// a name that changes what a program loads is refused, as for `--env`.
+    pub fn run_env(&self, home: &str, tmp: &str) -> Result<Vec<(String, String)>> {
+        let Some(setup) = &self.setup else {
+            return Ok(Vec::new());
+        };
+        let holes = RunHoles {
+            rules: &self.rules,
+            socket: &self.socket,
+            workspace: &self.workspace,
+            home,
+            tmp,
+        };
+        let run_env = setup.fill_run_env(&holes);
+        let mut out = Vec::new();
+        for (name, value) in self.filled.env.iter().chain(&run_env) {
+            if name.starts_with("LONCA_") {
+                continue;
+            }
+            if !valid_env_name(name) || env_name_forbidden(name) {
+                bail!(
+                    "the setup of harness {}: {name} is not a name the sandbox may be given",
+                    self.harness
+                );
+            }
+            out.push((name.clone(), value.clone()));
+        }
+        Ok(out)
+    }
+
+    /// A harness's setup as `lonca run` would prepare it, for a test.
+    #[cfg(test)]
+    pub fn of_setup(harness: &str, setup: Setup, workspace: &str) -> Prepared {
+        Prepared {
+            harness: harness.into(),
+            filled: setup.fill("", "/s", workspace).unwrap(),
+            setup: Some(setup),
+            rules: String::new(),
+            socket: "/s".into(),
+            workspace: workspace.into(),
+            mcp: Value::Null,
+        }
+    }
+
     /// Does the setup write `path`?
     pub fn writes(&self, path: &str) -> bool {
         self.filled.files.contains_key(path)
@@ -114,7 +165,7 @@ impl Prepared {
     pub fn report(&self, written: &[String]) -> Value {
         json!({
             "harness": self.harness,
-            "known": self.known,
+            "known": self.setup.is_some(),
             "written": written,
             "files": self.filled.files,
             "flags": self.filled.flags,
@@ -130,7 +181,7 @@ impl Prepared {
         for path in written {
             println!("wrote {path}");
         }
-        if !self.known {
+        if self.setup.is_none() {
             println!(
                 "no profile for harness {}: give it the MCP server and the rules",
                 self.harness
@@ -231,13 +282,56 @@ mod tests {
         let files = files.iter().map(|(p, t)| (p.to_string(), t.to_string()));
         Prepared {
             harness: "acme".into(),
-            known: true,
+            setup: Some(Setup::default()),
             filled: Filled {
                 files: files.collect(),
                 ..Filled::default()
             },
             rules: String::new(),
+            socket: String::new(),
+            workspace: String::new(),
             mcp: Value::Null,
+        }
+    }
+
+    #[test]
+    fn a_run_gets_the_setups_env_and_run_env_with_its_own_home_and_tmp() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = ws(dir.path());
+        let root = dir.path().to_str().unwrap();
+        let setup = json!({
+            "env": {"TRUST": "{workspace}", "LONCA_SOCKET": "{socket}", "BOTH": "env"},
+            "run_env": {"T": "{tmp}/x", "H": "{home}", "BOTH": "run_env", "W": "{workspace}"},
+        });
+        let p = filled_in(&w, "acme", setup).unwrap();
+        let env = p.run_env("/h", "/t").unwrap();
+        let want = [
+            ("BOTH", "env"),
+            ("TRUST", root),
+            ("BOTH", "run_env"),
+            ("H", "/h"),
+            ("T", "/t/x"),
+            ("W", root),
+        ];
+        let want: Vec<(String, String)> = want
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert_eq!(env, want, "Lonca's own names are the run's");
+
+        // A home that holds a hole's name is a path, not a hole.
+        let env = p.run_env("/{tmp}", "/t").unwrap();
+        assert!(env.contains(&("H".into(), "/{tmp}".into())), "{env:?}");
+
+        let unknown = filled_in(&w, "acme", Value::Null).unwrap();
+        assert!(unknown.run_env("/h", "/t").unwrap().is_empty());
+        for bad in [
+            json!({"env": {"DYLD_INSERT_LIBRARIES": "x"}}),
+            json!({"run_env": {"PATH": "x"}}),
+        ] {
+            let p = filled_in(&w, "acme", bad).unwrap();
+            let e = p.run_env("/h", "/t").unwrap_err().to_string();
+            assert!(e.contains("not a name the sandbox may be given"), "{e}");
         }
     }
 

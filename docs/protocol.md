@@ -733,8 +733,11 @@ Denied `yield_to_another_session`, `lease_pinned`, `lease_expired`,
 
 *agent.* `{"agent": string, "scope": scope, "expires_ms": time, "leases":
 [string] | null}`. A child session with a narrower scope. `leases` hands
-lease sets to it until it ends; they go back to the parent then. Logged,
-plus `"session"` and `"token"` when allowed.
+lease sets to it until it ends, expires or misses its heartbeat; they go
+back to the parent then, with the time they had, if the parent is still
+there (on expiry and heartbeat from log format 23). Only the child renews
+them while it holds them. Logged, plus `"session"` and `"token"` when
+allowed.
 
 ### `session.end`
 

@@ -1426,7 +1426,7 @@ impl Service {
                     .iter()
                     .map(|(change, items)| json!({"change": change, "items": items}))
                     .collect();
-                json!({"set": l.set, "session": l.session, "items": a.items, "intent": l.intent, "expires_ms": l.expires_ms, "pinned": pinned})
+                json!({"set": l.set, "session": a.holder, "items": a.items, "intent": l.intent, "expires_ms": l.expires_ms, "pinned": pinned})
             })
             .collect();
         let changes: Vec<Value> = s
@@ -2749,7 +2749,7 @@ impl Service {
             .chain
             .state
             .active_leases(now)
-            .filter(|a| a.lease.session == session)
+            .filter(|a| a.holder == session)
             .map(|a| json!({"set": a.lease.set, "expires_ms": a.lease.expires_ms}))
             .collect();
         let mut out = logged(&signed);

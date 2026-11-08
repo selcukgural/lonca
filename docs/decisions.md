@@ -1578,7 +1578,9 @@ a symbol and race everyone to hand it to a sub-agent (#42).
   the set as before, and the queue serves it.
 - **`cap.attenuate` with `leases`** hands sets to the child. The child holds
   them until it ends, and then they go back to the parent if the parent is
-  still there. A revocation of the parent reaches the child and the sets. Only
+  still there. From log format 23 the same holds when the child expires or
+  misses its heartbeat (see "A delegated lease comes back (#40)"). A
+  revocation of the parent reaches the child and the sets. Only
   whole sets move, which is less than the issue's "or a subset of their
   items": a worker that wants part of a set releases the rest first.
 - **A set that moves is whole, alive and unpinned** (`lease_pinned`,
@@ -2606,6 +2608,31 @@ files neither wrote.
 - **Log format 22.** An old reader would drop `names` and compute another
   digest, so the chain check refuses names in an older entry. The new-file
   rules are gated on the entry's format in `decide()` and in pinning.
+
+## A delegated lease comes back (#40)
+
+The lease tests of #40 found that a set handed to a child went back to the
+parent only when the child ended or was revoked. A child that ran out of time
+or stopped beating took the set with it: the set was dead, and whoever asked
+next got it, ahead of the parent that had handed it over for a while.
+
+- **The parent holds it the moment the child is gone.** `State::holder` is the
+  session a set names, unless that is a child that expired or missed its
+  heartbeat and the parent that gave it can still act; then it is the parent.
+  Every reader asks it: who a lease meets, whose it is to renew, release or
+  hand on, what a proposal may use, what details and `status` show. The set
+  keeps its own end; the child's renewals count.
+- **The next entry moves it.** Pruning at each entry gives such sets to their
+  holder before it drops dead ones, so the state says what the decisions
+  already used. Between the child's end and that entry nothing differs: the
+  parent can renew or release the set that still names the child.
+- **One level.** A set goes to the session it was delegated from. A set handed
+  on again names the second parent; if that one is gone too, the set ends, as
+  it did when sessions ended.
+- **Log format 23**, with no new field. `State::gives_back` is set from the
+  format of the entries before, after the entry's own pruning, so the entry
+  that reaches format 23 is decided and applied by the same rule. Older logs
+  replay as they were.
 
 ## Open questions (carried from the design)
 

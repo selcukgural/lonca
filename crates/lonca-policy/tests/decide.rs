@@ -4,8 +4,8 @@
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_INSERT_NAMES, FORMAT_SYMBOL_KEYS, SignedOp,
-    verify_chain,
+    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_SYMBOL_KEYS,
+    SignedOp, verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -4499,6 +4499,127 @@ fn a_delegation_needs_the_parents_own_live_set_within_the_childs_scope() {
     assert!(denied_with(&d, "scope_path:src/a.rs"), "{d:?}");
     assert_eq!(h.chain.state.leases["l1"].session, "a");
     h.assert_replay();
+}
+
+/// A child whose time runs out gives a delegated set back as one that ends
+/// does (log format 23): the parent holds it at once, before any entry
+/// moves it, and keeps the time it had.
+#[test]
+fn a_delegated_lease_comes_back_when_the_child_expires() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.agent("a", renew("l1", 30 * MIN)).is_allow());
+    let until = h.chain.state.leases["l1"].expires_ms;
+    assert!(h.agent("a", child_op(&h, "a", "kid", &["l1"])).is_allow());
+    // `child_op` gives the child ten minutes; the next entry is just past.
+    h.now += 10 * MIN - 1;
+    assert_eq!(
+        h.chain.state.leases["l1"].session, "kid",
+        "nothing moved yet"
+    );
+    let d = h.lease("b", "lb", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{F}:a:")), "{d:?}");
+    let l = &h.chain.state.leases["l1"];
+    assert_eq!(l.session, "a");
+    assert_eq!((l.delegated_from.as_deref(), l.expires_ms), (None, until));
+    assert_eq!(held(&h, "a"), [F]);
+    let d = h.agent("kid", renew("l1", 10 * MIN));
+    assert!(denied_with(&d, "session_inactive"), "{d:?}");
+    assert!(h.agent("a", renew("l1", 10 * MIN)).is_allow());
+    h.assert_replay();
+}
+
+/// The parent may renew or release what its expired child had at the first
+/// entry after, when the set still names the child.
+#[test]
+fn the_parent_acts_on_a_set_of_an_expired_child_before_it_moves() {
+    for op in [renew("l1", 10 * MIN), release("l1")] {
+        let mut h = three_sessions();
+        assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+        assert!(h.agent("a", renew("l1", 30 * MIN)).is_allow());
+        assert!(h.agent("a", child_op(&h, "a", "kid", &["l1"])).is_allow());
+        h.now += 10 * MIN - 1;
+        assert_eq!(h.chain.state.leases["l1"].session, "kid");
+        let d = h.agent("a", op.clone());
+        assert!(d.is_allow(), "{op:?}: {d:?}");
+        h.assert_replay();
+    }
+}
+
+/// A child that stops beating gives a delegated set back too.
+#[test]
+fn a_delegated_lease_comes_back_when_the_child_stops_beating() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.agent("a", child_op(&h, "a", "kid", &["l1"])).is_allow());
+    assert!(heartbeat(&mut h, "kid").is_allow());
+    let d = h.lease("b", "lb", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{F}:kid:")), "{d:?}");
+    // The default heartbeat timeout is five minutes.
+    h.now += 5 * MIN + 1;
+    let d = h.lease("b", "lb", &[(F, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{F}:a:")), "{d:?}");
+    assert_eq!(h.chain.state.leases["l1"].session, "a");
+    h.assert_replay();
+}
+
+/// A parent that is gone too has nothing to take back: the set ends.
+#[test]
+fn a_delegated_lease_ends_when_the_parent_is_gone_too() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.agent("a", child_op(&h, "a", "kid", &["l1"])).is_allow());
+    assert!(heartbeat(&mut h, "a").is_allow());
+    assert!(heartbeat(&mut h, "kid").is_allow());
+    h.now += 5 * MIN + 1;
+    let d = h.lease("b", "lb", &[(F, LeaseKind::Edit)]);
+    assert!(d.is_allow(), "{d:?}");
+    assert!(!h.chain.state.leases.contains_key("l1"));
+    h.assert_replay();
+}
+
+/// Before format 23 a set of an expired child ended with it. Replaying the
+/// entries as format 22 keeps that decision.
+#[test]
+fn before_the_format_an_expired_child_takes_its_lease_with_it() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.agent("a", renew("l1", 30 * MIN)).is_allow());
+    assert!(h.agent("a", child_op(&h, "a", "kid", &["l1"])).is_allow());
+    assert!(h.chain.state.gives_back);
+    let mut old = h.log.clone();
+    for o in &mut old {
+        assert_eq!(o.entry.format, FORMAT_CURRENT);
+        o.entry.format = FORMAT_GIVE_BACK - 1;
+    }
+    let s = State::replay(&old);
+    assert!(!s.gives_back);
+    let t = h.now + 10 * MIN;
+    let bundle = PolicyBundle::default_bundle();
+    let ctx = |format| Ctx {
+        format,
+        time_ms: t,
+        policy: &bundle,
+        facts: None,
+        evidence: &[],
+        symbols_engine: None,
+    };
+    let actor = Actor::Agent {
+        name: "bot-b".into(),
+        session: "b".into(),
+    };
+    let op = Op::LeaseAcquire {
+        set: "lb".into(),
+        items: vec![item(F)],
+        intent: "take".into(),
+        ttl_ms: 10 * MIN,
+    };
+    let old_format = FORMAT_GIVE_BACK - 1;
+    assert!(decide(&s, &actor, &op, None, &ctx(old_format)).is_allow());
+    let now = decide(&h.chain.state, &actor, &op, None, &ctx(FORMAT_CURRENT));
+    assert!(denied_with(&now, &format!("lease_held:{F}:a:")), "{now:?}");
+    assert_eq!(h.chain.state.holder(&s.leases["l1"], t), "a");
+    assert_eq!(s.holder(&s.leases["l1"], t), "kid");
 }
 
 fn acquire_for(h: &mut H, set: &str, ttl_ms: i64) -> Decision {

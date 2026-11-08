@@ -1,0 +1,43 @@
+// The order of the docs. Every page the site takes from ../docs is listed
+// here by its id (its path without .md); check.sh fails the build when a
+// page in docs/guide is missing.
+// @ts-check
+
+/** @type {import('@docusaurus/plugin-content-docs').SidebarsConfig} */
+const sidebars = {
+  docs: [
+    { type: 'doc', id: 'guide/index', label: 'What Lonca is' },
+    {
+      type: 'category',
+      label: 'Getting started',
+      collapsed: false,
+      items: [
+        { type: 'doc', id: 'guide/install', label: 'Install' },
+        { type: 'doc', id: 'guide/quick-start', label: 'Quick start' },
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Guides',
+      collapsed: false,
+      items: [
+        { type: 'doc', id: 'guide/humans', label: 'Working as a human' },
+        { type: 'doc', id: 'guide/profiles', label: 'Profiles' },
+        { type: 'doc', id: 'guide/runners', label: 'Running agents' },
+        { type: 'doc', id: 'guide/verification', label: 'Verification' },
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Reference',
+      items: [
+        { type: 'doc', id: 'protocol', label: 'Daemon protocol' },
+        { type: 'doc', id: 'crypto', label: 'Cryptography' },
+        { type: 'doc', id: 'security/owasp', label: 'OWASP review' },
+      ],
+    },
+    { type: 'doc', id: 'release-notes', label: 'Release notes' },
+  ],
+};
+
+export default sidebars;

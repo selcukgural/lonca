@@ -1,0 +1,158 @@
+/* Lonca's colours: a guild green on a dark ground, with a brass seal. */
+
+:root {
+  --ifm-color-primary: #1f7a6d;
+  --ifm-color-primary-dark: #1c6e62;
+  --ifm-color-primary-darker: #1a685d;
+  --ifm-color-primary-darkest: #15554c;
+  --ifm-color-primary-light: #228678;
+  --ifm-color-primary-lighter: #248c7d;
+  --ifm-color-primary-lightest: #29a08e;
+  --ifm-code-font-size: 92%;
+  --ifm-font-family-base: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --ifm-font-family-monospace: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+  --lonca-ground: #11181a;
+  --lonca-brass: #e7c76a;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #4fc1a6;
+  --ifm-color-primary-dark: #3fb699;
+  --ifm-color-primary-darker: #3bab90;
+  --ifm-color-primary-darkest: #308d77;
+  --ifm-color-primary-light: #66c9b2;
+  --ifm-color-primary-lighter: #71cdb8;
+  --ifm-color-primary-lightest: #93d9c9;
+  --ifm-background-color: var(--lonca-ground);
+  --ifm-navbar-background-color: #172023;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.1);
+}
+
+/* Wide tables of the protocol scroll instead of squeezing. */
+.markdown table {
+  display: block;
+  overflow-x: auto;
+}
+
+/* The home page. */
+.lonca-hero {
+  background: var(--lonca-ground);
+  color: #eef3f2;
+  padding: 4rem 1rem 3rem;
+  text-align: center;
+}
+.lonca-hero img {
+  width: 72px;
+  height: 72px;
+}
+.lonca-hero h1 {
+  font-size: clamp(2rem, 6vw, 3.4rem);
+  margin: 0.8rem 0 0.4rem;
+  letter-spacing: 0.02em;
+}
+.lonca-hero .lonca-tagline {
+  font-size: 1.3rem;
+  color: var(--lonca-brass);
+  margin-bottom: 1rem;
+}
+.lonca-hero p {
+  font-size: 1.1rem;
+  max-width: 46rem;
+  margin: 0 auto 1.8rem;
+  color: #c3cfcc;
+}
+.lonca-install {
+  max-width: 46rem;
+  margin: 0 auto 1.8rem;
+}
+.lonca-install-label {
+  display: block;
+  font-size: 0.85rem;
+  color: #93a3a0;
+  margin-bottom: 0.4rem;
+}
+.lonca-install-line {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid #33413f;
+  border-radius: 8px;
+  background: #0c1214;
+  overflow: hidden;
+}
+.lonca-install-line code {
+  flex: 1;
+  background: none;
+  border: none;
+  color: #eef3f2;
+  font-size: 0.95rem;
+  padding: 0.7rem 1rem;
+  text-align: left;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.lonca-install-prompt {
+  color: #4fc1a6;
+  user-select: none;
+}
+.lonca-install-copy {
+  border: none;
+  border-left: 1px solid #33413f;
+  background: #1c2628;
+  color: #eef3f2;
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0 1.1rem;
+  cursor: pointer;
+  min-width: 6.5rem;
+}
+.lonca-install-copy:hover,
+.lonca-install-copy:focus-visible {
+  background: #4fc1a6;
+  color: #0c1214;
+}
+.lonca-hero .button + .button {
+  margin-left: 0.8rem;
+}
+.lonca-flow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 2rem auto 0;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.95rem;
+}
+.lonca-flow span {
+  border: 1px solid #33413f;
+  border-radius: 999px;
+  padding: 0.25rem 0.8rem;
+}
+.lonca-flow span.arrow {
+  border: none;
+  color: var(--lonca-brass);
+  padding: 0.25rem 0;
+}
+.lonca-features {
+  padding: 3rem 1rem 1rem;
+}
+.lonca-features h3 {
+  margin-top: 1rem;
+}
+.lonca-terminal {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 1rem 1rem 3rem;
+}
+.lonca-other {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+}
+@media (max-width: 600px) {
+  .lonca-hero .button {
+    display: block;
+    margin: 0.5rem auto 0 !important;
+    max-width: 18rem;
+  }
+}

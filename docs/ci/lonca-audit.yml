@@ -1,6 +1,10 @@
 # Example workflow for a repository that Lonca pushes to: every push is
 # audited on infrastructure separate from the developer's machine.
-# Copy to .github/workflows/lonca-audit.yml and pin <REV> to a Lonca commit.
+# Copy to .github/workflows/lonca-audit.yml and set LONCA_VERSION to the
+# release your daemon runs (or a later one: every release reads every older
+# log). The release's archive is checked against its build provenance
+# attestation before it runs; `cargo install --locked lonca-audit --version
+# <V>` builds the same from crates.io instead.
 name: lonca-audit
 
 on:
@@ -19,7 +23,16 @@ jobs:
           persist-credentials: false
       - name: Fetch the Lonca refs (operation log, policy, proposals)
         run: git fetch --no-tags origin '+refs/lonca/*:refs/lonca/*'
-      - name: Install lonca-audit
-        run: cargo install --locked --git https://github.com/selcukgural/lonca --rev <REV> lonca-audit
+      - name: Install lonca-audit from the release, attestation checked
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LONCA_VERSION: "0.2.0"
+        run: |
+          archive=lonca-x86_64-unknown-linux-musl.tar.gz
+          gh release download "v$LONCA_VERSION" --repo selcukgural/lonca \
+            --pattern "$archive" --dir "$RUNNER_TEMP"
+          gh attestation verify "$RUNNER_TEMP/$archive" --repo selcukgural/lonca \
+            --signer-workflow selcukgural/lonca/.github/workflows/release.yml
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" lonca-audit
       - name: Replay and verify every decision
-        run: lonca-audit verify .git
+        run: '"$RUNNER_TEMP/lonca-audit" verify .git'

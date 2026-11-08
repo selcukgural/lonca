@@ -447,6 +447,44 @@ impl Auth {
     }
 }
 
+/// A session as the proxy counts it: repository and session id.
+type SessionKey = (String, String);
+
+/// What the proxy has open, by session, and what it has carried. Only in
+/// memory: nothing of it is a decision, and a restart starts it over.
+#[derive(Default)]
+struct ProxyBook {
+    /// Each connection let through, by the client's end: the sessions it
+    /// counts against, with the byte budget of each.
+    open: BTreeMap<std::net::SocketAddr, Vec<(SessionKey, u64)>>,
+    /// Bytes each session moved through the proxy.
+    carried: BTreeMap<SessionKey, u64>,
+    /// Connections no process could be named for, so every session the
+    /// proxy serves answered for them (see `lonca status`).
+    unattributed: u64,
+}
+
+impl ProxyBook {
+    fn open_of(&self, key: &SessionKey) -> usize {
+        let held = self.open.values().flatten();
+        held.filter(|(k, _)| k == key).count()
+    }
+}
+
+/// How a host reads under the policy of one session, for the proxy.
+fn host_verdict(cfg: &lonca_policy::config::Observation, host: &str) -> (bool, bool) {
+    // A host the policy names as the agent's own is no outside content: it
+    // is on the record and it taints nothing. A rule of `allow_hosts` lets
+    // its host through and says whether it taints.
+    if cfg.agent_hosts.iter().any(|h| h == host) {
+        return (true, false);
+    }
+    if let Some(rule) = cfg.host_rule(host) {
+        return (true, rule.taint);
+    }
+    (cfg.network == "taint", true)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProxyVerdict {
     pub allow: bool,
@@ -610,6 +648,7 @@ pub struct Service {
     /// Checks that passed, by repository, tree and configuration. It lives
     /// as long as the daemon: its environment is part of what passed.
     verified: Mutex<Verified>,
+    proxy: Mutex<ProxyBook>,
     verification_runs: AtomicU64,
     /// Changes whose checks are running, see [`Running`].
     running: Mutex<BTreeSet<ChangeId>>,
@@ -653,6 +692,7 @@ impl Service {
             verifier: Verifier::new(home.scratch()),
             verified: Mutex::default(),
             verification_runs: AtomicU64::new(0),
+            proxy: Mutex::default(),
             running: Mutex::default(),
             home,
             counters: Counters::default(),
@@ -1594,6 +1634,7 @@ impl Service {
             "unparsed_files": unparsed, "below_hardened": below_hardened,
             "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
             "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now, "daemon_key": s.daemon_key,
+            "proxy_unattributed": self.proxy_unattributed(),
         }))
     }
 
@@ -3156,7 +3197,17 @@ impl Service {
     /// connecting process when it could be determined; the connection is
     /// attributed to the sessions whose workspace contains it, otherwise to
     /// every session routed through the proxy (fail closed).
-    pub fn proxy_connect(&self, cwd: Option<&std::path::Path>, host: &str) -> ProxyVerdict {
+    /// The proxy's question: may this connection go through? Every session
+    /// it is attributed to has its policy asked (port, host, connections
+    /// and bytes), and the attempt is on each one's record before the
+    /// answer, refused or not.
+    pub fn proxy_connect(
+        &self,
+        cwd: Option<&std::path::Path>,
+        host: &str,
+        port: u16,
+        peer: std::net::SocketAddr,
+    ) -> ProxyVerdict {
         let now = self.now();
         let mut guard = self.lock();
         let inner = &mut *guard;
@@ -3193,10 +3244,20 @@ impl Service {
                 reason: "no Lonca session uses this proxy".into(),
             };
         }
+        let mut book = self.proxy.lock().unwrap_or_else(|e| e.into_inner());
+        if !attributed {
+            book.unattributed += 1;
+        }
+        let shown = match port {
+            80 | 443 => host.to_string(),
+            p => format!("{host}:{p}"),
+        };
         let mut allow = true;
         let mut allow_private = true;
-        for (repo, session) in &matched {
-            let Some(r) = inner.repos.get_mut(repo) else {
+        let mut reason = None;
+        let mut budgets = Vec::new();
+        for key in &matched {
+            let Some(r) = inner.repos.get_mut(&key.0) else {
                 continue;
             };
             let Ok(policy) = r.policy() else {
@@ -3204,45 +3265,82 @@ impl Service {
                 continue;
             };
             let cfg = &policy.config.observation;
-            // A host the policy names as the agent's own is no outside
-            // content: it is on the record and it taints nothing.
-            let own = cfg.agent_hosts.iter().any(|h| h == host);
-            allow &= own || cfg.network == "taint";
+            let (passes, external) = host_verdict(cfg, host);
+            let refused = if !cfg.allow_ports.contains(&port) {
+                Some(format!("port {port} is not in observation.allow_ports"))
+            } else if !passes {
+                Some("network access is denied by repository policy".to_string())
+            } else if book.open_of(key) >= cfg.max_connections as usize {
+                Some(format!(
+                    "this session has {} connections open through the proxy (observation.max_connections)",
+                    cfg.max_connections
+                ))
+            } else if book.carried.get(key).copied().unwrap_or(0) >= cfg.max_bytes {
+                Some("this session has moved observation.max_bytes through the proxy".to_string())
+            } else {
+                None
+            };
+            if let Some(why) = refused {
+                allow = false;
+                reason.get_or_insert(why);
+            }
             allow_private &= cfg.allow_private_network;
+            budgets.push((key.clone(), cfg.max_bytes));
             let ev = Observation {
                 phase: Phase::Pre,
                 kind: ObsKind::Fetch {
-                    host: host.to_string(),
+                    host: shown.clone(),
                 },
-                external: !own,
+                external,
             };
-            if r.submit(
-                Submission::new(
-                    Actor::Daemon,
-                    Op::Observe {
-                        session: session.clone(),
-                        events: vec![ev],
-                    },
-                ),
-                now,
-            )
-            .is_err()
-            {
+            let op = Op::Observe {
+                session: key.1.clone(),
+                events: vec![ev],
+            };
+            if r.submit(Submission::new(Actor::Daemon, op), now).is_err() {
                 allow = false;
+                reason.get_or_insert("the attempt could not be recorded".to_string());
             }
         }
-        let reason = if allow {
-            String::new()
-        } else {
-            "network access is denied by repository policy".into()
-        };
+        if allow {
+            book.open.insert(peer, budgets);
+        }
+        drop(book);
         drop(guard);
         self.notify_appended();
         ProxyVerdict {
             allow,
             allow_private,
-            reason,
+            reason: reason.unwrap_or_default(),
         }
+    }
+
+    /// A connection the proxy let through has ended.
+    pub fn proxy_finished(&self, peer: std::net::SocketAddr) {
+        let mut book = self.proxy.lock().unwrap_or_else(|e| e.into_inner());
+        book.open.remove(&peer);
+    }
+
+    /// Counts `bytes` against every session the connection of `peer` counts
+    /// against; `false` once one of them is past its budget, which cuts it.
+    pub fn proxy_carried(&self, peer: std::net::SocketAddr, bytes: u64) -> bool {
+        let mut book = self.proxy.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(budgets) = book.open.get(&peer).cloned() else {
+            return false;
+        };
+        let mut within = true;
+        for (key, max) in budgets {
+            let used = book.carried.entry(key).or_insert(0);
+            *used = used.saturating_add(bytes);
+            within &= *used <= max;
+        }
+        within
+    }
+
+    /// Connections the proxy could not name a process for, since the
+    /// daemon started.
+    pub fn proxy_unattributed(&self) -> u64 {
+        self.proxy.lock().map(|b| b.unattributed).unwrap_or(0)
     }
 
     // ---------------------------------------------------------------- integrity

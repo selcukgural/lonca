@@ -63,6 +63,17 @@ fn set_policy(e: &mut Env, config: &str) {
     assert_eq!(e.human(op)["decision"]["outcome"], "allow");
 }
 
+/// `config` with the proxy open to `port` too (tests serve on loopback
+/// ports that are not 80 or 443).
+fn open_to(config: &str, port: u16) -> String {
+    let opened = config.replace(
+        "allow_ports = [80, 443]",
+        &format!("allow_ports = [80, 443, {port}]"),
+    );
+    assert_ne!(opened, config);
+    opened
+}
+
 fn taints(e: &mut Env) -> Value {
     let s = e.ok("status", Some("demo"), None, json!({}));
     s["sessions"]
@@ -92,7 +103,7 @@ fn proxy_attributes_connections_to_the_workspace_that_made_them() {
         "allow_private_network = false",
         "allow_private_network = true",
     );
-    set_policy(&mut e, &config);
+    set_policy(&mut e, &open_to(&config, up));
 
     // A process in s1's workspace opens a tunnel, like a sandboxed `curl`.
     let script = format!(
@@ -140,6 +151,13 @@ fn proxy_refuses_without_sessions_private_targets_and_denied_networks() {
     bind_with_workspace(&mut e, &t1, &ws);
     let (status, body) = connect(proxy, &format!("127.0.0.1:{up}"));
     assert!(
+        status.contains("403") && body.contains(&format!("port {up}")),
+        "only ports 80 and 443 by default: {status} {body}"
+    );
+    let config = lonca_policy::config::DEFAULT_CONFIG.to_string();
+    set_policy(&mut e, &open_to(&config, up));
+    let (status, body) = connect(proxy, &format!("127.0.0.1:{up}"));
+    assert!(
         status.contains("403") && body.contains("private"),
         "private targets by default: {status} {body}"
     );
@@ -154,7 +172,7 @@ fn proxy_refuses_without_sessions_private_targets_and_denied_networks() {
             "allow_private_network = true",
         )
         .replace("network = \"taint\"", "network = \"deny\"");
-    set_policy(&mut e, &config);
+    set_policy(&mut e, &open_to(&config, up));
     let (status, body) = connect(proxy, &format!("127.0.0.1:{up}"));
     assert!(
         status.contains("403") && body.contains("denied by repository policy"),
@@ -316,7 +334,7 @@ fn an_isolated_session_is_watched_through_the_proxy() {
         "allow_private_network = false",
         "allow_private_network = true",
     );
-    set_policy(&mut e, &config);
+    set_policy(&mut e, &open_to(&config, up));
 
     // From anywhere: whoever uses the proxy, the isolated session answers
     // for it when the connection can not be attributed.
@@ -347,7 +365,7 @@ fn the_agents_own_host_is_recorded_and_taints_nothing_even_where_the_network_is_
         )
         .replace("network = \"taint\"", "network = \"deny\"")
         .replace("agent_hosts = []", "agent_hosts = [\"127.0.0.1\"]");
-    set_policy(&mut e, &config);
+    set_policy(&mut e, &open_to(&config, up));
 
     let out = tunnel_from(&ws, proxy, &format!("127.0.0.1:{up}"));
     assert!(out.contains("hello from upstream"), "{out}");
@@ -451,4 +469,158 @@ fn a_session_that_is_not_isolated_is_used_from_anywhere() {
     );
     assert_ne!(r.err().map(|x| x.0).as_deref(), Some("not_in_sandbox"));
     assert!(taint_of(&mut e).is_null());
+}
+
+// ---------------------------------------------------------------- limits (#64)
+
+/// A session bound in `ws` and a proxy, under `config` opened to `up`.
+fn proxied(e: &mut Env, config: &str, up: u16) -> (u16, PathBuf) {
+    e.init(None);
+    let proxy = start_proxy(e);
+    let t = e.session("s1", &["src/**"]);
+    let ws = e.root.join("ws1");
+    std::fs::create_dir_all(&ws).unwrap();
+    bind_with_workspace(e, &t, &ws);
+    set_policy(e, &open_to(config, up));
+    (proxy, ws)
+}
+
+fn private_ok() -> String {
+    lonca_policy::config::DEFAULT_CONFIG.replace(
+        "allow_private_network = false",
+        "allow_private_network = true",
+    )
+}
+
+#[test]
+fn only_allowed_ports_and_never_a_metadata_address() {
+    let mut e = Env::new();
+    let up = upstream();
+    let (proxy, _) = proxied(&mut e, &private_ok(), up);
+    // Refused by the port alone: nothing is resolved or connected.
+    let (status, body) = connect(proxy, "example.com:25");
+    assert!(
+        status.contains("403") && body.contains("port 25"),
+        "{status} {body}"
+    );
+    let log = e.ok("log", Some("demo"), None, json!({})).to_string();
+    assert!(
+        log.contains(r#""host":"example.com:25""#),
+        "the attempt is on record: {log}"
+    );
+    // Open to every private address, still never the metadata services.
+    for target in [
+        "169.254.169.254:80",
+        "[fd00:ec2::254]:80",
+        "[::ffff:169.254.169.254]:80",
+    ] {
+        let (status, body) = connect(proxy, target);
+        assert!(
+            status.contains("403") && body.contains("metadata"),
+            "{target}: {status} {body}"
+        );
+    }
+    let (status, _) = connect(proxy, &format!("127.0.0.1:{up}"));
+    assert!(status.contains("200"), "{status}");
+}
+
+/// Accepts connections and holds them until the other side closes.
+fn holding_upstream() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut s = s;
+                let _ = std::io::copy(&mut s, &mut std::io::sink());
+            });
+        }
+    });
+    port
+}
+
+fn open_tunnel(proxy: u16, target: &str) -> (TcpStream, String) {
+    let mut s = TcpStream::connect(("127.0.0.1", proxy)).unwrap();
+    write!(s, "CONNECT {target} HTTP/1.1\r\n\r\n").unwrap();
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let mut status = String::new();
+    r.read_line(&mut status).unwrap();
+    (s, status)
+}
+
+#[test]
+fn a_session_holds_so_many_connections_at_once() {
+    let mut e = Env::new();
+    let up = holding_upstream();
+    let config = private_ok().replace("max_connections = 16", "max_connections = 2");
+    let (proxy, _) = proxied(&mut e, &config, up);
+    let target = format!("127.0.0.1:{up}");
+    let (a, status) = open_tunnel(proxy, &target);
+    assert!(status.contains("200"), "{status}");
+    let (_b, status) = open_tunnel(proxy, &target);
+    assert!(status.contains("200"), "{status}");
+    let (third, said) = connect(proxy, &target);
+    assert!(
+        third.contains("403") && said.contains("connections open"),
+        "{third} {said}"
+    );
+    // One closes: there is room again.
+    drop(a);
+    let mut room = false;
+    for _ in 0..100 {
+        let (_c, status) = open_tunnel(proxy, &target);
+        if status.contains("200") {
+            room = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(room, "a closed connection gives its place back");
+}
+
+#[test]
+fn a_session_past_its_bytes_is_cut_and_refused() {
+    let mut e = Env::new();
+    let up = upstream();
+    let config = private_ok().replace("max_bytes = 1073741824", "max_bytes = 10");
+    let (proxy, _) = proxied(&mut e, &config, up);
+    let target = format!("127.0.0.1:{up}");
+    let (status, rest) = connect(proxy, &target);
+    assert!(status.contains("200"), "{status}");
+    assert!(
+        !rest.contains("hello from upstream"),
+        "cut before 20 bytes passed: {rest}"
+    );
+    let (status, body) = connect(proxy, &target);
+    assert!(
+        status.contains("403") && body.contains("max_bytes"),
+        "{status} {body}"
+    );
+}
+
+#[test]
+fn an_allowed_host_passes_a_closed_network_and_says_whether_it_taints() {
+    let mut e = Env::new();
+    let up = upstream();
+    let config = private_ok()
+        .replace("network = \"taint\"", "network = \"deny\"")
+        .replace(
+            "allow_hosts = []",
+            r#"allow_hosts = [{ host = "127.0.0.1", taint = false }, { host = "localhost", taint = true }]"#,
+        );
+    let (proxy, ws) = proxied(&mut e, &config, up);
+    let out = tunnel_from(&ws, proxy, &format!("127.0.0.1:{up}"));
+    assert!(out.contains("hello from upstream"), "{out}");
+    assert!(taints(&mut e)["s1"].is_null(), "a rule with taint = false");
+    let out = tunnel_from(&ws, proxy, &format!("localhost:{up}"));
+    assert!(out.contains("hello from upstream"), "{out}");
+    assert!(
+        taints(&mut e)["s1"]
+            .as_str()
+            .unwrap()
+            .contains("fetch localhost"),
+        "a rule with taint = true"
+    );
+    let status = e.ok("status", Some("demo"), None, json!({}));
+    assert!(status["proxy_unattributed"].is_u64(), "{status}");
 }

@@ -2828,6 +2828,35 @@ tag.
   `127.0.0.1`, `localhost` or `[::1]` (a test server), so the key never
   travels in clear text.
 
+## What the proxy lets through (#64)
+
+The proxy decided by host alone: `CONNECT` reached any port, a session
+could hold any number of connections and move any number of bytes, and
+`allow_private_network` opened the cloud metadata addresses with the rest.
+
+- **Ports**: `[observation] allow_ports` (default `[80, 443]`). The gate
+  refuses another port before anything is resolved.
+- **Hosts**: `allow_hosts = [{ host, taint }]` lets a host through under
+  `network = "deny"` and says whether it taints; `host` is an exact name or
+  `*.suffix` for the names below the suffix (not the suffix). Validated when
+  the policy is parsed: lowercase names only, a suffix with a dot.
+  `agent_hosts` stays as it was (pass, no taint). Order: agent host, then the
+  first rule, then `network`.
+- **Metadata always denied** in `lonca-net` (`is_metadata`): 169.254.169.254,
+  169.254.170.2, 169.254.170.23, 100.100.100.200, fd00:ec2::254 and their
+  mapped forms, whatever the gate says.
+- **Caps**: per session `max_connections` (16) open at once and `max_bytes`
+  (1 GiB) moved while the daemon runs, counted for every session a
+  connection is attributed to; the proxy reports each chunk to the gate
+  (`Gate::carried`) and cuts the tunnel when a budget is spent. Globally the
+  proxy serves at most 256 connections at once (`MAX_CONNECTIONS`, answered
+  503). The counts are memory only: they are no decision.
+- **On the record**: each attempt is an observation of every session it is
+  attributed to before the verdict, refused or not, as before; the host
+  carries `:port` when the port is not 80 or 443. No new log field.
+- **Attribution fallback** is counted (`proxy_unattributed` in `status`,
+  `PROXY …` in `lonca status`).
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

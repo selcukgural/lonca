@@ -5333,12 +5333,16 @@ fn hello_server() -> u16 {
     port
 }
 
-fn set_network_policy(e: &Env, agent_hosts: &str) {
+fn set_network_policy(e: &Env, agent_hosts: &str, port: u16) {
     let r = &e.root;
     let config = lonca_policy::config::DEFAULT_CONFIG
         .replace(
             "allow_private_network = false",
             "allow_private_network = true",
+        )
+        .replace(
+            "allow_ports = [80, 443]",
+            &format!("allow_ports = [{port}]"),
         )
         .replace("agent_hosts = []", &format!("agent_hosts = {agent_hosts}"));
     std::fs::write(r.join("c.toml"), config).unwrap();
@@ -5361,8 +5365,8 @@ fn the_network_of_a_sandbox_is_the_proxy_and_it_is_on_the_record() {
     }
     let e = Env::new();
     let ws = agent_workspace(&e);
-    set_network_policy(&e, "[]");
     let port = hello_server();
+    set_network_policy(&e, "[]", port);
     let script = format!("/usr/bin/curl -s -m 10 http://127.0.0.1:{port}/");
     let Some(o) = in_sandbox(&e, &ws, &script) else {
         return;
@@ -5370,7 +5374,8 @@ fn the_network_of_a_sandbox_is_the_proxy_and_it_is_on_the_record() {
     assert_eq!(text(&o.stdout), "hello\n", "{}", text(&o.stderr));
     let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
     let log = parse(&log).to_string();
-    assert!(log.contains(r#""host":"127.0.0.1""#), "{log}");
+    let host = format!(r#""host":"127.0.0.1:{port}""#);
+    assert!(log.contains(&host), "the port is on the record: {log}");
     assert!(log.contains(r#""external":true"#), "{log}");
 }
 
@@ -5381,8 +5386,8 @@ fn a_sandboxed_agent_reaches_its_model_and_still_integrates_alone() {
     }
     let e = Env::new();
     let ws = agent_workspace(&e);
-    set_network_policy(&e, r#"["127.0.0.1"]"#);
     let port = hello_server();
+    set_network_policy(&e, r#"["127.0.0.1"]"#, port);
     let script = format!(
         r#"
         set -e
@@ -5403,7 +5408,8 @@ fn a_sandboxed_agent_reaches_its_model_and_still_integrates_alone() {
     e.settle();
     let log = e.run(&e.root, &["log", "--repo", "demo", "--json", "--from", "1"]);
     let log = parse(&log).to_string();
-    assert!(log.contains(r#""host":"127.0.0.1""#), "{log}");
+    let host = format!(r#""host":"127.0.0.1:{port}""#);
+    assert!(log.contains(&host), "the port is on the record: {log}");
     assert!(!log.contains(r#""external":true"#), "{log}");
 }
 

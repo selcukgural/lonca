@@ -25,6 +25,14 @@ use std::time::{Duration, Instant};
 
 const MAX_HEAD: usize = 16 * 1024;
 
+/// Connections served at once, by every client together. One past it is
+/// answered 503 and closed: each takes a thread and two descriptors.
+pub const MAX_CONNECTIONS: usize = 256;
+
+/// How much of a tunnel is copied between two reports to
+/// [`Gate::carried`].
+const CHUNK: usize = 16 * 1024;
+
 /// One connection a client asked for.
 #[derive(Debug, Clone, Copy)]
 pub struct Request<'a> {
@@ -75,6 +83,8 @@ pub enum Outcome {
     Private,
     /// The upstream did not accept the connection.
     Unreachable,
+    /// The gate stopped it midway ([`Gate::carried`]).
+    Cut,
     /// Bytes flowed both ways until one side closed.
     Tunneled,
 }
@@ -85,6 +95,12 @@ pub trait Gate: Send + Sync + 'static {
 
     /// Told how every request that reached [`Gate::decide`] ended.
     fn finished(&self, _request: &Request<'_>, _outcome: Outcome) {}
+
+    /// Told of every `bytes` relayed for `request`, either way, before they
+    /// are passed on. `false` cuts the connection: a budget is spent.
+    fn carried(&self, _request: &Request<'_>, _bytes: u64) -> bool {
+        true
+    }
 
     /// Offered every `CONNECT` tunnel the gate let through, before a byte
     /// of it is relayed. A gate that serves the tunnel itself (to look
@@ -232,6 +248,10 @@ fn accept<G: Gate>(listener: TcpListener, gate: Arc<G>, shared: &Arc<Shared>) {
             return;
         }
         let Ok(stream) = conn else { continue };
+        if shared.open.lock().unwrap().len() >= MAX_CONNECTIONS {
+            respond(&stream, 503, "too many connections through the proxy");
+            continue;
+        }
         let id = shared.next.fetch_add(1, Ordering::Relaxed);
         shared.track(id, &stream);
         let (gate, shared) = (gate.clone(), Arc::clone(shared));
@@ -271,6 +291,25 @@ pub fn is_private(ip: IpAddr) -> bool {
                 || (s[0] & 0xffc0) == 0xfec0 // site local
                 || (s[0] == 0x2001 && s[1] == 0x0db8) // documentation
                 || s[..6] == [0, 0, 0, 0, 0, 0] // IPv4-compatible, deprecated
+        }
+    }
+}
+
+/// Cloud metadata endpoints, which hand out a machine's credentials. Never
+/// reachable, whatever a gate allows: `allow_private` opens a network, not
+/// these.
+pub fn is_metadata(ip: IpAddr) -> bool {
+    let v4 = |v: std::net::Ipv4Addr| {
+        matches!(
+            v.octets(),
+            [169, 254, 169, 254] | [169, 254, 170, 2] | [169, 254, 170, 23] | [100, 100, 100, 200]
+        )
+    };
+    match ip {
+        IpAddr::V4(v) => v4(v),
+        IpAddr::V6(v) => {
+            v.to_ipv4_mapped().is_some_and(v4)
+                || v.segments() == [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254]
         }
     }
 }
@@ -430,8 +469,14 @@ fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std
             return Ok(());
         }
     };
+    if !addrs.is_empty() && addrs.iter().all(|a| is_metadata(a.ip())) {
+        respond(&client, 403, "cloud metadata addresses are never reachable");
+        gate.finished(&request, Outcome::Private);
+        return Ok(());
+    }
     let Some(addr) = addrs
         .into_iter()
+        .filter(|a| !is_metadata(a.ip()))
         .find(|a| verdict.allow_private || !is_private(a.ip()))
     else {
         respond(
@@ -492,25 +537,76 @@ fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std
     };
     let mut up_w = upstream.try_clone()?;
     if !buffered.is_empty() {
+        if !gate.carried(&request, buffered.len() as u64) {
+            gate.finished(&request, Outcome::Cut);
+            return Ok(());
+        }
         up_w.write_all(&buffered)?;
     }
-    let mut up_r = upstream;
-    let mut client_w = client.try_clone()?;
-    let t = std::thread::spawn(move || {
-        let _ = std::io::copy(&mut up_r, &mut client_w);
-        let _ = client_w.shutdown(std::net::Shutdown::Write);
+    let cut = AtomicBool::new(false);
+    let (up_r, client_w) = (upstream.try_clone()?, client.try_clone()?);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            if !carry(&up_r, &client_w, gate, &request) {
+                cut.store(true, Ordering::SeqCst);
+                let _ = up_r.shutdown(std::net::Shutdown::Both);
+                let _ = client_w.shutdown(std::net::Shutdown::Both);
+            }
+            let _ = client_w.shutdown(std::net::Shutdown::Write);
+        });
+        if !carry(&client, &up_w, gate, &request) {
+            cut.store(true, Ordering::SeqCst);
+            let _ = client.shutdown(std::net::Shutdown::Both);
+            let _ = up_w.shutdown(std::net::Shutdown::Both);
+        }
+        let _ = up_w.shutdown(std::net::Shutdown::Write);
     });
-    let mut client_r = client;
-    let _ = std::io::copy(&mut client_r, &mut up_w);
-    let _ = up_w.shutdown(std::net::Shutdown::Write);
-    let _ = t.join();
-    gate.finished(&request, Outcome::Tunneled);
+    let how = if cut.load(Ordering::SeqCst) {
+        Outcome::Cut
+    } else {
+        Outcome::Tunneled
+    };
+    gate.finished(&request, how);
     Ok(())
+}
+
+/// Copies `from` to `to` until the end, telling the gate of every chunk
+/// first; `false` when the gate stopped it.
+fn carry(mut from: &TcpStream, mut to: &TcpStream, gate: &dyn Gate, request: &Request<'_>) -> bool {
+    let mut buf = vec![0u8; CHUNK];
+    loop {
+        let n = match from.read(&mut buf) {
+            Ok(0) | Err(_) => return true,
+            Ok(n) => n,
+        };
+        if !gate.carried(request, n as u64) {
+            return false;
+        }
+        if to.write_all(&buf[..n]).is_err() {
+            return true;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_addresses() {
+        for ip in [
+            "169.254.169.254",
+            "169.254.170.2",
+            "100.100.100.200",
+            "fd00:ec2::254",
+            "::ffff:169.254.169.254",
+        ] {
+            assert!(is_metadata(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["169.254.169.253", "10.0.0.1", "fd00:ec2::253", "8.8.8.8"] {
+            assert!(!is_metadata(ip.parse().unwrap()), "{ip}");
+        }
+    }
 
     #[test]
     fn private_ranges() {

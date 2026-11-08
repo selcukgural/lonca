@@ -109,6 +109,7 @@ fn start_daemon_hardened(root: &Path, home: &Path, sock: &Path, hardened: bool) 
         line_cap: lonca_daemon::protocol::MAX_LINE,
         proxy: proxy.local_addr().ok().map(|a| a.to_string()),
         hardened,
+        ..Settings::default()
     };
     let svc = Service::open(Home::new(home), settings, lonca_daemon::system_clock()).unwrap();
     let listener = lonca_daemon::server::bind(sock).unwrap();

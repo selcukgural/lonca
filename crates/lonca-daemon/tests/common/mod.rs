@@ -81,6 +81,7 @@ impl Env {
             line_cap: lonca_daemon::protocol::MAX_LINE,
             proxy: Some("127.0.0.1:8471".into()),
             hardened: false,
+            ..Settings::default()
         };
         let svc = Self::open_service(&root, &settings, &clock);
         Env {

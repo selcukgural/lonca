@@ -302,6 +302,14 @@ pub fn describe(repo: &str, op: &Op) -> String {
         Op::LeaseRelease { set } => format!("release lease set {set}"),
         Op::ChangePropose { change, .. } => format!("propose change {}", change.short()),
         Op::ChangeWithdraw { change } => format!("withdraw change {}", change.short()),
+        Op::Approve {
+            target_seq, checks, ..
+        } if !checks.is_empty() => {
+            format!(
+                "APPROVE operation #{target_seq}, owing checks {}",
+                checks.join(", ")
+            )
+        }
         Op::Approve { target_seq, .. } => format!("APPROVE operation #{target_seq}"),
         Op::Reject { target_seq, .. } => format!("REJECT operation #{target_seq}"),
         Op::ImportExternal { remote, .. } => format!("import from {remote}"),

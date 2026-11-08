@@ -29,7 +29,9 @@ use lonca_core::paths::{
     validate_path_pattern, validate_repo_path, validate_symbol_pattern,
 };
 
-use crate::config::{CRITICAL_ESCALATE, CVal, CedarOutcome, PolicyBundle, Quota, Verification};
+use crate::config::{
+    CRITICAL_ESCALATE, CVal, CedarOutcome, MAX_CHECKS, PolicyBundle, Quota, Verification,
+};
 use crate::state::{
     AFFECTED_LEASE, ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, INTEREST_BLOCK, LEASES_KEPT,
     RELEASED, RESERVATION_WINDOW, Session, State,
@@ -504,7 +506,18 @@ fn check_name(k: CheckKind) -> &'static str {
         CheckKind::Tests => "tests",
         CheckKind::TestIntegrity => "test_integrity",
         CheckKind::Extended => "extended",
+        CheckKind::Named => "named",
     }
+}
+
+/// The word a piece of evidence goes by in a denial: a named check by its
+/// name, which can not be one of the built-in words.
+fn evidence_name(a: &Attestation) -> &str {
+    let name = a
+        .details
+        .get("name")
+        .filter(|_| a.check == CheckKind::Named);
+    name.map_or(check_name(a.check), String::as_str)
 }
 
 fn sorted(v: &[String]) -> Vec<String> {
@@ -1034,7 +1047,11 @@ pub fn decide(
                 v.info.push(LEASES_KEPT.into());
             }
         }
-        Op::Approve { target_seq, note } => match state.pending.get(target_seq) {
+        Op::Approve {
+            target_seq,
+            note,
+            checks,
+        } => match state.pending.get(target_seq) {
             None => v.deny("nothing_pending"),
             Some(p) => {
                 if let Actor::Human { name } = actor
@@ -1045,6 +1062,7 @@ pub fn decide(
                 if note.len() > 500 {
                     v.deny("note_too_long");
                 }
+                check_approved_checks(checks, &p.op, &cfg.verification, &mut v);
                 if p.approvals.len() as u32 + 1 >= p.required {
                     v.info.push(RELEASED.into());
                     // A released key operation takes effect now: recheck
@@ -1184,15 +1202,38 @@ pub fn decide(
     v.finish(state.humans.len(), cfg.approvals.cap_to_enrolled_humans)
 }
 
+/// The named checks an approval adds: a proposal's only, each a check the
+/// policy in force defines, sorted, each once.
+fn check_approved_checks(checks: &[String], op: &Op, vc: &Verification, v: &mut Verdict) {
+    if checks.is_empty() {
+        return;
+    }
+    if !matches!(op, Op::ChangePropose { .. }) {
+        v.deny("checks_not_a_change");
+    }
+    let canonical = checks.is_sorted_by(|a, b| a < b);
+    if !canonical || checks.len() > MAX_CHECKS {
+        v.deny("invalid_checks");
+    }
+    for name in checks.iter().filter(|n| !vc.checks.contains_key(*n)) {
+        v.deny(format!("unknown_check:{name}"));
+    }
+}
+
 fn verify_evidence<'a>(
     state: &State,
     changes: impl IntoIterator<Item = &'a lonca_core::ChangeId>,
     ctx: &Ctx,
     v: &mut Verdict,
 ) {
-    let mut records = changes.into_iter().filter_map(|c| state.changes.get(c));
-    let reaches = records.any(|c| c.facts.reaches_others());
-    let owed = ctx.policy.config.verification.for_change(reaches);
+    let records: Vec<_> = changes
+        .into_iter()
+        .filter_map(|c| state.changes.get(c))
+        .collect();
+    let reaches = records.iter().any(|c| c.facts.reaches_others());
+    let vc = &ctx.policy.config.verification;
+    let named = records.iter().flat_map(|c| c.owed_checks(vc)).collect();
+    let owed = vc.for_change(reaches, &named);
     for problem in evidence_problems(&owed, ctx.evidence) {
         v.deny(problem);
     }
@@ -1234,18 +1275,14 @@ pub fn evidence_problems(vc: &Verification, evidence: &[Attestation]) -> Vec<Str
     let mut problems = Vec::new();
     for a in evidence {
         match a.result {
-            CheckResult::Fail => {
-                problems.push(format!("verification_failed:{}", check_name(a.check)))
-            }
-            CheckResult::Error => {
-                problems.push(format!("verification_error:{}", check_name(a.check)))
-            }
+            CheckResult::Fail => problems.push(format!("verification_failed:{}", evidence_name(a))),
+            CheckResult::Error => problems.push(format!("verification_error:{}", evidence_name(a))),
             CheckResult::Pass | CheckResult::Skipped => {}
         }
         if vc.require_sandbox
             && matches!(
                 a.check,
-                CheckKind::Build | CheckKind::Tests | CheckKind::Extended
+                CheckKind::Build | CheckKind::Tests | CheckKind::Extended | CheckKind::Named
             )
             && a.details.get("sandbox").is_none_or(|s| s == "none")
         {
@@ -1265,6 +1302,18 @@ pub fn evidence_problems(vc: &Verification, evidence: &[Attestation]) -> Vec<Str
         }
         if vc.on_signature_change.is_some() && !passed(CheckKind::Extended) {
             problems.push("verification_missing:extended".to_string());
+        }
+    }
+    // A check the change owes by name was asked for: it is owed with or
+    // without `required`.
+    for name in vc.checks.keys() {
+        let passed = |a: &Attestation| {
+            a.check == CheckKind::Named
+                && a.details.get("name") == Some(name)
+                && a.result == CheckResult::Pass
+        };
+        if !evidence.iter().any(passed) {
+            problems.push(format!("verification_missing:{name}"));
         }
     }
     problems

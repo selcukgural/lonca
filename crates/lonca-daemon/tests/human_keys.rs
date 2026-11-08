@@ -110,6 +110,7 @@ fn a_revocation_released_by_approval_drops_the_tokens() {
     let r = e.human(Op::Approve {
         target_seq: seq,
         note: String::new(),
+        checks: vec![],
     });
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     assert!(sessions_with_tokens(&e).is_empty());

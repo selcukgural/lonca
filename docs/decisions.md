@@ -3064,6 +3064,57 @@ whatever `TMPDIR` says, and the shared `/tmp` is closed.
   `api.anthropic.com` Claude Code reaches; each would taint under
   `network = "taint"`.
 
+## Checks a change owes, chosen per change (#191)
+
+A card of imece's says how its work is accepted ("`cargo test -p api`
+passes"), and in a Lonca workspace only the merge queue runs commands, from
+`[verification]`. So a card's check had nowhere to run, and a human approved
+without knowing whether it would.
+
+- **The commands stay in the signed policy; only which of them a change owes
+  is chosen per change.** `verification.checks` names commands
+  (`api = "cargo test --offline -p api"`), with the sandbox, environment,
+  limits and timeout of `build` and `test`. A name is `[a-z0-9_-]`, 1 to 32
+  long, at most 32 of them, and not a word Lonca uses for its own checks
+  (`build`, `test`, `tests`, `extended`, `syntax`, `scope`, `claim_diff`,
+  `merge`, `test_integrity`), because the name goes into the same denial
+  words: `verification_failed:api`, `verification_missing:api`.
+- **A human names them at approval, never the agent.** `approve` carries
+  `checks` (log format 25, signed with the approval; `lonca approve SEQ
+  --also api,e2e`). Only on a pending proposal (`checks_not_a_change`), only
+  names the policy in force defines (`unknown_check:<name>`), sorted and each
+  once (`invalid_checks`): the CLI sorts. The Touch ID prompt names them.
+  With two approvals needed, each one's names count.
+- **What was asked stays asked.** The names go on the change record and a
+  later version of the change keeps them, so an agent can not drop a check by
+  proposing again after a rejection. Nothing takes one away; a human who
+  wants less rejects or withdraws.
+- **The policy can name one for a path, so nobody has to remember.**
+  `verification.checks_by_path = { "api/**" = ["api"] }` (patterns as in
+  `paths.critical`, names checked against `checks` at load). This answers the
+  issue's second question, and it covers proposals no human approves at all.
+- **Not at `session start`.** The issue's other option, a set fixed when the
+  session starts, is left out: `session.start` is signed by a human too, but a
+  card's check is about one change, and the approval is the moment the human
+  sees what the change is. A runner that wants a check on every change of a
+  task can name it for the paths of that task in the policy.
+- **A named check a change owes is owed with or without `required`.** Someone
+  asked for it by name; `required = false` stays what it was for `build` and
+  `test`. `require_sandbox` holds named evidence like the others.
+- **Evidence is the kind `named`, with the name in `details.name`.** One new
+  kind instead of a kind per name keeps `CheckKind` closed. The verifier runs
+  the named checks after `build`, `test` and `on_signature_change`, in name
+  order, and a failure skips the rest, as before.
+- **A policy that drops a check a queued change owes leaves the change unable
+  to land.** `for_change` keeps the name with no command, the verifier runs
+  nothing for it, and the integration is denied `verification_missing:<name>`.
+  Quietly forgetting what a human asked for would be worse.
+- **The review list says what will run before the yes.** `status.changes[]`,
+  `status.pending[]` and `change.get` carry `checks` (asked) and `runs`
+  (`build`, `tests`, `extended`, then the named checks owed, under the policy
+  in force). `decide()` reads what is owed from the change record and the
+  entry's policy, so the auditor recomputes it like any other decision.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

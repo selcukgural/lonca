@@ -396,8 +396,16 @@ with a signed `daemon.rotate` through `human.submit`.
 - **change**: `{"change": change id, "actor": label, "status": change
   status, "provenance": "human" | "clean" | "tainted" | "unobserved" |
   "reviewed", "commit": id, "base": id, "intent": string, "created_ms":
-  time, "version": integer, "paths": [path]}`. `paths` are the files the
-  change touches (added, modified, deleted). Change status:
+  time, "version": integer, "paths": [path], "checks": [check name],
+  "runs": [check] | null}`. `paths` are the files the
+  change touches (added, modified, deleted). `checks` are the named checks
+  humans asked of it at approval (`approve.checks`); a later version keeps
+  them. `runs` is what the merge queue will run for it under the policy in
+  force, by the words of its evidence and denials: `build`, `tests`,
+  `extended` (`on_signature_change`, for a change that reaches others), then
+  each named check it owes, asked or named for one of its paths by
+  `verification.checks_by_path`; `null` when the policy can not be read.
+  Change status:
   `{"status": "pending", "seq"}`, `{"status": "queued"}`, `{"status":
   "integrated", "commit": id}`, `{"status": "conflicted", "symbols":
   [symbol]}`, `{"status": "rejected", "reasons": [string]}` or
@@ -406,10 +414,13 @@ with a signed `daemon.rotate` through `human.submit`.
   "created_ms": time, "actor": label, "op": op kind, "reasons":
   [string], "approvals": [human name], "required": integer, "change":
   change id | null, "base": id | null, "intent": string | null,
-  "agent": string | null, "task": string | null, "paths": [path]}`.
+  "agent": string | null, "task": string | null, "paths": [path],
+  "checks": [check name], "runs": [check] | null}`.
   `change`, `base` and `intent` are set for a `change.propose`;
-  `agent` and `task` when the actor is an agent session. One `status`
-  call fills a review list.
+  `agent` and `task` when the actor is an agent session. `checks` are the
+  named checks the approvals so far asked for; `runs` is the change's
+  `runs` (above), what it owes before the yes, and `null` for an operation
+  that is not a change. One `status` call fills a review list.
 
 `next_seq` is the sequence number the next entry will get, so a client
 sees whether anything was logged since its last read without calling
@@ -461,7 +472,7 @@ Operation kinds (`op.op`) and their fields:
 | `change.withdraw` | `change` |
 | `change.integrate` | `change`, `trunk_before`, `merged` (id or null), `conflicts` |
 | `change.integrate_batch` | `trunk_before`, `merged` (`[change, commit]` in queue order; the last is trunk's new head), from format 17 |
-| `approve` | `target_seq`, `note` |
+| `approve` | `target_seq`, `note`, `checks` (when not empty; from format 25) |
 | `reject` | `target_seq`, `reason` (1–4096 bytes; the requester reads it) |
 | `observe` | `session`, `events` |
 | `import.external` | `remote`, `commit`, `trunk_before` |
@@ -471,10 +482,17 @@ Operation kinds (`op.op`) and their fields:
 | `negotiate` | `thread`, `to_session`, `message` |
 | `redact` | `blob`, `reason` |
 
+`approve.checks` names checks of `verification.checks` the change owes from
+then on, sorted, each once, at most 32; only on a pending `change.propose`
+(`checks_not_a_change`), only names the policy in force defines
+(`unknown_check:<name>`), otherwise `invalid_checks`. Only a human signs an
+approval, so an agent can neither add a command nor drop a check.
+
 An attestation: `{"check": "syntax" | "scope" | "claim_diff" | "merge"
-| "build" | "tests" | "test_integrity", "result": "pass" | "fail" |
+| "build" | "tests" | "test_integrity" | "extended" | "named", "result": "pass" | "fail" |
 "error" | "skipped", "subject_tree": id, "details": {string: string},
-"env": hex, "log": id | null, "producer": string}`.
+"env": hex, "log": id | null, "producer": string}`. A `named` check
+carries its name in `details.name`.
 
 ### `tree`
 
@@ -508,7 +526,8 @@ bytes is `ceil(n / 3) * 4`. `lonca-cli` does this in `fetch`
 
 ```json
 {"change", "actor": actor, "commit", "base", "claim", "facts", "status",
- "provenance", "proposed_seq", "created_ms", "version",
+ "provenance", "proposed_seq", "created_ms", "version", "checks": [check name],
+ "runs": [check] | null,
  "integrate_seq": integer | null, "integrate_decision": decision | null,
  "evidence": [{"check": check kind, "result": "pass" | "fail" | "error" | "skipped",
                "exit": integer | null, "duration_ms": integer | null, "attempts": integer | null,
@@ -941,8 +960,11 @@ The `reasons` of a decision. The ones a runner acts on:
   session whose hooks did not run (`status.sessions[].unhooked`): start a
   new session in a harness that runs them.
 - `verification_failed:<check>`, `verification_error:<check>`,
-  `merge_conflict`, `conflict:<symbol>`: the integration failed; the
-  change's status says more.
+  `verification_missing:<check>`, `merge_conflict`, `conflict:<symbol>`:
+  the integration failed; the change's status says more. `<check>` is
+  `build`, `tests`, `extended` or the name of a named check the change owed
+  (`runs`); a named check is owed whether or not `verification.required`
+  is set.
 - `verification_quota:session`, `verification_quota:day`: past `[quota]`;
   on a proposal nothing is queued, on an integration the checks did not run.
   The session's quota does not come back; the day's does at midnight UTC.
@@ -1104,4 +1126,7 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   only for that harness, and a session started without one is `unobserved`, where
   before the request's name was enough. `mcp.call`, `status.sessions[].bound_ms`,
   `last_hook_ms` and `unhooked`, and the reasons `unhooked_session` and
-  `unhooked_critical_path` (#190).
+  `unhooked_critical_path` (#190). `checks` on `approve` (log format 25),
+  `checks` and `runs` on `status.changes[]`, `status.pending[]` and
+  `change.get`, the attestation kind `named`, and the reasons
+  `unknown_check:<name>`, `invalid_checks` and `checks_not_a_change` (#191).

@@ -208,6 +208,7 @@ fn tainted_session_goes_through_a_human_then_integrates() {
     let r = e.human(Op::Approve {
         target_seq: seq,
         note: "reviewed".into(),
+        checks: vec![],
     });
     assert!(
         r["decision"]["reasons"]

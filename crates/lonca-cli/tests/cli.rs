@@ -5645,7 +5645,73 @@ fn a_tool_call_the_hook_did_not_report_marks_the_session_unhooked() {
     assert!(s1["unhooked"].is_null(), "{s1}");
     assert!(s1["last_hook_ms"].is_number(), "{s1}");
     assert_eq!(s2["unhooked"]["tool"], "status", "{s2}");
-    assert!(s2["bound_ms"].is_null() && s2["last_hook_ms"].is_null(), "{s2}");
+    assert!(
+        s2["bound_ms"].is_null() && s2["last_hook_ms"].is_null(),
+        "{s2}"
+    );
     let taint = s2["taint"].as_str().unwrap();
     assert!(taint.starts_with("unhooked"), "{taint}");
+}
+
+/// `approve --also`: the human names checks of the policy, in any order;
+/// the signed op holds each once, sorted, and the change owes them
+/// (issue #191). A name the policy does not define is refused, exit 1.
+#[test]
+fn a_human_names_the_checks_a_change_owes_when_approving() {
+    let e = Env::new();
+    let r = &e.root;
+    let ws = agent_workspace(&e);
+    let shown = e.run(r, &["policy", "show", "--repo", "demo"]);
+    let (_, rest) = shown.split_once("==> lonca.toml <==\n").unwrap();
+    let (config, policy) = rest.split_once("==> policy.cedar <==\n").unwrap();
+    let config = config.replace(
+        "\nchecks = {}\n",
+        "\nchecks = { api = \"true\", e2e = \"test -f src/lib.rs\" }\n",
+    );
+    std::fs::write(r.join("c.toml"), config.trim_end()).unwrap();
+    std::fs::write(r.join("p.cedar"), policy.trim_end()).unwrap();
+    let args = [
+        "policy", "set", "--repo", "demo", "--config", "c.toml", "--policy", "p.cedar",
+    ];
+    assert!(e.run(r, &args).contains("allow"));
+
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
+    let args = ["propose", "-i", "double", "--accept-facts", "--json"];
+    let proposed = parse(&e.run(&ws, &args));
+    assert_eq!(proposed["status"], "pending", "{proposed}");
+    let seq = proposed["seq"].as_u64().unwrap().to_string();
+
+    let unknown = ["approve", &seq, "--repo", "demo", "--also", "deploy"];
+    refused(&e, r, &unknown, "unknown_check:deploy");
+    let approve = [
+        "approve", &seq, "--repo", "demo", "--also", "e2e,api", "--also", "api", "--json",
+    ];
+    let approved = parse(&e.run(r, &approve));
+    assert_eq!(approved["decision"]["outcome"], "allow", "{approved}");
+    let s = status_json(&e);
+    let mut changes = s["changes"].as_array().unwrap().iter();
+    let change = changes.find(|c| c["change"] == proposed["change"]).unwrap();
+    assert_eq!(
+        change["checks"],
+        serde_json::json!(["api", "e2e"]),
+        "{change}"
+    );
+    assert_eq!(
+        change["runs"],
+        serde_json::json!(["api", "e2e"]),
+        "{change}"
+    );
+    let log = e.run(r, &["log", "--repo", "demo", "--json", "--from", "1"]);
+    let signed = "\"checks\":[\"api\",\"e2e\"]";
+    assert!(parse(&log).to_string().contains(signed), "{log}");
+    e.settle();
+    let s = status_json(&e);
+    let mut changes = s["changes"].as_array().unwrap().iter();
+    let change = changes.find(|c| c["change"] == proposed["change"]).unwrap();
+    assert_eq!(change["status"]["status"], "integrated", "{change}");
 }

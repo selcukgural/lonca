@@ -46,8 +46,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// adds reserved `names` to an `insert` and makes a new file need a lease;
 /// version 23 gives a delegated lease back to the parent when the child
 /// expires or stops beating, as when it ends; version 24 adds the
-/// `unhooked` observation, which taints a session.
-pub const FORMAT_CURRENT: u32 = 24;
+/// `unhooked` observation, which taints a session; version 25 adds named
+/// `checks` to `approve`.
+pub const FORMAT_CURRENT: u32 = 25;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -115,6 +116,9 @@ pub const FORMAT_GIVE_BACK: u32 = 23;
 /// The first format with the `unhooked` observation: a call to `lonca mcp`
 /// whose before-tool event never came. From here it taints the session.
 pub const FORMAT_UNHOOKED: u32 = 24;
+/// The first format with named `checks` on `approve`: the checks of
+/// `verification.checks` a change owes. Evidence of them is `named`.
+pub const FORMAT_NAMED_CHECKS: u32 = 25;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -175,6 +179,7 @@ impl OpEntry {
             | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
             Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
             Op::Reject { .. } => FORMAT_REJECT,
+            Op::Approve { ref checks, .. } if !checks.is_empty() => FORMAT_NAMED_CHECKS,
             Op::ChangeIntegrateBatch { .. } => FORMAT_BATCH,
             Op::SessionIsolate { .. } => FORMAT_ISOLATE,
             Op::LeaseAcquire { ref items, .. } | Op::LeaseInterest { ref items, .. }
@@ -1103,6 +1108,37 @@ mod tests {
         assert!(chain(24).is_ok());
         let err = chain(23).unwrap_err();
         assert!(err.to_string().contains("needs log format 24"), "{err}");
+    }
+
+    #[test]
+    fn named_checks_on_an_approval_need_format_25() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let approve = |checks: &[&str]| Op::Approve {
+            target_seq: 1,
+            note: String::new(),
+            checks: checks.iter().map(|c| c.to_string()).collect(),
+        };
+        let at = |op: Op, format| OpEntry {
+            format,
+            op,
+            ..next(&g, 2000)
+        };
+        assert_eq!(at(approve(&["api"]), 25).min_format(), FORMAT_NAMED_CHECKS);
+        // Without checks an approval is what it always was.
+        assert_eq!(at(approve(&[]), 2).min_format(), FORMAT_LEGACY);
+        let chain = |format| {
+            let e = SignedOp::sign(at(approve(&["api"]), format), &key);
+            verify_chain(&[g.clone(), e])
+        };
+        assert!(chain(25).is_ok());
+        let err = chain(24).unwrap_err();
+        assert!(err.to_string().contains("needs log format 25"), "{err}");
+        // Old approvals keep their bytes: no `checks` key at all.
+        let text = serde_json::to_string(&approve(&[])).unwrap();
+        assert!(!text.contains("checks"), "{text}");
     }
 
     #[test]

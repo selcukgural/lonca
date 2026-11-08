@@ -41,7 +41,11 @@ page is the harness side.
    (`allow`) or waiting for a human (`escalate`, in `status.pending`
    and `lonca pending --json`). The person approves (`lonca approve
    <seq> --json`) or, for now, lets it be; the merge queue integrates
-   it and verifies. The worker syncs (`lonca sync`) after integration.
+   it and verifies. A card's own acceptance check is a named check of the
+   policy (`verification.checks`): the person adds it with `--also
+   <name>`, or the policy names it for the card's paths
+   (`checks_by_path`); `runs` in the pending entry says what will run
+   (docs/guide/verification.md, "Checks a change owes by name"). The worker syncs (`lonca sync`) after integration.
    The leases the change needed stay pinned to it until then, past
    their TTL, and integration releases them: to edit the same symbols
    again the worker leases them again.

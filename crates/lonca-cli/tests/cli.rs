@@ -5575,3 +5575,27 @@ fn a_token_carried_out_of_the_sandbox_stops_working_and_shows() {
     assert!(log.contains("outside its sandbox"), "{log}");
     assert!(!log.contains(r#""op":"lease.acquire""#), "{log}");
 }
+
+/// `lonca session rotate` puts a new token in the workspace, and a running
+/// MCP server goes on with it, since it reads the token for every call
+/// (#53).
+#[test]
+fn a_rotated_token_takes_over_in_the_workspace_and_the_mcp_server() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let file = ws.join(".lonca/session");
+    let old = std::fs::read_to_string(&file).unwrap();
+    let mut mcp = Mcp::start(&e, &ws);
+    let (err, st) = mcp.tool("status", json!({}));
+    assert!(!err, "{st}");
+    let out = e.run(&ws, &["session", "rotate"]);
+    assert!(!out.contains("lonca_"), "a token is never printed: {out}");
+    let new = std::fs::read_to_string(&file).unwrap();
+    assert_ne!(old.trim(), new.trim());
+    let (err, st) = mcp.tool("status", json!({}));
+    assert!(!err, "the server read the new token: {st}");
+    e.run(&ws, &["status"]);
+    std::fs::write(&file, &old).unwrap();
+    let said = fails(&e, &ws, &["status"]);
+    assert!(said.contains("unauthenticated"), "{said}");
+}

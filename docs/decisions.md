@@ -1102,6 +1102,7 @@ A01/A07, zero trust: every request authenticated).
 | `negotiate` | agent | |
 | `cap.attenuate` | agent | |
 | `session.end` | agent | |
+| `session.rotate` | agent | a new token for the caller's session; the old one stops |
 | `session.heartbeat` | agent | |
 | `hook.event` | agent | |
 | `hook.input` | agent | |
@@ -2691,6 +2692,38 @@ denial of service. Bad input must become a denial or an error.
   `SigningKey` zeroizes on drop, and what was read from or written to disk
   passes through `Zeroizing` buffers.
 - The inventory of algorithms, keys and secrets is `docs/crypto.md`.
+
+## Session tokens: expiry, sweep, rotation (#53)
+
+A token used to work for reads, `facts.preview` and the hooks until its
+session ended or was revoked, however long ago the session had expired,
+and `tokens.json` kept it for good.
+
+- **An agent token works while its session does.** The token entry stores
+  the session's end (`expires_ms`, from its log entry; entries written
+  before have none and go by the log). A request with a token whose session
+  is past its end, or under a parent that ended or expired, is refused with
+  `unauthenticated`, for every method but `session.heartbeat` (which refuses
+  such a session itself with `session_inactive`, unlogged) and `session.end`.
+  An expired session's end is still denied by `decide()`, and its token goes
+  then.
+- **Swept**: when the daemon starts, at each human login and every round of
+  the worker (at most two seconds apart), every token that no longer works
+  leaves `tokens.json`: human sessions past their end, agent sessions past
+  theirs or that the log says are over, tokens of repositories the daemon no
+  longer serves.
+- **`session.rotate`** gives the caller a new token for its session, and the
+  old one is gone in the same write. Revocation finds a rotated token like
+  any other: it goes by session. An isolated session can not rotate: its
+  token belongs to `lonca run`'s launcher, which beats with it. **Not
+  logged**, a deviation from the issue: the log never holds tokens or their
+  issuing (`session.start` records the session, not the token), and a new
+  token for the same session changes nothing a decision reads. It is a
+  security event for #56. `lonca session rotate` calls it from a workspace
+  and writes the new token where the old one was read.
+- **Clients read the token afresh.** `lonca mcp` reads the workspace's token
+  before every tool call and every heartbeat, so a rotation or a revocation
+  takes effect at once; a hook is a new process each time.
 
 ## Open questions (carried from the design)
 

@@ -359,6 +359,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("events", Cred::Agent),
     ("inbox", Cred::Agent),
     ("session.end", Cred::Agent),
+    ("session.rotate", Cred::Agent),
     ("hook.event", Cred::Agent),
     ("hook.input", Cred::Agent),
     ("hook.bind", Cred::Agent),
@@ -670,6 +671,8 @@ impl Service {
                 }
             }
             svc.promote_if_done(&mut inner)?;
+            Self::sweep_tokens(&mut inner, now)
+                .map_err(|e| Error::Invalid(format!("{}: {}", e.0, e.1)))?;
         }
         Ok(svc)
     }
@@ -934,6 +937,7 @@ impl Service {
             "inbox" => self.inbox(req),
             "session.end" => self.agent_end(req, params(p)?),
             "session.heartbeat" => self.heartbeat(req),
+            "session.rotate" => self.rotate(req),
             "hook.event" => self.hook_event(req, params(p)?),
             "hook.input" => self.hook_input(req, params(p)?),
             "hook.bind" => self.hook_bind(req, params(p)?),
@@ -986,7 +990,12 @@ impl Service {
         };
         match inner.tokens.lookup(token).cloned() {
             None => fail("unauthenticated", "unknown session token"),
-            Some(TokenEntry::Agent { repo, session }) => {
+            Some(TokenEntry::Agent {
+                repo,
+                session,
+                expires_ms,
+            }) => {
+                let past_end = expires_ms.is_some_and(|end| end <= now);
                 let Some(r) = inner.repos.get(&repo) else {
                     return fail("unauthenticated", "token for unknown repository");
                 };
@@ -995,6 +1004,17 @@ impl Service {
                 };
                 if s.ended.is_some() {
                     return fail("unauthenticated", "session ended");
+                }
+                // Expired, or under a parent that is over: nothing works any
+                // more but what refuses such a session on its own terms
+                // (`session.heartbeat`) or tidies up after it (`session.end`).
+                if (past_end || !r.chain.state.session_active(&session, now))
+                    && !LAUNCHER_METHODS.contains(&req.method.as_str())
+                {
+                    return fail(
+                        "unauthenticated",
+                        "session expired; a human starts a new one (`lonca session start`)",
+                    );
                 }
                 Ok(Caller::Agent {
                     repo,
@@ -1157,7 +1177,7 @@ impl Service {
         inner
             .login_nonces
             .insert(p.sig.nonce.clone(), p.sig.issued_ms);
-        inner.tokens.sweep_expired(now).or_fail()?;
+        Self::sweep_tokens(inner, now)?;
         let expires_ms = now + ttl;
         let token = inner
             .tokens
@@ -2316,7 +2336,7 @@ impl Service {
             Op::SessionStart {
                 session, continues, ..
             } => {
-                let token = inner.tokens.issue(&name, session).or_fail()?;
+                let token = Self::issue_token(inner, &name, session)?;
                 out["token"] = json!(token);
                 if let Some(c) = continues {
                     Self::revoke_tokens(inner, &name, &c.session)?;
@@ -2361,7 +2381,7 @@ impl Service {
             Op::SessionIsolate { session, .. } => {
                 let old = std::slice::from_ref(session);
                 inner.tokens.revoke_sessions(&name, old).or_fail()?;
-                out["token"] = json!(inner.tokens.issue(&name, session).or_fail()?);
+                out["token"] = json!(Self::issue_token(inner, &name, session)?);
                 if let Some(ws) = workspace {
                     let key = (name.clone(), session.clone());
                     inner.workspaces.insert(key, PathBuf::from(ws));
@@ -2388,6 +2408,32 @@ impl Service {
             _ => {}
         }
         Ok(out)
+    }
+
+    /// A token for `session`, which ends with the session.
+    fn issue_token(
+        inner: &mut Inner,
+        repo: &str,
+        session: &str,
+    ) -> std::result::Result<String, (String, String)> {
+        let r = Self::repo(inner, repo)?;
+        let Some(s) = r.chain.state.sessions.get(session) else {
+            return fail("internal", "a token for a session the log does not have");
+        };
+        let expires_ms = s.expires_ms;
+        inner.tokens.issue(repo, session, expires_ms).or_fail()
+    }
+
+    /// Drops the tokens that no longer work: past their end, or of a
+    /// session the log says is over (ended, or under a parent that is).
+    fn sweep_tokens(inner: &mut Inner, now: i64) -> std::result::Result<(), (String, String)> {
+        let Inner { tokens, repos, .. } = inner;
+        let live = |repo: &str, session: &str| {
+            repos
+                .get(repo)
+                .is_some_and(|r| r.chain.state.session_active(session, now))
+        };
+        tokens.sweep_expired(now, live).or_fail()
     }
 
     fn revoke_tokens(
@@ -2684,9 +2730,32 @@ impl Service {
         let mut out = logged(&signed);
         if signed.entry.decision.is_allow() {
             out["session"] = json!(child);
-            out["token"] = json!(inner.tokens.issue(&repo, &child).or_fail()?);
+            out["token"] = json!(Self::issue_token(inner, &repo, &child)?);
         }
         Ok(out)
+    }
+
+    /// A new token for the caller's session, and the one it came with
+    /// stops working at once. Not logged: the log never holds tokens, and a
+    /// token says nothing the session's entries do not.
+    fn rotate(&self, req: &Request) -> Hr {
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().unwrap_or_default();
+        let r = Self::repo(&mut guard, &repo)?;
+        let level = r.chain.state.sessions.get(session).map(|s| s.level);
+        if level == Some(ObservationLevel::Isolated) {
+            return fail(
+                "forbidden",
+                "an isolated session's token is its launcher's; `lonca run` replaces it",
+            );
+        }
+        let old = req.token.as_deref().unwrap_or_default();
+        match guard.tokens.rotate(old).or_fail()? {
+            Some(token) => Ok(json!({"token": token})),
+            None => fail("unauthenticated", "unknown session token"),
+        }
     }
 
     fn agent_end(&self, req: &Request, end: SessionEnd) -> Hr {
@@ -2708,6 +2777,9 @@ impl Service {
         let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
         if signed.entry.decision.is_allow() {
             Self::revoke_tokens(inner, &repo, &session)?;
+        } else {
+            // An expired session's end is denied, and its token goes anyway.
+            Self::sweep_tokens(inner, now)?;
         }
         let mut out = logged(&signed);
         if let Some(left) = left {
@@ -3465,6 +3537,16 @@ impl Service {
         n
     }
 
+    /// Drops tokens that no longer work, so `tokens.json` holds only live
+    /// ones. A write fails only with the disk; the next round tries again.
+    fn sweep_all(&self) {
+        let mut inner = self.lock();
+        let now = self.now();
+        if let Err((code, message)) = Self::sweep_tokens(&mut inner, now) {
+            eprintln!("lonca: sweeping tokens: {code}: {message}");
+        }
+    }
+
     /// Background worker: drains queues when woken, and checks refs.
     pub fn spawn_worker(self: &Arc<Self>) -> std::thread::JoinHandle<()> {
         let svc = self.clone();
@@ -3473,6 +3555,7 @@ impl Service {
             loop {
                 svc.process_all();
                 svc.reconcile_all();
+                svc.sweep_all();
                 let (m, c) = &svc.wake;
                 let guard = m.lock().unwrap_or_else(|e| e.into_inner());
                 if *guard == seen {

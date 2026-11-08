@@ -627,6 +627,9 @@ enum SessionCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Give the session of the current agent workspace a new token; the
+    /// old one stops working. The new one goes where the old one was.
+    Rotate,
     /// End the session of the current agent workspace.
     End {
         #[arg(long)]
@@ -1534,6 +1537,17 @@ fn run(cmd: Cmd) -> Result<()> {
                 print_decision(&r);
             }
             ctx::denied(&r)
+        }
+        Cmd::Session(SessionCmd::Rotate) => {
+            let (mut c, ws) = agent_client()?;
+            let r = call(&mut c, "session.rotate", json!({}))?;
+            let token = r["token"].as_str().context("no token in the answer")?;
+            ws.write_token(token).with_context(|| {
+                "the old token is gone and the new one could not be written; \
+                 a human revokes this session (`lonca session revoke`)"
+            })?;
+            println!("new session token in place");
+            Ok(())
         }
         Cmd::Session(SessionCmd::End { json: as_json }) => {
             let (mut c, ws) = agent_client()?;

@@ -228,8 +228,21 @@ pub(crate) fn session_over(e: &anyhow::Error) -> bool {
 /// The heartbeat of this server, on its own connection. It stops when the
 /// session is over, or with the process, which ends when the harness
 /// closes stdin: that is what makes a crashed agent's leases free.
-pub(crate) fn keep_alive(mut c: Client, ended: Arc<AtomicBool>) {
-    while let Some(wait) = next_beat(beat(&mut c)) {
+///
+/// `token` is asked before every beat: a token rotated or replaced in the
+/// workspace is used from the next beat on.
+pub(crate) fn keep_alive(
+    mut c: Client,
+    ended: Arc<AtomicBool>,
+    token: impl Fn() -> Option<String>,
+) {
+    loop {
+        if let Some(t) = token() {
+            c.token = Some(t);
+        }
+        let Some(wait) = next_beat(beat(&mut c)) else {
+            break;
+        };
         std::thread::sleep(Duration::from_millis(wait as u64));
     }
     ended.store(true, Ordering::SeqCst);
@@ -550,7 +563,9 @@ pub fn run() -> Result<()> {
     heart.token = client.token.clone();
     let ended = Arc::new(AtomicBool::new(false));
     let beating = ended.clone();
-    std::thread::spawn(move || keep_alive(heart, beating));
+    let root = ws.root.clone();
+    let token = move || Workspace::find(&root).and_then(|w| w.token().ok());
+    std::thread::spawn(move || keep_alive(heart, beating, token));
     let rules = setup::neutral_rules(Some(&ws));
     let mut server = Server { ws, client };
     let stdin = std::io::stdin();
@@ -586,6 +601,11 @@ pub fn run() -> Result<()> {
                         message: SESSION_OVER.into(),
                     }))
                 } else {
+                    // Read afresh for every call: a rotated token works at
+                    // once, a revoked one stops at once.
+                    if let Ok(t) = server.ws.token() {
+                        server.client.token = Some(t);
+                    }
                     server.tool(name, &args)
                 };
                 let news = server.news();

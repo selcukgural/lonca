@@ -185,8 +185,15 @@ fn owned_by(root: &Path, uid: u32) -> Result<()> {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum TokenEntry {
-    /// An agent session of one repository.
-    Agent { repo: String, session: String },
+    /// An agent session of one repository. `expires_ms` is the session's
+    /// own end, from its log entry; entries written before it was stored
+    /// have none, and the log says when they end.
+    Agent {
+        repo: String,
+        session: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_ms: Option<i64>,
+    },
     /// A human session (`human.login`): the human proved presence with
     /// `key`, and the session is good wherever that key is enrolled.
     Human {
@@ -216,14 +223,29 @@ impl Tokens {
         })
     }
 
-    pub fn issue(&mut self, repo: &str, session: &str) -> Result<String> {
+    /// A token for an agent session that ends at `expires_ms`.
+    pub fn issue(&mut self, repo: &str, session: &str, expires_ms: i64) -> Result<String> {
         self.insert(
             "lonca_",
             TokenEntry::Agent {
                 repo: repo.into(),
                 session: session.into(),
+                expires_ms: Some(expires_ms),
             },
         )
+    }
+
+    /// Replaces `old` with a new token for the same session, in one write:
+    /// from then on only the new one works. `None` if `old` is unknown.
+    pub fn rotate(&mut self, old: &str) -> Result<Option<String>> {
+        let Some(entry) = self.map.remove(&sha256_hex(old.as_bytes())) else {
+            return Ok(None);
+        };
+        let prefix = match entry {
+            TokenEntry::Agent { .. } => "lonca_",
+            TokenEntry::Human { .. } => "lonca_h_",
+        };
+        self.insert(prefix, entry).map(Some)
     }
 
     pub fn issue_human(&mut self, human: &str, key: &str, expires_ms: i64) -> Result<String> {
@@ -259,7 +281,9 @@ impl Tokens {
     pub fn revoke_sessions(&mut self, repo: &str, sessions: &[String]) -> Result<()> {
         let before = self.map.len();
         self.map.retain(|_, e| match e {
-            TokenEntry::Agent { repo: r, session } => !(r == repo && sessions.contains(session)),
+            TokenEntry::Agent {
+                repo: r, session, ..
+            } => !(r == repo && sessions.contains(session)),
             TokenEntry::Human { .. } => true,
         });
         if self.map.len() != before {
@@ -268,11 +292,17 @@ impl Tokens {
         Ok(())
     }
 
-    /// Drops human sessions that have expired by `now_ms`.
-    pub fn sweep_expired(&mut self, now_ms: i64) -> Result<()> {
+    /// Drops every token that no longer works at `now_ms`: human sessions
+    /// past their end, and agent sessions past theirs or that `live` says
+    /// are over (ended, expired with a parent, of a repository gone).
+    pub fn sweep_expired(&mut self, now_ms: i64, live: impl Fn(&str, &str) -> bool) -> Result<()> {
         let before = self.map.len();
         self.map.retain(|_, e| match e {
-            TokenEntry::Agent { .. } => true,
+            TokenEntry::Agent {
+                repo,
+                session,
+                expires_ms,
+            } => expires_ms.is_none_or(|end| end > now_ms) && live(repo, session),
             TokenEntry::Human { expires_ms, .. } => *expires_ms > now_ms,
         });
         if self.map.len() != before {
@@ -336,7 +366,7 @@ mod tests {
         )
         .unwrap();
         let mut t = Tokens::load(&path).unwrap();
-        let a = t.issue("demo", "s1").unwrap();
+        let a = t.issue("demo", "s1", 5_000).unwrap();
         let h = t.issue_human("ayse", "ab", 2_000).unwrap();
         assert!(a.starts_with("lonca_") && h.starts_with("lonca_h_"));
         let text = std::fs::read_to_string(&path).unwrap();
@@ -346,7 +376,8 @@ mod tests {
             t.lookup("lonca_old"),
             Some(&TokenEntry::Agent {
                 repo: "demo".into(),
-                session: "s0".into()
+                session: "s0".into(),
+                expires_ms: None,
             })
         );
         assert_eq!(
@@ -360,12 +391,54 @@ mod tests {
         let mut t = t;
         t.revoke_sessions("demo", &["s1".into()]).unwrap();
         assert!(t.lookup(&a).is_none() && t.lookup(&h).is_some());
-        t.sweep_expired(1_999).unwrap();
+        t.sweep_expired(1_999, |_, _| true).unwrap();
         assert!(t.lookup(&h).is_some());
-        t.sweep_expired(2_000).unwrap();
+        t.sweep_expired(2_000, |_, _| true).unwrap();
         assert!(t.lookup(&h).is_none());
         t.revoke("lonca_old").unwrap();
         t.revoke("lonca_old").unwrap();
         assert!(Tokens::load(&path).unwrap().lookup("lonca_old").is_none());
+    }
+
+    /// An agent token goes at its session's end, or when the log says the
+    /// session is over; one without a stored end only by the log.
+    #[test]
+    fn a_sweep_drops_agent_tokens_that_no_longer_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let mut t = Tokens::load(&path).unwrap();
+        let a = t.issue("demo", "s1", 2_000).unwrap();
+        let b = t.issue("demo", "s2", 9_000).unwrap();
+        t.sweep_expired(1_999, |_, _| true).unwrap();
+        assert!(t.lookup(&a).is_some() && t.lookup(&b).is_some());
+        t.sweep_expired(2_000, |_, _| true).unwrap();
+        assert!(t.lookup(&a).is_none() && t.lookup(&b).is_some());
+        t.sweep_expired(2_000, |repo, s| repo == "demo" && s != "s2")
+            .unwrap();
+        assert!(t.lookup(&b).is_none());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("s1") && !text.contains("s2"), "{text}");
+    }
+
+    #[test]
+    fn a_rotation_replaces_the_token_in_one_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let mut t = Tokens::load(&path).unwrap();
+        let old = t.issue("demo", "s1", 9_000).unwrap();
+        let new = t.rotate(&old).unwrap().unwrap();
+        assert!(new.starts_with("lonca_") && !new.starts_with("lonca_h_"));
+        assert_ne!(new, old);
+        let t2 = Tokens::load(&path).unwrap();
+        assert!(t2.lookup(&old).is_none());
+        assert_eq!(t2.lookup(&new), t.lookup(&new));
+        assert!(t.rotate(&old).unwrap().is_none(), "the old one is gone");
+        let h = t.issue_human("ayse", "ab", 9_000).unwrap();
+        assert!(t.rotate(&h).unwrap().unwrap().starts_with("lonca_h_"));
+        t.revoke_sessions("demo", &["s1".into()]).unwrap();
+        assert!(
+            t.lookup(&new).is_none(),
+            "revocation reaches a rotated token"
+        );
     }
 }

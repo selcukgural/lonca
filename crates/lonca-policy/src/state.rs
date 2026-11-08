@@ -295,6 +295,11 @@ pub struct State {
     pub sessions: BTreeMap<String, Session>,
     pub leases: BTreeMap<String, LeaseSet>,
     pub changes: BTreeMap<ChangeId, ChangeRecord>,
+    /// Every `change.propose` entry, whatever its decision, by sequence
+    /// number: the ref `refs/lonca/changes/<change>/<seq>` it wrote must
+    /// name this commit (see [`crate::refs`]). Read by no decision.
+    #[serde(skip)]
+    pub proposed: BTreeMap<u64, (ChangeId, GitId)>,
     pub queue: Vec<ChangeId>,
     pub spent: Spent,
     pub pending: BTreeMap<u64, Pending>,
@@ -998,6 +1003,9 @@ impl State {
         self.gives_back = e.format >= FORMAT_GIVE_BACK;
         self.settle_reservations(e.time_ms);
         self.charge(e);
+        if let Op::ChangePropose { change, commit, .. } = &e.op {
+            self.proposed.insert(e.seq, (*change, commit.clone()));
+        }
         // What the proposal is decided on: its session's leases at this
         // moment. A release by approval changes nothing, the pins are there.
         if pins

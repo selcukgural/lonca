@@ -93,8 +93,14 @@ impl Report {
 pub struct Options {
     /// Recompute facts and merges (slower, needs every object).
     pub deep: bool,
-    /// Compare trunk/policy refs with the replayed state.
+    /// Compare the refs with the replayed state: trunk, policy, every
+    /// proposal's ref, and no name under `refs/lonca/` the daemon never
+    /// writes.
     pub check_refs: bool,
+    /// Hold every ref to that, not only Lonca's: for the daemon's own store,
+    /// or a remote nothing but Lonca pushes to. A clone has its remotes'
+    /// branches and tags as well, which are not the log's.
+    pub all_refs: bool,
 }
 
 impl Default for Options {
@@ -102,6 +108,7 @@ impl Default for Options {
         Self {
             deep: true,
             check_refs: true,
+            all_refs: false,
         }
     }
 }
@@ -225,8 +232,44 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
                 Err(err) => rep.find(None, "ref", format!("{name}: {err}")),
             }
         }
+        check_other_refs(store, &state, opts.all_refs, &mut rep);
     }
     rep
+}
+
+/// The refs besides trunk and policy, as the daemon's `reconcile()` holds
+/// them (`lonca_policy::refs`). A proposal's ref past the end of the log is
+/// reported too: the log was cut short, or the daemon stopped between
+/// writing the ref and logging the proposal (it removes such a ref when it
+/// starts).
+fn check_other_refs(store: &Store, state: &State, all: bool, rep: &mut Report) {
+    use lonca_policy::refs::{RefCheck, check, missing_changes};
+    let refs = match store.refs_with_prefix(if all { "refs/" } else { "refs/lonca/" }) {
+        Ok(r) => r,
+        Err(err) => return rep.find(None, "ref", format!("listing refs: {err}")),
+    };
+    let present = refs.iter().map(|(n, _)| n.clone()).collect();
+    for (name, found) in &refs {
+        if name == TRUNK_REF || name == POLICY_REF {
+            continue;
+        }
+        let said = match check(state, name, found) {
+            RefCheck::Fine => continue,
+            RefCheck::Differs(want) => format!("{name} is {found}, the log says {want:?}"),
+            RefCheck::NotLogged => {
+                format!("{name} names a proposal past the end of the log")
+            }
+            RefCheck::Unknown => format!("{name} ({found}) is no ref the log has"),
+        };
+        rep.find(None, "ref", said);
+    }
+    for (name, commit) in missing_changes(state, &present) {
+        rep.find(
+            None,
+            "ref",
+            format!("{name} is missing; the log says {commit}"),
+        );
+    }
 }
 
 /// Recomputes facts and merges. `state` is the one before `op`: what a merge

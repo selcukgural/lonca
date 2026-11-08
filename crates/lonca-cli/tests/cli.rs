@@ -868,6 +868,7 @@ fn backup_and_restore_through_the_cli() {
         lonca_audit::Options {
             deep: true,
             check_refs: true,
+            all_refs: true,
         },
     )
     .unwrap();

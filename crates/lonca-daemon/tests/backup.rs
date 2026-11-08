@@ -144,6 +144,7 @@ fn deep() -> Options {
     Options {
         deep: true,
         check_refs: true,
+        all_refs: true,
     }
 }
 

@@ -113,6 +113,7 @@ fn forged_decision_is_caught_even_with_a_valid_signature() {
         Options {
             deep: true,
             check_refs: false,
+            all_refs: true,
         },
     )
     .unwrap();
@@ -143,6 +144,7 @@ fn forged_facts_are_caught() {
         Options {
             deep: true,
             check_refs: false,
+            all_refs: true,
         },
     )
     .unwrap();
@@ -157,6 +159,7 @@ fn forged_facts_are_caught() {
         Options {
             deep: false,
             check_refs: false,
+            all_refs: true,
         },
     )
     .unwrap();
@@ -191,6 +194,7 @@ fn forged_merge_is_caught() {
         Options {
             deep: true,
             check_refs: false,
+            all_refs: true,
         },
     )
     .unwrap();
@@ -226,6 +230,7 @@ fn a_batch_with_no_evidence_or_another_tree_is_caught() {
         let options = Options {
             deep: true,
             check_refs: false,
+            all_refs: true,
         };
         audit(store, options).unwrap()
     };

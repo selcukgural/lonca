@@ -181,6 +181,12 @@ impl Slot {
         &self.registry.limits
     }
 
+    /// The uid of the connection's peer (`u32::MAX` when the socket did not
+    /// tell), for the security log.
+    pub fn uid(&self) -> Option<u32> {
+        self.registry.lock().get(&self.id).map(|c| c.uid)
+    }
+
     /// Says a request is being answered. False if the connection was evicted
     /// first: the request must not run, whoever sent it is told to send it
     /// again.

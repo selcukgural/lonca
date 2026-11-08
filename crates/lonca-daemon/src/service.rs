@@ -58,6 +58,8 @@ pub struct Settings {
     pub git: String,
     /// How long one git command may run (fetch and push included).
     pub git_timeout: std::time::Duration,
+    /// How a freeze or an integrity alarm reaches a human at once.
+    pub notify: crate::security::Notify,
     /// Where a local-path remote may lie, besides the backups directory.
     /// `None`: anywhere outside the daemon home (cooperative). A hardened
     /// daemon starts with an empty list unless told otherwise.
@@ -86,6 +88,7 @@ impl Settings {
             managed_settings,
             proxy,
             hardened,
+            notify: crate::security::Notify::Desktop,
             ..Self::default()
         }
     }
@@ -104,6 +107,7 @@ impl Default for Settings {
             require_root_settings: true,
             git: "git".into(),
             git_timeout: crate::gitcmd::DEFAULT_TIMEOUT,
+            notify: crate::security::Notify::Off,
             local_roots: None,
             line_cap: MAX_LINE,
             proxy: None,
@@ -376,6 +380,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("hook.stop", Cred::Agent),
     ("harness.setup", Cred::Agent),
     ("queue.run", Cred::AnyHuman),
+    ("security.events", Cred::AnyHuman),
 ];
 
 /// What may send a line past `limits::SHORT_LINE`: what carries files or
@@ -649,6 +654,9 @@ pub struct Service {
     /// as long as the daemon: its environment is part of what passed.
     verified: Mutex<Verified>,
     proxy: Mutex<ProxyBook>,
+    security: crate::security::SecurityLog,
+    /// Repositories whose auditor flag was already told as an alarm.
+    flagged: Mutex<BTreeSet<String>>,
     verification_runs: AtomicU64,
     /// Changes whose checks are running, see [`Running`].
     running: Mutex<BTreeSet<ChangeId>>,
@@ -693,6 +701,8 @@ impl Service {
             verified: Mutex::default(),
             verification_runs: AtomicU64::new(0),
             proxy: Mutex::default(),
+            security: crate::security::SecurityLog::new(&home.root, settings.notify.clone()),
+            flagged: Mutex::default(),
             running: Mutex::default(),
             home,
             counters: Counters::default(),
@@ -801,7 +811,7 @@ impl Service {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn now(&self) -> i64 {
+    pub fn now(&self) -> i64 {
         (self.clock)()
     }
 
@@ -868,8 +878,12 @@ impl Service {
     pub fn handle_from(&self, req: Request, in_sandbox: &dyn Fn() -> bool) -> Response {
         let r = match self.dispatch(&req, in_sandbox) {
             Ok(v) => Response::ok(req.id, v),
-            Err((code, msg)) => Response::err(req.id, &code, msg),
+            Err((code, msg)) => {
+                self.refusal(&req, &code, &msg);
+                Response::err(req.id, &code, msg)
+            }
         };
+        self.take_alarms();
         if !matches!(
             req.method.as_str(),
             "ping" | "status" | "log" | "tree" | "change.get" | "whoami" | "repo.list"
@@ -877,6 +891,67 @@ impl Service {
             self.notify_appended();
         }
         r
+    }
+
+    /// A refusal that is a security event: who was refused what, never
+    /// with the token or the request.
+    fn refusal(&self, req: &Request, code: &str, message: &str) {
+        use crate::security::kind;
+        let k = match code {
+            "unauthenticated" | "forbidden" => kind::AUTH_FAILURE,
+            "rate_limited" => kind::RATE_LIMITED,
+            "not_in_sandbox" => kind::OUTSIDE_SANDBOX,
+            _ => return,
+        };
+        let mut e = crate::security::Event::new(self.now(), k)
+            .method(&req.method)
+            .code(code)
+            .detail(message);
+        if let Some(repo) = &req.repo {
+            e = e.repo(repo);
+        }
+        self.security.record(e);
+    }
+
+    /// Records a security event.
+    pub fn security_event(&self, event: crate::security::Event) {
+        self.security.record(event);
+    }
+
+    /// Moves the events of entries appended since into the security log.
+    fn take_alarms(&self) {
+        let taken: Vec<crate::security::Event> = {
+            let mut guard = self.lock();
+            let inner = &mut *guard;
+            let repos = inner.repos.values_mut().chain(inner.foreign.values_mut());
+            repos.flat_map(|r| std::mem::take(&mut r.alarms)).collect()
+        };
+        for e in taken {
+            self.security.record(e);
+        }
+    }
+
+    /// The security events of the last `since_ms` (default a day): counts by
+    /// kind, and the latest 100, of the repositories the human is enrolled
+    /// in and of none.
+    fn security_events(&self, auth: &Auth, p: SecurityEvents) -> Hr {
+        let Caller::Human { human, key } = &auth.caller else {
+            return fail("forbidden", "a human session is required");
+        };
+        let mine = {
+            let inner = self.lock();
+            Self::enrolled_repos(&inner, human, key)
+        };
+        let since = p.since_ms.unwrap_or_else(|| self.now() - 86_400_000);
+        let events: Vec<crate::security::Event> = self
+            .security
+            .read_since(since)
+            .into_iter()
+            .filter(|e| e.repo.as_ref().is_none_or(|r| mine.contains(r)))
+            .collect();
+        let counts = crate::security::summary(&events);
+        let latest = &events[events.len().saturating_sub(100)..];
+        Ok(json!({"since_ms": since, "counts": counts, "events": latest}))
     }
 
     /// An isolated session's token works in a sandbox only, but for what
@@ -992,6 +1067,7 @@ impl Service {
             "human.logout" => self.logout(req),
             "daemon.prepare_rotate" => self.prepare_rotate(),
             "repo.list" => self.repo_list(&auth),
+            "security.events" => self.security_events(&auth, params(p)?),
             "repo.prepare_init" => self.prepare_init(params(p)?),
             "repo.init" => self.init(&auth, params(p)?),
             "repo.backup" => self.backup(&auth),
@@ -2889,7 +2965,15 @@ impl Service {
         }
         let old = req.token.as_deref().unwrap_or_default();
         match guard.tokens.rotate(old).or_fail()? {
-            Some(token) => Ok(json!({"token": token})),
+            Some(token) => {
+                drop(guard);
+                use crate::security::{Event, kind};
+                let e = Event::new(now, kind::TOKEN_ROTATED)
+                    .repo(&repo)
+                    .session(session);
+                self.security.record(e);
+                Ok(json!({"token": token}))
+            }
             None => fail("unauthenticated", "unknown session token"),
         }
     }
@@ -2988,10 +3072,27 @@ impl Service {
         let (events, verdict) = hooks::translate(&ev, &policy, &scratch);
         if !events.is_empty() {
             r.submit(
-                Submission::new(Actor::Daemon, Op::Observe { session, events }),
+                Submission::new(
+                    Actor::Daemon,
+                    Op::Observe {
+                        session: session.clone(),
+                        events,
+                    },
+                ),
                 now,
             )
             .or_fail()?;
+        }
+        if verdict.decision == "deny" {
+            drop(guard);
+            use crate::security::{Event, kind};
+            let tool = ev.tool_name.as_deref().unwrap_or("?");
+            let e = Event::new(now, kind::HOOK_DENIED)
+                .repo(&repo)
+                .session(&session)
+                .method("hook.event")
+                .detail(&format!("{tool}: {}", verdict.reason));
+            self.security.record(e);
         }
         Ok(json!(verdict))
     }
@@ -3150,6 +3251,14 @@ impl Service {
             hook_binary_protected: ins.hook_binary_protected,
         };
         let level = level_for(&checks);
+        if checks.sudo_without_password {
+            use crate::security::{Event, kind};
+            let e = Event::new(now, kind::SUDO_WITHOUT_PASSWORD)
+                .repo(&repo)
+                .session(&session)
+                .detail("the hook reports that sudo runs without a password");
+            self.security.record(e);
+        }
         let signed = r
             .submit(
                 Submission::new(
@@ -3491,7 +3600,14 @@ impl Service {
             .map(|r| r.chain.state.next_seq)
             .collect();
         for r in inner.repos.values_mut().filter(|r| r.initialized()) {
-            let _ = Self::reconcile(r, now);
+            if let Err((code, message)) = Self::reconcile(r, now) {
+                use crate::security::{Event, kind};
+                let e = Event::new(now, kind::RECONCILE_ERROR)
+                    .repo(&r.name)
+                    .code(&code)
+                    .detail(&message);
+                self.security.record(e);
+            }
             // The auditor's only write: a flag file asking for a freeze.
             let flag = self.home.freeze_flag(&r.name);
             if let Ok(text) = std::fs::read_to_string(&flag) {
@@ -3501,6 +3617,22 @@ impl Service {
                 } else {
                     reason
                 };
+                if !self
+                    .flagged
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(&r.name)
+                {
+                    use crate::security::{Event, kind};
+                    let e = Event::new(now, kind::INTEGRITY_ALARM)
+                        .repo(&r.name)
+                        .detail(&reason);
+                    self.security.record(e);
+                }
+                self.flagged
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(r.name.clone());
                 if r.chain.state.frozen.is_none()
                     && r.submit(Submission::new(Actor::Daemon, Op::Freeze { reason }), now)
                         .is_err()
@@ -3508,6 +3640,10 @@ impl Service {
                     continue;
                 }
                 let _ = std::fs::remove_file(&flag);
+                self.flagged
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&r.name);
             }
         }
         let after: Vec<u64> = inner
@@ -3845,6 +3981,7 @@ impl Service {
                 svc.process_all();
                 svc.reconcile_all();
                 svc.sweep_all();
+                svc.take_alarms();
                 let (m, c) = &svc.wake;
                 let guard = m.lock().unwrap_or_else(|e| e.into_inner());
                 if *guard == seen {

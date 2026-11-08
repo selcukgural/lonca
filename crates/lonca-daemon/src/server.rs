@@ -126,6 +126,11 @@ pub fn serve_with(listener: UnixListener, svc: Arc<Service>, access: Access, lim
         if let Some(allowed) = &access.allowed_uids
             && !uid.is_some_and(|u| allowed.contains(&u))
         {
+            use crate::security::{Event, kind};
+            let e = Event::new(svc.now(), kind::REFUSED_PEER)
+                .uid(uid)
+                .detail("a uid the socket does not serve");
+            svc.security_event(e);
             continue; // dropped: closes the connection
         }
         let stream = Arc::new(stream);
@@ -292,7 +297,22 @@ fn handle_conn(stream: &UnixStream, slot: &Slot, svc: &Service) -> std::io::Resu
                 farewell(stream, limits, "timeout", "the request line took too long");
                 return Ok(());
             }
-            Incoming::Refused(why) => why,
+            Incoming::Refused(why) => {
+                use crate::security::{Event, kind};
+                let code = why
+                    .error
+                    .as_ref()
+                    .map(|e| e.code.clone())
+                    .unwrap_or_default();
+                if code == "too_large" {
+                    let e = Event::new(svc.now(), kind::OVERSIZED)
+                        .uid(slot.uid())
+                        .code(&code)
+                        .detail("a request line past its method's limit");
+                    svc.security_event(e);
+                }
+                why
+            }
             Incoming::Line(line) if line.trim().is_empty() => continue,
             Incoming::Line(_) if !slot.begin() => {
                 farewell(stream, limits, "closed", NOT_READ);
@@ -300,7 +320,15 @@ fn handle_conn(stream: &UnixStream, slot: &Slot, svc: &Service) -> std::io::Resu
             }
             Incoming::Line(line) => match serde_json::from_str::<Request>(&line) {
                 Ok(req) => svc.handle_from(req, &|| peer_in_sandbox(stream)),
-                Err(e) => Response::err(0, "invalid", format!("bad request: {e}")),
+                Err(e) => {
+                    use crate::security::{Event, kind};
+                    let ev = Event::new(svc.now(), kind::MALFORMED)
+                        .uid(slot.uid())
+                        .code("invalid")
+                        .detail(&format!("not a request: {e}"));
+                    svc.security_event(ev);
+                    Response::err(0, "invalid", format!("bad request: {e}"))
+                }
             },
         };
         if let Err(e) = write_by(stream, &resp, limits.write) {

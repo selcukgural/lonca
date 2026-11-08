@@ -93,6 +93,23 @@ pub fn env_pairs(
     Ok(out)
 }
 
+/// An environment in which a name stands once, with the value set last.
+#[derive(Default)]
+struct Env(Vec<(String, String)>);
+
+impl Env {
+    fn set(&mut self, name: &str, value: String) {
+        self.0.retain(|(k, _)| k != name);
+        self.0.push((name.to_string(), value));
+    }
+
+    fn extend(&mut self, pairs: impl IntoIterator<Item = (String, String)>) {
+        for (k, v) in pairs {
+            self.set(&k, v);
+        }
+    }
+}
+
 /// Every variable programs look for a proxy in.
 pub fn proxy_env(port: u16) -> Vec<(String, String)> {
     let url = format!("http://127.0.0.1:{port}");
@@ -350,6 +367,7 @@ fn plan(
     workspace: &Path,
     run: &Path,
     prepared: &Value,
+    setup: Option<&Prepared>,
     token_file: &Path,
 ) -> Result<Plan> {
     let real = |p: &Path| p.canonicalize().with_context(|| format!("{}", p.display()));
@@ -422,18 +440,24 @@ fn plan(
 
     let run_home = writable[writable.len() - 2].clone();
     let tmp = writable[writable.len() - 1].clone();
-    let mut env: Vec<(String, String)> = KEPT_ENV
-        .iter()
-        .filter_map(|n| Some((n.to_string(), std::env::var(n).ok()?)))
-        .collect();
-    env.extend(env_pairs(&a.env, |n| std::env::var(n).ok())?);
     let text = |p: &Path| p.to_string_lossy().into_owned();
+    // Later sets win: the harness's profile, then the person's `--env`, then
+    // what the run itself must hold.
+    let mut env = Env::default();
+    for n in KEPT_ENV {
+        if let Ok(v) = std::env::var(n) {
+            env.set(n, v);
+        }
+    }
+    if let Some(setup) = setup {
+        env.extend(setup.run_env(&text(&run_home), &text(&tmp))?);
+    }
+    env.extend(env_pairs(&a.env, |n| std::env::var(n).ok())?);
     let mut first = vec![lonca_dir];
     if sandbox == Sandbox::Seatbelt {
         first.insert(0, real(&shims)?);
     }
-    env.retain(|(k, _)| k != "PATH");
-    env.push(("PATH".to_string(), path_with(&first, &path)?));
+    env.set("PATH", path_with(&first, &path)?);
     env.extend([
         ("HOME".to_string(), text(&run_home)),
         ("TMPDIR".to_string(), text(&tmp)),
@@ -442,6 +466,7 @@ fn plan(
         ("LONCA_TOKEN_FILE".to_string(), text(token_file)),
     ]);
     env.extend(proxy.iter().flat_map(|p| proxy_env(p.port())));
+    let env = env.0;
 
     let socket = ctx::socket();
     let jail = Jail {
@@ -651,6 +676,7 @@ pub fn run(a: Args) -> Result<i32> {
         &ws.root,
         run_dir.path(),
         &prepared,
+        setup.as_ref(),
         &token_file,
     )?;
     probe(&plan)?;
@@ -842,8 +868,18 @@ mod tests {
         }
 
         fn plan(&self, sandbox: Sandbox, a: &Args, prepared: &Value) -> Result<Plan> {
+            self.plan_for(sandbox, a, prepared, None)
+        }
+
+        fn plan_for(
+            &self,
+            sandbox: Sandbox,
+            a: &Args,
+            prepared: &Value,
+            setup: Option<&Prepared>,
+        ) -> Result<Plan> {
             let (ws, run) = (self.root.join("ws"), self.root.join("run"));
-            plan(sandbox, a, &ws, &run, prepared, &run.join("token"))
+            plan(sandbox, a, &ws, &run, prepared, setup, &run.join("token"))
         }
     }
 
@@ -866,6 +902,39 @@ mod tests {
             .plan(Sandbox::Bubblewrap, &t.args(), &t.prepared(None))
             .unwrap();
         assert_eq!(p.jail.mark, None);
+    }
+
+    /// The profile's environment comes in under the person's `--env`, and
+    /// neither moves what the run holds itself.
+    #[test]
+    fn a_plan_starts_the_harness_with_its_profile_s_environment() {
+        let t = Planned::new();
+        let claude = lonca_policy::harness::built_in()["claude-code"]
+            .setup
+            .clone();
+        let setup = Prepared::of_setup("claude-code", claude, "/w");
+        let prepared = t.prepared(None);
+        let p = t
+            .plan_for(Sandbox::Seatbelt, &t.args(), &prepared, Some(&setup))
+            .unwrap();
+        let tmp = t.root.join("run/tmp");
+        assert_eq!(env_of(&p, "CLAUDE_CODE_TMPDIR"), [tmp.to_str().unwrap()]);
+
+        let mut extra = lonca_policy::harness::Setup::default();
+        extra.env.insert("SHARED".into(), "profile".into());
+        extra.env.insert("KEPT".into(), "profile".into());
+        extra.run_env.insert("HOME".into(), "/elsewhere".into());
+        let setup = Prepared::of_setup("acme", extra, "/w");
+        let mut a = t.args();
+        a.env = vec!["SHARED=person".into()];
+        let t = Planned::new();
+        let p = t
+            .plan_for(Sandbox::Seatbelt, &a, &prepared, Some(&setup))
+            .unwrap();
+        assert_eq!(env_of(&p, "SHARED"), ["person"]);
+        assert_eq!(env_of(&p, "KEPT"), ["profile"]);
+        let home = t.root.join("run/home");
+        assert_eq!(env_of(&p, "HOME"), [home.to_str().unwrap()]);
     }
 
     #[test]

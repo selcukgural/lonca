@@ -2961,6 +2961,45 @@ it and what it runs are part of the trust model.
   seven-day cooldown stay the defence; reconsider with a second maintainer
   or imported audits.
 
+## A harness's environment in a run (#187)
+
+`lonca run` starts the command with almost nothing of the caller's environment
+and with a `HOME` and `TMPDIR` of its own, so a harness that needs something
+more did not start, and the person had to know which names it reads. Claude
+Code on macOS exits on `mkdir /tmp/claude-<uid>`: it makes that directory
+whatever `TMPDIR` says, and the shared `/tmp` is closed.
+
+- **What a harness needs in a run is data in its profile.** `setup.run_env`
+  is a table like `setup.env`, read only by `lonca run`, with two more holes:
+  `{home}` and `{tmp}`, the sandbox's own. `claude-code` sets
+  `CLAUDE_CODE_TMPDIR = "{tmp}"`. Not `env`: `lonca harness setup` prints `env`
+  for a harness outside any sandbox, where Claude Code's own temp directory is
+  right and a `CLAUDE_CONFIG_DIR` would lose the person's login.
+- **A run applies the named harness's `env` too.** It is what the harness must
+  start with (Gemini's `GEMINI_CLI_TRUST_WORKSPACE`), and the profile is the one
+  `session start --harness` named, from the signed policy. Order, later wins:
+  the kept variables, the profile's `env`, its `run_env`, the person's `--env`,
+  then what the run holds itself (`PATH`, `HOME`, `TMPDIR`, `LONCA_*`, the
+  proxy). A profile's `LONCA_*` is skipped: the run sets its own.
+- **Names are checked twice.** A policy whose profile names a variable that
+  changes what a program loads (the `--env` and verification list) is refused
+  when it is read; `run_env` may not name `LONCA_*` either. `lonca run` checks
+  again before the sandbox starts, since the setup reaches it over the socket.
+- **Holes are filled in one pass.** A path that holds `{tmp}` is not filled
+  again.
+- **No `CLAUDE_CONFIG_DIR`.** With the run's own `HOME`, Claude Code writes its
+  settings to `$HOME/.claude`, deleted with the run. A scratch root would keep
+  them, but every run takes a new session whose scratch roots must be empty.
+  Measured with Claude Code 2.1.319 on macOS: with the profile, `claude -p`
+  starts and answers "Not logged in"; with `--env CLAUDE_CODE_TMPDIR=/tmp` it
+  exits on the `mkdir` again.
+- **The login stays the person's to give.** The Keychain and `~/.claude` stay
+  closed; `--env CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or
+  `--env ANTHROPIC_API_KEY` brings a credential in. Lonca reads no credential
+  for a harness. Not measured: a run with a token, and which hosts besides
+  `api.anthropic.com` Claude Code reaches; each would taint under
+  `network = "taint"`.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

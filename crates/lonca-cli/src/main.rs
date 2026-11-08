@@ -135,7 +135,9 @@ enum Cmd {
         /// The session's workspace (default: this directory).
         #[arg(long)]
         workspace: Option<PathBuf>,
-        /// Pass NAME, or set NAME=VALUE, in the sandbox.
+        /// Pass NAME, or set NAME=VALUE, in the sandbox, over what the
+        /// harness's profile sets there. A harness's login does not come
+        /// in by itself: pass its credential, as CLAUDE_CODE_OAUTH_TOKEN.
         #[arg(long, value_name = "NAME[=VALUE]")]
         env: Vec<String>,
         /// A tree in the home directory the command may read.

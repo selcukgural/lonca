@@ -13,6 +13,8 @@ use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::{env_name_forbidden, valid_env_name};
+
 const BUILT_IN: &str = include_str!("harnesses.toml");
 
 #[allow(
@@ -162,6 +164,7 @@ impl Profile {
         if self.events.stop.is_some() != self.stop_deny.is_some() {
             return Err("events.stop and stop_deny go together".into());
         }
+        self.setup.check()?;
         self.locked.as_ref().map_or(Ok(()), Locked::check)
     }
 
@@ -302,6 +305,11 @@ pub struct Setup {
     /// Environment the harness must start with.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Environment it needs besides, inside `lonca run`'s sandbox, where its
+    /// home and the shared temp directories are closed. Strings may also hold
+    /// `{home}` and `{tmp}`, the sandbox's own `HOME` and `TMPDIR`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub run_env: BTreeMap<String, String>,
     /// What a person has to know or do that Lonca can not.
     #[serde(default)]
     pub note: String,
@@ -382,6 +390,85 @@ impl Setup {
             note: string(&self.note),
         })
     }
+}
+
+impl Setup {
+    /// `run_env` with every hole filled, `home` and `tmp` included, in one
+    /// pass: a path that holds a hole's name stays as it is.
+    pub fn fill_run_env(&self, holes: &RunHoles) -> BTreeMap<String, String> {
+        let holes = [
+            ("rules", holes.rules),
+            ("socket", holes.socket),
+            ("workspace", holes.workspace),
+            ("home", holes.home),
+            ("tmp", holes.tmp),
+        ];
+        let fill = |v: &String| fill_once(v, &holes);
+        self.run_env
+            .iter()
+            .map(|(k, v)| (k.clone(), fill(v)))
+            .collect()
+    }
+
+    /// The names of `env` and `run_env` are ones a harness may be given:
+    /// none that changes what a program loads, and none of Lonca's own
+    /// (`LONCA_*`), but in `env`: a person exports those, and `lonca run`
+    /// sets its own.
+    fn check(&self) -> Result<(), String> {
+        let names = |m: &BTreeMap<String, String>| m.keys().cloned().collect::<Vec<_>>();
+        for name in names(&self.env) {
+            let own = name.starts_with("LONCA_");
+            if !valid_env_name(&name) || (env_name_forbidden(&name) && !own) {
+                return Err(format!(
+                    "setup.env: {name} is not a name a harness may be given"
+                ));
+            }
+        }
+        for name in names(&self.run_env) {
+            if !valid_env_name(&name) || env_name_forbidden(&name) {
+                return Err(format!(
+                    "setup.run_env: {name} is not a name a harness may be given"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What `run_env`'s holes stand for in one run.
+pub struct RunHoles<'a> {
+    pub rules: &'a str,
+    pub socket: &'a str,
+    pub workspace: &'a str,
+    pub home: &'a str,
+    pub tmp: &'a str,
+}
+
+/// `text` with each `{name}` of `holes` replaced, left to right; what a value
+/// brings in is never read again.
+fn fill_once(text: &str, holes: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('{') {
+        out.push_str(&rest[..at]);
+        let open = &rest[at + 1..];
+        let hole = holes.iter().find(|(name, _)| {
+            open.strip_prefix(name)
+                .is_some_and(|after| after.starts_with('}'))
+        });
+        match hole {
+            Some((name, value)) => {
+                out.push_str(value);
+                rest = &open[name.len() + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = open;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 impl Format {
@@ -830,6 +917,59 @@ mod tests {
         let toml: Value = toml::from_str(&f.files["a.toml"]).unwrap();
         assert_eq!(toml, json!({"x": tricky}));
         assert_eq!(f.files["a.txt"], "the rules\n");
+    }
+
+    #[test]
+    fn run_env_fills_every_hole_once_and_leaves_the_rest() {
+        let s = setup(
+            r#"
+            [run_env]
+            ALL = "{rules}|{socket}|{workspace}|{home}|{tmp}"
+            ODD = "{tmp}{tmp} {nope} {tmp {} {"
+        "#,
+        );
+        let holes = RunHoles {
+            rules: "R",
+            socket: "{home}",
+            workspace: "/w",
+            home: "/h{tmp}",
+            tmp: "/t",
+        };
+        let env = s.fill_run_env(&holes);
+        assert_eq!(env["ALL"], "R|{home}|/w|/h{tmp}|/t");
+        assert_eq!(env["ODD"], "/t/t {nope} {tmp {} {");
+        assert_eq!(fill_once("", &[("a", "b")]), "");
+        assert_eq!(fill_once("x{a}", &[("a", "b")]), "xb");
+    }
+
+    #[test]
+    fn a_setup_names_no_variable_that_changes_what_a_program_loads() {
+        let ok = setup(
+            "env = { LONCA_SOCKET = \"{socket}\", A_B = \"x\" }\nrun_env = { C = \"{tmp}\" }\n",
+        );
+        assert_eq!(ok.check(), Ok(()));
+        for (bad, why) in [
+            (
+                "env = { DYLD_INSERT_LIBRARIES = \"x\" }",
+                "setup.env: DYLD_INSERT_LIBRARIES",
+            ),
+            ("env = { \"A-B\" = \"x\" }", "setup.env: A-B"),
+            ("run_env = { PATH = \"x\" }", "setup.run_env: PATH"),
+            (
+                "run_env = { LONCA_WORKSPACE = \"x\" }",
+                "setup.run_env: LONCA_WORKSPACE",
+            ),
+            ("run_env = { \"\" = \"x\" }", "setup.run_env: "),
+        ] {
+            let e = setup(bad).check().unwrap_err();
+            assert!(e.starts_with(why), "{bad}: {e}");
+        }
+        for name in ["claude-code", "codex", "gemini", "opencode"] {
+            assert_eq!(built_in()[name].check(), Ok(()), "{name}");
+        }
+        let mut p = built_in()["claude-code"].clone();
+        p.setup.run_env.insert("NODE_OPTIONS".into(), "x".into());
+        assert!(p.check().unwrap_err().contains("NODE_OPTIONS"));
     }
 
     #[test]

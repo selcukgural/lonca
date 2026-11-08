@@ -1843,12 +1843,17 @@ Passing tests do not show that they would catch a flipped `>=` or a
 - **Tool: cargo-mutants** (27.1.0, pinned with `--locked` and an explicit
   version). It needs no code changes or annotations, reads
   `.cargo/mutants.toml`, and supports `--shard` for splitting a full run.
-- **Only for a release (2026-11-08).** Mutants run when a `v*` tag is
-  pushed and on demand, never on a pull request or a merge to main (see "CI
+- **Every night, and for a release (2026-11-08).** Mutants run every night
+  on main (00:07 UTC, the whole workspace in 20 shards, a few hours), when
+  a `v*` tag is pushed, and on demand, never on a pull request or a merge to main (see "CI
   runs for a release"). The per-PR run, even in two stages
   with settled results kept between pushes, made every pull request wait for
-  minutes to tens of minutes, and the nightly run added little between
-  releases. A release runs the whole workspace in 20 shards with no shortcut,
+  minutes to tens of minutes. The nightly run was dropped with the PR
+  stages the same morning and came back that evening: a full run takes
+  hours, too long to wait for just before tagging, so the survivors are
+  found overnight and fixed the next day. 0.2.0 goes out without a
+  mutants run (user's decision, 2026-11-08); the nightly finds its
+  survivors, fixed in a patch release. A release runs the whole workspace in 20 shards with no shortcut,
   so it also sees a test weakened but not removed, or a callee change that
   stops a test reaching a function. Survivors are fixed before the release.
   The PR stages (own crate, then workspace) and the results cache are gone

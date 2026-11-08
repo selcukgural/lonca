@@ -155,6 +155,15 @@ mod tests {
     }
 
     #[test]
+    fn a_path_may_be_4096_bytes_long() {
+        assert!(validate_repo_path(&"a".repeat(4096)).is_ok());
+        assert!(validate_repo_path(&"a".repeat(4097)).is_err());
+        let deep = format!("{}/b", "a".repeat(4094));
+        assert_eq!(deep.len(), 4096);
+        assert!(validate_repo_path(&deep).is_ok());
+    }
+
+    #[test]
     fn path_patterns() {
         assert!(path_matches("src/**", "src/a.rs"));
         assert!(path_matches("src/**", "src/x/y.rs"));
@@ -191,5 +200,9 @@ mod tests {
         ));
         assert!(symbol_pattern_within("X", "*"));
         assert!(validate_symbol_pattern("a*b").is_err());
+        assert!(validate_symbol_pattern("").is_err());
+        assert!(validate_symbol_pattern(&"a".repeat(512)).is_ok());
+        assert!(validate_symbol_pattern(&format!("{}*", "a".repeat(511))).is_ok());
+        assert!(validate_symbol_pattern(&"a".repeat(513)).is_err());
     }
 }

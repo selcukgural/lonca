@@ -32,10 +32,6 @@ impl Actor {
             _ => None,
         }
     }
-
-    pub fn is_human(&self) -> bool {
-        matches!(self, Actor::Human { .. })
-    }
 }
 
 impl fmt::Display for Actor {

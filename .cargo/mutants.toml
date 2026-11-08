@@ -41,6 +41,9 @@ exclude_globs = ["crates/lonca-daemon/src/peer_other.rs", "crates/lonca-verify/s
 exclude_re = [
   # `SEE_EXIT` joins three flags with no bit in common, so `^` is `|`.
   'process\.rs.*replace \| with \^',
+  # A change id's byte is `(high << 4) | low` with `low` below 16: the two
+  # halves have no bit in common, so `^` is `|`.
+  'replace \| with \^ in ChangeId::from_reverse_hex',
   # `from * got` in `log_pages`: `a_log_is_read_to_its_end_in_pages` and
   # `a_limit_stops_the_pages` fail at once, so nothing is lost. But with `from`
   # 0 a real `lonca log` in a CLI test reads the first page for ever, keeping

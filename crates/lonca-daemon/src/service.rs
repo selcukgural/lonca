@@ -989,7 +989,15 @@ impl Service {
             return Ok(Caller::Anonymous);
         };
         match inner.tokens.lookup(token).cloned() {
-            None => fail("unauthenticated", "unknown session token"),
+            None if token.starts_with("lonca_h_") => fail(
+                "unauthenticated",
+                "unknown human session token: it expired or was ended; log in again (`lonca human login`)",
+            ),
+            None => fail(
+                "unauthenticated",
+                "unknown session token: its session ended or expired, or it has a new token; \
+                 a human continues the workspace with `lonca session start --continue`",
+            ),
             Some(TokenEntry::Agent {
                 repo,
                 session,
@@ -1013,7 +1021,8 @@ impl Service {
                 {
                     return fail(
                         "unauthenticated",
-                        "session expired; a human starts a new one (`lonca session start`)",
+                        "session expired; a human continues the workspace with \
+                         `lonca session start --continue`",
                     );
                 }
                 Ok(Caller::Agent {

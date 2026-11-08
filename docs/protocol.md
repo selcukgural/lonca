@@ -767,7 +767,8 @@ lives by its TTL alone. Pinned items ignore the timeout. Result:
 own leases, on the daemon's clock. Send one every `timeout_ms / 3`.
 `lonca mcp` does, and renews what is about to run out. A session that
 has ended or expired gets the error `session_inactive`, and nothing is
-logged; stop beating.
+logged; once the daemon has swept its token (within seconds), the error is
+`unauthenticated`. Either way, stop beating.
 
 ### `hook.event`
 

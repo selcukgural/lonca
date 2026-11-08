@@ -2332,20 +2332,25 @@ fn an_expired_sessions_edit_lands_under_its_continuation() {
     let old_token = std::fs::read_to_string(w1.join(".lonca/session")).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(1100));
 
-    // The session is over, and it hears so.
-    let args = ["lease", "acquire", "-i", "fix", "src/lib.rs#charge"];
-    refused(&e, &w1, &args, "session_inactive");
-    let out = e
-        .cmd(&w1, &["session", "heartbeat", "--json"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
-    assert!(
-        text(&out.stderr).contains("session_inactive"),
-        "{}",
-        text(&out.stderr)
-    );
-    assert_eq!(text(&out.stdout), "");
+    // The session is over, and it hears so, and what to do: its token
+    // opens nothing any more (#53), whether or not it was swept yet.
+    for args in [
+        &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"][..],
+        &["session", "heartbeat", "--json"],
+    ] {
+        let out = e.cmd(&w1, args).output().unwrap();
+        let said = text(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {said}");
+        assert!(
+            said.contains("unauthenticated") || said.contains("session_inactive"),
+            "{args:?}: {said}"
+        );
+        assert!(
+            said.contains("--continue") || said.contains("ended or expired"),
+            "{said}"
+        );
+        assert_eq!(text(&out.stdout), "");
+    }
 
     let args = session_args("src/**", &["--continue", "w1", "--json"]);
     let c = parse(&e.run(r, &args));

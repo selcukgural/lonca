@@ -24,10 +24,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The version, components and profile come from rust-toolchain.toml.
       - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal -c clippy,rustfmt
-          rustup default stable
+        run: rustup toolchain install
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
@@ -42,12 +41,32 @@ jobs:
         with:
           persist-credentials: false
       - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        run: rustup toolchain install
       # AppArmor blocks bwrap's unprivileged user namespaces on 24.04.
       - name: Bubblewrap
         run: |
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo test -p lonca-cli --test cli --locked -- a_run_ a_command_ a_sandbox a_scratch what_runs the_network_of stopping_the ps_can
+
+  # A CycloneDX bill of materials of the release, kept with the run; #7
+  # attaches it to the release with the provenance.
+  sbom:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-cyclonedx@0.5.10
+      - run: cargo cyclonedx --format json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom-cyclonedx
+          path: crates/*/*.cdx.json
+          if-no-files-found: error

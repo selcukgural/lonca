@@ -398,6 +398,17 @@ pub fn peer_cwd(peer: SocketAddr, local: SocketAddr) -> Option<PathBuf> {
         .find_map(|l| l.strip_prefix('n').map(PathBuf::from))
 }
 
+/// The first of `addrs` that takes a connection, tried in order within one
+/// budget, as a client does: a name whose first address has no listener
+/// (`localhost` as `::1` on Linux, with the server on `127.0.0.1` only) is
+/// still reached on the next. Only addresses the rules allow are passed in.
+fn connect_any(addrs: &[SocketAddr], within: Duration) -> Option<TcpStream> {
+    let deadline = Instant::now() + within;
+    addrs.iter().find_map(|a| {
+        TcpStream::connect_timeout(a, deadline.saturating_duration_since(Instant::now())).ok()
+    })
+}
+
 fn respond(mut s: &TcpStream, code: u16, reason: &str) {
     let body = format!("proxy: {reason}\n");
     let _ = write!(
@@ -474,11 +485,12 @@ fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std
         gate.finished(&request, Outcome::Private);
         return Ok(());
     }
-    let Some(addr) = addrs
+    let allowed: Vec<SocketAddr> = addrs
         .into_iter()
         .filter(|a| !is_metadata(a.ip()))
-        .find(|a| verdict.allow_private || !is_private(a.ip()))
-    else {
+        .filter(|a| verdict.allow_private || !is_private(a.ip()))
+        .collect();
+    if allowed.is_empty() {
         respond(
             &client,
             403,
@@ -486,14 +498,11 @@ fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std
         );
         gate.finished(&request, Outcome::Private);
         return Ok(());
-    };
-    let upstream = match TcpStream::connect_timeout(&addr, Duration::from_secs(10)) {
-        Ok(u) => u,
-        Err(_) => {
-            respond(&client, 502, "cannot connect");
-            gate.finished(&request, Outcome::Unreachable);
-            return Ok(());
-        }
+    }
+    let Some(upstream) = connect_any(&allowed, Duration::from_secs(10)) else {
+        respond(&client, 502, "cannot connect");
+        gate.finished(&request, Outcome::Unreachable);
+        return Ok(());
     };
     track(&upstream);
     client.set_read_timeout(None)?;
@@ -591,6 +600,26 @@ fn carry(mut from: &TcpStream, mut to: &TcpStream, gate: &dyn Gate, request: &Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_connection_goes_to_the_first_address_that_takes_it() {
+        // A port nobody listens on: bound, then given back.
+        let closed = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let open = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = open.local_addr().unwrap();
+        let budget = Duration::from_secs(5);
+        let s = connect_any(&[closed, at], budget).expect("the second address");
+        assert_eq!(s.peer_addr().unwrap(), at);
+        assert!(connect_any(&[closed], budget).is_none());
+        assert!(connect_any(&[], budget).is_none());
+        assert!(
+            connect_any(&[at], Duration::ZERO).is_none(),
+            "no budget, no attempt"
+        );
+    }
 
     #[test]
     fn metadata_addresses() {

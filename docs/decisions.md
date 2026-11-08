@@ -1781,6 +1781,19 @@ tainted the session for good, closing every critical path to it.
   how the hook finds the workspace, what SessionStart injects, and what
   to do when a worker ends.
 
+## CI runs for a release
+
+Since 2026-11-08 the tests (`ci.yml`: Ubuntu, macOS and the bubblewrap
+`sandbox` job) and the mutants run only when a `v*` tag is pushed, and on
+demand before tagging. Pull requests and merges to main run neither, and the
+main ruleset keeps only its deletion and force-push rules: no status check is
+required. Waiting for CI on every pull request cost more time than it saved.
+What this gives up: main can take a commit that fails to build or breaks a
+test, and that is seen only at the next release run or a local
+`cargo test --workspace`. A release is tagged only after both workflows,
+run on demand on main, are green. `cargo-deny` and CodeQL still run on pull
+requests and block nothing.
+
 ## Mutation testing
 
 Passing tests do not show that they would catch a flipped `>=` or a
@@ -1790,8 +1803,8 @@ Passing tests do not show that they would catch a flipped `>=` or a
   version). It needs no code changes or annotations, reads
   `.cargo/mutants.toml`, and supports `--shard` for splitting a full run.
 - **Only for a release (2026-11-08).** Mutants run when a `v*` tag is
-  pushed and on demand, never on a pull request or a merge to main: there the
-  unit tests are the only required checks. The per-PR run, even in two stages
+  pushed and on demand, never on a pull request or a merge to main (see "CI
+  runs for a release"). The per-PR run, even in two stages
   with settled results kept between pushes, made every pull request wait for
   minutes to tens of minutes, and the nightly run added little between
   releases. A release runs the whole workspace in 20 shards with no shortcut,

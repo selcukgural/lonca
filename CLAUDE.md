@@ -68,8 +68,14 @@ cargo mutants -p lonca-policy -j 4          # one crate
   main`, before tagging). The whole workspace runs in 20 shards
   (`full k/20`); any survivor fails its shard and is listed in the run's
   summary and in the `mutants-full-<k>` artifact (`missed.txt`). Survivors
-  are fixed before the release. Pull requests and merges to main run the
-  unit tests only (`ci.yml`); no mutants run before a push or on a PR.
-- Every PR is opened with auto-merge (`gh pr merge --auto --merge`); it
-  lands once the required checks (`test (ubuntu-latest)`, `test
-  (macos-latest)`) are green.
+  are fixed before the release. No mutants run before a push or on a PR.
+
+## CI
+
+The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,
+`sandbox`) and the mutants run only for a release: on a pushed `v*` tag, and
+on demand before tagging (`gh workflow run ci.yml --ref main`). Pull requests
+and merges to main run neither, and the main ruleset requires no check.
+`cargo-deny` and CodeQL still run on pull requests; they block nothing.
+Every PR is opened with auto-merge (`gh pr merge --auto --merge`); with no
+required check it lands at once.

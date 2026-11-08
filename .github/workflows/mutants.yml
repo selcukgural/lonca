@@ -2,7 +2,7 @@
 #
 # Runs only for a release: when a `v*` tag is pushed, and on demand (run it
 # from the Actions tab on main before tagging). Pull requests and merges to
-# main run the unit tests only (ci.yml); this workflow is required by nothing.
+# main do not run it, nor ci.yml; this workflow is required by nothing.
 # The whole workspace runs in 20 shards. Any survivor fails its shard and is
 # listed in the run's summary and in the shard's artifact.
 name: mutants

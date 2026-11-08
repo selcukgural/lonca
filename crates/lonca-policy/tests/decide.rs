@@ -15,7 +15,7 @@ use lonca_policy::config::{
     CVal, CedarOutcome, DEFAULT_CONFIG, DEFAULT_POLICY, PolicyBundle, Profile, Quota,
     UnparsedFiles, Verification,
 };
-use lonca_policy::decide::{Ctx, decide, evidence_problems, quota_problems};
+use lonca_policy::decide::{Ctx, decide, evidence_problems, quota_problems, scope_within};
 use lonca_policy::human::intent_bytes;
 use lonca_policy::state::{ChangeStatus, Provenance, Renamed, State};
 
@@ -6647,5 +6647,521 @@ fn an_edit_under_an_exclusive_pin_is_exclusive_whatever_else_is_pinned() {
     let pinned = |set: &str| h.chain.state.leases[set].pins[&change].len();
     assert_eq!([pinned("la"), pinned("lb")], [1, 1]);
     assert_eq!(h.chain.state.exclusive_of(change), [f]);
+    h.assert_replay();
+}
+
+// ------------------------------------------------- bounds and both sides
+//
+// Each check below is held at its edge and on each side of an `||`, so a
+// `>` that became `>=` or an `||` that became `&&` is noticed.
+
+fn scope(symbols: Option<&[&str]>, max_files: Option<u32>, max_lines: Option<u32>) -> Scope {
+    Scope {
+        paths: vec!["src/**".into()],
+        symbols: symbols.map(|s| s.iter().map(|x| x.to_string()).collect()),
+        ops: vec![OpKind::ChangePropose],
+        max_files,
+        max_lines,
+        scratch: vec![],
+    }
+}
+
+#[test]
+fn a_narrower_scope_keeps_within_symbols_and_counts() {
+    let outer = scope(Some(&["Client.*"]), Some(5), Some(100));
+    assert_eq!(
+        scope_within(&scope(Some(&["Client.charge"]), Some(5), Some(100)), &outer),
+        Ok(())
+    );
+    assert_eq!(
+        scope_within(&scope(Some(&["Other.*"]), Some(5), Some(100)), &outer),
+        Err("symbol:Other.*".into())
+    );
+    assert_eq!(
+        scope_within(&scope(None, Some(5), Some(100)), &outer),
+        Err("symbols:unrestricted".into())
+    );
+    let counts =
+        |files, lines| scope_within(&scope(None, files, lines), &scope(None, Some(5), Some(100)));
+    assert_eq!(counts(Some(4), Some(99)), Ok(()));
+    assert_eq!(counts(Some(5), Some(100)), Ok(()));
+    assert_eq!(counts(Some(6), Some(100)), Err("max_files".into()));
+    assert_eq!(counts(Some(5), Some(101)), Err("max_lines".into()));
+    assert_eq!(counts(None, Some(100)), Err("max_files".into()));
+    assert_eq!(counts(Some(5), None), Err("max_lines".into()));
+    let open = scope(None, None, None);
+    assert_eq!(scope_within(&scope(None, Some(9), None), &open), Ok(()));
+}
+
+#[test]
+fn genesis_refuses_a_bad_repository_name_with_a_good_owner() {
+    let policy = PolicyBundle::default_bundle();
+    let key = KeyPair::generate();
+    let op = Op::RepoInit {
+        repo: "no spaces".into(),
+        daemon_key: key.public_hex(),
+        human: "ayse".into(),
+        human_key: file_key(&key),
+        policy: gid('a'),
+        trunk: gid('b'),
+    };
+    let d = decide(
+        &State::new(),
+        &Actor::Human {
+            name: "ayse".into(),
+        },
+        &op,
+        None,
+        &Ctx {
+            format: FORMAT_CURRENT,
+            time_ms: T0,
+            policy: &policy,
+            facts: None,
+            evidence: &[],
+            symbols_engine: None,
+        },
+    );
+    assert_eq!(d, Decision::deny("invalid_name"));
+}
+
+#[test]
+fn an_enrolled_key_must_be_hex_whatever_its_algorithm() {
+    let mut h = H::new();
+    let op = Op::HumanEnroll {
+        human: "cem".into(),
+        key: HumanKey {
+            alg: "ed25519".into(),
+            public: "not hex".into(),
+        },
+    };
+    assert!(denied_with(&h.human("ayse", op), "invalid_key"));
+    h.assert_replay();
+}
+
+#[test]
+fn a_policy_update_asks_one_human_fewer_than_it_needs() {
+    let config = DEFAULT_CONFIG
+        .replace("policy_updates = 1", "policy_updates = 3")
+        .replace(
+            "cap_to_enrolled_humans = true",
+            "cap_to_enrolled_humans = false",
+        );
+    let mut h = H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap());
+    let d = h.human("ayse", Op::PolicyUpdate { policy: gid('e') });
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    assert!(d.reasons.contains(&"policy_update".to_string()), "{d:?}");
+    assert!(d.reasons.contains(&"approvals=2".to_string()), "{d:?}");
+    let pending = h.chain.state.pending.values().next().unwrap();
+    assert_eq!(pending.required, 2);
+    h.assert_replay();
+}
+
+#[test]
+fn a_session_start_is_held_to_its_names_task_and_lifetime() {
+    let mut h = H::new();
+    let mut op = h.start_op("s1", &["src/**"], None);
+    let Op::SessionStart { agent, .. } = &mut op else {
+        unreachable!()
+    };
+    *agent = "no spaces".into();
+    assert!(denied_with(&h.human("ayse", op), "invalid_name"));
+
+    let with_task = |h: &H, session: &str, len: usize| {
+        let mut op = h.start_op(session, &["src/**"], None);
+        let Op::SessionStart { task, .. } = &mut op else {
+            unreachable!()
+        };
+        *task = "t".repeat(len);
+        op
+    };
+    let op = with_task(&h, "s2", 201);
+    assert!(denied_with(&h.human("ayse", op), "task_too_long"));
+    let op = with_task(&h, "s2", 200);
+    let d = h.human("ayse", op);
+    assert!(d.is_allow(), "{d:?}");
+
+    // The entry's time is one past `now`; the longest life is 480 minutes.
+    let living = |h: &H, session: &str, ms: i64| {
+        let mut op = h.start_op(session, &["src/**"], None);
+        let Op::SessionStart { expires_ms, .. } = &mut op else {
+            unreachable!()
+        };
+        *expires_ms = h.now + 1 + ms;
+        op
+    };
+    let op = living(&h, "s3", 480 * MIN + 1);
+    assert!(denied_with(&h.human("ayse", op), "session_ttl"));
+    let op = living(&h, "s3", 480 * MIN);
+    let d = h.human("ayse", op);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn a_session_ends_once() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    let end = || Op::SessionEnd {
+        session: "s1".into(),
+        reason: "done".into(),
+    };
+    assert!(h.human("ayse", end()).is_allow());
+    assert!(denied_with(&h.human("ayse", end()), "session_ended"));
+    h.assert_replay();
+}
+
+#[test]
+fn a_child_session_is_named_well_and_may_live_as_long_as_its_parent() {
+    let mut h = three_sessions();
+    let mut op = child_op(&h, "a", "kid", &[]);
+    let Op::CapAttenuate { agent, .. } = &mut op else {
+        unreachable!()
+    };
+    *agent = "no spaces".into();
+    assert!(denied_with(&h.agent("a", op), "invalid_name"));
+
+    let mut op = child_op(&h, "a", "kid", &[]);
+    let Op::CapAttenuate { expires_ms, .. } = &mut op else {
+        unreachable!()
+    };
+    *expires_ms = h.chain.state.sessions["a"].expires_ms + 1;
+    assert!(denied_with(&h.agent("a", op), "session_ttl"));
+    let mut op = child_op(&h, "a", "kid", &[]);
+    let Op::CapAttenuate { expires_ms, .. } = &mut op else {
+        unreachable!()
+    };
+    *expires_ms = h.chain.state.sessions["a"].expires_ms;
+    let d = h.agent("a", op);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn a_lease_set_name_is_used_once() {
+    let mut h = three_sessions();
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let d = h.lease("a", "l1", &[("src/a.rs#g", LeaseKind::Edit)]);
+    assert!(denied_with(&d, "invalid_lease_set"), "{d:?}");
+    h.assert_replay();
+}
+
+/// A session acquiring something else keeps its reservation; another
+/// session's stays too.
+#[test]
+fn a_reservation_outlives_a_lease_on_something_else() {
+    let mut h = three_sessions();
+    h.start("d", &["src/**"]);
+    let g = "src/a.rs#g";
+    assert!(h.lease("a", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("c", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    assert!(interest(&mut h, "b", F).is_allow());
+    assert!(interest(&mut h, "d", g).is_allow());
+    assert!(h.agent("a", release("l1")).is_allow());
+    assert!(h.agent("c", release("l2")).is_allow());
+    assert!(
+        h.lease("d", "l3", &[("src/b.rs#h", LeaseKind::Edit)])
+            .is_allow()
+    );
+    let holders: Vec<&str> = h
+        .chain
+        .state
+        .reservations
+        .iter()
+        .map(|r| r.session.as_str())
+        .collect();
+    assert_eq!(holders, ["b", "d"]);
+    h.assert_replay();
+}
+
+/// An unobserved session's proposal waits for a human and says where it
+/// came from; the human's note has a length limit.
+#[test]
+fn an_unobserved_proposal_is_marked_and_approved_with_a_short_note() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    let sym = "src/a.rs#f";
+    assert!(h.lease("s1", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    let d = h.propose("s1", c, edit(sym));
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    assert_eq!(h.chain.state.changes[&c].provenance, Provenance::Unobserved);
+
+    let seq = pending_seq(&h, c);
+    let note = |len: usize| Op::Approve {
+        target_seq: seq,
+        note: "n".repeat(len),
+    };
+    assert!(denied_with(&h.human("ayse", note(501)), "note_too_long"));
+    let d = h.human("ayse", note(500));
+    assert!(d.reasons.contains(&"released".to_string()), "{d:?}");
+    assert_eq!(h.chain.state.changes[&c].status, ChangeStatus::Queued);
+    h.assert_replay();
+}
+
+#[test]
+fn a_tainted_proposal_is_marked_tainted() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    let taint = Op::Taint {
+        session: "s1".into(),
+        reason: "read a web page".into(),
+    };
+    assert!(h.daemon(taint, vec![]).is_allow());
+    let sym = "src/a.rs#f";
+    h.wrote("s1", "src/a.rs");
+    assert!(h.lease("s1", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("s1", c, edit(sym)).outcome, Outcome::Escalate);
+    assert_eq!(h.chain.state.changes[&c].provenance, Provenance::Tainted);
+    h.assert_replay();
+}
+
+#[test]
+fn a_reason_may_be_as_long_as_the_limit() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    let sym = "src/a.rs#f";
+    assert!(h.lease("s1", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("s1", c, edit(sym)).outcome, Outcome::Escalate);
+    let seq = pending_seq(&h, c);
+    let d = h.human("ayse", reject(seq, &"x".repeat(4096)));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// Proposed again after a withdrawal, a change is its next version; a
+/// withdrawal takes only that change off the queue, and a change off the
+/// queue is not integrated.
+#[test]
+fn a_withdrawn_change_leaves_the_queue_and_comes_back_as_its_next_version() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    h.wrote("s1", "src/a.rs");
+    h.wrote("s1", "src/b.rs");
+    let (f, g) = ("src/a.rs#f", "src/b.rs#g");
+    assert!(
+        h.lease("s1", "l1", &[(f, LeaseKind::Edit), (g, LeaseKind::Edit)])
+            .is_allow()
+    );
+    let (c1, c2) = (ChangeId::random(), ChangeId::random());
+    assert!(h.propose("s1", c1, edit(f)).is_allow());
+    assert!(h.propose("s1", c2, edit(g)).is_allow());
+    assert_eq!(h.chain.state.changes[&c1].version, 1);
+    assert_eq!(h.chain.state.queue, [c1, c2]);
+    let d = h.agent("s1", Op::ChangeWithdraw { change: c1 });
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(h.chain.state.queue, [c2]);
+    // Only a queued change is integrated.
+    let d = integrate(&mut h, c1, Some(gid('f')), &[]);
+    assert!(denied_with(&d, "change_not_queued"), "{d:?}");
+    let d = h.propose("s1", c1, edit(f));
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(h.chain.state.changes[&c1].version, 2);
+    assert_eq!(h.chain.state.queue, [c2, c1]);
+    h.assert_replay();
+}
+
+#[test]
+fn an_observation_holds_up_to_256_events() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    let observe = |n: usize| Op::Observe {
+        session: "s1".into(),
+        events: (0..n)
+            .map(|i| Observation {
+                phase: Phase::Post,
+                kind: ObsKind::Write {
+                    path: format!("src/f{i}.rs"),
+                },
+                external: false,
+            })
+            .collect(),
+    };
+    assert!(denied_with(
+        &h.daemon(observe(257), vec![]),
+        "too_many_events"
+    ));
+    let d = h.daemon(observe(256), vec![]);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn a_push_anchors_at_the_head_by_number_and_hash() {
+    let mut h = H::new();
+    let push = |h: &H, hash: String| Op::BridgePush {
+        remote: "origin".into(),
+        oplog_seq: h.chain.state.next_seq - 1,
+        oplog_hash: hash,
+    };
+    let op = push(&h, "0".repeat(64));
+    let d = h.human("ayse", op);
+    assert!(denied_with(&d, "stale_anchor"), "{d:?}");
+    let op = push(&h, h.chain.state.head_hash.clone());
+    let d = h.human("ayse", op);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn only_its_two_sessions_talk_in_a_thread() {
+    let mut h = H::new();
+    for s in ["s1", "s2", "s3"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let say = |to: &str| Op::Negotiate {
+        thread: "t1".into(),
+        to_session: to.into(),
+        message: NegotiationMsg::Counter { note: "hi".into() },
+    };
+    assert!(h.agent("s1", say("s2")).is_allow());
+    assert!(denied_with(
+        &h.agent("s3", say("s2")),
+        "not_thread_participant"
+    ));
+    assert!(denied_with(
+        &h.agent("s3", say("s1")),
+        "not_thread_participant"
+    ));
+    h.assert_replay();
+}
+
+#[test]
+fn an_unsandboxed_check_is_one_that_ran_with_none() {
+    let vc = Verification {
+        require_sandbox: true,
+        ..Verification::default()
+    };
+    let mut none = pass(CheckKind::Build);
+    none.details.insert("sandbox".into(), "none".into());
+    assert_eq!(
+        evidence_problems(&vc, &[none]),
+        ["unsandboxed_verification"]
+    );
+    assert!(evidence_problems(&vc, &[pass(CheckKind::Build)]).is_empty());
+}
+
+#[test]
+fn a_change_may_have_as_many_files_as_the_config_allows() {
+    let config = DEFAULT_CONFIG.replace("max_files = 200", "max_files = 3");
+    let mut h = H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap());
+    let files = |n: usize| Facts {
+        modified_files: (0..n).map(|i| format!("src/f{i}.rs")).collect(),
+        lines_added: 1,
+        ..Default::default()
+    };
+    let propose = |h: &mut H, facts: Facts| {
+        let op = Op::ChangePropose {
+            change: ChangeId::random(),
+            commit: gid('c'),
+            base: h.chain.state.trunk.clone().unwrap(),
+            claim: claim_of(&facts),
+        };
+        h.human_change("ayse", op, facts)
+    };
+    let d = propose(&mut h, files(4));
+    assert!(denied_with(&d, "too_many_files"), "{d:?}");
+    let d = propose(&mut h, files(3));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// A session's own limits on files and lines hold at their edge.
+#[test]
+fn a_scope_limits_files_and_lines_to_its_edge() {
+    let mut h = H::new();
+    let mut op = h.start_op("s1", &["src/**"], None);
+    let Op::SessionStart { scope, .. } = &mut op else {
+        unreachable!()
+    };
+    scope.max_files = Some(2);
+    scope.max_lines = Some(10);
+    assert!(h.human("ayse", op).is_allow());
+    let bind = Op::SessionBind {
+        session: "s1".into(),
+        checks: BindChecks {
+            harness: "claude-code".into(),
+            harness_session: "h-s1".into(),
+            managed_hooks: true,
+            locked_sandbox: true,
+            sudo_without_password: false,
+            config_digest: "cfg".into(),
+            hook_binary_protected: true,
+        },
+        level: ObservationLevel::HooksSandbox,
+    };
+    assert!(h.daemon(bind, vec![]).is_allow());
+    let syms = ["src/a.rs#f", "src/b.rs#g", "src/c.rs#h"];
+    for s in syms {
+        h.wrote("s1", s.split('#').next().unwrap());
+    }
+    let items: Vec<(&str, LeaseKind)> = syms.iter().map(|s| (*s, LeaseKind::Edit)).collect();
+    assert!(h.lease("s1", "l1", &items).is_allow());
+    let facts = |n: usize, added: u32, removed: u32| Facts {
+        edits: syms[..n].iter().map(|s| s.to_string()).collect(),
+        modified_files: syms[..n]
+            .iter()
+            .map(|s| s.split('#').next().unwrap().to_string())
+            .collect(),
+        lines_added: added,
+        lines_removed: removed,
+        ..Default::default()
+    };
+    let d = h.propose("s1", ChangeId::random(), facts(3, 1, 1));
+    assert!(denied_with(&d, "scope_max_files"), "{d:?}");
+    let d = h.propose("s1", ChangeId::random(), facts(2, 6, 5));
+    assert!(denied_with(&d, "scope_max_lines"), "{d:?}");
+    let d = h.propose("s1", ChangeId::random(), facts(2, 6, 4));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// The policy sees the lines added and removed together.
+#[test]
+fn the_blast_radius_counts_lines_added_and_removed() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    h.start_observed("s2", &["src/**"]);
+    let (f, g) = ("src/a.rs#f", "src/b.rs#g");
+    h.wrote("s1", "src/a.rs");
+    h.wrote("s2", "src/b.rs");
+    assert!(h.lease("s1", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    assert!(h.lease("s2", "l2", &[(g, LeaseKind::Edit)]).is_allow());
+    let lines = |sym: &str, added: u32, removed: u32| Facts {
+        lines_added: added,
+        lines_removed: removed,
+        ..edit(sym)
+    };
+    let d = h.propose("s1", ChangeId::random(), lines(f, 2001, 0));
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    assert!(
+        d.reasons.contains(&"policy:blast-radius".to_string()),
+        "{d:?}"
+    );
+    let d = h.propose("s2", ChangeId::random(), lines(g, 1000, 1000));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// Text outside any symbol (`<file>`, `<imports>`) is in a scope only
+/// when the scope names every symbol.
+#[test]
+fn only_a_scope_of_every_symbol_reaches_text_outside_symbols() {
+    let mut h = H::new();
+    for (session, symbols) in [("s1", "*"), ("s2", "f")] {
+        let mut op = h.start_op(session, &["src/**"], None);
+        let Op::SessionStart { scope, .. } = &mut op else {
+            unreachable!()
+        };
+        scope.symbols = Some(vec![symbols.into()]);
+        assert!(h.human("ayse", op).is_allow());
+    }
+    let (a, b) = ("src/a.rs#<file>", "src/b.rs#<file>");
+    assert!(h.lease("s1", "l1", &[(a, LeaseKind::Edit)]).is_allow());
+    let d = h.propose("s1", ChangeId::random(), edit(a));
+    assert!(!denied_with(&d, "scope_symbol"), "{d:?}");
+    let d = h.propose("s2", ChangeId::random(), edit(b));
+    assert!(denied_with(&d, &format!("scope_symbol:{b}")), "{d:?}");
     h.assert_replay();
 }

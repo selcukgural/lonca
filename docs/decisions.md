@@ -122,6 +122,8 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 20** adds `harness` to `session.start`, left out of the encoding when
   absent, and holds `session.bind` to it (see "Naming the harness"). Older entries
   replay as they were.
+- **Version 21** adds the lease kind `shared` (see "Shared leases (#112)"). An
+  acquire or an interest with a `shared` item needs it.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -636,6 +638,10 @@ entry format, so they have their own version
     around it, as with `MAX_LEVELS`, and test names of JavaScript stop there as
     well. Files that are read stay far below it.
   - Both limits depend only on the text, so the auditor gets the same answer.
+- **Engine 14** joins by lines a symbol both sides changed, where the caller
+  says it may (`Joins`): one held `shared` (see "Shared leases (#112)"). With
+  nothing to join its output is engine 13's. The cases under
+  `tests/engine/v14/` with a `joins` file pin what it joins.
     Engines before 13 read everything, as they always did.
 - **The cost of a merge grows with the file**, in every engine. Going through a
   list for each symbol, node or change made a merge of 300 KB take minutes.
@@ -2485,6 +2491,52 @@ both 0 (off) by default.
   leaves (under one millisecond per change) is not charged to a session.
 - **A table of its own**, not `[verification]`: the verifier's cache is keyed
   by a digest of that table, and a quota does not change what a run proves.
+
+## Shared leases (#112)
+
+A symbol has one `edit` holder, so two agents in one long method take turns.
+Most of their edits would not touch the same lines. The lease kind `shared`
+lets several sessions hold a symbol at once, and the merge joins their changes
+to it line by line.
+
+- **Off unless the repository verifies every merge.** `[leases] shared = true`
+  is refused at policy load without `verification.required = true` and a
+  `build` or `test` command, and `decide()` refuses a `shared` item
+  (`shared_off`) unless both hold, in an acquire or an interest. Two edits that
+  do not share a line can still break each other; what catches that is the
+  checks on the merged tree, so the kind can not exist without them.
+- **`shared` goes with `shared` only.** Against `edit` or `rename` on the
+  symbol, on what holds it, or on what it holds, it conflicts as an `edit`
+  would, in both orders, so `edit` keeps meaning exclusive. Against an
+  `insert` it is an `edit`.
+- **A body, not a signature.** A `shared` lease covers a symbol in `edits`. A
+  change of its signature still needs `edit` or `rename`: what calls it can
+  not be merged by lines. Deletes and renames are as before.
+- **Log format 21.** An old reader would take `shared` for an unknown kind, so
+  the chain check refuses one in an older entry.
+- **The merge (engine 14).** A symbol both sides changed is joined by
+  lines when the change being integrated pinned a `shared` item covering it,
+  and no move of trunk since its base changed it under any other kind: an
+  integration records in the state what its facts change (edits, signature
+  changes, deletes, renamed names) that no `shared` pin of it covers, and an
+  import from outside counts as changing everything. In a batch, the members
+  in front count too. Nothing is joined under a policy without `shared`
+  leases, whatever was pinned. All of it comes from the replayed state and
+  the policy in force, so the auditor recomputes the same merge and the log
+  carries nothing new. The daemon merges and verifies without its lock, so before it
+  logs it reads what may be joined again; a policy that changed under the run
+  sends the change back through the merge (a batch's head goes alone). An
+  edit that an exclusive pin of the same change also covers was made under
+  that one, whatever `shared` item the session holds besides.
+- **What a join must hold to.** Lines both sides changed, or lines next to
+  each other, stay a conflict naming the symbol. The result must parse and
+  keep what the symbol merge keeps (`holds_up`); a joined result that does not
+  is a conflict naming the joined symbol, not the file. A type whose members
+  are symbols is merged member by member as before; a Rust struct's fields are
+  its own text, so they are joined.
+- **Recorded state grows with trunk.** One record per integration that
+  changed something exclusively; a lookup reads only the records since the
+  change's base.
 
 ## Open questions (carried from the design)
 

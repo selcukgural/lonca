@@ -232,6 +232,34 @@ pub enum LeaseKind {
     Insert,
     /// Exclusive: rename or delete a symbol.
     Rename,
+    /// Shared: change the body of a symbol alongside others who hold it
+    /// `shared`; the merge joins their lines (log format 21, needs
+    /// `leases.shared`).
+    Shared,
+}
+
+impl LeaseKind {
+    pub const ALL: [LeaseKind; 4] = [Self::Edit, Self::Insert, Self::Rename, Self::Shared];
+
+    /// The name in entries and requests.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Edit => "edit",
+            Self::Insert => "insert",
+            Self::Rename => "rename",
+            Self::Shared => "shared",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == name)
+    }
+}
+
+impl LeaseItem {
+    pub fn is_shared(&self) -> bool {
+        self.kind == LeaseKind::Shared
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -810,6 +838,18 @@ impl<'a> LoginIntent<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The names requests use are the names in entries.
+    #[test]
+    fn lease_kinds_are_named_as_they_are_written() {
+        for kind in LeaseKind::ALL {
+            let written = serde_json::to_value(kind).unwrap();
+            assert_eq!(written, kind.as_str());
+            assert_eq!(LeaseKind::from_name(kind.as_str()), Some(kind));
+        }
+        assert_eq!(LeaseKind::from_name("Shared"), None);
+        assert_eq!(LeaseKind::from_name(""), None);
+    }
 
     #[test]
     fn a_change_reaches_others_by_any_one_of_three() {

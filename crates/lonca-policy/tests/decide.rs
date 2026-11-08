@@ -6431,3 +6431,221 @@ fn a_batch_is_one_run_and_its_changes_share_it() {
     assert_eq!(h.chain.state.queue, [d, e]);
     h.assert_replay();
 }
+
+/// `leases.shared` on, with what makes it acceptable: every merge verified.
+fn shared_policy() -> PolicyBundle {
+    let config = DEFAULT_CONFIG
+        .replace("shared = false", "shared = true")
+        .replace("required = false", "required = true")
+        .replace("# test = \"cargo test --offline\"", "test = \"t\"");
+    PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap()
+}
+
+#[test]
+fn shared_needs_the_repository_to_verify_every_merge() {
+    let on = |from: &str, to: &str| DEFAULT_CONFIG.replace(from, to);
+    let shared = on("shared = false", "shared = true");
+    let required = shared.replace("required = false", "required = true");
+    let blank = required.replace("# test = \"cargo test --offline\"", "test = \"  \"");
+    for config in [&shared, &required, &blank] {
+        let Err(err) = PolicyBundle::parse(config, DEFAULT_POLICY) else {
+            panic!("allowed: {config}");
+        };
+        assert!(err.contains("leases.shared needs"), "{err}");
+    }
+    let built = required.replace("# build = \"cargo build --offline\"", "build = \"b\"");
+    assert!(PolicyBundle::parse(&built, DEFAULT_POLICY).is_ok());
+    assert!(shared_policy().config.shared_leases());
+    assert!(!PolicyBundle::default_bundle().config.shared_leases());
+}
+
+#[test]
+fn a_shared_lease_is_refused_where_the_repository_does_not_allow_it() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let f = "src/a.rs#f";
+    let d = h.lease("a", "la", &[(f, LeaseKind::Shared)]);
+    assert!(denied_with(&d, "shared_off"), "{d:?}");
+    // An interest in it too: it would stop others for what can never be held.
+    assert!(h.lease("b", "lb", &[(f, LeaseKind::Edit)]).is_allow());
+    let d = h.agent(
+        "a",
+        Op::LeaseInterest {
+            items: vec![LeaseItem {
+                symbol: f.into(),
+                kind: LeaseKind::Shared,
+            }],
+            intent: "wait".into(),
+        },
+    );
+    assert!(denied_with(&d, "shared_off"), "{d:?}");
+    // The other kinds are as they were.
+    let d = h.lease("a", "la", &[("src/a.rs#g", LeaseKind::Edit)]);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn shared_holders_share_and_edit_stays_exclusive() {
+    let mut h = H::with_policy(shared_policy());
+    for s in ["a", "b", "c", "d"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let f = "src/a.rs#Client.charge";
+    let g = "src/a.rs#Client.refund";
+    assert!(h.lease("a", "la", &[(f, LeaseKind::Shared)]).is_allow());
+    assert!(h.lease("b", "lb", &[(f, LeaseKind::Shared)]).is_allow());
+    // An exclusive kind on it, or on what holds it, meets both holders.
+    for (sym, kind) in [
+        (f, LeaseKind::Edit),
+        (f, LeaseKind::Rename),
+        ("src/a.rs#Client", LeaseKind::Edit),
+        ("src/a.rs#<file>", LeaseKind::Rename),
+    ] {
+        let d = h.lease("c", "lc", &[(sym, kind)]);
+        assert!(denied_with(&d, &format!("lease_held:{f}:a:")), "{d:?}");
+        assert!(denied_with(&d, &format!("lease_held:{f}:b:")), "{d:?}");
+    }
+    // Against an insert, shared is an edit: a new member of the type is no
+    // part of `charge`, and a new member of `charge` is.
+    let d = h.lease("c", "lc", &[("src/a.rs#Client", LeaseKind::Insert)]);
+    assert!(d.is_allow(), "{d:?}");
+    let d = h.lease("d", "ld", &[(f, LeaseKind::Insert)]);
+    assert!(denied_with(&d, &format!("lease_held:{f}:a:")), "{d:?}");
+    // And an edit held first keeps shared out.
+    assert!(h.lease("d", "ld", &[(g, LeaseKind::Edit)]).is_allow());
+    let d = h.lease("a", "la2", &[(g, LeaseKind::Shared)]);
+    assert!(denied_with(&d, &format!("lease_held:{g}:d:")), "{d:?}");
+    // A shared lease on the type is shared with one on its member.
+    let d = h.lease("b", "lb2", &[("src/a.rs#Client", LeaseKind::Shared)]);
+    assert!(denied_with(&d, &format!("lease_held:{g}:d:")), "{d:?}");
+    assert!(!denied_with(&d, &format!("lease_held:{f}")), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn a_shared_lease_covers_a_body_and_not_a_signature() {
+    let mut h = H::with_policy(shared_policy());
+    h.start_observed("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "la", &[(f, LeaseKind::Shared)]).is_allow());
+    h.wrote("a", "src/a.rs");
+    let d = h.propose("a", ChangeId::random(), reaching(&[]));
+    assert!(denied_with(&d, &format!("lease_missing:{f}")), "{d:?}");
+    let change = ChangeId::random();
+    let d = h.propose("a", change, edit(f));
+    assert!(d.is_allow(), "{d:?}");
+    // What the change needs is pinned to it, shared or not.
+    let pinned = &h.chain.state.leases["la"].pins[&change];
+    assert_eq!(
+        pinned.iter().map(|i| i.kind).collect::<Vec<_>>(),
+        [LeaseKind::Shared]
+    );
+    h.assert_replay();
+}
+
+/// What engine 14 may join, as the daemon and the auditor read it from the
+/// state: what the change pinned `shared`, less what trunk changed since its
+/// base under anything else.
+#[test]
+fn what_an_integration_may_join_comes_from_the_state() {
+    let mut h = H::with_policy(shared_policy());
+    let config = shared_policy().config;
+    let (f, g, del) = ("src/a.rs#f", "src/a.rs#g", "src/a.rs#h");
+    for s in ["a", "b", "c"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    // A human's edit of `f` made the base: it is not since the base.
+    let human = ChangeId::random();
+    let op = Op::ChangePropose {
+        change: human,
+        commit: gid('c'),
+        base: h.chain.state.trunk.clone().unwrap(),
+        claim: claim_of(&edit(f)),
+    };
+    assert!(h.human_change("ayse", op, edit(f)).is_allow());
+    assert!(integrate(&mut h, human, Some(gid('1')), &[]).is_allow());
+    let exclusive = &h.chain.state.exclusive;
+    assert_eq!(exclusive.last().unwrap().symbols, Some(vec![f.to_string()]));
+
+    assert!(h.lease("a", "la", &[(f, LeaseKind::Shared)]).is_allow());
+    assert!(h.lease("b", "lb", &[(f, LeaseKind::Shared)]).is_allow());
+    let items = [(g, LeaseKind::Edit), (del, LeaseKind::Rename)];
+    assert!(h.lease("c", "lc", &items).is_allow());
+    for s in ["a", "b", "c"] {
+        h.wrote(s, "src/a.rs");
+    }
+    let [ca, cb, cc] = [(); 3].map(|_| ChangeId::random());
+    // In the queue: `a`'s, `c`'s, then `b`'s, which is the one asked about.
+    assert!(h.propose("a", ca, edit(f)).is_allow());
+    let mut other = edit(g);
+    other.deletes = vec![del.into()];
+    assert!(h.propose("c", cc, other).is_allow());
+    assert!(h.propose("b", cb, edit(f)).is_allow());
+
+    let joins = |h: &H, before: &[ChangeId]| h.chain.state.joins(cb, before, &config);
+    assert!(joins(&h, &[]).allows(f));
+    assert!(!joins(&h, &[]).allows(g), "not pinned shared");
+    assert!(joins(&h, &[ca]).allows(f), "shared in front of it");
+    assert!(joins(&h, &[cc]).allows(f));
+    // In front of it in a batch, `c`'s change says what `a`'s may join.
+    let by_a = |before: &[ChangeId]| h.chain.state.joins(ca, before, &config);
+    assert!(by_a(&[]).allows(f));
+    assert_eq!(h.chain.state.exclusive_of(cc), [g, del]);
+    assert!(h.chain.state.exclusive_of(ca).is_empty());
+
+    // Shared on trunk leaves nothing behind; an edit and a delete do.
+    let records = h.chain.state.exclusive.len();
+    assert!(integrate(&mut h, ca, Some(gid('2')), &[]).is_allow());
+    assert_eq!(h.chain.state.exclusive.len(), records);
+    assert!(joins(&h, &[]).allows(f));
+    let d = integrate(&mut h, cc, Some(gid('3')), &[]);
+    assert!(d.is_allow(), "{d:?}");
+    let last = h.chain.state.exclusive.last().unwrap();
+    assert_eq!(last.symbols, Some(vec![g.to_string(), del.to_string()]));
+    assert!(joins(&h, &[]).allows(f));
+
+    // Not under a policy without shared leases.
+    let off = PolicyBundle::default_bundle().config;
+    assert!(!h.chain.state.joins(cb, &[], &off).allows(f));
+    // Nor across what came from outside: it could have changed anything.
+    let trunk_before = h.chain.state.trunk.clone().unwrap();
+    let import = Op::ImportExternal {
+        remote: "origin".into(),
+        commit: gid('4'),
+        trunk_before,
+    };
+    assert!(h.human("ayse", import).is_allow());
+    assert_eq!(h.chain.state.exclusive.last().unwrap().symbols, None);
+    assert!(!joins(&h, &[]).allows(f));
+    // What came from outside before the base is in the base.
+    h.start_observed("d", &["src/**"]);
+    assert!(h.lease("d", "ld", &[(f, LeaseKind::Shared)]).is_allow());
+    h.wrote("d", "src/a.rs");
+    let cd = ChangeId::random();
+    assert!(h.propose("d", cd, edit(f)).is_allow());
+    assert!(h.chain.state.joins(cd, &[], &config).allows(f));
+    h.assert_replay();
+}
+
+/// A session's own leases do not meet: one that holds `f` both `shared` and
+/// `edit` changed it under `edit`, and no later change joins with that.
+#[test]
+fn an_edit_under_an_exclusive_pin_is_exclusive_whatever_else_is_pinned() {
+    let mut h = H::with_policy(shared_policy());
+    h.start_observed("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(
+        h.lease("a", "la", &[("src/a.rs#<file>", LeaseKind::Shared)])
+            .is_allow()
+    );
+    assert!(h.lease("a", "lb", &[(f, LeaseKind::Edit)]).is_allow());
+    h.wrote("a", "src/a.rs");
+    let change = ChangeId::random();
+    assert!(h.propose("a", change, edit(f)).is_allow());
+    let pinned = |set: &str| h.chain.state.leases[set].pins[&change].len();
+    assert_eq!([pinned("la"), pinned("lb")], [1, 1]);
+    assert_eq!(h.chain.state.exclusive_of(change), [f]);
+    h.assert_replay();
+}

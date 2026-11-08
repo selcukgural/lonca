@@ -23,12 +23,12 @@ use std::sync::Arc;
 
 use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
 use lonca_core::ops::Op;
-use lonca_core::{GitId, Result, Store};
-use lonca_policy::config::{CONFIG_FILE, POLICY_FILE, PolicyBundle};
+use lonca_core::{ChangeId, GitId, Result, Store};
+use lonca_policy::config::{CONFIG_FILE, Config, POLICY_FILE, PolicyBundle};
 use lonca_policy::decide::{Ctx, decide};
 use lonca_policy::state::State;
 use lonca_symbols::engine;
-use lonca_symbols::integrate::{facts_of, integrate};
+use lonca_symbols::integrate::{facts_of, integrate_joining};
 use serde::Serialize;
 
 pub const TRUNK_REF: &str = "refs/heads/main";
@@ -163,7 +163,7 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
             _ => true,
         };
         if opts.deep && engine_known {
-            recheck_objects(store, &state, op, &mut rep);
+            recheck_objects(store, &state, &policy.config, op, &mut rep);
         }
         let d = decide(
             &state,
@@ -224,7 +224,9 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
     rep
 }
 
-fn recheck_objects(store: &Store, state: &State, op: &SignedOp, rep: &mut Report) {
+/// Recomputes facts and merges. `state` is the one before `op`: what a merge
+/// may join comes from it, as it did in the daemon.
+fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp, rep: &mut Report) {
     let e = &op.entry;
     let engine = e.engine().unwrap_or(engine::ENGINE_CURRENT);
     match &e.op {
@@ -256,7 +258,16 @@ fn recheck_objects(store: &Store, state: &State, op: &SignedOp, rep: &mut Report
                 rep.skip(e.seq, "merge", "integration objects not present");
                 return;
             }
-            match integrate(store, engine, &rec.base, trunk_before, &rec.commit) {
+            let joins = state.joins(*change, &[], config);
+            let may_join = |s: &str| joins.allows(s);
+            match integrate_joining(
+                store,
+                engine,
+                &rec.base,
+                trunk_before,
+                &rec.commit,
+                &may_join,
+            ) {
                 Ok(i) => {
                     if &i.merged != merged || &i.conflicts != conflicts {
                         rep.find(
@@ -277,7 +288,8 @@ fn recheck_objects(store: &Store, state: &State, op: &SignedOp, rep: &mut Report
             merged,
         } => {
             let mut trunk = trunk_before.clone();
-            for (change, commit) in merged {
+            let members: Vec<ChangeId> = merged.iter().map(|(c, _)| *c).collect();
+            for (k, (change, commit)) in merged.iter().enumerate() {
                 let Some(rec) = state.changes.get(change) else {
                     return;
                 };
@@ -285,7 +297,9 @@ fn recheck_objects(store: &Store, state: &State, op: &SignedOp, rep: &mut Report
                     rep.skip(e.seq, "merge", "integration objects not present");
                     return;
                 }
-                match integrate(store, engine, &rec.base, &trunk, &rec.commit) {
+                let joins = state.joins(*change, &members[..k], config);
+                let may_join = |s: &str| joins.allows(s);
+                match integrate_joining(store, engine, &rec.base, &trunk, &rec.commit, &may_join) {
                     Ok(i) if i.merged.as_ref() == Some(commit) => {}
                     Ok(i) => {
                         let found = format!("recorded {commit:?}, recomputed {:?}", i.merged);

@@ -1,0 +1,273 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#Ledger.total",
+          "src/sample.py#charge"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#Ledger.total",
+          "src/sample.py#charge"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "import os\n\n\nclass Ledger:\n    def total(self, fee):\n        s = 0.0\n        for e in self.entries:\n            s += e\n        fee = max(fee, 0)\n        return s + fee\n\n    def count(self):\n        return len(self.entries)\n\n\ndef charge(amount):\n    a = int(amount)\n    b = 0\n    return a - b\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          9
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "def total(self, fee):",
+              "skipped": false,
+              "span": [
+                30,
+                30,
+                156
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.count",
+              "own": "",
+              "signature": "def count(self):",
+              "skipped": false,
+              "span": [
+                162,
+                162,
+                211
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_definition(class\u001fLedger\u001f:\u001fblock())",
+          "signature": "class Ledger:",
+          "skipped": false,
+          "span": [
+            12,
+            12,
+            211
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "def charge(amount):",
+          "skipped": false,
+          "span": [
+            214,
+            214,
+            275
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          9
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "def total(self, fee):",
+              "skipped": false,
+              "span": [
+                30,
+                30,
+                158
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.count",
+              "own": "",
+              "signature": "def count(self):",
+              "skipped": false,
+              "span": [
+                164,
+                164,
+                213
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_definition(class\u001fLedger\u001f:\u001fblock())",
+          "signature": "class Ledger:",
+          "skipped": false,
+          "span": [
+            12,
+            12,
+            213
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "def charge(amount):",
+          "skipped": false,
+          "span": [
+            216,
+            216,
+            282
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          9
+        ]
+      ],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "def total(self, fee):",
+              "skipped": false,
+              "span": [
+                30,
+                30,
+                164
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.count",
+              "own": "",
+              "signature": "def count(self):",
+              "skipped": false,
+              "span": [
+                170,
+                170,
+                219
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_definition(class\u001fLedger\u001f:\u001fblock())",
+          "signature": "class Ledger:",
+          "skipped": false,
+          "span": [
+            12,
+            12,
+            219
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "charge",
+          "own": "",
+          "signature": "def charge(amount):",
+          "skipped": false,
+          "span": [
+            222,
+            222,
+            283
+          ]
+        }
+      ]
+    }
+  }
+}

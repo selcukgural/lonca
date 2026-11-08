@@ -18,6 +18,7 @@ use lonca_core::ops::{
 };
 use serde::Serialize;
 
+use crate::config::Config;
 use crate::decide::leases_conflict;
 use crate::symbols::{self, LeaseNeed};
 
@@ -118,6 +119,37 @@ pub struct Reservation {
     pub session: String,
     pub items: Vec<LeaseItem>,
     pub until_ms: i64,
+}
+
+/// What a move of trunk changed other than under a `shared` lease: no other
+/// change may join its lines with it (see [`State::joins`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Exclusive {
+    /// The trunk it made, in `trunk_line`.
+    pub line: usize,
+    /// `None`: anything, as an import from outside.
+    pub symbols: Option<Vec<String>>,
+}
+
+/// The symbols an integration may join by lines with what trunk did (engine
+/// 14's [`lonca_symbols`] `Joins`): a change pinned `shared` on them, and no
+/// move of trunk since its base changed them other than under `shared`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Joins {
+    shared: Vec<String>,
+    exclusive: Vec<String>,
+    keys: bool,
+}
+
+impl Joins {
+    pub fn allows(&self, symbol: &str) -> bool {
+        let keys = self.keys;
+        self.shared.iter().any(|s| symbols::covers(s, symbol, keys))
+            && !self
+                .exclusive
+                .iter()
+                .any(|e| symbols::overlaps(e, symbol, keys))
+    }
 }
 
 /// A symbol that goes on under another name, from an integrated change.
@@ -248,6 +280,8 @@ pub struct State {
     pub trunk_line: Vec<GitId>,
     /// What integrated changes renamed, oldest first.
     pub renames: Vec<Renamed>,
+    /// What moves of trunk changed other than under `shared`, oldest first.
+    pub exclusive: Vec<Exclusive>,
     pub sessions: BTreeMap<String, Session>,
     pub leases: BTreeMap<String, LeaseSet>,
     pub changes: BTreeMap<ChangeId, ChangeRecord>,
@@ -502,8 +536,76 @@ impl State {
         self.trunk_line.push(commit.clone());
     }
 
+    /// The items pinned to `change` that are `shared` (or that are not).
+    fn pins_of(&self, change: ChangeId, shared: bool) -> Vec<String> {
+        let pins = self.leases.values().filter_map(|l| l.pins.get(&change));
+        let items = pins.flatten().filter(|i| i.is_shared() == shared);
+        items.map(|i| i.symbol.clone()).collect()
+    }
+
+    fn shared_pins(&self, change: ChangeId) -> Vec<String> {
+        self.pins_of(change, true)
+    }
+
+    /// What `change` changes other than under a `shared` item pinned to it.
+    /// An edit an exclusive pin of it covers too was made under that one. A
+    /// signature, a delete or a rename is never a body.
+    pub fn exclusive_of(&self, change: ChangeId) -> Vec<String> {
+        let Some(c) = self.changes.get(&change) else {
+            return vec![];
+        };
+        let (f, keys) = (&c.facts, self.symbol_keys);
+        let [shared, sole] = [true, false].map(|s| self.pins_of(change, s));
+        let covered = |pins: &[String], s: &str| pins.iter().any(|i| symbols::covers(i, s, keys));
+        let alone = |s: &&String| covered(&sole, s) || !covered(&shared, s);
+        let olds = f.renames.iter().map(|[old, _]| old);
+        let others = f.signature_changes.iter().chain(&f.deletes).chain(olds);
+        f.edits
+            .iter()
+            .filter(alone)
+            .chain(others)
+            .cloned()
+            .collect()
+    }
+
+    /// What `change` may join by lines when it is merged onto trunk after
+    /// the changes in `before`, which are not on trunk yet (a batch). Nothing
+    /// unless `shared` leases are on.
+    pub fn joins(&self, change: ChangeId, before: &[ChangeId], config: &Config) -> Joins {
+        let Some(c) = self.changes.get(&change) else {
+            return Joins::default();
+        };
+        let Some(base) = self.trunk_line.iter().rposition(|t| *t == c.base) else {
+            return Joins::default();
+        };
+        if !config.shared_leases() {
+            return Joins::default();
+        }
+        // Lines never go down: what came after the base is the end.
+        let from = self.exclusive.partition_point(|e| e.line <= base);
+        let mut exclusive = Vec::new();
+        for e in &self.exclusive[from..] {
+            match &e.symbols {
+                Some(s) => exclusive.extend(s.iter().cloned()),
+                None => return Joins::default(),
+            }
+        }
+        exclusive.extend(before.iter().flat_map(|b| self.exclusive_of(*b)));
+        Joins {
+            shared: self.shared_pins(change),
+            exclusive,
+            keys: self.symbol_keys,
+        }
+    }
+
     /// `change` is on trunk, as `commit`.
     fn integrated(&mut self, change: ChangeId, commit: &GitId, time_ms: i64, reasons: &[String]) {
+        let symbols = self.exclusive_of(change);
+        if !symbols.is_empty() {
+            let line = self.trunk_line.len().saturating_sub(1);
+            let symbols = Some(symbols);
+            self.exclusive.push(Exclusive { line, symbols });
+        }
         if let Some(c) = self.changes.get_mut(&change) {
             c.status = ChangeStatus::Integrated {
                 commit: commit.clone(),
@@ -1652,6 +1754,9 @@ impl State {
                 self.trunk = Some(commit.clone());
                 self.trunk_history.insert(commit.clone());
                 self.trunk_line.push(commit.clone());
+                let line = self.trunk_line.len() - 1;
+                let symbols = None;
+                self.exclusive.push(Exclusive { line, symbols });
             }
             Op::ImportUnmediated { .. } => {}
             Op::BridgePush {

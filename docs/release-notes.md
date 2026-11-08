@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Shared leases
+
+A new lease kind, `shared`: several agents can hold one symbol at once, where a signed
+policy has `[leases] shared = true`, which needs `verification.required = true` and a `build`
+or `test` command. `edit` and `rename` stay exclusive and conflict with it. It covers a body,
+not a signature. When two holders change one function, the merge (symbol engine 14) joins
+their lines; lines both changed are `conflicted`, naming the function. Log format 21. See
+`docs/guide/verification.md`, "Shared leases".
+
 ### A quota on verification
 
 `[quota] session_seconds` and `day_seconds` cap the time verification may take for a session

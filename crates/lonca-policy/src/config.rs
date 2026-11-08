@@ -53,6 +53,12 @@ interest_block_ms = 600000
 # ("file"). With "optimistic" it needs no lease: the line merge at integration
 # decides, an overlap is `conflicted`, and verification runs on the result.
 unparsed_files = "file"
+# Several sessions may hold a symbol with the lease kind "shared", and the
+# merge joins their changes to it line by line; lines both changed are a
+# conflict. Only with verification.required and a build or test command:
+# the merged result is what verification runs on. See
+# docs/guide/verification.md, "Shared leases".
+shared = false
 
 [changes]
 max_files = 200
@@ -327,6 +333,12 @@ pub struct Config {
 }
 
 impl Config {
+    /// `shared` leases are on, and every merged result they allow is
+    /// verified before it reaches trunk.
+    pub fn shared_leases(&self) -> bool {
+        self.leases.shared && self.verification.checks_every_merge()
+    }
+
     /// The profile of a harness: this repository's, else the built-in one.
     pub fn harness(&self, name: &str) -> Option<&crate::harness::Profile> {
         let built_in = || crate::harness::built_in().get(name);
@@ -369,6 +381,8 @@ pub struct Leases {
     pub interest_block_ms: i64,
     /// What an edit of a file no parser reads takes.
     pub unparsed_files: UnparsedFiles,
+    /// The lease kind `shared` may be taken; see [`Config::shared_leases`].
+    pub shared: bool,
 }
 
 /// `leases.unparsed_files`. Any other word is refused with the policy.
@@ -433,6 +447,12 @@ pub struct Verification {
 }
 
 impl Verification {
+    /// Every integration needs evidence, and there is a command to give it.
+    pub fn checks_every_merge(&self) -> bool {
+        let set = |c: &Option<String>| c.as_ref().is_some_and(|c| !c.trim().is_empty());
+        self.required && (set(&self.build) || set(&self.test))
+    }
+
     /// What a change owes: `reaches_others` is what its facts say of it.
     pub fn for_change(&self, reaches_others: bool) -> Self {
         let extended = self.on_signature_change.as_ref();
@@ -628,6 +648,7 @@ impl Default for Leases {
             reservation_ms: 60_000,
             interest_block_ms: 600_000,
             unparsed_files: UnparsedFiles::File,
+            shared: false,
         }
     }
 }
@@ -841,6 +862,12 @@ impl PolicyBundle {
             return Err(format!(
                 "{CONFIG_FILE}: leases.heartbeat_timeout_ms, leases.max_hold_minutes, \
                  leases.reservation_ms and leases.interest_block_ms must be positive"
+            ));
+        }
+        if config.leases.shared && !config.shared_leases() {
+            return Err(format!(
+                "{CONFIG_FILE}: leases.shared needs verification.required = true \
+                 and a verification.build or verification.test command"
             ));
         }
         if !matches!(config.observation.network.as_str(), "taint" | "deny") {

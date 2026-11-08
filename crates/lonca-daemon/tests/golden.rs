@@ -90,7 +90,52 @@ fn golden_repo() -> Env {
     unparsed(&mut e);
     batch(&mut e);
     reach(&mut e);
+    shared(&mut e);
     e
+}
+
+/// From format 21 and engine 14: two agents hold one function `shared`, and
+/// the merge joins their lines.
+fn shared(e: &mut Env) {
+    let config = lonca_policy::config::DEFAULT_CONFIG
+        .replace("shared = false", "shared = true")
+        .replace("required = false", "required = true")
+        .replace("# test = \"cargo test --offline\"", "test = \"true\"");
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+    let path = "src/joined.rs";
+    let seed = "pub fn joined() -> u8 {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    a + b + c\n}\n";
+    let r = e.human_change(vec![file(path, seed)], "joined");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let base = e.trunk();
+    for (name, from, to) in [("s-ja", "a = 1", "a = 10"), ("s-jb", "c = 3", "c = 30")] {
+        let t = e.session(name, &["src/**"]);
+        e.bind(&t);
+        e.wrote(&t, path);
+        let items = json!([{"symbol": "src/joined.rs#joined", "kind": "shared"}]);
+        let r = e.ok(
+            "lease.acquire",
+            None,
+            Some(&t),
+            json!({"items": items, "intent": "a line", "ttl_ms": 600_000}),
+        );
+        assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+        let files = vec![file(path, &seed.replace(from, to))];
+        let r = e.propose(&t, &base, files, &["src/joined.rs#joined"]);
+        assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    }
+    assert_eq!(e.svc.process_all(), 2);
+    let head = e.trunk();
+    let text = e.store().read_file(&head, path).unwrap().unwrap();
+    let joined = seed.replace("a = 1", "a = 10").replace("c = 3", "c = 30");
+    assert_eq!(String::from_utf8(text).unwrap(), joined);
 }
 
 /// From format 18: facts say what mentions a changed signature, the decision
@@ -955,6 +1000,33 @@ fn golden_v20_log_still_verifies_replays_and_audits() {
         )
     });
     assert!(bound.count() > 0);
+}
+
+/// Two `shared` holders of one function, joined by engine 14: the auditor
+/// recomputes the join from the state it replays.
+#[test]
+fn golden_v21_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v21.bundle",
+        "715d6f35aadb16aa13d611626ebfb7086615fa1e92eb94b299bebf917268f8bc",
+        21,
+    );
+    let shared = ops.iter().filter(|o| match &o.entry.op {
+        Op::LeaseAcquire { items, .. } => items.iter().any(|i| i.kind == LeaseKind::Shared),
+        _ => false,
+    });
+    assert_eq!(shared.count(), 2);
+    let joined = ops.iter().filter(|o| {
+        o.entry.symbols_engine == Some(14)
+            && matches!(
+                &o.entry.op,
+                Op::ChangeIntegrate {
+                    merged: Some(_),
+                    ..
+                }
+            )
+    });
+    assert!(joined.count() >= 2);
 }
 
 #[test]

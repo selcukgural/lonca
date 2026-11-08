@@ -652,6 +652,7 @@ enum LeaseCmd {
     Acquire {
         #[arg(required = true)]
         symbols: Vec<String>,
+        /// edit, insert, rename, or shared (where the repository allows it)
         #[arg(long, default_value = "edit")]
         kind: String,
         /// What you are doing and why; others read it
@@ -680,6 +681,7 @@ enum LeaseCmd {
     Interest {
         #[arg(required = true)]
         symbols: Vec<String>,
+        /// edit, insert, rename, or shared (where the repository allows it)
         #[arg(long, default_value = "edit")]
         kind: String,
         /// What you are doing and why; others read it
@@ -1029,11 +1031,8 @@ fn claim_of(intent: String, symbols: [&Vec<String>; 4], deleted_files: Vec<Strin
 }
 
 fn lease_items(symbols: Vec<String>, kind: &str) -> Result<Vec<LeaseItem>> {
-    let kind = match kind {
-        "edit" => LeaseKind::Edit,
-        "insert" => LeaseKind::Insert,
-        "rename" => LeaseKind::Rename,
-        k => bail!("unknown lease kind {k}"),
+    let Some(kind) = LeaseKind::from_name(kind) else {
+        bail!("unknown lease kind {kind}");
     };
     let items = symbols.into_iter();
     Ok(items.map(|symbol| LeaseItem { symbol, kind }).collect())

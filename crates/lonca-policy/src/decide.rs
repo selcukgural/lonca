@@ -184,6 +184,9 @@ fn check_lease_request(
     if intent.len() > 500 {
         v.deny("intent_too_long");
     }
+    if items.iter().any(LeaseItem::is_shared) && !ctx.policy.config.shared_leases() {
+        v.deny("shared_off");
+    }
     for item in items {
         let Some((path, name)) = symbols::split(&item.symbol) else {
             v.deny(format!("invalid_symbol:{}", item.symbol));
@@ -456,10 +459,11 @@ pub fn scope_within(inner: &Scope, outer: &Scope) -> Result<(), String> {
 }
 
 /// Two lease items can not be held by different sessions at the same time.
+/// `shared` goes with `shared` only: against an `insert` it is an `edit`.
 pub fn leases_conflict(a: &LeaseItem, b: &LeaseItem, keys: bool) -> bool {
     use LeaseKind::*;
     match (a.kind, b.kind) {
-        (Insert, Insert) => false,
+        (Insert, Insert) | (Shared, Shared) => false,
         (Insert, _) => {
             symbols::covers(&b.symbol, &a.symbol, keys)
                 || (keys && symbols::stands_for(&a.symbol, &b.symbol))

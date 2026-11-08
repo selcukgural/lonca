@@ -25,9 +25,9 @@ use lonca_policy::details;
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
-use lonca_policy::state::{ChangeStatus, State};
+use lonca_policy::state::{ChangeStatus, Joins, State};
 use lonca_symbols::engine::ENGINE_CURRENT;
-use lonca_symbols::integrate::{facts_of, integrate};
+use lonca_symbols::integrate::{facts_of, integrate_joining};
 use lonca_verify::{Sandbox, Verifier};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -3209,7 +3209,7 @@ impl Service {
     /// the changes ahead of it that wait for that.
     fn process_batch(&self, repo: &str) -> Result<Option<SignedOp>> {
         let mut running = self.running();
-        let (store, jobs, reaches, trunk, vcfg) = {
+        let (store, jobs, reaches, trunk, vcfg, joins) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
                 return Ok(None);
@@ -3234,14 +3234,24 @@ impl Service {
                 )
             };
             let reach = |c: &ChangeId| state.changes[c].facts.reaches_others();
-            let held = state.queue.iter().take(size).take_while(free);
-            let jobs: Vec<_> = held.map(job).collect();
+            let held: Vec<ChangeId> = state
+                .queue
+                .iter()
+                .take(size)
+                .take_while(free)
+                .copied()
+                .collect();
+            // Each member is merged onto the ones in front of it.
+            let joins: Vec<_> = (0..held.len())
+                .map(|k| state.joins(held[k], &held[..k], &policy.config))
+                .collect();
+            let jobs: Vec<_> = held.iter().map(job).collect();
             let reaches: Vec<_> = state.queue.iter().take(size).map(reach).collect();
             let trunk = state.trunk.clone().expect("initialized");
             if jobs.len() >= 2 {
                 running.hold(jobs.iter().map(|j| j.0));
             }
-            (r.store.clone(), jobs, reaches, trunk, vcfg)
+            (r.store.clone(), jobs, reaches, trunk, vcfg, joins)
         };
         // At most the policy's size, so never two under the default.
         if jobs.len() < 2 {
@@ -3250,8 +3260,9 @@ impl Service {
         // Merged in order, up to the first that conflicts.
         let mut stack: Vec<(ChangeId, GitId, FileMap, Vec<String>)> = Vec::new();
         let mut tip = trunk.clone();
-        for (change, commit, base) in &jobs {
-            let i = integrate(&store, ENGINE_CURRENT, base, &tip, commit);
+        for ((change, commit, base), joins) in jobs.iter().zip(&joins) {
+            let may_join = |s: &str| joins.allows(s);
+            let i = integrate_joining(&store, ENGINE_CURRENT, base, &tip, commit, &may_join);
             let Some((merged, i)) = i.ok().and_then(|i| Some((i.merged.clone()?, i))) else {
                 break;
             };
@@ -3272,7 +3283,8 @@ impl Service {
                 .filter(|e| evidence_problems(&owed, e).is_empty())
             {
                 let merged = prefix.iter().map(|p| (p.0, p.1.clone())).collect();
-                return self.log_batch(repo, trunk, merged, &jobs, evidence);
+                let joins = &joins[..length];
+                return self.log_batch(repo, trunk, merged, (&jobs, joins), evidence);
             }
             length /= 2;
         }
@@ -3284,16 +3296,24 @@ impl Service {
         repo: &str,
         trunk: GitId,
         merged: Vec<(ChangeId, GitId)>,
-        jobs: &[(ChangeId, GitId, GitId)],
+        (jobs, joins): (&[(ChangeId, GitId, GitId)], &[Joins]),
         evidence: Vec<Attestation>,
     ) -> Result<Option<SignedOp>> {
         let mut inner = self.lock();
         let r = inner.repos.get_mut(repo).expect("exists");
+        let config = r.policy()?.config.clone();
         let state = &r.chain.state;
         let still = jobs.iter().take(merged.len()).zip(&state.queue);
         let same = still.filter(|(job, queued)| job.0 == **queued);
         let same = same.filter(|(job, _)| same_proposal(state, job.0, &job.1, &job.2));
         if same.count() != merged.len() || state.trunk.as_ref() != Some(&trunk) {
+            return Ok(None);
+        }
+        // As for one change: what may be joined is read again, and the head
+        // goes alone if it is not what the batch merged with.
+        let members: Vec<ChangeId> = merged.iter().map(|m| m.0).collect();
+        let now = (0..members.len()).map(|k| state.joins(members[k], &members[..k], &config));
+        if !now.eq(joins.iter().cloned()) {
             return Ok(None);
         }
         let tip = merged.last().map(|(_, tip)| tip.clone()).expect("a batch");
@@ -3316,7 +3336,7 @@ impl Service {
     /// The change at the head of the queue, alone.
     fn process_head(&self, repo: &str) -> Result<Option<SignedOp>> {
         let mut running = self.running();
-        let (store, change, commit, base, trunk, vcfg, reuse, past) = {
+        let (store, change, commit, base, trunk, vcfg, reuse, past, joins) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
                 return Ok(None);
@@ -3338,6 +3358,7 @@ impl Service {
             let state = &r.chain.state;
             let actor = &state.changes[&change].actor;
             let past = !quota_problems(state, actor, t, &policy.config.quota).is_empty();
+            let joins = state.joins(change, &[], &policy.config);
             running.hold([change]);
             (
                 r.store.clone(),
@@ -3348,9 +3369,11 @@ impl Service {
                 vcfg,
                 reuse,
                 past,
+                joins,
             )
         };
-        let integ = integrate(&store, ENGINE_CURRENT, &base, &trunk, &commit)?;
+        let may_join = |s: &str| joins.allows(s);
+        let integ = integrate_joining(&store, ENGINE_CURRENT, &base, &trunk, &commit, &may_join)?;
         let mut evidence = Vec::new();
         if let Some(m) = integ.merged.as_ref().filter(|_| !past) {
             let changed = (&integ.files, integ.touched.as_slice());
@@ -3363,6 +3386,13 @@ impl Service {
             || r.chain.state.trunk.as_ref() != Some(&trunk)
         {
             return Ok(None);
+        }
+        // The auditor reads what may be joined from the policy in force at
+        // the entry: one that changed under the run merges again.
+        let config = &r.policy()?.config;
+        if r.chain.state.joins(change, &[], config) != joins {
+            drop(inner);
+            return self.process_head(repo);
         }
         // Not verified, so it can only stand as what `decide` refuses: past
         // midnight, or under a wider policy, it is verified after all.

@@ -1,0 +1,7 @@
+# Every mutant in a gated file (mutants-gated.txt) that `.cargo/mutants.toml`
+# excludes, as `path: name` (line and column left out, so that moving code
+# does not change it). The reason for each is the comment above its entry in
+# `.cargo/mutants.toml`. A new exclusion in a gated file fails the release
+# run until it is added here, so the change shows in review next to its
+# reason. Written by `.github/scripts/mutants-gate.sh exclusions --write`.
+crates/lonca-core/src/changeid.rs: replace | with ^ in ChangeId::from_reverse_hex

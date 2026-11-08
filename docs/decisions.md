@@ -1864,6 +1864,27 @@ Passing tests do not show that they would catch a flipped `>=` or a
   `canonical.rs`, `changeid.rs` or `keys.rs` is excluded without review.
   A surviving mutant is otherwise killed with a test. "Hard to test" is
   not a reason to exclude.
+- **The gate on the trust model's files (#35).** `.cargo/mutants-gated.txt`
+  lists the files that hold the trust model: `decide.rs`, `chain.rs`,
+  `state.rs` and `human.rs` of `lonca-policy`; `oplog.rs`, `canonical.rs`,
+  `changeid.rs`, `keys.rs` and `paths.rs` of `lonca-core`; all of
+  `lonca-audit`; `merge.rs` and `integrate.rs` of `lonca-symbols`. A survivor
+  anywhere already fails a release, so the gate adds what that rule lets
+  through. A timeout counts as caught, but in a gated file it fails: it is a
+  loop no test ends or a test too slow to tell, and either hides whether the
+  mutant was found. Every exclusion in a gated file is listed by name
+  (path and mutant, no line) in `.cargo/mutants-gated-exclusions.txt`; the
+  release run's `exclusions` job compares that list with what
+  `cargo mutants --list` with and without the config tells apart, so a new
+  regex that happens to hide a gated mutant fails until it is listed, and
+  the listing shows in review: CODEOWNERS names an owner for `.cargo/` and
+  `.github/`, so a change to the config, either list or the script asks for
+  that owner's review. The `score` job
+  prints each crate's score and the gated files' from all shards in the
+  run's summary. The issue asked for the gate on the PR job and for a floor
+  under the scores of `lonca-policy` and `lonca-core`; the PR job is gone
+  (mutants run only for a release), and with no survivor allowed anywhere a
+  floor below 100 % checks nothing more.
 - **Tests are hermetic under mutation.** cargo-mutants runs copies of the
   tree in parallel. Tests use their own temp dirs, `127.0.0.1:0` ports and
   short socket paths; the CLI tests point `HOME` and `LONCA_HOME` into

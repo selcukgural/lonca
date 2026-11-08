@@ -1,7 +1,9 @@
 # Who answers for the parts that hold the trust model: the trusted core, the
-# CI that audits it, the supply-chain policy and what installs Lonca. A pull
-# request touching them asks this owner for review.
+# CI that audits it, the mutation gate (.cargo/), the supply-chain policy and
+# what installs Lonca. A pull request touching them asks this owner for
+# review.
 /.github/                 @selcukgural
+/.cargo/                  @selcukgural
 /deny.toml                @selcukgural
 /rust-toolchain.toml      @selcukgural
 /packaging/               @selcukgural

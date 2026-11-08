@@ -278,7 +278,7 @@ Agent'lar dosya değil **sembol** (fonksiyon, sınıf, metod) düzeyinde kiralam
 | Tür | Kapsam | Sahiplik |
 |---|---|---|
 | `edit` | Bir sembolün gövdesi | Tek sahip |
-| `insert` | Bir kapsayıcıya (dosya, sınıf) yeni üye ekleme | Çok sahip olabilir. Eklemeler deterministik sırayla (lease sırası) birleştirilir. |
+| `insert` | Bir kapsayıcıya (dosya, sınıf) yeni üye ekleme | Çok sahip olabilir. Eklenecek üye adları ayrılabilir (`names`); adları kesişen iki `insert` çakışır, ayrılmış adların dışında ekleme reddedilir. Eklemeler deterministik sırayla (kuyruk sırası; aynı yerde en son entegre edilen komşusuna en yakın) birleştirilir. Yeni dosya, yolunun `path#<file>` sembolünde `edit` ister: aynı yolu iki agent oluşturamaz. |
 | `imports` | Dosya başındaki import/using bloğuna ekleme | Kiralama gerekmez; küme olarak birleştirilir. Silme `edit` gerektirir. |
 | `rename` / `delete` | Sembol ve bilinen referansları | Geniş kapsam; politika onayı gerektirebilir |
 

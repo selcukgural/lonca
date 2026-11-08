@@ -17,7 +17,7 @@ use common::*;
 use lonca_audit::{Options, audit};
 use lonca_core::canonical::canonical_bytes;
 use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_LEGACY, OpEntry};
-use lonca_core::ops::{CheckKind, ObsKind, ObservationLevel};
+use lonca_core::ops::{CheckKind, Claim, ObsKind, ObservationLevel};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use std::collections::BTreeSet;
 
@@ -91,7 +91,74 @@ fn golden_repo() -> Env {
     batch(&mut e);
     reach(&mut e);
     shared(&mut e);
+    insert_names(&mut e);
     e
+}
+
+/// From format 22: two inserts into one type reserve the names they add, a
+/// third that wants one of them is refused, and a new file is created under
+/// an exclusive lease on its path.
+fn insert_names(e: &mut Env) {
+    let path = "src/limits.rs";
+    let seed = "pub struct Limits;\n\nimpl Limits {\n    pub fn new() -> Self {\n        Limits\n    }\n}\n";
+    let r = e.human_change(vec![file(path, seed)], "limits");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let base = e.trunk();
+    let acquire = |e: &mut Env, t: &str, items: Value| {
+        let args = json!({"items": items, "intent": "a member", "ttl_ms": 600_000});
+        e.ok("lease.acquire", None, Some(t), args)
+    };
+    let container = "src/limits.rs#Limits";
+    let mut proposals = vec![];
+    for (name, member) in [("s-na", "low"), ("s-nb", "high")] {
+        let t = e.session(name, &["src/**"]);
+        e.bind(&t);
+        e.wrote(&t, path);
+        let items = json!([{"symbol": container, "kind": "insert", "names": [member]}]);
+        let r = acquire(e, &t, items);
+        assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+        let method = format!("    pub fn {member}() -> u8 {{\n        1\n    }}\n}}\n");
+        let text = seed.replace("    }\n}\n", &format!("    }}\n\n{method}"));
+        proposals.push((t, vec![file(path, &text)]));
+    }
+    let t = e.session("s-nc", &["src/**"]);
+    let items = json!([{"symbol": container, "kind": "insert", "names": ["low"]}]);
+    let r = acquire(e, &t, items);
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    let fresh = "src/fresh.rs";
+    let t = e.session("s-nd", &["src/**"]);
+    e.bind(&t);
+    e.wrote(&t, fresh);
+    let r = acquire(
+        e,
+        &t,
+        json!([{"symbol": "src/fresh.rs#<file>", "kind": "edit"}]),
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    proposals.push((t, vec![file(fresh, "pub fn fresh() {}\n")]));
+    for (t, files) in proposals {
+        let preview = json!({"base": base, "files": files});
+        let r = e.ok("facts.preview", None, Some(&t), preview);
+        let adds: Vec<String> = serde_json::from_value(r["facts"]["adds"].clone()).unwrap();
+        let claim = Claim {
+            intent: "a member".into(),
+            adds,
+            ..Default::default()
+        };
+        let args = json!({"base": base, "files": files, "claim": claim});
+        let r = e.ok("change.propose", None, Some(&t), args);
+        assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    }
+    assert_eq!(e.svc.process_all(), 3);
+    let head = e.trunk();
+    let text = e.store().read_file(&head, path).unwrap().unwrap();
+    let text = String::from_utf8(text).unwrap();
+    assert!(
+        text.contains("fn low()") && text.contains("fn high()"),
+        "{text}"
+    );
+    assert!(e.store().read_file(&head, fresh).unwrap().is_some());
 }
 
 /// From format 21 and engine 14: two agents hold one function `shared`, and
@@ -1027,6 +1094,35 @@ fn golden_v21_log_still_verifies_replays_and_audits() {
             )
     });
     assert!(joined.count() >= 2);
+}
+
+/// Inserts that reserve names, one refused for a name taken, and a new file
+/// created under an exclusive lease on its path.
+#[test]
+fn golden_v22_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v22.bundle",
+        "8c08a2d460cba30b4a6a18f9e7eb42c4294b8694f6a7dd8e59d62b1d258164cd",
+        22,
+    );
+    let named = |allowed: bool| {
+        let named = ops.iter().filter(|o| match &o.entry.op {
+            Op::LeaseAcquire { items, .. } => items.iter().any(|i| !i.names.is_empty()),
+            _ => false,
+        });
+        named
+            .filter(|o| o.entry.decision.is_allow() == allowed)
+            .count()
+    };
+    assert_eq!((named(true), named(false)), (2, 1));
+    let created = ops.iter().filter(|o| {
+        o.entry.decision.is_allow()
+            && o.entry
+                .facts
+                .as_ref()
+                .is_some_and(|f| f.added_files == ["src/fresh.rs"])
+    });
+    assert_eq!(created.count(), 1);
 }
 
 #[test]

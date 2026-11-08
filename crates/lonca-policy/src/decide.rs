@@ -15,8 +15,8 @@
 use std::collections::BTreeSet;
 
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_ISOLATE, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS,
-    FORMAT_SESSION_HARNESS,
+    FORMAT_AFFECTED, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_LEASE_INTENT,
+    FORMAT_LEASE_LIVENESS, FORMAT_SESSION_HARNESS,
 };
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
@@ -188,6 +188,15 @@ fn check_lease_request(
         v.deny("shared_off");
     }
     for item in items {
+        if !item.names.is_empty() {
+            if item.kind != LeaseKind::Insert {
+                v.deny(format!("names_need_insert:{}", item.symbol));
+            }
+            let valid = item.names.iter().all(|n| symbols::valid_reserved_name(n));
+            if !valid || item.names.len() > symbols::MAX_RESERVED_NAMES {
+                v.deny(format!("invalid_names:{}", item.symbol));
+            }
+        }
         let Some((path, name)) = symbols::split(&item.symbol) else {
             v.deny(format!("invalid_symbol:{}", item.symbol));
             continue;
@@ -460,10 +469,12 @@ pub fn scope_within(inner: &Scope, outer: &Scope) -> Result<(), String> {
 
 /// Two lease items can not be held by different sessions at the same time.
 /// `shared` goes with `shared` only: against an `insert` it is an `edit`.
+/// Two inserts go together unless they reserve one name in one container.
 pub fn leases_conflict(a: &LeaseItem, b: &LeaseItem, keys: bool) -> bool {
     use LeaseKind::*;
     match (a.kind, b.kind) {
-        (Insert, Insert) | (Shared, Shared) => false,
+        (Insert, Insert) => symbols::names_meet(a, b, keys),
+        (Shared, Shared) => false,
         (Insert, _) => {
             symbols::covers(&b.symbol, &a.symbol, keys)
                 || (keys && symbols::stands_for(&a.symbol, &b.symbol))
@@ -1279,6 +1290,29 @@ fn affected_holders(
         .collect()
 }
 
+/// The symbols `f` adds that another session reserved by name, with that
+/// session: under an unnamed insert, or as the new name of a rename, as much
+/// as under an insert of its own.
+fn reserved_by_others(state: &State, actor: &Actor, f: &Facts, t: i64) -> Vec<(String, String)> {
+    let keys = state.symbol_keys;
+    let own = |l: &ActiveLease| {
+        let me = actor.session();
+        me.is_some_and(|s| state.continues(s, &l.lease.session))
+    };
+    let named = |i: &&LeaseItem| i.kind == LeaseKind::Insert && !i.names.is_empty();
+    let mut out = BTreeSet::new();
+    for l in state.active_leases(t).filter(|l| !own(l)) {
+        for item in l.items.iter().copied().filter(named) {
+            let reserved =
+                |a: &&String| symbols::covers(&item.symbol, a, keys) && symbols::reserves(item, a);
+            for a in f.adds.iter().filter(reserved) {
+                out.insert((a.clone(), l.lease.session.clone()));
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 fn propose(
     state: &State,
     actor: &Actor,
@@ -1410,9 +1444,20 @@ fn propose(
                 .filter(|l| l.lease.session == *session)
                 .collect();
             let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
-            for need in symbols::lease_needs_under(f, cfg.leases.unparsed_files) {
+            let unparsed = cfg.leases.unparsed_files;
+            for need in symbols::lease_needs_under(f, unparsed, ctx.format) {
                 if !mine.iter().any(|l| state.covers_need(&need, l, Some(base))) {
                     v.deny(format!("lease_missing:{}", need.symbol));
+                }
+            }
+            for (added, holder) in reserved_by_others(state, actor, f, t) {
+                v.deny(format!("name_reserved:{added}:{holder}"));
+            }
+            if ctx.format >= FORMAT_INSERT_NAMES {
+                for p in &f.added_files {
+                    if state.created_since(base, p) {
+                        v.deny(format!("created_since_base:{p}"));
+                    }
                 }
             }
 

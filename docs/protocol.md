@@ -165,7 +165,15 @@ unknown method: `unknown_method`, whatever the token.
   "insert" | "rename" | "shared"}`; `shared` only where the policy has
   `[leases] shared = true` (else `shared_off`, see
   `docs/guide/verification.md`, "Shared leases"); for `insert` the symbol is the container
-  (`path#Type` or `path#<file>`). Markdown, TOML, JSON and YAML files
+  (`path#Type` or `path#<file>`). An `insert` may add `"names": [string]`, the
+  bare names of the members it adds (log format 22): two inserts into one
+  container whose names meet conflict, and an addition that is none of them is
+  `lease_missing`; names on another kind are `names_need_insert`, malformed
+  ones `invalid_names`; adding a name another session reserved is
+  `name_reserved:<symbol>:<session>`. A file a change adds needs `edit` (or
+  `rename`) on its `path#<file>`, and one trunk created after the change's base
+  is `created_since_base:<path>` (sync first). A lease detail of a free
+  `insert` carries the `names` to reserve. Markdown, TOML, JSON and YAML files
   have sections as symbols (`README.md#Install.Linux`,
   `Cargo.toml#dependencies.serde`); adding to the end of a Markdown section
   is the addition `path#Section.<append>`, which takes an `insert` lease on

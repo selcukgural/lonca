@@ -282,6 +282,9 @@ pub struct State {
     pub renames: Vec<Renamed>,
     /// What moves of trunk changed other than under `shared`, oldest first.
     pub exclusive: Vec<Exclusive>,
+    /// The files integrations created, with where in `trunk_line`, oldest
+    /// first.
+    pub created: Vec<(usize, String)>,
     pub sessions: BTreeMap<String, Session>,
     pub leases: BTreeMap<String, LeaseSet>,
     pub changes: BTreeMap<ChangeId, ChangeRecord>,
@@ -498,6 +501,7 @@ impl State {
         LeaseItem {
             symbol: self.renamed_to(&item.symbol, None),
             kind: item.kind,
+            names: item.names.clone(),
         }
     }
 
@@ -522,7 +526,7 @@ impl State {
         let keys = self.symbol_keys;
         let renamed = LeaseNeed {
             symbol: self.renamed_to(&need.symbol, base),
-            kinds: need.kinds,
+            ..need.clone()
         };
         need.covered_by(item, keys) || renamed.covered_by(item, keys)
     }
@@ -618,6 +622,9 @@ impl State {
                 self.reverts.push((time_ms, syms));
             }
             self.record_renames(&facts);
+            let line = self.trunk_line.len().saturating_sub(1);
+            let created = facts.added_files.iter().map(|p| (line, p.clone()));
+            self.created.extend(created);
         }
         self.queue.retain(|q| *q != change);
         self.unpin(change, !reasons.iter().any(|r| r == LEASES_KEPT));
@@ -965,7 +972,7 @@ impl State {
             && let Op::ChangePropose { change, .. } = &e.op
             && let Some(session) = e.actor.session()
         {
-            self.pin(session, *change, e.facts.as_ref(), e.time_ms);
+            self.pin(session, *change, e.facts.as_ref(), e.time_ms, e.format);
         }
         // A proposal that stands is progress: the next stop starts over. An
         // agent that can only get denied keeps counting, and ends.
@@ -1084,8 +1091,16 @@ impl State {
     }
 
     /// Pins the items of the session that the facts need to the change.
-    fn pin(&mut self, session: &str, change: ChangeId, facts: Option<&Facts>, now_ms: i64) {
-        let needs = facts.map(symbols::lease_needs).unwrap_or_default();
+    fn pin(
+        &mut self,
+        session: &str,
+        change: ChangeId,
+        facts: Option<&Facts>,
+        now_ms: i64,
+        format: u32,
+    ) {
+        let needs = facts.map(|f| symbols::lease_needs(f, format));
+        let needs = needs.unwrap_or_default();
         let pinned: Vec<(String, Vec<LeaseItem>)> = self
             .active_leases(now_ms)
             .filter(|l| l.lease.session == session)
@@ -1835,6 +1850,17 @@ fn describe(k: &ObsKind) -> String {
 }
 
 impl State {
+    /// An integration since `base` created `path`: a change from `base` that
+    /// adds it would be merged with that file as if from nothing. Any trunk
+    /// when `base` was never trunk.
+    pub fn created_since(&self, base: &GitId, path: &str) -> bool {
+        let at = self.trunk_line.iter().rposition(|t| t == base);
+        let later = |line: &usize| at.is_none_or(|at| *line > at);
+        self.created
+            .iter()
+            .any(|(line, p)| p == path && later(line))
+    }
+
     /// How many integrations trunk has had since `base` was trunk; `None`
     /// when `base` was never trunk.
     pub fn behind(&self, base: &GitId) -> Option<usize> {

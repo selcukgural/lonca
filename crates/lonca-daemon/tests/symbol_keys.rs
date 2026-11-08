@@ -41,6 +41,7 @@ fn lease(e: &mut Env, token: &str, symbol: &str, kind: LeaseKind) -> serde_json:
     let items = vec![LeaseItem {
         symbol: format!("{PATH}#{symbol}"),
         kind,
+        names: Vec::new(),
     }];
     let args = serde_json::json!({"items": items, "intent": "work", "ttl_ms": 600_000});
     e.ok("lease.acquire", None, Some(token), args)["decision"].clone()

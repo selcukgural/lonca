@@ -56,7 +56,6 @@ fn add_text(e: &mut Env, base: &GitId, name: &str, path: &str, text: &str) -> Va
         ..Default::default()
     };
     let lease = e.lease(&t, &format!("{path}#<file>"));
-    let _ = lease;
     let files = [file(path, text)];
     let r = e.ok(
         "facts.preview",
@@ -71,8 +70,10 @@ fn add_text(e: &mut Env, base: &GitId, name: &str, path: &str, text: &str) -> Va
         ..claim
     };
     let args = json!({"base": base, "files": files, "claim": claim});
-    let r = e.ok("change.propose", None, Some(&t), args);
+    let mut r = e.ok("change.propose", None, Some(&t), args);
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    r["token"] = json!(t);
+    r["set"] = lease["set"].clone();
     r
 }
 
@@ -171,7 +172,16 @@ fn a_conflict_ends_a_batch() {
     let (mut e, base) = repo(4);
     let one = add(&mut e, &base, "a", "src/a")["change"].clone();
     let two = add(&mut e, &base, "b", "src/b")["change"].clone();
-    let same = add_text(&mut e, &base, "c", "src/a", "other\n")["change"].clone();
+    // An agent can not create a path another one is creating: a person can.
+    let files = [file("src/a", "other\n")];
+    let args = json!({"base": base, "files": files, "author": "ayse", "intent": "same path"});
+    let prep = e.ok("human.prepare_change", Some("demo"), None, args);
+    let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
+    let Op::ChangePropose { change, .. } = &op else {
+        unreachable!();
+    };
+    let same = json!(change);
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
     let last = add(&mut e, &base, "d", "src/d")["change"].clone();
     e.svc.process_all();
     assert_eq!(batches(&e), [2], "up to the conflict");
@@ -351,10 +361,19 @@ fn a_path_that_is_both_file_and_directory_is_a_conflict() {
 #[test]
 fn a_failed_tree_is_verified_again() {
     let (mut e, base) = repo(2);
-    let change = add(&mut e, &base, "a", "src/bad")["change"].clone();
+    let first = add(&mut e, &base, "a", "src/bad");
+    let change = first["change"].clone();
     let runs = e.svc.verification_runs();
     e.svc.process_all();
     assert_eq!(status_of(&mut e, &change)["status"], "rejected");
+    // A new path is one session's at a time.
+    let token = first["token"].as_str().unwrap();
+    e.ok(
+        "lease.release",
+        None,
+        Some(token),
+        json!({"set": first["set"]}),
+    );
     assert_eq!(e.svc.verification_runs(), runs + 1);
     let again = add(&mut e, &base, "b", "src/bad")["change"].clone();
     e.svc.process_all();

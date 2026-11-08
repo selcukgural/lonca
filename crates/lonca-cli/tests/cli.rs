@@ -1928,7 +1928,7 @@ fn mcp_leases_mixed_kinds_says_what_is_needed_and_releases_part_of_a_set() {
     assert_eq!(
         needed["acquire"],
         json!([
-            {"symbol": "src/lib.rs#<file>", "kind": "insert"},
+            {"symbol": "src/lib.rs#<file>", "kind": "insert", "names": ["extra"]},
             {"symbol": "src/lib.rs#charge", "kind": "edit"},
         ])
     );
@@ -1962,7 +1962,7 @@ fn mcp_leases_mixed_kinds_says_what_is_needed_and_releases_part_of_a_set() {
     assert_eq!(part["decision"]["outcome"], "allow", "{part}");
     assert_eq!(
         part["kept"],
-        json!([{"symbol": "src/lib.rs#<file>", "kind": "insert"}])
+        json!([{"symbol": "src/lib.rs#<file>", "kind": "insert", "names": ["extra"]}])
     );
     let leases = status_json(&e)["leases"].clone();
     assert_eq!(leases.as_array().unwrap().len(), 1, "{leases}");
@@ -1972,7 +1972,7 @@ fn mcp_leases_mixed_kinds_says_what_is_needed_and_releases_part_of_a_set() {
     let left = expires - leases[0]["expires_ms"].as_i64().unwrap();
     assert!(left.abs() < 60_000, "{left}");
 
-    // The last item: nothing is kept, no new set.
+    // The last item, named by its symbol alone: nothing is kept, no new set.
     let new_set = part["set"].as_str().unwrap().to_string();
     let (err, last) = mcp.tool(
         "lease_release",

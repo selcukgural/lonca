@@ -253,6 +253,15 @@ impl LeaseKind {
 }
 
 impl LeaseItem {
+    /// An item with no reserved names.
+    pub fn new(symbol: impl Into<String>, kind: LeaseKind) -> Self {
+        Self {
+            symbol: symbol.into(),
+            kind,
+            names: Vec::new(),
+        }
+    }
+
     pub fn is_shared(&self) -> bool {
         self.kind == LeaseKind::Shared
     }
@@ -263,6 +272,13 @@ pub struct LeaseItem {
     /// `path#Qualified.name`; for `insert`, the container (`path#Type` or `path#<file>`).
     pub symbol: String,
     pub kind: LeaseKind,
+    /// For `insert` only: the names of the members it adds, bare (no key).
+    /// Two inserts into one container whose names meet conflict, and an
+    /// addition under this item must be one of them. Empty reserves nothing
+    /// and allows any addition. Left out of the encoding when empty, so
+    /// entries without names keep their bytes (log format 22).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

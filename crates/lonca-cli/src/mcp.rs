@@ -61,6 +61,7 @@ fn tool_list() -> Value {
             "properties": {
                 "symbol": text("A symbol id, as `symbols` lists it: path#Type.method"),
                 "kind": kind,
+                "names": list("For insert only: the bare names of the members you will add (throttle, not Client.throttle). Another insert reserving one of them waits; an addition that is none of them is refused. Leave out to reserve nothing"),
             },
             "required": ["symbol", "kind"],
         }})
@@ -81,7 +82,7 @@ fn tool_list() -> Value {
     json!([
         {"name": "status", "description": "Repository state: trunk, queue, all active leases (who holds what and why), your session and your changes.", "inputSchema": s(json!({}), &[])},
         {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method). `def` of a type is its own text (fields, header): lease it to leave the methods to others. Symbols that share a name have a key, path#Type.method(int): the name alone holds all of them.", "inputSchema": s(json!({"path": path}), &["path"])},
-        {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file), rename (rename/delete). Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it or waits for it, their intent, and when it ends (or the change it is pinned to).", "inputSchema": s(json!({"items": items("Symbols with a kind each, for a set of mixed kinds"), "symbols": symbols, "kind": kind, "intent": lease_intent, "ttl_minutes": ttl}), &["intent"])},
+        {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file; give `names` in items to reserve what you add), rename (rename/delete). A file you create needs edit on path#<file>, so nobody else creates it meanwhile. Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it or waits for it, their intent, and when it ends (or the change it is pinned to).", "inputSchema": s(json!({"items": items("Symbols with a kind each, for a set of mixed kinds"), "symbols": symbols, "kind": kind, "intent": lease_intent, "ttl_minutes": ttl}), &["intent"])},
         {"name": "lease_needed", "description": "The leases your local changes need, computed by Lonca: for each symbol the kind needed and whether you hold it, it is free, or who holds it. `acquire` lists the free ones as items for lease_acquire. A file under `no_lease` needs none: the merge decides.", "inputSchema": s(json!({}), &[])},
         {"name": "lease_interest", "description": "Say you are waiting for symbols another session holds. It holds nothing and never waits: go on with other work. For a while nobody can take a new lease that conflicts with it, so a wide change is not starved by small ones. When they are freed you get a short reservation (see `events`) and only you can acquire them; the oldest interest goes first. Refused (`lease_free`) for what nobody holds: acquire that.", "inputSchema": s(json!({"items": items("The symbols you are waiting for, with a kind each"), "symbols": symbols, "kind": kind, "intent": lease_intent}), &["intent"])},
         {"name": "events", "description": "What happened that you should know of: a lease reserved for you, a lease handed to you, your change integrated, conflicted, approved or rejected, a message from another session with what it says. Messages and leases also arrive with the answers of your tools. Pass `from` as `next` of the last answer.", "inputSchema": s(json!({"from": number("`next` of the last answer; 0 for all")}), &[])},
@@ -252,7 +253,11 @@ fn requested_items(args: &Value) -> Result<Vec<LeaseItem>> {
         None => vec![],
     };
     let symbols = strings(args, "symbols").into_iter();
-    items.extend(symbols.map(|symbol| LeaseItem { symbol, kind }));
+    items.extend(symbols.map(|symbol| LeaseItem {
+        symbol,
+        kind,
+        names: Vec::new(),
+    }));
     Ok(items)
 }
 
@@ -267,10 +272,14 @@ fn remainder(lease: &Value, released: &[LeaseItem]) -> Result<Vec<LeaseItem>> {
             p["items"].clone(),
         )?);
     }
-    if let Some(i) = released.iter().find(|i| !items.contains(i)) {
+    // An item is its symbol and kind: one released by symbol goes with the
+    // names it reserved.
+    let same = |a: &LeaseItem, b: &LeaseItem| a.symbol == b.symbol && a.kind == b.kind;
+    let among = |list: &[LeaseItem], i: &LeaseItem| list.iter().any(|x| same(x, i));
+    if let Some(i) = released.iter().find(|i| !among(&items, i)) {
         bail!("{} ({:?}) is not in this lease set", i.symbol, i.kind);
     }
-    let kept = |i: &LeaseItem| !released.contains(i) && !pinned.contains(i);
+    let kept = |i: &LeaseItem| !among(released, i) && !among(&pinned, i);
     Ok(items.into_iter().filter(kept).collect())
 }
 
@@ -610,6 +619,7 @@ mod tests {
         LeaseItem {
             symbol: symbol.into(),
             kind,
+            names: Vec::new(),
         }
     }
 
@@ -738,6 +748,9 @@ mod tests {
                 item("a#g", LeaseKind::Insert)
             ]
         );
+        // An item reserves the names it gives.
+        let named = got(json!({"items": [{"symbol": "a#T", "kind": "insert", "names": ["m"]}]}));
+        assert_eq!(named[0].names, ["m"]);
         for bad in [
             json!({"symbols": ["a#f"], "kind": "own"}),
             json!({"items": [{"symbol": "a#f", "kind": "own"}]}),
@@ -763,6 +776,18 @@ mod tests {
         let foreign = item("a#g", LeaseKind::Insert);
         let err = remainder(&lease, &[foreign]).unwrap_err().to_string();
         assert!(err.contains("a#g"), "{err}");
+        // An item reserving names goes when released by its symbol.
+        let named = LeaseItem {
+            names: vec!["m".into()],
+            ..item("a#T", LeaseKind::Insert)
+        };
+        let lease = json!({"items": [f, named], "pinned": [{"change": "c", "items": [named]}]});
+        let by_symbol = item("a#T", LeaseKind::Insert);
+        assert_eq!(
+            remainder(&lease, std::slice::from_ref(&by_symbol)).unwrap(),
+            vec![f.clone()]
+        );
+        assert_eq!(remainder(&lease, std::slice::from_ref(&f)).unwrap(), vec![]);
     }
 
     #[test]

@@ -655,6 +655,11 @@ enum LeaseCmd {
         /// edit, insert, rename, or shared (where the repository allows it)
         #[arg(long, default_value = "edit")]
         kind: String,
+        /// With --kind insert: a name the insert reserves, bare (`throttle`,
+        /// not `Client.throttle`); repeat for more. Additions under it must
+        /// be one of them. Another insert reserving one of them waits.
+        #[arg(long = "name", value_name = "NAME")]
+        names: Vec<String>,
         /// What you are doing and why; others read it
         #[arg(long, short)]
         intent: String,
@@ -684,6 +689,9 @@ enum LeaseCmd {
         /// edit, insert, rename, or shared (where the repository allows it)
         #[arg(long, default_value = "edit")]
         kind: String,
+        /// With --kind insert: a name it reserves; repeat for more
+        #[arg(long = "name", value_name = "NAME")]
+        names: Vec<String>,
         /// What you are doing and why; others read it
         #[arg(long, short)]
         intent: String,
@@ -1030,12 +1038,22 @@ fn claim_of(intent: String, symbols: [&Vec<String>; 4], deleted_files: Vec<Strin
     }
 }
 
-fn lease_items(symbols: Vec<String>, kind: &str) -> Result<Vec<LeaseItem>> {
+/// One item per symbol, each with `kind` and the reserved `names`.
+fn lease_items(symbols: Vec<String>, kind: &str, names: &[String]) -> Result<Vec<LeaseItem>> {
     let Some(kind) = LeaseKind::from_name(kind) else {
         bail!("unknown lease kind {kind}");
     };
+    if !names.is_empty() && kind != LeaseKind::Insert {
+        bail!("--name reserves names for an insert: add --kind insert");
+    }
     let items = symbols.into_iter();
-    Ok(items.map(|symbol| LeaseItem { symbol, kind }).collect())
+    Ok(items
+        .map(|symbol| LeaseItem {
+            symbol,
+            kind,
+            names: names.to_vec(),
+        })
+        .collect())
 }
 
 fn agent_client() -> Result<(Client, Workspace)> {
@@ -1718,21 +1736,23 @@ fn run(cmd: Cmd) -> Result<()> {
                 LeaseCmd::Interest {
                     symbols,
                     kind,
+                    names,
                     intent,
                     json: as_json,
                 } => {
-                    let items = lease_items(symbols, &kind)?;
+                    let items = lease_items(symbols, &kind, &names)?;
                     let params = json!({"items": items, "intent": intent});
                     (call(&mut c, "lease.interest", params)?, as_json)
                 }
                 LeaseCmd::Acquire {
                     symbols,
                     kind,
+                    names,
                     intent,
                     ttl,
                     json: as_json,
                 } => {
-                    let items = lease_items(symbols, &kind)?;
+                    let items = lease_items(symbols, &kind, &names)?;
                     let r = call(
                         &mut c,
                         "lease.acquire",
@@ -2444,9 +2464,25 @@ fn pin_note(lease: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_of, lease_need_lines, log_pages, no_lease_lines, pin_note, source, split_ids,
-        unparsed_note,
+        claim_of, lease_items, lease_need_lines, log_pages, no_lease_lines, pin_note, source,
+        split_ids, unparsed_note,
     };
+    use lonca_core::ops::LeaseKind;
+
+    #[test]
+    fn names_go_with_an_insert_only() {
+        let names = ["throttle".to_string()];
+        let items = lease_items(vec!["a.rs#T".into(), "a.rs#U".into()], "insert", &names).unwrap();
+        assert!(
+            items
+                .iter()
+                .all(|i| i.names == names && i.kind == LeaseKind::Insert)
+        );
+        let err = lease_items(vec!["a.rs#T".into()], "edit", &names).unwrap_err();
+        assert!(err.to_string().contains("--kind insert"), "{err}");
+        let plain = lease_items(vec!["a.rs#T".into()], "edit", &[]).unwrap();
+        assert!(plain[0].names.is_empty());
+    }
     use anyhow::bail;
     use serde_json::{Value, json};
 

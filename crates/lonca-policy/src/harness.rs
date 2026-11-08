@@ -398,6 +398,8 @@ const RULES: &str = "\
 - Read {tool}status before leasing: it shows what others hold and wait for, and why.
 - Before editing a function, method or type, lease it: {tool}lease_acquire with symbols like \"src/file.rs#Type.method\" ({tool}symbols lists them). Every lease needs an `intent`: what you are doing and why, in a sentence. An agent you hold up reads it.
 - To change a type's fields or header, lease \"src/file.rs#Type.<def>\", the `def` of the type in {tool}symbols: its methods stay free for others.
+- To add new members to a type or a file, take an `insert` lease on it (\"src/file.rs#Type\" or \"src/file.rs#<file>\") and give the bare names you will add in `names` (`--name` on the command line; `throttle`, not `Type.throttle`): another agent can not reserve or add the same name meanwhile (name_reserved), and an addition you did not name is refused. Others add other names alongside you.
+- Before creating a new file, lease its path with kind `edit` (\"src/new.rs#<file>\"): until your change lands nobody else can create it, and a new file proposed without it is refused. If someone else's creation of that path landed after your base (created_since_base), run {tool}sync and propose again.
 - Overloads and other symbols that share a name have a key, as in \"src/file.cs#Type.method(int)\". Lease one by its id; the name alone holds all of them and keeps others off the rest.
 - To rename a symbol, a `rename` lease on the old name is enough. `preview` lists it under `renames`; claim it as what it is, a delete and an add.
 - A change across a whole type leases \"src/file.rs#Type\", which holds up all its methods. A rename, a delete and a whole file hold up others the same way. For these, say in `intent` why it needs that much, with the issue number if there is one.
@@ -770,6 +772,9 @@ mod tests {
         let neutral = rules("", "", &[]);
         assert!(neutral.starts_with("This workspace is governed by Lonca.\n"));
         assert!(neutral.contains("lease it: lease_acquire with"));
+        // What a new file and a new member take is said before it is refused.
+        assert!(neutral.contains("lease its path with kind `edit`"));
+        assert!(neutral.contains("give the bare names you will add in `names`"));
         assert!(!neutral.contains("mcp_") && !neutral.contains('{'.to_string().as_str()));
         assert!(neutral.contains("- Edit files only inside this workspace.\n"));
 

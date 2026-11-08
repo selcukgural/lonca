@@ -74,9 +74,10 @@ cargo mutants -p lonca-policy -j 4          # one crate
   mutants (cargo-mutants 27.1.0); use file globs or a test.
 - Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
   paths, no writes to `$HOME`. Parallel jobs (`-j`) run copies at once.
-- CI (`.github/workflows/mutants.yml`) runs mutants only for a release:
-  on a pushed `v*` tag, and on demand (`gh workflow run mutants.yml --ref
-  main`, before tagging). The whole workspace runs in 20 shards
+- CI (`.github/workflows/mutants.yml`) runs mutants every night on main
+  (00:07 UTC, a few hours), on a pushed `v*` tag, and on demand
+  (`gh workflow run mutants.yml --ref main`, before tagging). The whole
+  workspace runs in 20 shards
   (`full k/20`); any survivor fails its shard and is listed in the run's
   summary and in the `mutants-full-<k>` artifact (`missed.txt`). The `score`
   job prints each crate's score and fails on the gate; `exclusions` fails on
@@ -86,9 +87,10 @@ cargo mutants -p lonca-policy -j 4          # one crate
 ## CI
 
 The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,
-`sandbox`) and the mutants run only for a release: on a pushed `v*` tag, and
-on demand before tagging (`gh workflow run ci.yml --ref main`). Pull requests
-and merges to main run neither. The main ruleset requires a pull request (no
+`sandbox`) run only for a release: on a pushed `v*` tag, and on demand
+before tagging (`gh workflow run ci.yml --ref main`). The mutants run the
+same way and also every night on main. Pull requests and merges to main run
+neither. The main ruleset requires a pull request (no
 direct push) but no check. `cargo-deny`, CodeQL and zizmor (workflow changes)
 run on pull requests; they block nothing. The toolchain is pinned in
 `rust-toolchain.toml`; Actions are GitHub's own plus four named ones

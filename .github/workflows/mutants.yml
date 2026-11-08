@@ -4,7 +4,9 @@
 # from the Actions tab on main before tagging). Pull requests and merges to
 # main do not run it, nor ci.yml; this workflow is required by nothing.
 # The whole workspace runs in 20 shards. Any survivor fails its shard and is
-# listed in the run's summary and in the shard's artifact.
+# listed in the run's summary and in the shard's artifact. The gate (#35):
+# the files in .cargo/mutants-gated.txt may have no timed-out mutant either,
+# and no exclusion that .cargo/mutants-gated-exclusions.txt does not list.
 name: mutants
 
 on:
@@ -20,6 +22,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # What .cargo/mutants.toml excludes in a gated file, against the reviewed
+  # list. Only lists mutants, so it takes a minute.
+  exclusions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        with:
+          tool: cargo-mutants@27.1.0
+      - run: .github/scripts/mutants-gate.sh exclusions
+
   # Twenty shards is what the plan runs at once. A job may take six hours;
   # this one stops before that, so its artifact is still written.
   full:
@@ -70,3 +88,28 @@ jobs:
           name: mutants-full-${{ matrix.shard }}
           path: mutants.out
           retention-days: 14
+
+  # The score of each crate and of the gated files, from every shard's
+  # results; fails on a missed or timed-out mutant in a gated file.
+  score:
+    needs: full
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutants-full-*
+          path: shards
+      - name: Score and gate
+        run: |
+          set +e
+          .github/scripts/mutants-gate.sh results shards/* > score.md
+          rc=$?
+          set -e
+          { echo "### Mutation score"; cat score.md; } >> "$GITHUB_STEP_SUMMARY"
+          cat score.md
+          exit $rc

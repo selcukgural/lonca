@@ -1,0 +1,22 @@
+# The gated files of the mutation gate (#35; docs/decisions.md, "Mutation
+# testing"). They hold the trust model: `decide()`, the log's chain and
+# state, the canonical encoding, change ids, keys and paths, the auditor and
+# the structural merge it recomputes. One path per line; a path ending in `/`
+# covers everything under it.
+#
+# In the release run (.github/workflows/mutants.yml) a gated file must have
+# no missed and no timed-out mutant, and every mutant `.cargo/mutants.toml`
+# excludes in one must be listed, by name, in `mutants-gated-exclusions.txt`.
+# `.github/scripts/mutants-gate.sh` checks both, also locally.
+crates/lonca-policy/src/decide.rs
+crates/lonca-policy/src/chain.rs
+crates/lonca-policy/src/state.rs
+crates/lonca-policy/src/human.rs
+crates/lonca-core/src/oplog.rs
+crates/lonca-core/src/canonical.rs
+crates/lonca-core/src/changeid.rs
+crates/lonca-core/src/keys.rs
+crates/lonca-core/src/paths.rs
+crates/lonca-audit/src/
+crates/lonca-symbols/src/merge.rs
+crates/lonca-symbols/src/integrate.rs

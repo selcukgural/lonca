@@ -55,10 +55,15 @@ cargo mutants -p lonca-policy -j 4          # one crate
   read it: many mean the tests never ran, and CI fails a shard with more
   timeouts than caught), `unviable.txt` mutants that do not compile
   (ignored), `caught.txt` the rest; `diff/` has each mutant as a patch.
-- A new survivor in a security-critical file (`decide.rs`, `chain.rs`,
-  `state.rs`, `oplog.rs`, `canonical.rs`, `changeid.rs`, `keys.rs`, the
-  auditor, the merge) is fixed with a test, or listed in `exclude_re` with
-  a written reason why it is equivalent.
+- The gated files (`.cargo/mutants-gated.txt`: `decide.rs`, `chain.rs`,
+  `state.rs`, `human.rs`, `oplog.rs`, `canonical.rs`, `changeid.rs`,
+  `keys.rs`, `paths.rs`, the auditor, the merge) may have no missed and no
+  timed-out mutant. A survivor there is fixed with a test, or listed in
+  `exclude_re` with a written reason why it is equivalent and added to
+  `.cargo/mutants-gated-exclusions.txt`
+  (`.github/scripts/mutants-gate.sh exclusions --write`; plain `exclusions`
+  checks, in seconds). A new operation type (`ops.rs`, `decide.rs`,
+  `state.rs`, the auditor) arrives with tests that kill its mutants.
 - `exclude_re` and `--re` do not filter "delete field … from struct"
   mutants (cargo-mutants 27.1.0); use file globs or a test.
 - Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
@@ -67,8 +72,10 @@ cargo mutants -p lonca-policy -j 4          # one crate
   on a pushed `v*` tag, and on demand (`gh workflow run mutants.yml --ref
   main`, before tagging). The whole workspace runs in 20 shards
   (`full k/20`); any survivor fails its shard and is listed in the run's
-  summary and in the `mutants-full-<k>` artifact (`missed.txt`). Survivors
-  are fixed before the release. No mutants run before a push or on a PR.
+  summary and in the `mutants-full-<k>` artifact (`missed.txt`). The `score`
+  job prints each crate's score and fails on the gate; `exclusions` fails on
+  an unlisted exclusion in a gated file. Survivors are fixed before the
+  release. No mutants run before a push or on a PR.
 
 ## CI
 

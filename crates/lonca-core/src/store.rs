@@ -505,6 +505,14 @@ mod tests {
     }
 
     #[test]
+    fn short_and_debug_show_ten_digits() {
+        let id = GitId("0123456789abcdef0123456789abcdef01234567".into());
+        assert_eq!(id.short(), "0123456789");
+        assert_eq!(format!("{id:?}"), "GitId(0123456789)");
+        assert_eq!(GitId("abc".into()).short(), "abc");
+    }
+
+    #[test]
     fn tree_round_trip_with_nested_dirs() {
         let (_d, s) = store();
         let a = s.write_blob(b"fn a() {}\n").unwrap();

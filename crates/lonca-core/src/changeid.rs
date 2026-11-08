@@ -101,6 +101,18 @@ mod tests {
     }
 
     #[test]
+    fn short_and_debug_show_the_id() {
+        let mut bytes = [0u8; 16];
+        bytes[0] = 0x01;
+        bytes[5] = 0xab;
+        let id = ChangeId(bytes);
+        let hex = id.to_reverse_hex();
+        assert_eq!(id.short(), "zyzzzzzzzzpo");
+        assert_eq!(id.short(), hex[..12]);
+        assert_eq!(format!("{id:?}"), format!("ChangeId({hex})"));
+    }
+
+    #[test]
     fn rejects_forward_hex_and_wrong_length() {
         assert!(ChangeId::from_reverse_hex("0123456789abcdef0123456789abcdef").is_none());
         assert!(ChangeId::from_reverse_hex("zzzz").is_none());

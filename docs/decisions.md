@@ -1814,8 +1814,8 @@ tainted the session for good, closing every critical path to it.
 Since 2026-11-08 the tests (`ci.yml`: Ubuntu, macOS and the bubblewrap
 `sandbox` job) and the mutants run only when a `v*` tag is pushed, and on
 demand before tagging. Pull requests and merges to main run neither, and the
-main ruleset keeps only its deletion and force-push rules: no status check is
-required. Waiting for CI on every pull request cost more time than it saved.
+main ruleset requires no status check (since #60 it requires a pull request,
+see "CI and the repository's own settings"). Waiting for CI on every pull request cost more time than it saved.
 What this gives up: main can take a commit that fails to build or breaks a
 test, and that is seen only at the next release run or a local
 `cargo test --workspace`. A release is tagged only after both workflows,
@@ -2874,6 +2874,44 @@ tries never reaches a decision, and nothing told anyone of a freeze.
   failed `reconcile()` (`let _ =`); it is a `reconcile_error` now. Not done:
   integrity of the managed settings and the hook binary between binds (a
   bind checks them), metrics beyond these counts.
+
+## CI and the repository's own settings (#60)
+
+CI is the auditor's separate infrastructure (design §5.13), so what may change
+it and what it runs are part of the trust model.
+
+- **main takes pull requests only.** The ruleset adds `pull_request` (no
+  approvals required: there is one maintainer) to its deletion and
+  force-push rules, so a direct push to main is refused. **No status check
+  is required**, a deviation from the issue, kept from "CI runs for a
+  release" (the user's decision of 2026-11-08): a pull request with a failing
+  test can still be merged, and is seen at the next release run. `cargo-deny`,
+  CodeQL and zizmor run on pull requests and block nothing.
+- **CODEOWNERS** names the owner of `.github/`, `deny.toml`,
+  `rust-toolchain.toml`, `packaging/`, `lonca-core`, `lonca-policy`,
+  `lonca-audit` and `SECURITY.md`; review by the owner is asked, not
+  required.
+- **A pinned toolchain**: `rust-toolchain.toml` names the exact version
+  (1.99.1, with clippy and rustfmt), here and in every CI job (`rustup
+  toolchain install` reads it). It is raised by hand in a pull request of its
+  own; Dependabot does not bump it.
+- **Actions**: the repository allows GitHub's own actions and four others by
+  name (`EmbarkStudios/cargo-deny-action`, `ossf/scorecard-action`,
+  `taiki-e/install-action`, `zizmorcore/zizmor-action`), each pinned by commit
+  as the repository already required.
+- **zizmor** (`.github/workflows/zizmor.yml`, version pinned) checks the
+  workflows where they change and fails on anything above `low`; today it
+  reports one `low` (the self-repository syntax of the mutants runner).
+- **SBOM**: a `v*` tag builds a CycloneDX bill of materials of every crate
+  (`cargo cyclonedx`, pinned) and keeps it with the run; #7 attaches it to
+  the release with the provenance.
+- **CodeQL for Rust** was on already (default setup, actions and rust).
+- **Not adopted: `cargo vet`.** The trusted core pulls in gix, cedar-policy
+  and the tree-sitter grammars; vetting them by hand is more than one
+  maintainer can keep up, and an unmaintained audit set is worse than none.
+  `cargo-deny` (advisories, licenses, crates.io only) and Dependabot's
+  seven-day cooldown stay the defence; reconsider with a second maintainer
+  or imported audits.
 
 ## Open questions (carried from the design)
 

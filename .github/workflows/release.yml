@@ -4,8 +4,8 @@ name: release
 # macOS arm64 and x86_64 and Linux x86_64 and arm64 (static, musl) and
 # drafts that tag's GitHub release with:
 #
-#   lonca-<target>.tar.gz   lonca, lonca-audit, install-hardened.sh (and on
-#                           macOS uninstall-hardened.sh and lonca-se, the
+#   lonca-<target>.tar.gz   lonca, lonca-audit, install-hardened.sh,
+#                           uninstall-hardened.sh (and on macOS lonca-se, the
 #                           Secure Enclave helper, ad-hoc signed), LICENSE and
 #                           README.md, all at its top
 #   SHA256SUMS              of every archive
@@ -120,7 +120,7 @@ jobs:
             cp "target/$TARGET/release/lonca-se" packaging/macos/install-hardened.sh \
               packaging/macos/uninstall-hardened.sh pack/
           else
-            cp packaging/linux/install-hardened.sh pack/
+            cp packaging/linux/install-hardened.sh packaging/linux/uninstall-hardened.sh pack/
           fi
           (cd pack && tar -czf "../dist/lonca-$TARGET.tar.gz" -- *)
           tar -tzvf "dist/lonca-$TARGET.tar.gz"

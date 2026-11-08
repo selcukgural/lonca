@@ -154,3 +154,108 @@ fn local_remotes_stay_out_of_the_daemon_home() {
     let r = try_import(&mut e, &inside);
     assert!(passed(r.clone()), "{r:?}");
 }
+
+/// A hardened install's import directory: a bundle directly in it is
+/// fetched from the daemon's own copy, which goes afterwards. A link, a
+/// repository directory, a file further down, a link from outside and a
+/// push there are refused.
+#[test]
+fn the_import_directory_gives_git_only_a_copy_of_a_bundle() {
+    let mut e = Env::new();
+    let dir = e.root.join("import");
+    std::fs::create_dir_all(&dir).unwrap();
+    e.settings.local_roots = Some(vec![]);
+    e.settings.import_dir = Some(dir.clone());
+    e.reopen();
+    let up = upstream(&e.root, "up", "one\n");
+    let bundle = dir.join("up.bundle");
+    git(
+        &up,
+        &["bundle", "create", "-q", bundle.to_str().unwrap(), "main"],
+    );
+    let head = String::from_utf8(
+        std::process::Command::new("git")
+            .args(["-C", up.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    e.init(Some(bundle.to_str().unwrap()));
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(st["trunk"], json!(head.trim()), "{st}");
+    let imports = e.root.join("home/imports");
+    assert_eq!(std::fs::read_dir(&imports).unwrap().count(), 0, "copy gone");
+    // A copy a killed daemon left is gone at the next start.
+    std::fs::write(imports.join("import-x.bundle"), "left").unwrap();
+    e.reopen();
+    assert!(!imports.exists());
+
+    let try_import = |e: &mut Env, remote: &Path| {
+        e.call(
+            "human.prepare_import",
+            Some("demo"),
+            None,
+            json!({"remote": remote}),
+        )
+        .unwrap_err()
+    };
+    let refused = |(code, message): (String, String), why: &str| {
+        assert_eq!(code, "forbidden", "{message}");
+        assert!(message.contains(why), "{message}");
+    };
+    // Past the check git reads the copy: the same commit is up to date.
+    let (code, _) = try_import(&mut e, &bundle);
+    assert_eq!(code, "up_to_date");
+
+    std::os::unix::fs::symlink(&bundle, dir.join("link.bundle")).unwrap();
+    refused(try_import(&mut e, &dir.join("link.bundle")), "a link");
+    let repo = dir.join("repo.git");
+    git(&e.root, &["init", "-q", "--bare", repo.to_str().unwrap()]);
+    refused(try_import(&mut e, &repo), "not a regular file");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::copy(&bundle, dir.join("sub/up.bundle")).unwrap();
+    refused(
+        try_import(&mut e, &dir.join("sub/up.bundle")),
+        "directly in",
+    );
+    refused(try_import(&mut e, &dir), "directly in");
+    let text = dir.join("notes.txt");
+    std::fs::write(&text, "hello\n").unwrap();
+    refused(try_import(&mut e, &text), "not a git bundle");
+    let outside = e.root.join("outside.bundle");
+    std::os::unix::fs::symlink(&bundle, &outside).unwrap();
+    refused(try_import(&mut e, &outside), "only read");
+    let r = e.call(
+        "human.prepare_push",
+        Some("demo"),
+        None,
+        json!({"remote": dir.join("out.git")}),
+    );
+    let pushed_into = std::fs::create_dir(dir.join("out.git"));
+    assert!(pushed_into.is_ok());
+    let r2 = e.call(
+        "human.prepare_push",
+        Some("demo"),
+        None,
+        json!({"remote": dir.join("out.git")}),
+    );
+    assert_eq!(r.unwrap_err().0, "forbidden", "a missing path");
+    refused(r2.unwrap_err(), "only read");
+    assert!(!imports.exists() || std::fs::read_dir(&imports).unwrap().count() == 0);
+}
+
+/// Without an import directory nothing changes: a bundle is a local path
+/// like any other.
+#[test]
+fn without_an_import_directory_a_bundle_is_a_local_path() {
+    let mut e = Env::new();
+    let up = upstream(&e.root, "up", "one\n");
+    let bundle = e.root.join("up.bundle");
+    git(
+        &up,
+        &["bundle", "create", "-q", bundle.to_str().unwrap(), "main"],
+    );
+    e.init(Some(bundle.to_str().unwrap()));
+    assert!(!e.root.join("home/imports").exists());
+}

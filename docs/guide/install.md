@@ -74,15 +74,55 @@ sudo ./install-hardened.sh --bin .
 ```
 
 `--render DIR` writes the generated files (launchd or systemd unit, managed
-Claude Code settings) to `DIR` without installing anything. On macOS,
-`uninstall-hardened.sh` removes it again. A repository created in
-cooperative mode moves over with its history; see
-[the README](https://github.com/selcukgural/lonca#observation-levels).
+Claude Code settings) to `DIR` without installing anything. Log out and in
+again afterwards, so your account joins group `lonca`.
+
+| | macOS | Linux |
+|---|---|---|
+| Binaries (root's) | `/Library/Lonca/bin` | `/opt/lonca/bin` |
+| Socket | `/Library/Lonca/run/lonca.sock` | `/run/lonca/lonca.sock` |
+| Store and key (daemon only) | `/Library/Lonca/home` | `/var/lib/lonca` |
+| Backups (group `lonca` reads) | `/Library/Lonca/backups` | `/var/lib/lonca-backups` |
+| Imports (group `lonca` writes) | `/Library/Lonca/import` | `/var/lib/lonca-import` |
+
+Linux has no key that proves user presence, which the hardened profile
+asks for: create repositories there with `lonca init <repo>
+--without-presence`.
+
+**Bringing history in.** The daemon reads nothing in your home. Leave a
+Git bundle in the import directory and name it; the daemon copies the file
+before git reads it, and takes only a regular file directly in that
+directory, readable by group `lonca` (`chmod g+r` under a strict umask),
+up to 4 GiB (a larger history comes from an `https://` or `ssh://`
+remote):
+
+```sh
+git -C ~/src/myproject bundle create /var/lib/lonca-import/myproject.bundle main
+lonca init demo --without-presence --import /var/lib/lonca-import/myproject.bundle
+```
+
+A repository of a cooperative daemon comes the same way: `lonca backup`,
+copy the bundle into the import directory, `lonca restore <repo> --from
+<that file>`, then `lonca daemon-key recover --repo <repo>` (see
+[the README](https://github.com/selcukgural/lonca#observation-levels)).
+The audit of a hardened store goes through a backup, since your account
+can not read the store: `lonca backup`, then verify the bundle as below.
+
+**Upgrade.** Unpack the newer archive and run its installer the same way.
+It stops the daemon, replaces the binaries and the generated files, starts
+the daemon again and prints the version that runs; the stores, the key
+and the backups stay. Then `lonca doctor`.
+
+**Uninstall.** `sudo ./uninstall-hardened.sh` from the archive removes the
+daemon, the binaries, `daemon.toml` and the managed settings it wrote; the
+stores, backups and imports stay for a later install. `--purge` removes
+them and the daemon's user as well: `lonca backup` first and copy the
+bundle off the machine.
 
 ## After installing
 
 ```sh
-lonca daemon &
+lonca daemon &          # cooperative mode; a hardened install runs its own
 lonca doctor
 ```
 

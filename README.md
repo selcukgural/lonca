@@ -158,7 +158,7 @@ session start the hook tells the agent Lonca's rules.
 | Mode | Agents run | Store bypass | Observation bypass | Setup |
 |---|---|---|---|---|
 | Cooperative | as you | detected (hash chain, auditor) | none: sessions count as unobserved → every change needs a human | none |
-| Hardened | as you, harness hooks and sandbox locked | prevented (daemon is a separate system user) | from the harness: prevented; from outside: detected | `sudo packaging/macos/install-hardened.sh` |
+| Hardened | as you, harness hooks and sandbox locked | prevented (daemon is a separate system user) | from the harness: prevented; from outside: detected | `sudo ./install-hardened.sh --bin .` from a release archive |
 | Isolated | in a container/OS sandbox | prevented | prevented | your container runtime |
 
 The hardened installers (macOS launchd, Linux systemd) create the `_lonca`
@@ -174,10 +174,15 @@ A hardened daemon starts each new repository from the hardened profile and
 does not start without a sandbox. See
 [docs/guide/profiles.md](docs/guide/profiles.md).
 
-Repositories created in cooperative mode move with their history: stop
-the cooperative daemon, restore each store into the hardened daemon
-(`lonca restore`, below), and run `lonca daemon-key recover --repo <name>`
-as an enrolled human. The same command continues a repository whose
+Repositories created in cooperative mode move with their history: back
+each one up (`lonca backup`), stop the cooperative daemon, copy the bundles
+into the hardened install's import directory (`/Library/Lonca/import`,
+`/var/lib/lonca-import`), restore each into the hardened daemon (`lonca
+restore`, below), and run `lonca daemon-key recover --repo <name>` as an
+enrolled human. A new repository's history comes the same way, as a
+bundle there (`lonca init <repo> --import <bundle>`). Running the
+installer of a newer archive upgrades in place; `uninstall-hardened.sh`
+removes the install. See [docs/guide/install.md](docs/guide/install.md). The same command continues a repository whose
 `daemon.key` was lost; `lonca daemon-key rotate` replaces a key that is
 still there. See [docs/decisions.md](docs/decisions.md), "Daemon keys".
 
@@ -225,7 +230,9 @@ lonca-audit verify ~/.lonca/repos/demo.git
 - **Permissions:** the daemon writes bundles with mode 0640 into
   `~/.lonca/backups` (hardened mode: `/Library/Lonca/backups` or
   `/var/lib/lonca-backups`, readable by group `lonca`). A restored store
-  belongs to the daemon's user; the source must be readable by it.
+  belongs to the daemon's user; the source must be readable by it. A
+  hardened daemon reads a source only in its backups or its import
+  directory.
 - **Verify a backup without restoring it:**
   `git init --bare x.git && git -C x.git fetch demo-000412.bundle
   '+refs/*:refs/*' && lonca-audit verify x.git`.

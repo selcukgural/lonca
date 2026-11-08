@@ -5,6 +5,7 @@ pub mod gitcmd;
 pub mod home;
 pub mod hooked;
 pub mod hooks;
+mod import;
 pub mod limits;
 #[cfg(not(target_os = "linux"))]
 mod peer_other;

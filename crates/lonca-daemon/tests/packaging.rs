@@ -64,3 +64,27 @@ fn installer_settings_pass_inspection() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+/// Both daemons read the import directory the installer creates, and the
+/// developer's bundles reach them nowhere else (#10).
+#[test]
+fn the_daemon_is_given_the_import_directory() {
+    for (script, file, dir) in [
+        (
+            "packaging/linux/install-hardened.sh",
+            "lonca.service",
+            "--import-dir /var/lib/lonca-import",
+        ),
+        (
+            "packaging/macos/install-hardened.sh",
+            "dev.lonca.daemon.plist",
+            "<string>--import-dir</string><string>/Library/Lonca/import</string>",
+        ),
+    ] {
+        let out = render(script);
+        let text = std::fs::read_to_string(out.join(file)).unwrap();
+        assert!(text.contains(dir), "{script}: {text}");
+        assert!(!text.contains("--local-root"), "{script}");
+        let _ = std::fs::remove_dir_all(out);
+    }
+}

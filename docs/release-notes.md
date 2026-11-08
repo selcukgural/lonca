@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Hardened mode, installed for real on Linux
+
+The Linux installer ran for real with `sudo` (Debian 12, systemd), and what
+broke is fixed. A hardened install has an import directory
+(`/Library/Lonca/import`, `/var/lib/lonca-import`) where you leave a Git
+bundle for `lonca init --import` or `lonca restore`: before, a hardened
+daemon could read neither a project of yours nor a cooperative backup. The
+daemon copies the bundle before git reads it (`lonca daemon --import-dir`).
+Running a newer archive's installer is the upgrade: it stops the daemon,
+replaces the binaries and starts it again (on Linux the old daemon kept
+running before). Linux has `uninstall-hardened.sh` too. `ping` says
+`hardened`. A hardened daemon no longer starts with `--local-root`. macOS has not been installed for real yet. See
+`docs/decisions.md`, "Hardened mode in the field (#10)".
+
 ## 0.2.0 (2026-11-08)
 
 The first release. Its tests ran on Ubuntu, macOS and in the bubblewrap

@@ -501,3 +501,31 @@ fn a_restore_refuses_what_it_can_not_trust_and_leaves_nothing_behind() {
         .unwrap_err();
     assert_eq!(err.0, "conflict", "{err:?}");
 }
+
+/// A hardened daemon reads a backup the developer left in its import
+/// directory: the developer can not write its backups directory.
+#[test]
+fn a_restore_reads_a_bundle_from_the_import_directory() {
+    let mut e = repo();
+    let before = e.ok("status", Some("demo"), None, json!({}));
+    let bundle = backup(&mut e);
+    let dir = e.root.join("import");
+    std::fs::create_dir_all(&dir).unwrap();
+    let left = dir.join("demo.bundle");
+    std::fs::copy(&bundle, &left).unwrap();
+    e.settings.local_roots = Some(vec![]);
+    e.settings.import_dir = Some(dir.clone());
+    let mut o = Other::open(&e, "home2", true);
+    let r = o.restore("demo", &left).unwrap();
+    assert_eq!(r["head_hash"], before["head_hash"]);
+    assert!(audit(&o.store("demo"), deep()).unwrap().ok());
+    assert_eq!(
+        std::fs::read_dir(o.home.join("imports")).unwrap().count(),
+        0
+    );
+    // The first daemon's backups are not this one's: refused.
+    std::fs::remove_dir_all(o.home.join("repos/demo.git")).unwrap();
+    let mut o = Other::open(&e, "home3", true);
+    let err = o.restore("demo", &bundle).unwrap_err();
+    assert_eq!(err.0, "forbidden", "{err:?}");
+}

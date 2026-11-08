@@ -4,17 +4,25 @@
 #   sudo packaging/linux/install-hardened.sh [--bin DIR] [--allow-unsandboxed]
 #   packaging/linux/install-hardened.sh --render DIR [--dev-uid N] [--daemon-uid N]
 #
+# Run it again from a newer archive to upgrade: it stops the daemon, replaces
+# the binaries and the generated files, and starts it again. The stores, the
+# key and the backups stay. uninstall-hardened.sh removes the install.
+#
 # Same layout as the macOS installer: a lonca system user owns the daemon's
 # state, binaries are root-owned, the socket admits the developer's uid only,
 # /etc/lonca/daemon.toml tells clients the daemon's uid, and Claude Code's
 # managed settings lock hooks and sandbox (bubblewrap). The daemon does not
 # start without bubblewrap unless --allow-unsandboxed says it may.
+# /var/lib/lonca-import is where the developer leaves Git bundles for
+# `lonca init --import` and `lonca restore`: the daemon reads none of the
+# developer's other directories, and the developer can write none of its.
 set -eu
 
 PREFIX=/opt/lonca
 BIN_DIR=$PREFIX/bin
 HOME_DIR=/var/lib/lonca
 BACKUP_DIR=/var/lib/lonca-backups
+IMPORT_DIR=/var/lib/lonca-import
 SOCKET=/run/lonca/lonca.sock
 DAEMON_CONFIG_DIR=/etc/lonca
 DAEMON_CONFIG=$DAEMON_CONFIG_DIR/daemon.toml
@@ -53,7 +61,7 @@ RuntimeDirectoryMode=0750
 StateDirectory=lonca
 StateDirectoryMode=0700
 UMask=0077
-ExecStart=$BIN_DIR/lonca daemon --home $HOME_DIR --backups $BACKUP_DIR --socket-mode 660 --socket-group lonca --allow-uid $1 --proxy 127.0.0.1:$PROXY_PORT$unsandboxed
+ExecStart=$BIN_DIR/lonca daemon --home $HOME_DIR --backups $BACKUP_DIR --socket-mode 660 --socket-group lonca --allow-uid $1 --proxy 127.0.0.1:$PROXY_PORT --import-dir $IMPORT_DIR$unsandboxed
 Restart=always
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -119,12 +127,23 @@ if [ -z "$unsandboxed" ] && [ ! -x /usr/bin/bwrap ] && [ ! -x /bin/bwrap ] && [ 
     exit 1
 fi
 
+upgrade=""
+[ -e "$UNIT" ] && upgrade=1
+
 getent group lonca >/dev/null || groupadd --system lonca
 getent passwd lonca >/dev/null || useradd --system --gid lonca --home-dir "$HOME_DIR" --shell /usr/sbin/nologin lonca
 usermod -a -G lonca "$dev_user"
 
 install -d -o root -g root -m 0755 "$PREFIX" "$BIN_DIR"
+# An upgrade: the old daemon stops just before its binaries are replaced,
+# so none keeps running from a deleted file.
+if systemctl is-active --quiet lonca.service; then
+    systemctl stop lonca.service
+fi
 install -d -o lonca -g lonca -m 0750 "$BACKUP_DIR"
+# Group lonca writes, the setgid bit gives each file that group, the sticky
+# bit keeps one from removing another's file.
+install -d -o root -g lonca -m 3770 "$IMPORT_DIR"
 for b in lonca lonca-audit; do
     [ -x "$src_bin/$b" ] && install -o root -g root -m 0755 "$src_bin/$b" "$BIN_DIR/$b"
 done
@@ -143,9 +162,44 @@ else
     chmod 0644 "$MANAGED"
 fi
 systemctl daemon-reload
-systemctl enable --now lonca.service
-echo "Lonca installed. export LONCA_SOCKET=$SOCKET; log out and in to join group lonca."
-echo "Backups (lonca backup) go to $BACKUP_DIR, readable by group lonca."
-echo "A new repository starts from the hardened profile. '$BIN_DIR/lonca doctor' checks the rest:"
-echo "repositories below that profile, and a sudo that asks for no password (use"
-echo "'Defaults:$dev_user timestamp_timeout=0' or a non-sudo account for agents)."
+systemctl enable lonca.service
+systemctl restart lonca.service
+i=0
+while [ ! -S "$SOCKET" ] && [ $i -lt 40 ]; do
+    sleep 0.25
+    i=$((i + 1))
+done
+if [ ! -S "$SOCKET" ]; then
+    echo "the daemon did not start: journalctl -u lonca.service" >&2
+    exit 1
+fi
+version=$("$BIN_DIR/lonca" --version)
+done_word=installed
+[ -n "$upgrade" ] && done_word=upgraded
+
+cat <<EOF
+
+$version $done_word, running as lonca.
+  socket:  $SOCKET   (export LONCA_SOCKET=$SOCKET in your shell profile)
+  state:   $HOME_DIR (unreadable for your account)
+  backups: $BACKUP_DIR (lonca backup; readable by group lonca)
+  imports: $IMPORT_DIR (leave Git bundles here)
+  hooks:   $MANAGED
+
+Log out and in again (or run 'newgrp lonca') so your account joins group lonca.
+
+A new repository starts from the hardened profile, which asks for human
+signatures with user presence. Linux has no key that proves it, so say so:
+    $BIN_DIR/lonca init <repo> --without-presence
+To bring a project's history along, bundle it into the import directory
+first (the daemon reads the file through group lonca):
+    git -C ~/src/project bundle create $IMPORT_DIR/project.bundle main
+    $BIN_DIR/lonca init <repo> --without-presence --import $IMPORT_DIR/project.bundle
+A repository of a cooperative daemon comes the same way: 'lonca backup', copy
+the bundle into $IMPORT_DIR, 'lonca restore <repo> --from <that file>'.
+
+'$BIN_DIR/lonca doctor' checks the rest: repositories below the hardened
+profile, and a sudo that asks for no password (design §3.3), for which add
+    Defaults:$dev_user timestamp_timeout=0
+with 'sudo visudo', or use a non-sudo account for daily work.
+EOF

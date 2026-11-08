@@ -517,3 +517,17 @@ fn real_socket_round_trip() {
         "second daemon refused"
     );
 }
+
+/// A harness asks the daemon, not the files, whether the install is
+/// hardened (#10).
+#[test]
+fn ping_says_whether_the_daemon_is_hardened() {
+    let mut e = Env::new();
+    assert_eq!(
+        e.ok("ping", None, None, json!({}))["hardened"],
+        json!(false)
+    );
+    e.settings.hardened = true;
+    e.reopen();
+    assert_eq!(e.ok("ping", None, None, json!({}))["hardened"], json!(true));
+}

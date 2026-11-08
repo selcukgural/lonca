@@ -3239,6 +3239,97 @@ release (roadmap M2).
   which hardened mode forbids (the invariant). Hardened mode installs from
   the unpacked archive with its script, which copies them root-owned.
 
+## Hardened mode in the field (#10)
+
+The hardened installers had only been run with `--render`. The 0.2.0
+Linux archive (`aarch64-unknown-linux-musl`) was installed for real with
+`sudo` on Debian 12 under systemd (a podman container with systemd as
+PID 1, a developer account in group `sudo` with a password). macOS has
+not been installed for real yet: it writes the managed settings every
+Claude Code session on the machine reads, so it waits for a machine set
+aside for it.
+
+What held: the user, the group, root-owned binaries, a 0700 store the
+developer can not list, a 0660 socket of the daemon's user, `daemon.toml`,
+the managed settings, `lonca doctor` all green, a session, a backup the
+developer can read and audit, and `lonca hook` binding the session at
+`hooks_sandbox` from the managed settings alone. What broke, and what was
+done:
+
+- **No way in for a project's history.** A hardened daemon reads local
+  paths only in its backups directory, and the developer can not write
+  there, so `lonca init --import ~/src/x` and `lonca restore` from a
+  cooperative backup were both `forbidden`. The installers now make an
+  import directory (`/Library/Lonca/import`, `/var/lib/lonca-import`;
+  root, group `lonca`, mode 3770) and start the daemon with
+  `--import-dir`. Anything running as the developer can write it, agents
+  included, so git never reads it: the daemon opens a regular file
+  directly in it with `O_NOFOLLOW | O_NONBLOCK`, checks the bundle header,
+  copies it into `<home>/imports` (0700) and fetches from the copy, which
+  goes when the fetch is done (a daemon killed meanwhile empties
+  `imports` at its next start). A link swapped in after the check, a
+  FIFO, a hard link (macOS lets anyone link a file they can reach but not
+  read), a repository directory whose `objects/info/alternates` names a
+  store in the daemon home, a file in a subdirectory: none reaches git. A
+  bundle above 4 GiB is refused before a byte is copied (a sparse file
+  costs its writer nothing and the copy would write it out), and the copy
+  of `repo.prepare_init` runs before the service lock, so nobody waits
+  for it. A push there is refused; the import directory is read only.
+  What the human imports is still what they sign, as from any directory
+  of theirs: an agent can replace the bundle before the human runs
+  `init`, as it could edit `~/src/x` before.
+- **A hardened daemon refuses `--local-root`.** Git is given such a path
+  as it is, so through a directory the developer can write it could be
+  pointed back at the daemon home after the check. The installers never
+  passed it; now `lonca daemon` does not start with it on a hardened
+  install, and bundles come through the import directory only.
+- **An upgrade left the old daemon running.** Running the Linux
+  installer again replaced `/opt/lonca/bin/lonca` and called `systemctl
+  enable --now`, which does not restart a running service: the old daemon
+  went on from a deleted file. Both installers now are the upgrade path:
+  they stop the daemon before the binaries are replaced, start it again,
+  wait for the new socket (the macOS one outlives its daemon, so it is
+  removed first), and print the version that runs. Stores, key and
+  backups stay; `lonca doctor` checks the rest.
+- **Linux had no uninstaller.** `packaging/linux/uninstall-hardened.sh`
+  mirrors the macOS one (`--purge` also removes the stores, backups,
+  imports and the user); both archives carry it.
+- **Linux can not meet the hardened profile's presence.** There is no
+  key that proves it there, so `lonca init` needs `--without-presence`;
+  the installer says so now instead of pointing at the Secure Enclave.
+
+**sudo's credential cache, measured** (sudo 1.9.13, Debian's default
+`timestamp_type=tty`): after `sudo -v` on a terminal, a child process
+that still has that terminal as its controlling terminal runs `sudo -n
+true` without a password, even with stdin redirected from `/dev/null`; a
+process detached from it (`setsid`) is asked. Claude Code's tool shells
+have no controlling terminal (`tty` says "not a tty", `ps` shows `??`;
+measured on macOS 27.2), so they can not reuse a cache the developer's
+terminal holds. The hook runs `sudo -n true` the same way the harness
+runs the agent's commands, so its answer is the agent's reach: run under
+Claude Code it says "asks for a password" while `lonca doctor` in the
+terminal right after `sudo -v` warns. A harness that keeps the terminal
+for its tool processes gets the cache and the warning with it. macOS
+1.9.17 has the same default; its own measurement waits for the macOS
+install.
+
+**Questions from the harness side** (imece starts each worker with
+`lonca hook` in `--settings`):
+
+1. Claude Code's documentation says `allowManagedHooksOnly` blocks user,
+   project, local and plugin hooks; it does not say what happens to hooks
+   given with `--settings`. Not measured: it needs root-managed settings
+   and a live Claude Code run, which waits for the macOS install. Until
+   then a harness that passes its own on a hardened machine may see
+   `lonca hook` run twice per tool call.
+2. Yes: with the managed settings and a session started by the human with
+   `--harness claude-code`, the managed `lonca hook` binds the session at
+   `hooks_sandbox` with nothing from the harness (measured above).
+3. `ping` now says `hardened` (true for a daemon whose uid the root-owned
+   `daemon.toml` names). Whether the harness's own hooks are the locked
+   ones shows after the first hook, as the session's level in `status`;
+   #190 makes a session that never bound visible.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a
@@ -3248,5 +3339,5 @@ release (roadmap M2).
 - Running the base test suite against changed tests ("test integrity"
   currently escalates deleted or skipped tests; it does not rerun suites).
 - Harness levels for agents other than Claude Code (Codex, Cursor, ...).
-- Whether `sudo -n true` reuses a credential cache from the agent's shell
-  (to be measured on a real install).
+- A real hardened install on macOS (Linux was measured; see "Hardened
+  mode in the field").

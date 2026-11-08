@@ -80,8 +80,37 @@ lonca daemon-key recover --repo demo      # only if this daemon's key is new
 lonca-audit verify ~/.lonca/repos/demo.git
 ```
 
-Human keys live in `~/.config/lonca/humans`, not in the daemon's home: back
-up file keys separately; a Secure Enclave key never leaves its Mac, so set a
-recovery key (`lonca human recovery-key --out`) and keep it off the machine.
-What a backup holds and what it does not is in
-[the README](https://github.com/selcukgural/lonca#backup-restore-and-moving-to-another-machine).
+- **What is backed up:** the bundle written by the daemon (every ref, at
+  one point of the log), or the remote `lonca push` sends trunk, the log,
+  policy and proposals to. A pushed remote is a complete backup and is
+  audited in CI; `lonca backup` also works offline and before any push.
+- **What is not:** the daemon key (`daemon.key`; a restore on another key
+  is continued with `lonca daemon-key recover`, which every auditor sees),
+  session token hashes (`tokens.json`; sessions in a restored log need new
+  tokens, that is new sessions), freeze flags, the verifier's scratch
+  directory and agent workspaces (`lonca session start` recreates them).
+  Human keys live in `~/.config/lonca/humans`, not in the daemon's home:
+  back up file keys separately; a Secure Enclave key never leaves its Mac,
+  so set a recovery key (`lonca human recovery-key --out`) and keep it off
+  the machine.
+- **A restore never replaces a repository.** The log is append-only; a
+  restore over a longer log would be the rewrite the auditor exists to
+  catch. Move the broken store away first (as the daemon's user) or audit
+  the backup elsewhere. The name must be the one the log was created
+  under, because human signatures bind it.
+- **Permissions:** the daemon writes bundles with mode 0640 into
+  `~/.lonca/backups` (hardened mode: `/Library/Lonca/backups` or
+  `/var/lib/lonca-backups`, readable by group `lonca`). A restored store
+  belongs to the daemon's user; the source must be readable by it. A
+  hardened daemon reads a source only in its backups or its import
+  directory.
+- **Verify a backup without restoring it:**
+  `git init --bare x.git && git -C x.git fetch demo-000412.bundle
+  '+refs/*:refs/*' && lonca-audit verify x.git`.
+
+The same `lonca daemon-key recover` continues a repository whose
+`daemon.key` was lost; `lonca daemon-key rotate` replaces a key that is
+still there (the reasons are in
+[docs/decisions.md](https://github.com/selcukgural/lonca/blob/main/docs/decisions.md),
+"Daemon keys"). Moving cooperative repositories into a hardened install is
+in [Install](install.md#hardened-mode).

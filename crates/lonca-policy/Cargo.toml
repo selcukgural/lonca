@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 description = "Lonca's deterministic decision layer: the pure decide() function, state replay, Cedar policies and human keys"
 keywords = ["vcs", "policy", "cedar", "agents"]
 categories = ["development-tools"]

@@ -29,8 +29,13 @@ Read it before you run it:
 ## Homebrew
 
 ```sh
-brew install selcukgural/lonca/lonca
+brew tap selcukgural/lonca
+brew install lonca
 ```
+
+After the tap, the short name works for everything else too: `brew upgrade
+lonca`, `brew uninstall lonca`. Without it a plain `brew install lonca`
+finds no formula: Lonca is not in homebrew-core.
 
 The tap ([selcukgural/homebrew-lonca](https://github.com/selcukgural/homebrew-lonca))
 takes the same release archives. Its formula is written by a workflow that
@@ -103,8 +108,8 @@ lonca init demo --without-presence --import /var/lib/lonca-import/myproject.bund
 
 A repository of a cooperative daemon comes the same way: `lonca backup`,
 copy the bundle into the import directory, `lonca restore <repo> --from
-<that file>`, then `lonca daemon-key recover --repo <repo>` (see
-[the README](https://github.com/selcukgural/lonca#observation-levels)).
+<that file>`, then `lonca daemon-key recover --repo <repo>` as an
+enrolled human (see [Backup and moving](quick-start.md#backup-and-moving)).
 The audit of a hardened store goes through a backup, since your account
 can not read the store: `lonca backup`, then verify the bundle as below.
 

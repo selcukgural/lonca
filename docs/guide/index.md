@@ -107,6 +107,21 @@ profiles of data ([Running agents](runners.md)). A team server is designed
 for, not built. A log written by any 0.x release stays readable, verifiable
 and auditable by every later release.
 
+## Limitations
+
+- Not yet used on real projects.
+- One daemon per machine, one sequencer per repository.
+- Symbol extraction covers thirteen languages, and Markdown, TOML, JSON
+  and YAML files are split into sections; other files are leased whole. Signature changes are detected and must be declared, but their
+  callers are not analyzed: the merge queue's tests are what catch broken
+  callers.
+- Verification needs `bubblewrap` on Linux to be sandboxed.
+- Redaction is logical: content is withheld by the daemon, objects are not
+  yet purged from Git history.
+- Creating a Secure Enclave key needs an interactive session; it could not
+  be exercised in automated tests (the signature format is tested).
+- The advisor has been tested against a fake API only.
+
 The design (in Turkish) is
 [docs/design.md](https://github.com/selcukgural/lonca/blob/main/docs/design.md);
 every decision and its reasons are in

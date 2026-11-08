@@ -1862,8 +1862,10 @@ Passing tests do not show that they would catch a flipped `>=` or a
   workspace. `cargo test` goes crate by crate, so a mutant in `lonca-symbols`
   waited for the daemon's and the CLI's tests before its own could catch it.
   nextest stops at the first failure, so only a survivor pays for a full run.
-  Doctests do not run with it; the workspace has none, and a new one would
-  need its own check.
+  Doctests do not run with it. The only ones are the README examples of
+  `lonca-client` and `lonca-net` (their crate docs, `include_str!`), which
+  `cargo test --workspace` in `ci.yml` runs; they show usage and kill no
+  mutant, the crates' own tests do.
 - **Timeouts** are at least `minimum_test_timeout = 600` s, three times a
   workspace test run on CI. A timeout counts as caught, so a shorter limit lets
   a survivor on a busy runner pass as caught; 300 s was one and a half times a
@@ -3218,11 +3220,17 @@ release (roadmap M2).
   published by hand (`docs/release-checklist.md`); the workflow is off until
   the repository variable `PUBLISH_CRATES` is `true`.
 - **Homebrew from a tap of its own,** `selcukgural/homebrew-lonca`
-  (`brew install selcukgural/lonca/lonca`). The tap's workflow reads the
-  latest published release, verifies every archive's attestation against
-  `release.yml` of this repository, writes the formula from `SHA256SUMS` and
-  commits it with its own token. This repository holds no token for the tap,
-  and a draft or pre-release never reaches it.
+  (`brew tap selcukgural/lonca`, then `brew install lonca`). The tap's
+  workflow reads the latest published release, verifies every archive's
+  attestation against `release.yml` of this repository, writes the formula
+  from `SHA256SUMS` and commits it with its own token. This repository
+  holds no token for the tap, and a draft or pre-release never reaches it.
+  The docs show the tap and the short name as two steps (0.2.1) rather than
+  the one-line `brew install selcukgural/lonca/lonca`: that one works but
+  is easily shortened to a plain `brew install lonca`, which without the
+  tap finds no formula. That form needs homebrew-core, whose notability
+  bar (stars, forks, watchers, a formula built from source) is far above
+  this repository today.
 - **`install.sh`** (served by the site, `website/static/install.sh`) picks
   the archive for the machine, checks it against `SHA256SUMS` and installs
   the binaries in `~/.local/bin`, over HTTPS only.

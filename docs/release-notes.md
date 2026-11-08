@@ -16,6 +16,15 @@ running before). Linux has `uninstall-hardened.sh` too. `ping` says
 `hardened`. A hardened daemon no longer starts with `--local-root`. macOS has not been installed for real yet. See
 `docs/decisions.md`, "Hardened mode in the field (#10)".
 
+### Crates and Homebrew
+
+Every published crate has a README on crates.io; `lonca-client` and
+`lonca-net` show it on docs.rs as well, with an example that is compiled
+as a test. Homebrew is shown as `brew tap selcukgural/lonca`, then
+`brew install lonca`, so the short name works for `brew upgrade lonca`
+too. The repository's README is a short front page; what it held is on
+the site (backups in the quick start, limitations on "What Lonca is").
+
 ## 0.2.0 (2026-11-08)
 
 The first release. Its tests ran on Ubuntu, macOS and in the bubblewrap

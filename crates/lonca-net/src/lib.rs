@@ -1,16 +1,4 @@
-//! A small network proxy for sandboxed commands, shared by Lonca and Kule.
-//!
-//! A sandbox lets commands reach only this proxy, on loopback. Every
-//! connection (`CONNECT host:port` or an absolute `http://` request) is put to
-//! a [`Gate`], which decides whether it goes through. Loopback, private and
-//! link-local destinations are refused unless the gate allows them, and the
-//! proxy connects to the address it checked, so DNS cannot swap in a private
-//! address after the check. The proxy never looks inside TLS itself; a gate
-//! may serve a tunnel it let through ([`Gate::relay`]).
-//!
-//! It has no dependencies and knows nothing about who uses it: the gate
-//! holds all the policy.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

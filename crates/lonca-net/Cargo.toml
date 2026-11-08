@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 description = "A loopback HTTP CONNECT proxy that asks a gate about every connection"
 keywords = ["proxy", "sandbox", "network", "agents"]
 categories = ["network-programming"]

@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+readme = "README.md"
 description = "Client of the Lonca daemon socket: protocol types, framing, daemon checks and the human session file"
 keywords = ["vcs", "agents", "lonca", "client"]
 categories = ["development-tools", "api-bindings"]

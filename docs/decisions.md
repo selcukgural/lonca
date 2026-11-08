@@ -128,6 +128,11 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   empty, and makes a change that adds a file need an exclusive lease on its
   `path#<file>` (see "Insert leases (#45)"). An acquire or an interest with
   names needs it. Older entries replay as they were.
+- **Version 23** gives a set delegated to a child back to the parent when the
+  child expires or stops beating, with no new field (see "A delegated lease
+  comes back (#40)").
+- **Version 24** adds the `unhooked` observation (see "A session whose hooks do
+  not run (#190)"). An `observe` with one needs it.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -1115,6 +1120,7 @@ A01/A07, zero trust: every request authenticated).
 | `hook.input` | agent | |
 | `hook.bind` | agent | |
 | `hook.stop` | agent | |
+| `mcp.call` | agent | `lonca mcp` names the tool it runs; a call with no hook event marks the session |
 | `harness.setup` | agent | |
 | `queue.run` | any human | drains every merge queue now |
 | `security.events` | any human | the security log of the last day, of the human's repositories |
@@ -2347,6 +2353,56 @@ claude-code".
 - **Every program, not one.** Each Lonca hook in each list must have its program out of
   a user's reach. A harness runs them all, so the weakest one decides.
 
+## A session whose hooks do not run (#190)
+
+Hooks are how Lonca sees a session, and the daemon took for granted that a harness runs
+the ones it was given. A harness that skips them, by a flag, a setting or a later
+version, still reaches `lonca mcp` with a valid token, and Lonca heard nothing and held
+nothing against it. A client can check what its harness prints (imece waits for
+`SessionStart`), but that proves the settings were read, not that `PreToolUse` fires for
+each tool. Only the daemon sees both ends of a call to its own tools.
+
+- **The proof is a pair.** `lonca mcp` names each tool before it runs it (`mcp.call`). On
+  a harness whose before-tool event covers MCP tools, that event came first: the hook
+  blocks the call until the daemon answers it, so the order is certain, and the daemon
+  takes one event of that tool from the session's, oldest first. By name and order, not by
+  a digest of the input: a harness may reshape the input between the two (Claude Code's
+  `updatedInput`), and parallel calls of one tool are interchangeable anyway.
+- **In memory, a miss in the log.** Each event would be an entry if the pairs were
+  logged, and the log does not grow with tool calls. So events wait in the daemon (ten
+  minutes, 64 per session), and only a miss is written: an `unhooked` observation, once
+  per session, log format 24. From there it is the fold's, like a taint: replayed, audited,
+  and still there after a restart.
+- **A miss is a taint with a word of its own.** The fold taints the session (if nothing
+  did before), drops it to `unobserved` and keeps the first tool. `decide()` says
+  `unhooked_session` and `unhooked_critical_path` where it would say the taint's words, and
+  `[taint] critical` decides a critical path, since the session is tainted. Nothing it did
+  since its last proof can be taken as seen. A child made after the mark has it, as it runs
+  in the same harness; a continuation reports afresh but keeps the taint, like any other.
+- **Nothing is refused at the call.** The mark changes what the session's next operations
+  get. Refusing the call would add little: the tools that matter are decided anyway, and
+  a read-only tool refused would only hide the mark from the agent's runner.
+- **Only where a run showed it.** `events.before_tool_mcp` in a profile says the event
+  fires for MCP tools; it is on for Claude Code only (`PreToolUse` with matcher `*` covers
+  `mcp__lonca__*`). A harness that skips the event for MCP tools would taint every session,
+  so a profile is held to it only when it says so, like a `locked` table. A session with
+  no harness named, or isolated by `lonca run`, is not checked: the first is `unobserved`
+  already, the second is seen by its sandbox.
+- **A session that never bound** is `unobserved`, which the shipped policy treats as
+  tainted (`[observation] unobserved_is_tainted`), and with Claude Code its first call is
+  a miss too. `status.sessions[].bound_ms` says whether it bound; `last_hook_ms` when the
+  daemon last heard its hooks (in memory, so `null` after a restart).
+- **A restart forgets the events.** The hook blocks its call until answered, so only a
+  restart between the two loses one, and `lonca mcp` reconnects within seconds. For ten
+  seconds after a start a call with no event, of a session older than the daemon, is not
+  a miss. A miss is still possible if a
+  person takes over ten minutes to allow a Lonca tool; Lonca's setup allows them
+  (`permissions.allow`), so that takes a setting of the person's own.
+- **What it can not see.** An agent that never calls `lonca mcp` (it edits and runs
+  `lonca propose` from a shell the harness does not hook) is not caught by this, only by
+  the rest: an unbound session is `unobserved`, and a proposal of files no hook saw written
+  escalates (`unobserved_write`).
+
 ## What one client can not do to the others (#50)
 
 The daemon is the single writer for every repository on the machine, and a hook
@@ -2906,8 +2962,9 @@ tries never reaches a decision, and nothing told anyone of a freeze.
   reason), `reconcile_error`, `unmediated_import` (the ref), `freeze`,
   `integrity_alarm` (the auditor's freeze flag), `taint` (the daemon tainted
   a session), `sudo_without_password` (a bind whose hook reports it),
-  `token_rotated` (`session.rotate`, #53). Entries the daemon appends
-  (`freeze`, `import.unmediated`, `taint`) are taken from the repository and
+  `token_rotated` (`session.rotate`, #53), `unhooked` (a call to `lonca mcp`
+  with no hook event before it: the tool, #190). Entries the daemon appends
+  (`freeze`, `import.unmediated`, `taint`, `unhooked`) are taken from the repository and
   written after the request, or by the worker within two seconds.
 - **Kept**: past 8 MiB the file moves to `security.log.1`, replacing the one
   there, so at most about 16 MiB, the latest events, are kept. The log is

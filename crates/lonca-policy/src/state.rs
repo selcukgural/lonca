@@ -46,6 +46,8 @@ pub struct Session {
     pub harness: Option<String>,
     /// A `session.bind` has set `level`: from here it can only stay or fall.
     pub bound: bool,
+    /// When that was: the time of the `session.bind`, or the parent's.
+    pub bound_ms: Option<i64>,
     pub taint: Option<String>,
     pub ended: Option<String>,
     pub writes: BTreeSet<String>,
@@ -61,6 +63,18 @@ pub struct Session {
     /// 0 for a clean stop. `None` until the first report, and again after
     /// a proposal that stands: then nobody has said what is left.
     pub unproposed: Option<Unproposed>,
+    /// The first call to `lonca mcp` whose before-tool event never came: the
+    /// harness is not running the session's hooks. It taints the session and
+    /// drops its level to `unobserved`, for good.
+    pub unhooked: Option<Unhooked>,
+}
+
+/// A tool call the session's hooks did not report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Unhooked {
+    /// The MCP tool, without the harness's prefix.
+    pub tool: String,
+    pub seen_ms: i64,
 }
 
 /// What a session left behind, as reported when it stopped.
@@ -1534,6 +1548,7 @@ impl State {
                         // A human signed this start: its harness gets to
                         // report, and the taint stays whatever it says.
                         bound: false,
+                        bound_ms: None,
                         taint: old.as_ref().and_then(|o| o.taint.clone()),
                         ended: None,
                         writes: old.as_ref().map(|o| o.writes.clone()).unwrap_or_default(),
@@ -1542,6 +1557,8 @@ impl State {
                         continued_from: old.as_ref().map(|o| o.id.clone()),
                         continued_by: None,
                         unproposed: None,
+                        // Its harness reports afresh; the taint went along.
+                        unhooked: None,
                     },
                 );
                 if let Some(old) = old {
@@ -1552,6 +1569,7 @@ impl State {
                 if let Some(s) = self.sessions.get_mut(session) {
                     s.level = *level;
                     s.bound = true;
+                    s.bound_ms = Some(time_ms);
                 }
             }
             Op::SessionIsolate { session, .. } => {
@@ -1594,6 +1612,7 @@ impl State {
                             // parent stands, or it would be a way up.
                             harness: p.harness.clone(),
                             bound: p.bound,
+                            bound_ms: p.bound_ms,
                             taint: p.taint.as_ref().map(|t| format!("inherited: {t}")),
                             ended: None,
                             writes: BTreeSet::new(),
@@ -1602,6 +1621,8 @@ impl State {
                             continued_from: None,
                             continued_by: None,
                             unproposed: None,
+                            // The same harness runs it.
+                            unhooked: p.unhooked.clone(),
                         },
                     );
                 }
@@ -1820,6 +1841,22 @@ impl State {
                                     seen_ms: time_ms,
                                 });
                             }
+                            // Nothing it did since can be taken as seen
+                            // (#190). The daemon sends none for a sandbox.
+                            ObsKind::Unhooked { tool } => {
+                                if s.unhooked.is_none() {
+                                    s.unhooked = Some(Unhooked {
+                                        tool: tool.clone(),
+                                        seen_ms: time_ms,
+                                    });
+                                }
+                                if s.level != ObservationLevel::Isolated {
+                                    s.level = ObservationLevel::Unobserved;
+                                }
+                                if s.taint.is_none() {
+                                    s.taint = Some(describe(&ev.kind));
+                                }
+                            }
                             _ => {}
                         }
                         if ev.external && s.taint.is_none() {
@@ -1916,6 +1953,7 @@ fn describe(k: &ObsKind) -> String {
         ObsKind::Other { tool } => format!("tool {tool}"),
         ObsKind::Heartbeat => "heartbeat".into(),
         ObsKind::Unproposed { total, .. } => format!("{total} unproposed file(s)"),
+        ObsKind::Unhooked { tool } => format!("unhooked: {tool} ran without its hook event"),
     }
 }
 

@@ -375,6 +375,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("hook.input", Cred::Agent),
     ("hook.bind", Cred::Agent),
     ("hook.stop", Cred::Agent),
+    ("mcp.call", Cred::Agent),
     ("harness.setup", Cred::Agent),
     ("queue.run", Cred::AnyHuman),
     ("security.events", Cred::AnyHuman),
@@ -399,13 +400,15 @@ pub const LONG_LINES: &[&str] = &[
 ];
 
 /// Agent methods that write nothing to the log, and `session.end`: a session
-/// over its rate must still be able to stop.
-const NOT_THROTTLED: [&str; 5] = [
+/// over its rate must still be able to stop. `mcp.call` writes once in a
+/// session's life at most.
+const NOT_THROTTLED: [&str; 6] = [
     "facts.preview",
     "events",
     "inbox",
     "harness.setup",
     "session.end",
+    "mcp.call",
 ];
 
 /// Who sent a request, as far as its token says.
@@ -658,6 +661,9 @@ pub struct Service {
     /// Changes whose checks are running, see [`Running`].
     running: Mutex<BTreeSet<ChangeId>>,
     settings: Settings,
+    /// When this daemon started, by its clock: hook events sent before it
+    /// went to another daemon ([`crate::hooked::START_GRACE_MS`]).
+    started_ms: i64,
     inner: Mutex<Inner>,
     wake: (Mutex<u64>, Condvar),
     /// Bumped whenever a log may have grown; `log` with `wait_ms` sleeps
@@ -703,6 +709,7 @@ impl Service {
             running: Mutex::default(),
             home,
             counters: Counters::default(),
+            started_ms: clock(),
             clock,
             settings,
             inner: Mutex::new(Inner {
@@ -1135,6 +1142,7 @@ impl Service {
             "hook.input" => self.hook_input(req, params(p)?),
             "hook.bind" => self.hook_bind(req, params(p)?),
             "hook.stop" => self.hook_stop(req, params(p)?),
+            "mcp.call" => self.mcp_call(req, params(p)?),
             "harness.setup" => self.harness_setup(req, params(p)?),
             "queue.run" => {
                 self.notify_queue();
@@ -1635,6 +1643,8 @@ impl Service {
                     "verification_ms": s.session_spent(&x.id),
                     "continued_from": x.continued_from, "continued_by": x.continued_by,
                     "unproposed": x.unproposed,
+                    "bound_ms": x.bound_ms, "unhooked": x.unhooked,
+                    "last_hook_ms": r.hooked.get(&x.id).and_then(|h| h.last_ms),
                 })
             })
             .collect();
@@ -3067,6 +3077,20 @@ impl Service {
             .map(|s| s.scope.scratch.clone())
             .unwrap_or_default();
         let (events, verdict) = hooks::translate(&ev, &policy, &scratch);
+        // Heard, and for a tool of `lonca mcp` kept for its call (#190). A
+        // refused call never comes, so only an allowed one waits.
+        let heard = Self::heard(r, &session, now);
+        let harness = ev.harness.as_deref().unwrap_or("claude-code");
+        if ev.hook_event_name == "PreToolUse"
+            && verdict.decision != "deny"
+            && let Some(profile) = policy.config.harness(harness)
+            && let Some(tool) = ev
+                .tool_name
+                .as_deref()
+                .and_then(|t| t.strip_prefix(&profile.tool_prefix()))
+        {
+            heard.before(tool, now);
+        }
         if !events.is_empty() {
             r.submit(
                 Submission::new(
@@ -3154,6 +3178,74 @@ impl Service {
         Ok(out)
     }
 
+    /// A session's hooks were heard from now. The first time, the sessions
+    /// no longer active are forgotten, so the map lives as long as they do.
+    fn heard<'a>(r: &'a mut RepoHandle, session: &str, now: i64) -> &'a mut crate::hooked::Hooked {
+        if !r.hooked.contains_key(session) {
+            let state = &r.chain.state;
+            r.hooked.retain(|s, _| state.session_active(s, now));
+        }
+        let h = r.hooked.entry(session.to_string()).or_default();
+        h.heard(now);
+        h
+    }
+
+    /// `lonca mcp` is about to run `tool`. On a harness whose before-tool
+    /// event covers MCP tools that event came first, unless the hooks are
+    /// not running: then the session is marked `unhooked` in the log, which
+    /// taints it (#190). Nothing is refused here; what the session does next
+    /// is decided as a tainted session's.
+    fn mcp_call(&self, req: &Request, call: McpCall) -> Hr {
+        use crate::hooked::{START_GRACE_MS, valid_tool};
+        if !valid_tool(&call.tool) {
+            return fail("invalid", "tool must be a tool name of lonca mcp");
+        }
+        let mut guard = self.lock();
+        let now = self.now();
+        let (repo, actor) = Self::agent(&guard, req, now)?;
+        let session = actor.session().expect("agent").to_string();
+        let r = Self::repo(&mut guard, &repo)?;
+        let policy = r.policy().or_fail()?;
+        let Some(s) = r.chain.state.sessions.get(&session) else {
+            return fail("unauthenticated", "unknown session");
+        };
+        // A sandbox observes what hooks would; a session with no harness
+        // named, or one whose event skips MCP tools, has nothing to prove.
+        let checked = s.level != ObservationLevel::Isolated
+            && s.harness
+                .as_deref()
+                .and_then(|h| policy.config.harness(h))
+                .is_some_and(|p| p.events.before_tool_mcp);
+        if !checked {
+            return Ok(json!({"checked": false, "hooked": null}));
+        }
+        let marked = s.unhooked.is_some();
+        // Only a session older than this daemon can have sent its event to
+        // the one before.
+        let fresh = s.created_ms < self.started_ms
+            && now.saturating_sub(self.started_ms) < START_GRACE_MS;
+        let took = r
+            .hooked
+            .get_mut(&session)
+            .is_some_and(|h| h.take(&call.tool, now));
+        let hooked = took || fresh;
+        if !hooked && !marked {
+            let op = Op::Observe {
+                session: session.clone(),
+                events: vec![Observation {
+                    phase: Phase::Pre,
+                    kind: ObsKind::Unhooked {
+                        tool: call.tool.clone(),
+                    },
+                    external: false,
+                }],
+            };
+            r.submit(Submission::new(Actor::Daemon, op), now)
+                .or_fail()?;
+        }
+        Ok(json!({"checked": true, "hooked": hooked}))
+    }
+
     /// The agent is about to finish its turn: what it left is recorded, and
     /// while rounds remain it is told to go on, in the harness's shape.
     fn hook_stop(&self, req: &Request, h: HookStop) -> Hr {
@@ -3170,6 +3262,7 @@ impl Service {
         let Some(answer) = &profile.stop_deny else {
             return fail("invalid", format!("{} has no stop event", h.harness));
         };
+        Self::heard(r, &session, now);
         let left = report_unproposed(r, &session, h.files, limit, now)?;
         let mut out = json!({
             "unproposed": left.paths, "total": left.total, "round": left.round, "limit": limit,
@@ -3197,6 +3290,7 @@ impl Service {
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
+        Self::heard(r, &session, now);
         // A hook of a harness that runs in a sandbox: it has nothing to add,
         // and what the hook can see of the machine is the sandbox's.
         let s = r.chain.state.sessions.get(&session);

@@ -1479,15 +1479,24 @@ fn propose(
                 // session in the other state refused. Only the known word
                 // opens; `PolicyBundle::parse` refuses any other.
                 let open = |word: &str| word == CRITICAL_ESCALATE;
+                // A session whose hooks did not run is tainted and says so
+                // in a word of its own; the taint's setting answers for it.
+                let unhooked = s.unhooked.is_some();
                 if !critical.is_empty() {
                     if s.taint.is_some() && !open(&cfg.taint.critical) {
-                        v.deny("tainted_critical_path");
+                        v.deny(if unhooked {
+                            "unhooked_critical_path"
+                        } else {
+                            "tainted_critical_path"
+                        });
                     } else if unobserved && !open(&cfg.observation.unobserved_critical) {
                         v.deny("unobserved_critical_path");
                     }
                 }
                 v.escalate(
-                    if s.taint.is_some() {
+                    if unhooked {
+                        "unhooked_session"
+                    } else if s.taint.is_some() {
                         "tainted_session"
                     } else {
                         "unobserved_session"

@@ -357,7 +357,9 @@ with a signed `daemon.rotate` through `human.submit`.
   "last_seen_ms": time | null, "verification_ms": integer,
   "continued_from": string | null,
   "continued_by": string | null, "unproposed": {"paths": [path], "total":
-  integer, "rounds": integer, "seen_ms": time} | null}`. `verification_ms` is
+  integer, "rounds": integer, "seen_ms": time} | null, "bound_ms": time |
+  null, "last_hook_ms": time | null, "unhooked": {"tool": string, "seen_ms":
+  time} | null}`. `verification_ms` is
   what the session's line has used of `[quota] session_seconds`: the session,
   those it was made from or continues, and theirs. `last_seen_ms` is
   the last heartbeat; `null` means none yet. `continued_from` and
@@ -369,7 +371,15 @@ with a signed `daemon.rotate` through `human.submit`.
   [], "total": 0, "rounds": 0`. `null` means no report since the session
   began or last proposed (it expired, or ended without `files`), so a client
   can tell "ended clean" from "nobody said". It is the client's report, not
-  a check: only a proposal proves delivery.
+  a check: only a proposal proves delivery. `bound_ms` is when the session's
+  hook sent `hook.bind` (a child's is its parent's); `null` means it never
+  did. `last_hook_ms` is when the last hook event of the session came, since
+  the daemon started; `null` after a restart until the next one.
+  `unhooked` is the first call to `lonca mcp` whose before-tool event never
+  came: the harness is not running the session's hooks (see `mcp.call`). It
+  taints the session and drops its level to `unobserved` for good. A client
+  that wants observed workers stops a session with `bound_ms` `null` or with
+  `unhooked`.
 - **detail**: `{"code", "symbol", "needed_kind": lease kind,
   "holder_session": string | null, "holder_agent": string | null,
   "intent": string | null, "expires_ms": time | null, "set": string |
@@ -832,6 +842,26 @@ something new; a clean report is new once after the session began or
 proposed. It is a reminder and a record, not a check: the client
 computes `files`.
 
+### `mcp.call`
+
+*agent.* `{"tool": string}`. `lonca mcp` sends it before it runs one of its
+tools, by the name in `tools/list` (lowercase, digits and `_`, at most 64
+bytes; any other is `invalid`). On a harness whose profile says its
+before-tool event covers MCP tools (`events.before_tool_mcp`, only Claude
+Code's for now), that event came first, through `hook.event` or
+`hook.input`, unless the session's hooks are not running. The daemon takes
+one event of that tool from the session's, oldest first; an event waits ten
+minutes at most. A call with none marks the session `unhooked`: an
+`unhooked` observation in the log (once per session) and an `unhooked`
+security event. Nothing is refused here, but the session is tainted from
+then on (`unhooked_session`, `unhooked_critical_path`). Answers `{"checked":
+boolean, "hooked": boolean | null}`; `checked` is false, and nothing is
+compared, for an isolated session, one with no harness named and one whose
+harness has no such event. For ten seconds after the daemon starts, a call
+of a session older than the daemon with no event is not a miss: the event
+may have gone to the daemon before.
+Not counted against `[sessions] ops_per_minute`.
+
 ### `harness.setup`
 
 *agent.* `{"harness": string}`. Gives `{"setup": object | null}`: the
@@ -907,6 +937,9 @@ The `reasons` of a decision. The ones a runner acts on:
 - `stale_trunk`, `unknown_base`: propose on the current trunk.
 - `unobserved_write:<path>`, `tainted_session`, `tainted_critical_path`,
   `critical_path:<path>`, `unobserved_session`: escalated to a human.
+  `unhooked_session` and `unhooked_critical_path` are a taint's, for a
+  session whose hooks did not run (`status.sessions[].unhooked`): start a
+  new session in a harness that runs them.
 - `verification_failed:<check>`, `verification_error:<check>`,
   `merge_conflict`, `conflict:<symbol>`: the integration failed; the
   change's status says more.
@@ -1069,4 +1102,6 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   request authenticated (`docs/decisions.md`, "Daemon authentication").
   `harness` on `session.start` and `status.sessions[]`; `hook.bind` reads a level
   only for that harness, and a session started without one is `unobserved`, where
-  before the request's name was enough.
+  before the request's name was enough. `mcp.call`, `status.sessions[].bound_ms`,
+  `last_hook_ms` and `unhooked`, and the reasons `unhooked_session` and
+  `unhooked_critical_path` (#190).

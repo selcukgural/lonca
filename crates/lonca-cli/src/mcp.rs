@@ -384,6 +384,16 @@ impl Server {
         inbox["text"].as_str().map(String::from)
     }
 
+    /// Tells the daemon which tool runs, before it runs, so it can match
+    /// the harness's before-tool event to it (#190). The answer changes
+    /// nothing here: a session whose hooks are not running is marked in the
+    /// log, and what it does next is decided accordingly.
+    fn announce(&mut self, name: &str) {
+        if is_tool(name) {
+            let _ = ctx::call(&mut self.client, "mcp.call", json!({"tool": name}));
+        }
+    }
+
     /// A tool that only reads runs past an argument it does not take and
     /// says so; one that changes something does not run on a call that may
     /// not mean what it says.
@@ -549,6 +559,13 @@ impl Server {
 
 /// A tool's answer. News from other sessions comes as text of its own, so the
 /// answer stays one JSON document for whoever parses it.
+/// One of the tools `tools/list` gives.
+fn is_tool(name: &str) -> bool {
+    tools()
+        .as_array()
+        .is_some_and(|t| t.iter().any(|t| t["name"] == name))
+}
+
 fn answer(body: String, news: Option<String>, is_error: bool) -> Value {
     let mut content = vec![json!({"type": "text", "text": body})];
     content.extend(news.map(|text| json!({"type": "text", "text": text})));
@@ -606,6 +623,7 @@ pub fn run() -> Result<()> {
                     if let Ok(t) = server.ws.token() {
                         server.client.token = Some(t);
                     }
+                    server.announce(name);
                     server.tool(name, &args)
                 };
                 let news = server.news();
@@ -633,8 +651,9 @@ pub fn run() -> Result<()> {
 mod tests {
     use super::{
         ADDITIVE, LeaseItem, LeaseKind, READ_ONLY, RETRY_BEAT_MS, annotated, anyhow,
-        beat_interval_ms, claim_mismatch, ctx, due_for_renewal, error_body, next_beat, remainder,
-        renewal_ttl_ms, requested_items, section_ids, session_over, tools, ttl_ms, wrong_argument,
+        beat_interval_ms, claim_mismatch, ctx, due_for_renewal, error_body, is_tool, next_beat,
+        remainder, renewal_ttl_ms, requested_items, section_ids, session_over, tools, ttl_ms,
+        wrong_argument,
     };
     use serde_json::json;
 
@@ -945,5 +964,27 @@ mod tests {
             status["inputSchema"]["required"],
             serde_json::json!(["change"])
         );
+    }
+
+    /// What `mcp.call` names is a tool of the list, each one a name the
+    /// daemon takes (`hooked::valid_tool`: lowercase, digits, `_`).
+    #[test]
+    fn only_a_listed_tool_is_announced_and_every_one_is_a_plain_name() {
+        let list = tools();
+        let names: Vec<&str> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"propose") && names.len() > 5, "{names:?}");
+        for n in &names {
+            assert!(is_tool(n));
+            let plain = n.len() <= 64
+                && n.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+            assert!(plain, "{n}");
+        }
+        assert!(!is_tool("") && !is_tool("nope") && !is_tool("Propose"));
     }
 }

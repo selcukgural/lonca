@@ -3740,6 +3740,94 @@ fn opening_one_word_does_not_open_the_other() {
     h.assert_replay();
 }
 
+fn unhook(h: &mut H, session: &str, tool: &str) -> Decision {
+    h.daemon(
+        Op::Observe {
+            session: session.into(),
+            events: vec![Observation {
+                phase: Phase::Pre,
+                kind: ObsKind::Unhooked { tool: tool.into() },
+                external: false,
+            }],
+        },
+        vec![],
+    )
+}
+
+/// A session whose hooks did not run (#190) is a tainted one with a word of
+/// its own: the taint's setting decides a critical path, and its level drops
+/// to unobserved for good.
+#[test]
+fn an_unhooked_session_is_tainted_and_says_why() {
+    let mut h = at_cargo_toml(PolicyBundle::default_bundle(), true, false);
+    assert_eq!(
+        h.chain.state.sessions["s1"].level,
+        ObservationLevel::HooksSandbox
+    );
+    let d = unhook(&mut h, "s1", "propose");
+    assert!(d.is_allow(), "{d:?}");
+    let s = &h.chain.state.sessions["s1"];
+    assert_eq!(s.level, ObservationLevel::Unobserved);
+    assert_eq!(
+        s.taint.as_deref(),
+        Some("unhooked: propose ran without its hook event")
+    );
+    let mark = s.unhooked.clone().unwrap();
+    assert_eq!((mark.tool.as_str(), mark.seen_ms), ("propose", h.now));
+    let (_, d) = propose_cargo_toml(&mut h);
+    assert!(denied_with(&d, "unhooked_critical_path"), "{d:?}");
+    assert!(!denied_with(&d, "tainted_critical_path"), "{d:?}");
+    // The first mark stays.
+    h.now += 5;
+    assert!(unhook(&mut h, "s1", "status").is_allow());
+    assert_eq!(h.chain.state.sessions["s1"].unhooked, Some(mark));
+    h.assert_replay();
+
+    // Both words open: a human decides, told why.
+    let mut h = at_cargo_toml(critical_words("escalate", "escalate"), true, false);
+    unhook(&mut h, "s1", "propose");
+    let (_, d) = propose_cargo_toml(&mut h);
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    assert!(d.reasons.contains(&"unhooked_session".to_string()), "{d:?}");
+    assert!(d.reasons.contains(&"critical_path:Cargo.toml".to_string()));
+    for other in ["tainted_session", "unobserved_session"] {
+        assert!(!d.reasons.contains(&other.to_string()), "{d:?}");
+    }
+    h.assert_replay();
+
+    // Tainted before: the taint keeps its reason, the word is the mark's.
+    let mut h = at_cargo_toml(PolicyBundle::default_bundle(), true, true);
+    unhook(&mut h, "s1", "propose");
+    let s = &h.chain.state.sessions["s1"];
+    assert_eq!(s.taint.as_deref(), Some("read the web"));
+    assert!(s.unhooked.is_some());
+    assert!(denied_with(
+        &propose_cargo_toml(&mut h).1,
+        "unhooked_critical_path"
+    ));
+    h.assert_replay();
+
+    // Only a session the log knows.
+    let mut h = H::new();
+    assert!(denied_with(
+        &unhook(&mut h, "nobody", "propose"),
+        "unknown_session"
+    ));
+}
+
+/// The daemon sends no mark for a sandbox; one in the log leaves the level.
+#[test]
+fn a_mark_does_not_lower_an_isolated_session() {
+    let mut h = H::new();
+    h.start("s1", &["src/**"]);
+    assert!(h.human("ayse", isolate("s1")).is_allow());
+    assert!(unhook(&mut h, "s1", "propose").is_allow());
+    let s = &h.chain.state.sessions["s1"];
+    assert_eq!(s.level, ObservationLevel::Isolated);
+    assert!(s.unhooked.is_some() && s.taint.is_some());
+    h.assert_replay();
+}
+
 /// An observed, clean session pays only the human's review, whatever the
 /// words say: they are about sessions nobody fully observes.
 #[test]

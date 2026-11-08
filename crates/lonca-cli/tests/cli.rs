@@ -5613,3 +5613,39 @@ fn a_rotated_token_takes_over_in_the_workspace_and_the_mcp_server() {
     let said = fails(&e, &ws, &["status"]);
     assert!(said.contains("unauthenticated"), "{said}");
 }
+
+/// `lonca mcp` names each tool it runs to the daemon. Under Claude Code the
+/// hook reports the call first; a call it did not report marks the session
+/// `unhooked` (#190).
+#[test]
+fn a_tool_call_the_hook_did_not_report_marks_the_session_unhooked() {
+    let e = Env::new();
+    agent_workspace(&e);
+    for ws in ["u1", "u2"] {
+        let extra = ["--workspace", ws, "--harness", "claude-code", "--no-setup"];
+        e.run(&e.root, &session_args("src/**", &extra));
+    }
+    let (w1, w2) = (e.root.join("u1"), e.root.join("u2"));
+    let pre = json!({"hook_event_name": "PreToolUse", "tool_name": "mcp__lonca__status",
+                     "tool_input": {}, "cwd": w1});
+    let o = e.hook(&w1, &pre.to_string());
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let (err, _) = Mcp::start(&e, &w1).tool("status", json!({}));
+    assert!(!err);
+    let (err, _) = Mcp::start(&e, &w2).tool("status", json!({}));
+    assert!(!err, "the call itself goes on");
+
+    let st = parse(&e.run(&e.root, &["status", "--repo", "demo", "--json"]));
+    let of = |ws: &Path| {
+        let id = session_of(ws);
+        let all = st["sessions"].as_array().unwrap();
+        all.iter().find(|s| s["id"] == id.as_str()).unwrap().clone()
+    };
+    let (s1, s2) = (of(&w1), of(&w2));
+    assert!(s1["unhooked"].is_null(), "{s1}");
+    assert!(s1["last_hook_ms"].is_number(), "{s1}");
+    assert_eq!(s2["unhooked"]["tool"], "status", "{s2}");
+    assert!(s2["bound_ms"].is_null() && s2["last_hook_ms"].is_null(), "{s2}");
+    let taint = s2["taint"].as_str().unwrap();
+    assert!(taint.starts_with("unhooked"), "{taint}");
+}

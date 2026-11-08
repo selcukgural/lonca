@@ -3,6 +3,7 @@
 pub mod client;
 pub mod gitcmd;
 pub mod home;
+pub mod hooked;
 pub mod hooks;
 pub mod limits;
 #[cfg(not(target_os = "linux"))]

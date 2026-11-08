@@ -280,6 +280,28 @@ impl Store {
         Ok(())
     }
 
+    /// Deletes `name` if it still names `expected`. Only used to remove
+    /// refs someone wrote behind the daemon's back.
+    pub fn ref_delete(&self, name: &str, expected: &GitId) -> Result<()> {
+        use gix::refs::transaction::{Change, RefEdit, RefLog};
+        let repo = self.local();
+        let full: gix::refs::FullName = name
+            .try_into()
+            .map_err(|e| Error::Invalid(format!("ref {name}: {e}")))?;
+        repo.edit_reference(RefEdit {
+            change: Change::Delete {
+                expected: PreviousValue::MustExistAndMatch(gix::refs::Target::Object(
+                    expected.oid()?,
+                )),
+                log: RefLog::AndReference,
+            },
+            name: full,
+            deref: false,
+        })
+        .map_err(|e| Error::Conflict(format!("ref {name}: {e}")))?;
+        Ok(())
+    }
+
     pub fn refs_with_prefix(&self, prefix: &str) -> Result<Vec<(String, GitId)>> {
         let repo = self.local();
         let platform = repo.references().map_err(git)?;
@@ -617,11 +639,18 @@ mod tests {
         );
         s.ref_cas("refs/heads/main", &c2, Some(&c1)).unwrap();
         assert_eq!(s.ref_get("refs/heads/main").unwrap(), Some(c2.clone()));
-        assert_eq!(s.read_commit(&c2).unwrap().parents, vec![c1]);
+        assert_eq!(s.read_commit(&c2).unwrap().parents, vec![c1.clone()]);
         assert_eq!(
             s.refs_with_prefix("refs/heads/").unwrap(),
-            vec![("refs/heads/main".to_string(), c2)]
+            vec![("refs/heads/main".to_string(), c2.clone())]
         );
+        assert!(
+            s.ref_delete("refs/heads/main", &c1).is_err(),
+            "not what it names"
+        );
+        s.ref_delete("refs/heads/main", &c2).unwrap();
+        assert_eq!(s.ref_get("refs/heads/main").unwrap(), None);
+        assert!(s.ref_delete("refs/heads/main", &c2).is_err(), "gone");
     }
 
     #[test]

@@ -2764,6 +2764,43 @@ daemon fetched from.
 - **Branches** to fetch pass Lonca's own test and then `git check-ref-format
   --branch`.
 
+## Every ref is the log's (#58)
+
+`reconcile()` held only trunk and the policy ref to the log. A write behind
+the daemon's back to anything else went unnoticed: a proposal's ref (which
+the bridge pushed), the log's own ref while the daemon ran, a new branch or
+tag.
+
+- **One rule for the daemon and the auditor** (`lonca_policy::refs::check`):
+  `refs/heads/main` and `refs/lonca/policy` name what the log says;
+  `refs/lonca/changes/<change>/<seq>` must be the ref of the
+  `change.propose` entry at `seq` (any decision: the ref is written before
+  the entry), naming its commit, and every such entry's ref must be there;
+  `refs/lonca/import/initial` and `refs/lonca/incoming` are staging refs
+  whose content no decision reads; any other name is unknown. `State` keeps
+  the proposals by sequence number (`proposed`, derived, read by no
+  decision), so no log format changes.
+- **The daemon undoes and logs.** Each write is an `import.unmediated` entry
+  (`found`, `expected`: `None` for a ref that should not exist or was
+  deleted); a ref that names the wrong thing is put back, an unknown one
+  deleted, a missing proposal ref restored if its commit is still there.
+  `integrity.on_unmediated = "freeze"` freezes the repository as well; the
+  default restores only.
+- **The log's ref** must name the head the daemon appends to. Moved, it is
+  put back first (an append checks it), the move is logged, and the
+  repository is **always frozen**, as for the policy ref.
+- **A proposal ref past the end of the log** was written before an entry
+  that never came (the daemon stopped in between). The daemon removes it
+  without a word; the auditor reports it, since from outside it is also what
+  a log cut short looks like.
+- **The bridge pushes what the log has**: trunk, the log, the policy and
+  the ref of every logged proposal, named one by one (500 per `git push`),
+  instead of `refs/lonca/changes/*`.
+- **The auditor**, with `check_refs` (the default), applies the rule to
+  `refs/lonca/*`; `--all-refs` holds every ref to it, for the daemon's own
+  store or a remote nothing but Lonca pushes to. A CI clone also has its
+  remote's branches and tags, so the example workflow keeps the default.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

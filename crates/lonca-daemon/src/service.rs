@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use lonca_core::canonical::{digest_of, random_id};
 use lonca_core::keys::KeyPair;
-use lonca_core::oplog::{OpLog, SignedOp};
+use lonca_core::oplog::{OPLOG_REF, OpLog, SignedOp};
 use lonca_core::ops::{
     Actor, Attestation, BindChecks, CheckResult, Claim, HumanKey, LeaseItem, MAX_UNPROPOSED_PATHS,
     ObsKind, Observation, ObservationLevel, Op, Phase,
@@ -20,11 +20,11 @@ use lonca_core::{ChangeId, Error, FileMap, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::config::{Profile, UnparsedFiles, Verification};
 use lonca_policy::decide::{evidence_problems, level_for, quota_problems, valid_token};
-use lonca_policy::details;
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
 use lonca_policy::state::{ChangeStatus, Joins, State};
+use lonca_policy::{details, refs};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate_joining};
 use lonca_verify::{Sandbox, Verifier};
@@ -320,6 +320,9 @@ impl Cred {
         }
     }
 }
+
+/// How many refs one `git push` of the bridge names.
+const PUSH_REFS_PER_CALL: usize = 500;
 
 /// What the launcher of `lonca run` does with an isolated session's token,
 /// from outside the sandbox. Neither reads or changes the repository.
@@ -2364,7 +2367,8 @@ impl Service {
         );
         sub.human = Some(p.sig);
         let workspace = p.workspace.filter(|w| Path::new(w).is_absolute());
-        let mut push: Option<(PathBuf, String)> = None;
+        // Store, remote, and the proposal refs the log has: only those go.
+        let mut push: Option<(PathBuf, String, Vec<String>)> = None;
         match &p.op {
             Op::RepoInit { .. } => return fail("invalid", "use repo.init"),
             Op::ChangePropose {
@@ -2445,7 +2449,13 @@ impl Service {
             // not hold up every other request.
             Op::BridgePush { remote, .. } => {
                 let r = Self::repo(inner, &name)?;
-                push = Some((r.store.path().to_path_buf(), remote.clone()));
+                let changes = r.chain.state.proposed.iter();
+                let changes = changes.map(|(seq, (c, _))| refs::change_ref_name(c, *seq));
+                push = Some((
+                    r.store.path().to_path_buf(),
+                    remote.clone(),
+                    changes.collect(),
+                ));
             }
             // The old token was seen outside the sandbox, so it stops here:
             // from now on the level belongs to whoever holds the new one.
@@ -2479,20 +2489,17 @@ impl Service {
             _ => {}
         }
         drop(guard);
-        if let Some((dir, remote)) = push {
-            let pushed = self.git(
-                &dir,
-                &[
-                    "push",
-                    "--porcelain",
-                    "--",
-                    &remote,
-                    "refs/heads/main:refs/heads/main",
-                    "refs/lonca/oplog:refs/lonca/oplog",
-                    "refs/lonca/policy:refs/lonca/policy",
-                    "refs/lonca/changes/*:refs/lonca/changes/*",
-                ],
-            )?;
+        if let Some((dir, remote, changes)) = push {
+            let mut pushed = String::new();
+            let mine = ["refs/heads/main", "refs/lonca/oplog", "refs/lonca/policy"];
+            let all: Vec<String> = mine.iter().map(|r| r.to_string()).chain(changes).collect();
+            // In pieces, so that no command line grows with the log.
+            for part in all.chunks(PUSH_REFS_PER_CALL) {
+                let specs: Vec<String> = part.iter().map(|r| format!("{r}:{r}")).collect();
+                let mut args = vec!["push", "--porcelain", "--", remote.as_str()];
+                args.extend(specs.iter().map(String::as_str));
+                pushed.push_str(&self.git(&dir, &args)?);
+            }
             out["push"] = json!(pushed);
         }
         Ok(out)
@@ -3276,6 +3283,102 @@ impl Service {
                 }
             }
             r.store.ref_force(refname, &expected).or_fail()?;
+        }
+        Self::reconcile_oplog(r, now)?;
+        Self::reconcile_others(r, now, on == "freeze")
+    }
+
+    /// The log's own ref must name the head this daemon appends to. Moved,
+    /// it is put back first (an append checks it), then the move is logged
+    /// and the repository frozen: a log rewritten under the daemon is the
+    /// gravest write there is.
+    fn reconcile_oplog(r: &mut RepoHandle, now: i64) -> std::result::Result<(), (String, String)> {
+        let Some(head) = r.head.clone() else {
+            return Ok(());
+        };
+        let found = r.store.ref_get(OPLOG_REF).or_fail()?;
+        if found.as_ref() == Some(&head) {
+            return Ok(());
+        }
+        r.store.ref_force(OPLOG_REF, &head).or_fail()?;
+        let op = Op::ImportUnmediated {
+            refname: OPLOG_REF.into(),
+            found,
+            expected: Some(head),
+        };
+        r.submit(Submission::new(Actor::Daemon, op), now)
+            .or_fail()?;
+        Self::freeze_for(r, OPLOG_REF, now)
+    }
+
+    /// Every other ref: what the log has must name what it says, a
+    /// proposal's ref must be there, and nothing else may be (see
+    /// `lonca_policy::refs`). A write is logged as `import.unmediated` and
+    /// undone; the policy's `integrity.on_unmediated` says whether the
+    /// repository freezes as well. The ref of a proposal never logged (the
+    /// daemon stopped between the two) goes without a word.
+    fn reconcile_others(
+        r: &mut RepoHandle,
+        now: i64,
+        freeze: bool,
+    ) -> std::result::Result<(), (String, String)> {
+        use lonca_policy::refs::{RefCheck, check, missing_changes};
+        let refs = r.store.refs_with_prefix("refs/").or_fail()?;
+        let present: BTreeSet<String> = refs.iter().map(|(n, _)| n.clone()).collect();
+        let mut undone = Vec::new();
+        for (name, found) in refs {
+            if [TRUNK_REF, POLICY_REF, OPLOG_REF].contains(&name.as_str()) {
+                continue;
+            }
+            match check(&r.chain.state, &name, &found) {
+                RefCheck::Fine => {}
+                RefCheck::NotLogged => r.store.ref_delete(&name, &found).or_fail()?,
+                RefCheck::Differs(expected) => {
+                    match &expected {
+                        Some(e) => r.store.ref_force(&name, e).or_fail()?,
+                        None => r.store.ref_delete(&name, &found).or_fail()?,
+                    }
+                    undone.push((name, Some(found), expected));
+                }
+                RefCheck::Unknown => {
+                    r.store.ref_delete(&name, &found).or_fail()?;
+                    undone.push((name, Some(found), None));
+                }
+            }
+        }
+        let missing: Vec<(String, GitId)> = missing_changes(&r.chain.state, &present)
+            .map(|(n, c)| (n, c.clone()))
+            .collect();
+        for (name, commit) in missing {
+            if r.store.has_object(&commit) {
+                r.store.ref_force(&name, &commit).or_fail()?;
+            }
+            undone.push((name, None, Some(commit)));
+        }
+        for (refname, found, expected) in undone {
+            let op = Op::ImportUnmediated {
+                refname: refname.clone(),
+                found,
+                expected,
+            };
+            r.submit(Submission::new(Actor::Daemon, op), now)
+                .or_fail()?;
+            if freeze {
+                Self::freeze_for(r, &refname, now)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn freeze_for(
+        r: &mut RepoHandle,
+        refname: &str,
+        now: i64,
+    ) -> std::result::Result<(), (String, String)> {
+        if r.chain.state.frozen.is_none() {
+            let reason = format!("{refname} changed outside Lonca");
+            r.submit(Submission::new(Actor::Daemon, Op::Freeze { reason }), now)
+                .or_fail()?;
         }
         Ok(())
     }

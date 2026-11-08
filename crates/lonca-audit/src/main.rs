@@ -20,7 +20,7 @@ use lonca_core::oplog::OpLog;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  lonca-audit verify <git-dir> [--shallow] [--no-refs] [--json] [--freeze-flag <file>]\n  lonca-audit compare <local-git-dir> <published-git-dir>"
+        "usage:\n  lonca-audit verify <git-dir> [--shallow] [--no-refs] [--all-refs] [--json] [--freeze-flag <file>]\n  lonca-audit compare <local-git-dir> <published-git-dir>"
     );
     ExitCode::from(2)
 }
@@ -44,6 +44,7 @@ fn verify(args: &[String]) -> ExitCode {
         match a.as_str() {
             "--shallow" => opts.deep = false,
             "--no-refs" => opts.check_refs = false,
+            "--all-refs" => opts.all_refs = true,
             "--json" => json = true,
             "--freeze-flag" => match it.next() {
                 Some(p) => freeze_flag = Some(PathBuf::from(p)),

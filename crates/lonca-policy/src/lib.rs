@@ -18,6 +18,7 @@ pub mod details;
 pub mod events;
 pub mod harness;
 pub mod human;
+pub mod refs;
 pub mod state;
 pub mod symbols;
 

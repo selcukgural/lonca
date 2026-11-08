@@ -83,6 +83,14 @@ enum Cmd {
         /// its home.
         #[arg(long = "local-root")]
         local_roots: Vec<PathBuf>,
+        /// Run this program for a freeze or an integrity alarm, with the
+        /// event as one JSON line on its stdin (a webhook, a pager), instead
+        /// of the desktop's notification.
+        #[arg(long)]
+        notify_command: Option<PathBuf>,
+        /// No notification at all; events stay in `security.log`.
+        #[arg(long, conflicts_with = "notify_command")]
+        no_notify: bool,
     },
     /// Human identities: file keys or Secure Enclave keys.
     #[command(subcommand)]
@@ -1092,6 +1100,8 @@ fn run(cmd: Cmd) -> Result<()> {
             allow_uids,
             allow_unsandboxed,
             local_roots,
+            notify_command,
+            no_notify,
         } => {
             let hardened = lonca_daemon::trust::Trust::load()?.is_hardened();
             let sandbox = lonca_verify::Sandbox::detect();
@@ -1127,6 +1137,11 @@ fn run(cmd: Cmd) -> Result<()> {
             );
             if hardened || !local_roots.is_empty() {
                 settings.local_roots = Some(local_roots);
+            }
+            if let Some(p) = notify_command {
+                settings.notify = lonca_daemon::security::Notify::Command(p);
+            } else if no_notify {
+                settings.notify = lonca_daemon::security::Notify::Off;
             }
             let svc =
                 lonca_daemon::Service::open(home.clone(), settings, lonca_daemon::system_clock())?;

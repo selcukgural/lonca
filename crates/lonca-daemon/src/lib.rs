@@ -10,6 +10,7 @@ mod peer_other;
 pub mod protocol;
 pub mod proxy;
 pub mod repo;
+pub mod security;
 pub mod server;
 pub mod service;
 pub mod sys;

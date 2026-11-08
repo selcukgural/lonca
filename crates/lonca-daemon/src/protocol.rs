@@ -193,6 +193,14 @@ pub struct ChangeRef {
     pub change: ChangeId,
 }
 
+/// `security.events`: what the security log holds since `since_ms`
+/// (default: the last day).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SecurityEvents {
+    #[serde(default)]
+    pub since_ms: Option<i64>,
+}
+
 /// `trunk.bundle`: a Git bundle of trunk for a checkout, thin against
 /// the commits the checkout already has.
 #[derive(Clone, Debug, Serialize, Deserialize)]

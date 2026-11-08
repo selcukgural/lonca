@@ -77,5 +77,5 @@ The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,
 on demand before tagging (`gh workflow run ci.yml --ref main`). Pull requests
 and merges to main run neither, and the main ruleset requires no check.
 `cargo-deny` and CodeQL still run on pull requests; they block nothing.
-Every PR is opened with auto-merge (`gh pr merge --auto --merge`); with no
-required check it lands at once.
+A PR is merged as soon as it is opened (`gh pr merge --merge`): with no
+required check GitHub refuses `--auto` ("clean status").

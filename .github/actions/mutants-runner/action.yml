@@ -36,7 +36,17 @@ runs:
           /usr/local/share/chromium /usr/local/lib/node_modules 2>/dev/null || true
         sudo docker image prune -af >/dev/null 2>&1 || true
         df -h / | tail -1
+    # The prebuilt binaries come from GitHub release downloads, which have
+    # answered 504 for every repository for hours at a time (2026-11-08) while
+    # the API and crates.io answered. Then the same versions are built from
+    # crates.io: a few minutes slower, and a release run does not fail on it.
     - name: cargo-mutants
+      id: prebuilt
+      continue-on-error: true
       uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
       with:
         tool: cargo-mutants@27.1.0,cargo-nextest@0.9.151
+    - name: cargo-mutants from crates.io
+      if: steps.prebuilt.outcome == 'failure'
+      shell: bash
+      run: cargo install --locked cargo-mutants@27.1.0 cargo-nextest@0.9.151

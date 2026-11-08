@@ -3221,6 +3221,14 @@ release (roadmap M2).
 - **`install.sh`** (served by the site, `website/static/install.sh`) picks
   the archive for the machine, checks it against `SHA256SUMS` and installs
   the binaries in `~/.local/bin`, over HTTPS only.
+- **The site** (`website/`, English, Docusaurus as imece and Kule have it)
+  is built from `docs/` itself: the guide, the protocol, cryptography, the
+  OWASP review and the release notes, so a page reads the same on GitHub.
+  `design.md` (Turkish) and `decisions.md` are linked on GitHub instead.
+  `docs.yml` builds it on pull requests (a broken link or anchor fails, and
+  so does a guide page missing from the sidebar) and publishes it from main
+  to https://selcukgural.github.io/lonca/, with `install.sh`. The build sees
+  no credential and runs no npm script.
 - **Every install path is cooperative mode.** Homebrew, `install.sh` and
   `cargo install` put the binaries where the developer's account can write,
   which hardened mode forbids (the invariant). Hardened mode installs from

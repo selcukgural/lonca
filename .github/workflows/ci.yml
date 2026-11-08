@@ -1,9 +1,13 @@
+# The unit tests run only for a release: when a `v*` tag is pushed, and on
+# demand (run it from the Actions tab on main before tagging). Pull requests
+# and merges to main do not run them (docs/decisions.md, "CI runs for a
+# release").
 name: ci
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read

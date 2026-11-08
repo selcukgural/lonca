@@ -126,7 +126,10 @@ impl Verifier {
         })
     }
 
-    /// Runs the configured build and test commands on `files`.
+    /// Runs the configured build and test commands on `files`, then the
+    /// named checks in `cfg.checks`, in name order. One with no command (a
+    /// name the policy no longer defines) does not run: there is nothing
+    /// to pass it.
     pub fn run(
         &self,
         store: &Store,
@@ -135,14 +138,17 @@ impl Verifier {
         cfg: &Verification,
     ) -> Result<Vec<Attestation>> {
         let mut out = Vec::new();
-        let steps: Vec<(CheckKind, &String)> = [
+        let builtin = [
             (CheckKind::Build, &cfg.build),
             (CheckKind::Tests, &cfg.test),
             (CheckKind::Extended, &cfg.on_signature_change),
-        ]
-        .into_iter()
-        .filter_map(|(k, c)| c.as_ref().map(|c| (k, c)))
-        .collect();
+        ];
+        let builtin = builtin
+            .into_iter()
+            .filter_map(|(k, c)| c.as_ref().map(|c| (k, None, c)));
+        let named = cfg.checks.iter().filter(|(_, c)| !c.trim().is_empty());
+        let named = named.map(|(n, c)| (CheckKind::Named, Some(n), c));
+        let steps: Vec<(CheckKind, Option<&String>, &String)> = builtin.chain(named).collect();
         if steps.is_empty() {
             return Ok(out);
         }
@@ -153,13 +159,17 @@ impl Verifier {
         let root = work.path().canonicalize()?;
         materialize(store, files, &root.join("tree"))?;
         let mut failed = false;
-        for (kind, cmd) in steps {
+        for (kind, name, cmd) in steps {
+            let named = || {
+                let name = name.map(|n| ("name".to_string(), n.clone()));
+                name.into_iter().collect::<BTreeMap<_, _>>()
+            };
             if failed {
                 out.push(attestation(
                     kind,
                     CheckResult::Skipped,
                     subject,
-                    BTreeMap::new(),
+                    named(),
                     self.env(cmd),
                     None,
                 ));
@@ -176,6 +186,7 @@ impl Verifier {
                 }
             };
             let mut details = details;
+            details.extend(named());
             let took = started.elapsed().as_millis().to_string();
             details.insert("duration_ms".into(), took);
             details.insert("attempts".into(), attempts.to_string());
@@ -508,6 +519,48 @@ mod tests {
             (r[0].result, r[1].result),
             (CheckResult::Fail, CheckResult::Skipped)
         );
+    }
+
+    /// Named checks run after the built-in ones, in name order, each named
+    /// in its evidence; one with no command does not run; and a failure
+    /// skips what comes after, by name too.
+    #[test]
+    fn named_checks_run_after_the_built_in_ones() {
+        let (dir, store, files, tree) = setup(&[("ok.txt", "yes\n")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let mut c = cfg(Some("true"), None);
+        c.checks.insert("e2e".into(), "exit 4".into());
+        c.checks.insert("api".into(), "test -f ok.txt".into());
+        c.checks.insert("gone".into(), " ".into());
+        c.checks.insert("zz".into(), "true".into());
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        let seen: Vec<_> = r
+            .iter()
+            .map(|a| (a.check, a.details.get("name").cloned(), a.result))
+            .collect();
+        let named = |n: &str| Some(n.to_string());
+        assert_eq!(
+            seen,
+            [
+                (CheckKind::Build, None, CheckResult::Pass),
+                (CheckKind::Named, named("api"), CheckResult::Pass),
+                (CheckKind::Named, named("e2e"), CheckResult::Fail),
+                (CheckKind::Named, named("zz"), CheckResult::Skipped),
+            ]
+        );
+        assert_eq!(r[2].details["exit"], "4");
+        assert!(r[2].log.is_some());
+        assert_eq!(r[3].log, None);
+        // Only the named ones: there is still a tree to run them on.
+        let mut only = cfg(None, None);
+        only.checks.insert("api".into(), "test -f ok.txt".into());
+        let r = v.run(&store, &files, &tree, &only).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].result, CheckResult::Pass);
+        // A name with no command alone runs nothing.
+        let mut none = cfg(None, None);
+        none.checks.insert("gone".into(), String::new());
+        assert!(v.run(&store, &files, &tree, &none).unwrap().is_empty());
     }
 
     #[test]

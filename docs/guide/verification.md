@@ -34,6 +34,31 @@ Its result is the check `extended`. It fails a change like `build` and
 `test` do, and with `required = true` a change that owes it can not land
 without a pass.
 
+## Checks a change owes by name
+
+`checks` names commands that run only for a change that owes them. A human
+names them when approving (`lonca approve SEQ --also api,e2e`), or the policy
+does for the paths a change touches:
+
+```toml
+checks = { api = "cargo test --offline -p api", e2e = "npm run e2e" }
+checks_by_path = { "api/**" = ["api"] }
+```
+
+They run after `build`, `test` and `on_signature_change`, in name order, with
+the same sandbox, environment, limits and timeout, and their evidence is the
+check `named` with the name in `details.name`. A check a change owes must pass
+even with `required = false`: someone asked for it. A failure rejects the
+change with `verification_failed:<name>` and the output tail, like a failed
+test. Only names in `checks` can be asked for (`unknown_check:<name>`), and an
+agent can not ask for any: approving is a human's signature. Names are
+`[a-z0-9_-]`, at most 32 characters, and not a built-in check's word (`build`,
+`tests`, ...).
+
+What a change will run is in `status` (`changes[].runs`, `pending[].runs`) and
+`change.get` before anyone says yes; `checks` lists what humans asked for. A
+later version of the change still owes them.
+
 ## The environment the commands see
 
 The verifier clears the environment and sets:

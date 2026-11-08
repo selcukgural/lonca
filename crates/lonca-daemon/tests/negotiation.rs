@@ -207,6 +207,7 @@ fn asking_from_where_you_left_off_finds_an_older_request_s_approval() {
     let d = e.human(Op::Approve {
         target_seq: asked,
         note: "reviewed".into(),
+        checks: vec![],
     });
     assert_eq!(d["decision"]["outcome"], "allow", "{d}");
     let got = e.ok("events", None, Some(&c), json!({"from": next}));

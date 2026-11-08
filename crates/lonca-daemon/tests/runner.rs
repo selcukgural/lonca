@@ -109,6 +109,7 @@ fn a_pending_entry_fills_a_review_list() {
     e.human(Op::Approve {
         target_seq: seq,
         note: "ok".into(),
+        checks: vec![],
     });
     assert!(
         e.ok("status", Some("demo"), None, json!({}))["pending"]
@@ -1037,6 +1038,7 @@ fn a_rejection_carries_its_reason_to_the_worker_and_frees_the_leases() {
     let d = e.human(Op::Approve {
         target_seq: seq2,
         note: "ok".into(),
+        checks: vec![],
     });
     assert!(
         d["decision"]["reasons"]
@@ -1762,6 +1764,7 @@ fn two_agents_add_to_a_manifest_and_a_changelog_at_once() {
         let d = e.human(Op::Approve {
             target_seq: seq,
             note: String::new(),
+            checks: vec![],
         });
         assert_eq!(d["decision"]["outcome"], "allow", "{d}");
         e.svc.process_all();

@@ -240,6 +240,26 @@ pub struct ChangeRecord {
     /// Time of the entry that proposed this version.
     pub created_ms: i64,
     pub version: u32,
+    /// Named checks humans asked of this change when approving it. Kept
+    /// for every later version: a new proposal can not drop them.
+    pub checks: BTreeSet<String>,
+}
+
+impl ChangeRecord {
+    /// The files this version adds, deletes or changes.
+    pub fn files(&self) -> impl Iterator<Item = &String> {
+        let f = &self.facts;
+        f.added_files
+            .iter()
+            .chain(&f.deleted_files)
+            .chain(&f.modified_files)
+    }
+
+    /// The named checks this change owes under `vc`: those asked of it, and
+    /// those `checks_by_path` names for a file it touches.
+    pub fn owed_checks(&self, vc: &crate::config::Verification) -> BTreeSet<String> {
+        vc.owed(&self.checks, self.files())
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -253,6 +273,9 @@ pub struct Pending {
     pub reasons: Vec<String>,
     pub required: u32,
     pub approvals: BTreeSet<String>,
+    /// Named checks the approvals so far asked of the change: they go to
+    /// it when the last one releases it.
+    pub checks: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1087,6 +1110,7 @@ impl State {
                         reasons: e.decision.reasons.clone(),
                         required: approvals_from(&e.decision.reasons),
                         approvals: BTreeSet::new(),
+                        checks: BTreeSet::new(),
                     },
                 );
             }
@@ -1244,11 +1268,9 @@ impl State {
             },
             Actor::Daemon => Provenance::Clean,
         };
-        let version = self
-            .changes
-            .get(&change)
-            .map(|c| c.version + 1)
-            .unwrap_or(1);
+        let earlier = self.changes.get(&change);
+        let version = earlier.map(|c| c.version + 1).unwrap_or(1);
+        let checks = earlier.map(|c| c.checks.clone()).unwrap_or_default();
         self.changes.insert(
             change,
             ChangeRecord {
@@ -1263,6 +1285,7 @@ impl State {
                 proposed_seq: seq,
                 created_ms: time_ms,
                 version,
+                checks,
             },
         );
     }
@@ -1747,16 +1770,24 @@ impl State {
                     self.integrated(*change, commit, time_ms, reasons);
                 }
             }
-            Op::Approve { target_seq, .. } => {
+            Op::Approve {
+                target_seq, checks, ..
+            } => {
                 let Actor::Human { name } = actor else { return };
                 let Some(p) = self.pending.get_mut(target_seq) else {
                     return;
                 };
                 p.approvals.insert(name.clone());
+                p.checks.extend(checks.iter().cloned());
                 if reasons.iter().any(|r| r == RELEASED)
                     && let Some(p) = self.pending.remove(target_seq)
                 {
                     self.effects(&p.actor, &p.op, p.facts.as_ref(), p.seq, time_ms, &[], true);
+                    if let Op::ChangePropose { change, .. } = &p.op
+                        && let Some(c) = self.changes.get_mut(change)
+                    {
+                        c.checks.extend(p.checks);
+                    }
                 }
             }
             // A human declines: the operation leaves the pending set; a

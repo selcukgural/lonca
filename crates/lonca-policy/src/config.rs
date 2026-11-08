@@ -2,7 +2,7 @@
 //! (rules). Both live in the commit that `refs/lonca/policy` points to, never
 //! in a code branch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use cedar_policy::{
@@ -98,6 +98,14 @@ untrusted = ["vendor/**", "third_party/**", "node_modules/**"]
 # Also run for a change that alters a signature, or takes away a name
 # something else mentions.
 # on_signature_change = "cargo test --offline --workspace --all-features"
+# Named commands a change runs only when it owes them: a human names them
+# at approval (`lonca approve SEQ --also api`), or `checks_by_path` does for
+# a path the change touches. Same sandbox, environment and timeout as build
+# and test; a check a change owes must pass, even with required = false.
+# checks = { api = "cargo test --offline -p api" }
+checks = {}
+# checks_by_path = { "api/**" = ["api"] }
+checks_by_path = {}
 required = false
 require_sandbox = false
 timeout_seconds = 900
@@ -430,6 +438,14 @@ pub struct Verification {
     /// Also runs for a change that alters a signature, or that takes away
     /// a name something else mentions: what is too slow for every change.
     pub on_signature_change: Option<String>,
+    /// Named commands, run for a change only when it owes them: see
+    /// [`Self::owed`]. After [`Self::for_change`], the ones it owes; a name
+    /// the policy no longer defines has an empty command, which never runs,
+    /// so nothing passes it.
+    pub checks: BTreeMap<String, String>,
+    /// Path patterns, as in `paths.critical`, and the checks a change that
+    /// touches a matching path owes.
+    pub checks_by_path: BTreeMap<String, Vec<String>>,
     pub required: bool,
     pub require_sandbox: bool,
     pub timeout_seconds: u64,
@@ -465,11 +481,33 @@ impl Verification {
         self.required && (set(&self.build) || set(&self.test))
     }
 
-    /// What a change owes: `reaches_others` is what its facts say of it.
-    pub fn for_change(&self, reaches_others: bool) -> Self {
+    /// The named checks a change owes: the ones `asked` for it by name (at
+    /// approval), and those `checks_by_path` names for a path it touches.
+    pub fn owed<'a>(
+        &self,
+        asked: &BTreeSet<String>,
+        paths: impl IntoIterator<Item = &'a String>,
+    ) -> BTreeSet<String> {
+        let mut owed = asked.clone();
+        for path in paths {
+            for (pattern, names) in &self.checks_by_path {
+                if config_pattern_matches(pattern, path) {
+                    owed.extend(names.iter().cloned());
+                }
+            }
+        }
+        owed
+    }
+
+    /// What a change owes: `reaches_others` is what its facts say of it,
+    /// `named` the checks it owes ([`Self::owed`]).
+    pub fn for_change(&self, reaches_others: bool, named: &BTreeSet<String>) -> Self {
         let extended = self.on_signature_change.as_ref();
+        let command = |n: &String| self.checks.get(n).cloned().unwrap_or_default();
         Self {
             on_signature_change: extended.filter(|_| reaches_others).cloned(),
+            checks: named.iter().map(|n| (n.clone(), command(n))).collect(),
+            checks_by_path: BTreeMap::new(),
             ..self.clone()
         }
     }
@@ -508,6 +546,74 @@ pub const FORBIDDEN_ENV: &[&str] = &[
     "IFS",
     "LONCA_*",
 ];
+
+/// The most named checks a policy defines, and the most one approval names.
+pub const MAX_CHECKS: usize = 32;
+
+/// Words a named check can not take: the checks Lonca runs itself, whose
+/// names are in the same denial words (`verification_failed:build`).
+pub const RESERVED_CHECKS: &[&str] = &[
+    "build",
+    "test",
+    "tests",
+    "extended",
+    "syntax",
+    "scope",
+    "claim_diff",
+    "merge",
+    "test_integrity",
+];
+
+/// A name a named check may have: `[a-z0-9_-]`, 1 to 32 of them, and not a
+/// reserved word.
+pub fn valid_check_name(name: &str) -> bool {
+    (1..=32).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+        && !RESERVED_CHECKS.contains(&name)
+}
+
+fn check_named(v: &Verification) -> Result<(), String> {
+    if v.checks.len() > MAX_CHECKS {
+        return Err(format!(
+            "{CONFIG_FILE}: verification: at most {MAX_CHECKS} checks"
+        ));
+    }
+    for (name, command) in &v.checks {
+        if !valid_check_name(name) {
+            return Err(format!(
+                "{CONFIG_FILE}: verification.checks: bad name {name:?} \
+                 ([a-z0-9_-], at most 32, not a built-in check)"
+            ));
+        }
+        if command.trim().is_empty() {
+            return Err(format!(
+                "{CONFIG_FILE}: verification.checks: {name} has no command"
+            ));
+        }
+    }
+    if v.checks_by_path.len() > 64 {
+        return Err(format!(
+            "{CONFIG_FILE}: verification: at most 64 checks_by_path patterns"
+        ));
+    }
+    for (pattern, names) in &v.checks_by_path {
+        let ok =
+            pattern.starts_with("**/") || lonca_core::paths::validate_path_pattern(pattern).is_ok();
+        if !ok {
+            return Err(format!(
+                "{CONFIG_FILE}: verification.checks_by_path: bad path pattern {pattern:?}"
+            ));
+        }
+        if let Some(n) = names.iter().find(|n| !v.checks.contains_key(*n)) {
+            return Err(format!(
+                "{CONFIG_FILE}: verification.checks_by_path: {pattern}: unknown check {n}"
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Why a name is refused, or `None` when it may be passed.
 pub fn env_name_forbidden(name: &str) -> bool {
@@ -747,6 +853,8 @@ impl Default for Verification {
             build: None,
             test: None,
             on_signature_change: None,
+            checks: BTreeMap::new(),
+            checks_by_path: BTreeMap::new(),
             required: false,
             require_sandbox: false,
             timeout_seconds: 900,
@@ -1017,6 +1125,7 @@ impl PolicyBundle {
                 ));
             }
         }
+        check_named(v)?;
         let cedar = PolicySet::from_str(policy_text).map_err(|e| format!("{POLICY_FILE}: {e}"))?;
         for p in cedar.policies() {
             if let Some(n) = p.annotation("approvals") {
@@ -1638,6 +1747,87 @@ mod env_tests {
             "the default lines must be there to replace"
         );
         PolicyBundle::parse(&config, DEFAULT_POLICY)
+    }
+
+    fn with_checks(checks: &str, by_path: &str) -> Result<PolicyBundle, String> {
+        let config = DEFAULT_CONFIG
+            .replace("\nchecks = {}\n", &format!("\nchecks = {checks}\n"))
+            .replace(
+                "\nchecks_by_path = {}\n",
+                &format!("\nchecks_by_path = {by_path}\n"),
+            );
+        PolicyBundle::parse(&config, DEFAULT_POLICY)
+    }
+
+    #[test]
+    fn named_checks_are_held_to_their_names_and_commands() {
+        let b = with_checks("{}", "{}").unwrap();
+        assert!(b.config.verification.checks.is_empty());
+        let b = with_checks(
+            "{ api = \"cargo test -p api\", e2e-web_2 = \"x\" }",
+            "{ \"api/**\" = [\"api\"], \"**/*.tsx\" = [\"e2e-web_2\", \"api\"] }",
+        )
+        .unwrap();
+        let vc = &b.config.verification;
+        assert_eq!(vc.checks["api"], "cargo test -p api");
+        let asked = BTreeSet::new();
+        let owed = |paths: &[&str]| {
+            let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+            vc.owed(&asked, &paths).into_iter().collect::<Vec<_>>()
+        };
+        assert_eq!(owed(&["api/x.rs"]), ["api"]);
+        assert_eq!(owed(&["web/a.tsx", "api/x.rs"]), ["api", "e2e-web_2"]);
+        assert!(owed(&["src/a.rs"]).is_empty());
+        let asked = BTreeSet::from(["e2e-web_2".to_string()]);
+        let none: [String; 0] = [];
+        assert_eq!(vc.owed(&asked, &none), asked);
+        for (checks, by_path, word) in [
+            ("{ API = \"x\" }", "{}", "bad name"),
+            ("{ \"a b\" = \"x\" }", "{}", "bad name"),
+            ("{ \"\" = \"x\" }", "{}", "bad name"),
+            ("{ build = \"x\" }", "{}", "bad name"),
+            ("{ tests = \"x\" }", "{}", "bad name"),
+            ("{ api = \" \" }", "{}", "api has no command"),
+            (
+                "{ api = \"x\" }",
+                "{ \"api/**\" = [\"e2e\"] }",
+                "unknown check e2e",
+            ),
+            (
+                "{ api = \"x\" }",
+                "{ \"/abs\" = [\"api\"] }",
+                "bad path pattern",
+            ),
+        ] {
+            let err = with_checks(checks, by_path).err().expect(checks);
+            assert!(err.contains(word), "{checks} {by_path}: {err}");
+        }
+        let long = "a".repeat(33);
+        let err = with_checks(&format!("{{ {long} = \"x\" }}"), "{}")
+            .err()
+            .expect("refused");
+        assert!(err.contains("bad name"), "{err}");
+        assert!(with_checks(&format!("{{ {} = \"x\" }}", "a".repeat(32)), "{}").is_ok());
+        let many = |n: usize| {
+            let items: Vec<String> = (0..n).map(|i| format!("c{i} = \"x\"")).collect();
+            format!("{{ {} }}", items.join(", "))
+        };
+        assert!(with_checks(&many(MAX_CHECKS), "{}").is_ok());
+        let err = with_checks(&many(MAX_CHECKS + 1), "{}")
+            .err()
+            .expect("refused");
+        assert!(err.contains("at most 32 checks"), "{err}");
+        let patterns = |n: usize| {
+            let items: Vec<String> = (0..n).map(|i| format!("\"p{i}/**\" = [\"c0\"]")).collect();
+            format!("{{ {} }}", items.join(", "))
+        };
+        assert!(with_checks(&many(1), &patterns(64)).is_ok());
+        let err = with_checks(&many(1), &patterns(65)).err().expect("refused");
+        assert!(err.contains("at most 64 checks_by_path"), "{err}");
+        for name in RESERVED_CHECKS {
+            assert!(!valid_check_name(name), "{name}");
+        }
+        assert!(valid_check_name("a-b_9"));
     }
 
     #[test]

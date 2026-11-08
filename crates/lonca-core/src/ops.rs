@@ -386,6 +386,8 @@ pub enum CheckKind {
     TestIntegrity,
     /// `verification.on_signature_change`.
     Extended,
+    /// One of `verification.checks`, by the name in `details["name"]`.
+    Named,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -651,8 +653,16 @@ pub enum Op {
         /// Each change, in queue order, with the commit it merged to.
         merged: Vec<(ChangeId, GitId)>,
     },
+    /// `checks`: named checks of `verification.checks` the change owes from
+    /// here on, besides what it owed already; only on a proposal (log
+    /// format 25). Sorted, each name once.
     #[serde(rename = "approve")]
-    Approve { target_seq: u64, note: String },
+    Approve {
+        target_seq: u64,
+        note: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        checks: Vec<String>,
+    },
     /// A human declines an escalated operation; the reason is for the
     /// requester (a worker fixes and proposes again) and is never
     /// interpreted.

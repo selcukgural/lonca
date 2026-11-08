@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Checks a change owes, named per change
+
+`[verification]` takes named commands, `checks = { api = "cargo test --offline -p api" }`,
+which run only for a change that owes them: a human names them when approving
+(`lonca approve SEQ --also api,e2e`, signed in `approve`, log format 25), or
+`checks_by_path = { "api/**" = ["api"] }` does for a path. They run in the queue's sandbox
+after build and test, a failure rejects with `verification_failed:<name>`, and a check owed
+is owed even with `required = false`. A new version of the change keeps them.
+`status.changes[]`, `status.pending[]` and `change.get` add `checks` (asked) and `runs`
+(what the queue will run). See `docs/decisions.md`, "Checks a change owes, chosen per
+change (#191)".
+
 ### A session whose hooks do not run is marked and tainted
 
 `lonca mcp` now tells the daemon which tool it runs (`mcp.call`). On Claude Code, whose

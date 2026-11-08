@@ -267,6 +267,10 @@ enum Cmd {
         repo: Option<String>,
         #[arg(long, default_value = "")]
         note: String,
+        /// Named checks of `verification.checks` the change must also pass
+        /// before it is integrated (a proposal only), e.g. `--also api,e2e`.
+        #[arg(long, value_delimiter = ',')]
+        also: Vec<String>,
         #[arg(long = "as")]
         human: Option<String>,
         #[arg(long)]
@@ -1085,6 +1089,10 @@ fn agent_client() -> Result<(Client, Workspace)> {
 
 fn run(cmd: Cmd) -> Result<()> {
     let is_reject = matches!(cmd, Cmd::Reject { .. });
+    let also = match &cmd {
+        Cmd::Approve { also, .. } => also.clone(),
+        _ => vec![],
+    };
     match cmd {
         Cmd::Doctor {
             managed_settings,
@@ -2073,6 +2081,7 @@ fn run(cmd: Cmd) -> Result<()> {
             note,
             human,
             json: as_json,
+            ..
         }
         | Cmd::Reject {
             seq,
@@ -2090,9 +2099,15 @@ fn run(cmd: Cmd) -> Result<()> {
                     reason: note,
                 }
             } else {
+                let mut checks: Vec<String> =
+                    also.into_iter().map(|c| c.trim().to_string()).collect();
+                checks.retain(|c| !c.is_empty());
+                checks.sort();
+                checks.dedup();
                 Op::Approve {
                     target_seq: seq,
                     note,
+                    checks,
                 }
             };
             let r = if as_json {

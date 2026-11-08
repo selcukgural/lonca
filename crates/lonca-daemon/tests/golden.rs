@@ -94,7 +94,40 @@ fn golden_repo() -> Env {
     insert_names(&mut e);
     give_back(&mut e);
     unhooked(&mut e);
+    named_checks(&mut e);
     e
+}
+
+/// From format 25: a human approves a proposal with a named check, and the
+/// queue runs it; its evidence is `named`.
+fn named_checks(e: &mut Env) {
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
+        "\nchecks = {}\n",
+        "\nchecks = { card = \"test -f card.md\" }\n",
+    );
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+    e.human_change(vec![file("card.md", "a card\n")], "card");
+    assert_eq!(e.svc.process_all(), 1);
+    let base = e.trunk();
+    let t = e.session("s-card", &["card.md"]);
+    e.lease(&t, "card.md#<file>");
+    let files = vec![file("card.md", "accepted when card passes\n")];
+    let r = e.propose(&t, &base, files, &["card.md#<file>"]);
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let d = e.human(Op::Approve {
+        target_seq: r["seq"].as_u64().expect("seq"),
+        note: "golden".into(),
+        checks: vec!["card".into()],
+    });
+    assert_eq!(d["decision"]["outcome"], "allow", "{d}");
+    assert_eq!(e.svc.process_all(), 1);
 }
 
 /// From format 24: a call to `lonca mcp` whose before-tool event never came
@@ -464,6 +497,7 @@ fn continuation(e: &mut Env) {
     let d = e.human(Op::Approve {
         target_seq: seq,
         note: "golden".into(),
+        checks: vec![],
     });
     assert_eq!(d["decision"]["outcome"], "allow", "{d}");
     e.svc.process_all();
@@ -508,6 +542,7 @@ fn pins(e: &mut Env) {
     let d = e.human(Op::Approve {
         target_seq: r["seq"].as_u64().expect("seq"),
         note: "golden".into(),
+        checks: vec![],
     });
     assert_eq!(d["decision"]["outcome"], "allow", "{d}");
     e.svc.process_all();
@@ -546,6 +581,7 @@ fn rejection(e: &mut Env) {
     allowed(e.human(Op::Approve {
         target_seq: r["seq"].as_u64().expect("seq"),
         note: "golden".into(),
+        checks: vec![],
     }));
     e.svc.process_all();
 }
@@ -1236,6 +1272,27 @@ fn golden_v24_log_still_verifies_replays_and_audits() {
                 .any(|r| r == "unhooked_session")
     });
     assert_eq!(escalated.count(), 1);
+}
+
+/// An approval that names a check, and the integration whose evidence of
+/// it is `named`.
+#[test]
+fn golden_v25_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v25.bundle",
+        "5887236c1ace8c52668fb69e0983f29d167e4c4e99d7062ec24b3f0fec271125",
+        25,
+    );
+    let asked = ops.iter().filter(
+        |o| matches!(&o.entry.op, Op::Approve { checks, .. } if checks == &["card".to_string()]),
+    );
+    assert_eq!(asked.count(), 1);
+    let ran = ops.iter().flat_map(|o| &o.entry.evidence).filter(|a| {
+        a.check == CheckKind::Named
+            && a.details.get("name").map(String::as_str) == Some("card")
+            && a.result == lonca_core::ops::CheckResult::Pass
+    });
+    assert_eq!(ran.count(), 1);
 }
 
 #[test]

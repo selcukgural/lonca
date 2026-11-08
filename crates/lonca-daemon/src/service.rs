@@ -23,7 +23,7 @@ use lonca_policy::decide::{evidence_problems, level_for, quota_problems, valid_t
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
-use lonca_policy::state::{ChangeStatus, Joins, State};
+use lonca_policy::state::{ChangeRecord, ChangeStatus, Joins, State};
 use lonca_policy::{details, refs};
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::integrate::{facts_of, integrate_joining};
@@ -1631,6 +1631,7 @@ impl Service {
             _ => vec![],
         };
         let s = &r.chain.state;
+        let runs = |c: &ChangeRecord| policy.as_ref().map(|p| runs_for(&p.config.verification, c));
         let sessions: Vec<Value> = s
             .sessions
             .values()
@@ -1668,6 +1669,7 @@ impl Service {
                     "change": c.change, "actor": c.actor.label(), "status": c.status, "provenance": c.provenance,
                     "commit": c.commit, "base": c.base, "intent": c.claim.intent, "created_ms": c.created_ms,
                     "version": c.version, "paths": touched_paths(&c.facts),
+                    "checks": c.checks, "runs": runs(c),
                 })
             })
             .collect();
@@ -1684,12 +1686,14 @@ impl Service {
                     } => (Some(*change), Some(base.clone()), Some(claim.intent.clone())),
                     _ => (None, None, None),
                 };
+                let record = change.and_then(|c| s.changes.get(&c));
                 json!({
                     "seq": p.seq, "created_ms": p.time_ms, "actor": p.actor.label(), "op": p.op.kind().as_str(),
                     "reasons": p.reasons, "approvals": p.approvals, "required": p.required,
                     "change": change, "base": base, "intent": intent,
                     "agent": session.map(|x| &x.agent), "task": session.map(|x| &x.task),
                     "paths": p.facts.as_ref().map(touched_paths).unwrap_or_default(),
+                    "checks": p.checks, "runs": record.and_then(runs),
                 })
             })
             .collect();
@@ -1893,8 +1897,13 @@ impl Service {
         };
         let store = r.store.clone();
         let redacted = r.chain.state.redacted.clone();
+        let runs = r
+            .policy()
+            .ok()
+            .map(|p| runs_for(&p.config.verification, &rec));
         drop(inner);
         let mut out = json!(rec);
+        out["runs"] = json!(runs);
         let ops = OpLog::new(&store).read_all().or_fail()?;
         let names_it = |o: &&SignedOp| match &o.entry.op {
             Op::ChangeIntegrate { change, .. } => *change == c.change,
@@ -3222,8 +3231,8 @@ impl Service {
         let marked = s.unhooked.is_some();
         // Only a session older than this daemon can have sent its event to
         // the one before.
-        let fresh = s.created_ms < self.started_ms
-            && now.saturating_sub(self.started_ms) < START_GRACE_MS;
+        let fresh =
+            s.created_ms < self.started_ms && now.saturating_sub(self.started_ms) < START_GRACE_MS;
         let took = r
             .hooked
             .get_mut(&session)
@@ -3821,7 +3830,10 @@ impl Service {
                     state.changes[c].base.clone(),
                 )
             };
-            let reach = |c: &ChangeId| state.changes[c].facts.reaches_others();
+            let reach = |c: &ChangeId| {
+                let rec = &state.changes[c];
+                (rec.facts.reaches_others(), rec.owed_checks(&vcfg))
+            };
             let held: Vec<ChangeId> = state
                 .queue
                 .iter()
@@ -3864,7 +3876,9 @@ impl Service {
             let touched: BTreeSet<String> =
                 prefix.iter().flat_map(|p| p.3.iter().cloned()).collect();
             let touched: Vec<String> = touched.into_iter().collect();
-            let owed = vcfg.for_change(reaches[..length].contains(&true));
+            let reach = reaches[..length].iter().any(|r| r.0);
+            let named = reaches[..length].iter().flat_map(|r| r.1.iter().cloned());
+            let owed = vcfg.for_change(reach, &named.collect());
             let evidence = self.verify(repo, &store, &owed, (files, &touched), tip, true);
             if let Some(evidence) = evidence
                 .ok()
@@ -3940,7 +3954,8 @@ impl Service {
             let reaches = rec.facts.reaches_others();
             let trunk = r.chain.state.trunk.clone().expect("initialized");
             let policy = r.policy()?;
-            let vcfg = policy.config.verification.for_change(reaches);
+            let named = r.chain.state.changes[&change].owed_checks(&policy.config.verification);
+            let vcfg = policy.config.verification.for_change(reaches, &named);
             let reuse = policy.config.queue.batch_size > 1;
             let t = r.chain.entry_time(self.now());
             let state = &r.chain.state;
@@ -4109,6 +4124,21 @@ fn truncate_at_line(mut text: String, cap: usize) -> (String, bool) {
 
 /// The files a change touches, as its facts say: added, modified and
 /// deleted, sorted, each once.
+/// What the merge queue will run for `c` under `vc`, by the words its
+/// evidence and denials use: `build`, `tests`, `extended`, then the named
+/// checks it owes. Pending ones too: the human sees it before the yes.
+fn runs_for(vc: &Verification, c: &ChangeRecord) -> Vec<String> {
+    let owed = vc.for_change(c.facts.reaches_others(), &c.owed_checks(vc));
+    let builtin = [
+        ("build", &owed.build),
+        ("tests", &owed.test),
+        ("extended", &owed.on_signature_change),
+    ];
+    let builtin = builtin.into_iter().filter(|(_, c)| c.is_some());
+    let builtin = builtin.map(|(name, _)| name.to_string());
+    builtin.chain(owed.checks.into_keys()).collect()
+}
+
 fn touched_paths(f: &lonca_core::ops::Facts) -> Vec<String> {
     let mut paths: Vec<String> = f
         .added_files

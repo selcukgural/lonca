@@ -9,6 +9,7 @@ use lonca_core::oplog::{
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use lonca_policy::chain::{Chain, Submission, replay_checked};
@@ -545,6 +546,7 @@ fn scope_paths_and_ops_are_enforced() {
         Op::Approve {
             target_seq: 1,
             note: String::new(),
+            checks: vec![],
         },
     );
     assert!(denied_with(&d, "not_grantable:approve"));
@@ -716,6 +718,7 @@ fn tainted_sessions_need_review_and_never_touch_critical_paths() {
         Op::Approve {
             target_seq: seq,
             note: String::new(),
+            checks: vec![],
         },
     );
     assert!(denied_with(&d, "not_grantable:approve"));
@@ -724,6 +727,7 @@ fn tainted_sessions_need_review_and_never_touch_critical_paths() {
         Op::Approve {
             target_seq: seq,
             note: "read it".into(),
+            checks: vec![],
         },
     );
     assert!(
@@ -1042,6 +1046,7 @@ fn policy_rules_deny_and_escalate_with_approval_counts() {
         Op::Approve {
             target_seq: seq,
             note: String::new(),
+            checks: vec![],
         },
     );
     assert!(first.is_allow() && !first.reasons.contains(&"released".to_string()));
@@ -1050,7 +1055,8 @@ fn policy_rules_deny_and_escalate_with_approval_counts() {
             "ayse",
             Op::Approve {
                 target_seq: seq,
-                note: String::new()
+                note: String::new(),
+                checks: vec![],
             }
         ),
         "already_approved"
@@ -1060,6 +1066,7 @@ fn policy_rules_deny_and_escalate_with_approval_counts() {
         Op::Approve {
             target_seq: seq,
             note: String::new(),
+            checks: vec![],
         },
     );
     assert!(second.reasons.contains(&"released".to_string()));
@@ -1411,6 +1418,7 @@ fn approve(seq: u64) -> Op {
     Op::Approve {
         target_seq: seq,
         note: String::new(),
+        checks: vec![],
     }
 }
 
@@ -3671,6 +3679,7 @@ fn an_open_repository_lets_an_unobserved_critical_change_wait_for_a_human() {
     let approve = Op::Approve {
         target_seq: seq,
         note: "read it".into(),
+        checks: vec![],
     };
     let d = h.human("ayse", approve);
     assert!(d.is_allow() && d.reasons.contains(&"released".to_string()));
@@ -5804,22 +5813,25 @@ fn what_runs_more_is_owed_by_a_change_that_reaches_others() {
     };
     assert!(vc.on_signature_change.is_some());
     let missing = ["verification_missing:extended".to_string()];
-    assert_eq!(evidence_problems(&vc.for_change(true), &[]), missing);
-    assert!(evidence_problems(&vc.for_change(false), &[]).is_empty());
+    assert_eq!(
+        evidence_problems(&vc.for_change(true, &BTreeSet::new()), &[]),
+        missing
+    );
+    assert!(evidence_problems(&vc.for_change(false, &BTreeSet::new()), &[]).is_empty());
     let passed = [pass(CheckKind::Extended)];
-    assert!(evidence_problems(&vc.for_change(true), &passed).is_empty());
+    assert!(evidence_problems(&vc.for_change(true, &BTreeSet::new()), &passed).is_empty());
     let optional = Verification {
         required: false,
         ..vc.clone()
     };
-    assert!(evidence_problems(&optional.for_change(true), &[]).is_empty());
+    assert!(evidence_problems(&optional.for_change(true, &BTreeSet::new()), &[]).is_empty());
     let bare = Verification {
         require_sandbox: true,
         ..vc
     };
     let mut unsandboxed = pass(CheckKind::Extended);
     unsandboxed.details.clear();
-    let problems = evidence_problems(&bare.for_change(true), &[unsandboxed]);
+    let problems = evidence_problems(&bare.for_change(true, &BTreeSet::new()), &[unsandboxed]);
     assert_eq!(problems, ["unsandboxed_verification"]);
 }
 
@@ -7125,6 +7137,7 @@ fn an_unobserved_proposal_is_marked_and_approved_with_a_short_note() {
     let note = |len: usize| Op::Approve {
         target_seq: seq,
         note: "n".repeat(len),
+        checks: vec![],
     };
     assert!(denied_with(&h.human("ayse", note(501)), "note_too_long"));
     let d = h.human("ayse", note(500));
@@ -7954,4 +7967,319 @@ fn policy_minutes_too_large_saturate() {
     let d = h.agent("s1", renew("l1", i64::MAX));
     assert!(d.is_allow(), "{d:?}");
     h.assert_replay();
+}
+
+// ------------------------------------------------------------ named checks
+
+/// `api` and `e2e`, and `e2e` for every path under `src/web/`.
+fn named_checks_policy() -> PolicyBundle {
+    let config = DEFAULT_CONFIG
+        .replace(
+            "checks = {}",
+            "checks = { api = \"api-cmd\", e2e = \"e2e-cmd\" }",
+        )
+        .replace(
+            "checks_by_path = {}",
+            "checks_by_path = { \"src/web/**\" = [\"e2e\"] }",
+        );
+    PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap()
+}
+
+fn named(name: &str, result: CheckResult) -> Attestation {
+    let mut a = pass(CheckKind::Named);
+    a.result = result;
+    a.details.insert("name".into(), name.into());
+    a
+}
+
+fn approve_with(seq: u64, checks: &[&str]) -> Op {
+    Op::Approve {
+        target_seq: seq,
+        note: String::new(),
+        checks: checks.iter().map(|c| c.to_string()).collect(),
+    }
+}
+
+fn integrate_named(h: &mut H, change: ChangeId, evidence: Vec<Attestation>) -> Decision {
+    let op = Op::ChangeIntegrate {
+        change,
+        trunk_before: h.chain.state.trunk.clone().unwrap(),
+        merged: Some(gid('e')),
+        conflicts: vec![],
+    };
+    h.daemon(op, evidence)
+}
+
+/// An unobserved session's proposal of `sym`, waiting for a human.
+fn waiting(h: &mut H, session: &str, sym: &str) -> (ChangeId, u64) {
+    h.start(session, &["src/**"]);
+    let set = format!("l{session}");
+    assert!(h.lease(session, &set, &[(sym, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    let d = h.propose(session, c, edit(sym));
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    (c, pending_seq(h, c))
+}
+
+/// What a human names at approval the change owes: missing, failed and
+/// passed, by name, with `required = false`.
+#[test]
+fn a_check_named_at_approval_is_owed_by_the_change() {
+    let mut h = H::with_policy(named_checks_policy());
+    let (c, seq) = waiting(&mut h, "s1", "src/a.rs#f");
+    let d = h.human("ayse", approve_with(seq, &["api"]));
+    assert!(d.reasons.contains(&"released".to_string()), "{d:?}");
+    let rec = &h.chain.state.changes[&c];
+    assert_eq!(rec.checks, BTreeSet::from(["api".to_string()]));
+    let vc = &h.policy.config.verification;
+    assert_eq!(rec.owed_checks(vc), BTreeSet::from(["api".to_string()]));
+    let d = integrate_named(&mut h, c, vec![]);
+    assert!(denied_with(&d, "verification_missing:api"), "{d:?}");
+    assert_eq!(d.reasons.len(), 1, "{d:?}");
+    h.assert_replay();
+
+    let mut h = H::with_policy(named_checks_policy());
+    let (c, seq) = waiting(&mut h, "s1", "src/a.rs#f");
+    assert!(h.human("ayse", approve_with(seq, &["api"])).is_allow());
+    let failed = vec![named("api", CheckResult::Fail)];
+    let d = integrate_named(&mut h, c, failed);
+    assert!(denied_with(&d, "verification_failed:api"), "{d:?}");
+    // A pass of another check does not stand for it.
+    let mut h = H::with_policy(named_checks_policy());
+    let (c, seq) = waiting(&mut h, "s1", "src/a.rs#f");
+    assert!(h.human("ayse", approve_with(seq, &["api"])).is_allow());
+    let other = vec![named("e2e", CheckResult::Pass), pass(CheckKind::Tests)];
+    let d = integrate_named(&mut h, c, other);
+    assert!(denied_with(&d, "verification_missing:api"), "{d:?}");
+    h.assert_replay();
+
+    let mut h = H::with_policy(named_checks_policy());
+    let (c, seq) = waiting(&mut h, "s1", "src/a.rs#f");
+    assert!(h.human("ayse", approve_with(seq, &["api"])).is_allow());
+    let d = integrate_named(&mut h, c, vec![named("api", CheckResult::Pass)]);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// Without a name, a change owes no named check.
+#[test]
+fn a_plain_approval_owes_no_named_check() {
+    let mut h = H::with_policy(named_checks_policy());
+    let (c, seq) = waiting(&mut h, "s1", "src/a.rs#f");
+    assert!(h.human("ayse", approve_with(seq, &[])).is_allow());
+    assert!(h.chain.state.changes[&c].checks.is_empty());
+    assert!(integrate_named(&mut h, c, vec![]).is_allow());
+    h.assert_replay();
+}
+
+/// The approval is held to the policy in force and to a proposal.
+#[test]
+fn an_approval_names_known_checks_of_a_proposal_once_each() {
+    let mut h = H::with_policy(named_checks_policy());
+    let (c, seq) = waiting(&mut h, "s1", "src/a.rs#f");
+    for (checks, word) in [
+        (&["zz"][..], "unknown_check:zz"),
+        (&["e2e", "api"][..], "invalid_checks"),
+        (&["api", "api"][..], "invalid_checks"),
+        (&["build"][..], "unknown_check:build"),
+    ] {
+        let d = h.human("ayse", approve_with(seq, checks));
+        assert!(denied_with(&d, word), "{checks:?}: {d:?}");
+    }
+    let many: Vec<String> = (0..33).map(|i| format!("c{i:02}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let d = h.human("ayse", approve_with(seq, &many));
+    assert!(d.reasons.contains(&"invalid_checks".to_string()), "{d:?}");
+    // 32 is as many as one approval may name: unknown, but not too many.
+    let d = h.human("ayse", approve_with(seq, &many[..32]));
+    assert!(denied_with(&d, "unknown_check:c00"), "{d:?}");
+    assert!(!d.reasons.contains(&"invalid_checks".to_string()), "{d:?}");
+    // Nothing denied changed the pending proposal.
+    assert!(h.chain.state.pending[&seq].checks.is_empty());
+    let d = h.human("ayse", approve_with(seq, &["api", "e2e"]));
+    assert!(d.is_allow(), "{d:?}");
+    let both = BTreeSet::from(["api".to_string(), "e2e".to_string()]);
+    assert_eq!(h.chain.state.changes[&c].checks, both);
+    h.assert_replay();
+
+    // A policy update is not a change: it has nothing to run.
+    let config = DEFAULT_CONFIG
+        .replace("policy_updates = 1", "policy_updates = 2")
+        .replace("checks = {}", "checks = { api = \"api-cmd\" }");
+    let mut h = H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap());
+    h.enroll("bora");
+    let d = h.human("ayse", Op::PolicyUpdate { policy: gid('e') });
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    let seq = *h.chain.state.pending.keys().next().unwrap();
+    let d = h.human("bora", approve_with(seq, &["api"]));
+    assert!(denied_with(&d, "checks_not_a_change"), "{d:?}");
+    assert_eq!(d.reasons.len(), 1, "{d:?}");
+    assert!(h.human("bora", approve_with(seq, &[])).is_allow());
+    h.assert_replay();
+}
+
+/// With two approvals needed, each one's checks count, the first's too.
+#[test]
+fn every_approval_adds_its_checks() {
+    let mut h = H::with_policy(named_checks_policy());
+    let bora = KeyPair::generate();
+    let enroll = Op::HumanEnroll {
+        human: "bora".into(),
+        key: file_key(&bora),
+    };
+    assert!(h.human("ayse", enroll).is_allow());
+    h.humans.push(("bora".into(), bora));
+    h.start_observed("s1", &["**"]);
+    h.wrote("s1", "auth/login.rs");
+    let sym = "auth/login.rs#check";
+    assert!(h.lease("s1", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    let d = h.propose("s1", c, edit(sym));
+    assert!(d.reasons.contains(&"approvals=2".to_string()), "{d:?}");
+    let seq = pending_seq(&h, c);
+    let first = h.human("ayse", approve_with(seq, &["api"]));
+    assert!(
+        !first.reasons.contains(&"released".to_string()),
+        "{first:?}"
+    );
+    let api = BTreeSet::from(["api".to_string()]);
+    assert_eq!(h.chain.state.pending[&seq].checks, api);
+    assert!(h.chain.state.changes[&c].checks.is_empty(), "not yet");
+    let second = h.human("bora", approve_with(seq, &["e2e"]));
+    assert!(
+        second.reasons.contains(&"released".to_string()),
+        "{second:?}"
+    );
+    let both = BTreeSet::from(["api".to_string(), "e2e".to_string()]);
+    assert_eq!(h.chain.state.changes[&c].checks, both);
+    h.assert_replay();
+}
+
+/// A new version of the change owes what the earlier one was asked: the
+/// agent can not shed a check by proposing again.
+#[test]
+fn a_new_version_still_owes_the_checks_asked_before() {
+    let mut h = H::with_policy(named_checks_policy());
+    let (c, seq) = waiting(&mut h, "s1", "src/a.rs#f");
+    assert!(h.human("ayse", approve_with(seq, &["api"])).is_allow());
+    let d = integrate_named(&mut h, c, vec![]);
+    assert!(denied_with(&d, "verification_missing:api"), "{d:?}");
+    // Rejected, it is proposed again, and approved with nothing named.
+    let version = h.chain.state.changes[&c].version;
+    let d = h.propose("s1", c, edit("src/a.rs#f"));
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    let seq = pending_seq(&h, c);
+    assert!(h.human("ayse", approve_with(seq, &[])).is_allow());
+    let rec = &h.chain.state.changes[&c];
+    assert!(rec.version > version, "{rec:?}");
+    assert_eq!(rec.checks, BTreeSet::from(["api".to_string()]));
+    let d = integrate_named(&mut h, c, vec![]);
+    assert!(denied_with(&d, "verification_missing:api"), "{d:?}");
+    h.assert_replay();
+}
+
+/// `checks_by_path` names what a change owes without anyone asking, on a
+/// proposal no human sees; other paths owe nothing.
+#[test]
+fn the_policy_names_the_checks_a_path_owes() {
+    for (sym, owed) in [("src/web/page.rs#f", true), ("src/a.rs#f", false)] {
+        let mut h = H::with_policy(named_checks_policy());
+        h.start_observed("s1", &["src/**"]);
+        let path = sym.split('#').next().unwrap();
+        h.wrote("s1", path);
+        assert!(h.lease("s1", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+        let c = ChangeId::random();
+        assert!(h.propose("s1", c, edit(sym)).is_allow());
+        let vc = h.policy.config.verification.clone();
+        let want: BTreeSet<String> = owed.then(|| "e2e".to_string()).into_iter().collect();
+        assert_eq!(h.chain.state.changes[&c].owed_checks(&vc), want, "{sym}");
+        let d = integrate_named(&mut h, c, vec![]);
+        assert_eq!(
+            denied_with(&d, "verification_missing:e2e"),
+            owed,
+            "{sym}: {d:?}"
+        );
+        assert_eq!(d.is_allow(), !owed, "{sym}: {d:?}");
+        h.assert_replay();
+    }
+}
+
+/// A batch owes what each member owes.
+#[test]
+fn a_batch_owes_the_checks_of_every_member() {
+    let config = DEFAULT_CONFIG
+        .replace("batch_size = 1", "batch_size = 3")
+        .replace("checks = {}", "checks = { e2e = \"e2e-cmd\" }")
+        .replace(
+            "checks_by_path = {}",
+            "checks_by_path = { \"src/web/**\" = [\"e2e\"] }",
+        );
+    let mut h = H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap());
+    for (session, sym) in [("a", "src/a.rs#f"), ("b", "src/web/b.rs#g")] {
+        h.start_observed(session, &["src/**"]);
+        h.wrote(session, sym.split('#').next().unwrap());
+        let set = format!("l{session}");
+        assert!(h.lease(session, &set, &[(sym, LeaseKind::Edit)]).is_allow());
+        assert!(h.propose(session, ChangeId::random(), edit(sym)).is_allow());
+    }
+    let queued = h.chain.state.queue.clone();
+    let merged = [(queued[0], gid('e')), (queued[1], gid('f'))];
+    let d = batch(&mut h, &merged, vec![]);
+    assert!(denied_with(&d, "verification_missing:e2e"), "{d:?}");
+    let d = batch(&mut h, &merged, vec![named("e2e", CheckResult::Pass)]);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// What named evidence comes to, alone: an error and a missing sandbox
+/// count as for build and test, and a name the policy no longer defines
+/// can not be met.
+#[test]
+fn named_evidence_is_held_like_the_built_in_checks() {
+    let vc = Verification {
+        checks: [("api".to_string(), "api-cmd".to_string())].into(),
+        require_sandbox: true,
+        ..Verification::default()
+    };
+    let api = BTreeSet::from(["api".to_string()]);
+    let owed = vc.for_change(false, &api);
+    assert!(evidence_problems(&owed, &[named("api", CheckResult::Pass)]).is_empty());
+    let errored = [named("api", CheckResult::Error)];
+    assert_eq!(
+        evidence_problems(&owed, &errored),
+        ["verification_error:api", "verification_missing:api"]
+    );
+    let mut bare = named("api", CheckResult::Pass);
+    bare.details.remove("sandbox");
+    assert_eq!(
+        evidence_problems(&owed, &[bare]),
+        ["unsandboxed_verification"]
+    );
+    // Owing nothing named, the policy's checks are not owed.
+    assert!(evidence_problems(&vc.for_change(false, &BTreeSet::new()), &[]).is_empty());
+    // A skipped one does not pass.
+    let skipped = [named("api", CheckResult::Skipped)];
+    assert_eq!(
+        evidence_problems(&owed, &skipped),
+        ["verification_missing:api"]
+    );
+    // A name on other evidence does not rename it.
+    let mut tests = named("api", CheckResult::Fail);
+    tests.check = CheckKind::Tests;
+    let problems = evidence_problems(&vc.for_change(false, &BTreeSet::new()), &[tests]);
+    assert_eq!(problems, ["verification_failed:tests"]);
+    // Named evidence with no name is "named" in a denial.
+    let mut nameless = named("api", CheckResult::Fail);
+    nameless.details.remove("name");
+    let problems = evidence_problems(&vc.for_change(false, &BTreeSet::new()), &[nameless]);
+    assert_eq!(problems, ["verification_failed:named"]);
+    let gone = BTreeSet::from(["gone".to_string()]);
+    let owed = vc.for_change(false, &gone);
+    assert_eq!(owed.checks["gone"], "");
+    let fake = [named("gone", CheckResult::Fail)];
+    let problems = evidence_problems(&owed, &fake);
+    assert_eq!(
+        problems,
+        ["verification_failed:gone", "verification_missing:gone"]
+    );
 }

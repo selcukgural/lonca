@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### A clean stop is on the record
+
+`status.sessions[].unproposed` was `null` both for a session that stopped or ended with nothing
+left and for one that never reported, so a runner could not tell a workspace safe to remove
+without a live token. A clean report now reads `{"paths": [], "total": 0, "rounds": 0, …}`, and
+`null` means nobody said since the session began or last proposed. `lonca status` lists only
+sessions that left work, as before. See `docs/decisions.md`, "Stopping with unproposed work"
+(#189).
+
 ### Merge: a change already in trunk, and deletions at the top
 
 Symbol engine 15. A change whose every edit trunk already has merges into trunk unchanged; it

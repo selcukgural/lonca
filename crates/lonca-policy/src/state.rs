@@ -57,8 +57,9 @@ pub struct Session {
     pub continued_from: Option<String>,
     /// The session that took this one's workspace over.
     pub continued_by: Option<String>,
-    /// Work its workspace held the last time it stopped, until a proposal
-    /// or a clean stop.
+    /// What its workspace held the last time it stopped or ended, `total`
+    /// 0 for a clean stop. `None` until the first report, and again after
+    /// a proposal that stands: then nobody has said what is left.
     pub unproposed: Option<Unproposed>,
 }
 
@@ -69,7 +70,7 @@ pub struct Unproposed {
     pub paths: Vec<String>,
     pub total: u64,
     /// Reports since the last proposal or clean stop: how many times the
-    /// session stopped with this work.
+    /// session stopped with this work. 0 for a clean stop.
     pub rounds: u32,
     pub seen_ms: i64,
 }
@@ -1804,11 +1805,18 @@ impl State {
                             }
                             ObsKind::Shell { .. } => s.shell_seen = true,
                             ObsKind::Unproposed { paths, total } => {
-                                let rounds = s.unproposed.as_ref().map_or(0, |u| u.rounds);
-                                s.unproposed = (*total > 0).then(|| Unproposed {
+                                // A clean report is kept too, with the count
+                                // back at 0: `None` is "no report since the
+                                // last proposal", not "nothing left" (#189).
+                                let rounds = match s.unproposed.as_ref() {
+                                    _ if *total == 0 => 0,
+                                    Some(u) => u.rounds.saturating_add(1),
+                                    None => 1,
+                                };
+                                s.unproposed = Some(Unproposed {
                                     paths: paths.clone(),
                                     total: *total,
-                                    rounds: rounds.saturating_add(1),
+                                    rounds,
                                     seen_ms: time_ms,
                                 });
                             }

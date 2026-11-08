@@ -156,16 +156,30 @@ fn a_policy_with_half_of_a_stop_event_is_refused() {
     assert!(message.contains("harness codex: events.stop"), "{message}");
 }
 
+/// A clean stop ends the turn and is on the record once, so `null` keeps
+/// meaning "never reported" (#189).
 #[test]
-fn nothing_local_ends_the_turn_with_no_answer_and_no_entry() {
+fn nothing_local_ends_the_turn_and_is_recorded_once() {
     let (mut e, _, t) = repo();
+    assert!(mark(&mut e, "s1").is_null(), "nobody has reported yet");
     let seq = next_seq(&mut e);
     let r = stop(&mut e, &t, &[]);
     assert!(r.get("output").is_none(), "{r}");
     assert_eq!(r["total"], 0);
     assert_eq!(r["round"], 0);
-    assert_eq!(next_seq(&mut e), seq);
-    assert!(mark(&mut e, "s1").is_null());
+    assert_eq!(next_seq(&mut e), seq + 1);
+    let m = mark(&mut e, "s1");
+    assert_eq!(
+        (&m["paths"], &m["total"], &m["rounds"]),
+        (&json!([]), &json!(0), &json!(0))
+    );
+    assert!(m["seen_ms"].as_i64().unwrap() > 0);
+    stop(&mut e, &t, &[]);
+    assert_eq!(
+        next_seq(&mut e),
+        seq + 1,
+        "an unchanged clean stop is not logged again"
+    );
 }
 
 /// Rounds end, so an agent that can not propose still stops, and the mark
@@ -268,10 +282,13 @@ fn what_a_standing_proposal_carries_is_not_unproposed_and_an_edit_after_it_is() 
     );
     assert_ne!(r["decision"]["outcome"], "deny", "{r}");
 
-    let seq = next_seq(&mut e);
+    assert!(
+        mark(&mut e, "s1").is_null(),
+        "a proposal leaves nothing said"
+    );
     let r = stop(&mut e, &t, &[local("src/lib.rs", EDITED)]);
     assert!(r.get("output").is_none(), "pending: {r}");
-    assert_eq!(next_seq(&mut e), seq);
+    assert_eq!(mark(&mut e, "s1")["total"], 0, "delivered: clean");
 
     let again = format!("{EDITED}// more\n");
     let r = stop(&mut e, &t, &[local("src/lib.rs", &again)]);
@@ -441,12 +458,63 @@ fn another_session_s_proposal_leaves_a_mark_alone() {
 fn a_clean_stop_clears_the_mark_and_the_count() {
     let (mut e, _, t) = repo();
     stop(&mut e, &t, &[local("src/lib.rs", EDITED)]);
-    assert!(mark(&mut e, "s1").is_object());
+    assert_eq!(mark(&mut e, "s1")["total"], 1);
     let seq = next_seq(&mut e);
     stop(&mut e, &t, &[]);
     assert_eq!(next_seq(&mut e), seq + 1, "the clearing is logged");
-    assert!(mark(&mut e, "s1").is_null());
+    let m = mark(&mut e, "s1");
+    assert_eq!(
+        (&m["paths"], &m["total"], &m["rounds"]),
+        (&json!([]), &json!(0), &json!(0))
+    );
     assert_eq!(stop(&mut e, &t, &[local("a", "b")])["round"], 1);
+}
+
+/// The three workspaces of #189, as `session end` leaves them: one never
+/// touched, one with an edit, one whose edit is proposed. Only a session
+/// that never reported reads `null`.
+#[test]
+fn session_end_tells_clean_from_left_from_never_reported() {
+    let (mut e, base, t1) = repo();
+    let t2 = e.session("s2", &["src/**"]);
+    let t3 = e.session("s3", &["src/**"]);
+    let t4 = e.session("s4", &["src/**"]);
+    e.bind(&t3);
+    e.wrote(&t3, "src/lib.rs");
+    e.lease(&t3, "src/lib.rs#refund");
+    let r = e.propose(
+        &t3,
+        &base,
+        vec![file("src/lib.rs", EDITED)],
+        &["src/lib.rs#refund"],
+    );
+    assert_ne!(r["decision"]["outcome"], "deny", "{r}");
+
+    let end = |e: &mut Env, t: &str, files: Value| e.ok("session.end", None, Some(t), files);
+    let r = end(&mut e, &t1, json!({"files": []}));
+    assert_eq!(
+        (&r["unproposed"], &r["unproposed_total"]),
+        (&json!([]), &json!(0))
+    );
+    end(&mut e, &t2, json!({"files": [local("src/lib.rs", EDITED)]}));
+    let r = end(&mut e, &t3, json!({"files": [local("src/lib.rs", EDITED)]}));
+    assert_eq!(r["unproposed_total"], 0, "{r}");
+    end(&mut e, &t4, json!({}));
+
+    let clean = |m: Value| m["total"] == 0 && m["paths"] == json!([]);
+    assert!(clean(mark(&mut e, "s1")));
+    assert_eq!(mark(&mut e, "s2")["paths"], json!(["src/lib.rs"]));
+    assert!(clean(mark(&mut e, "s3")));
+    assert!(
+        mark(&mut e, "s4").is_null(),
+        "ended without files: nothing said"
+    );
+    // And after a restart, from the log alone.
+    e.reopen();
+    assert!(clean(mark(&mut e, "s1")) && clean(mark(&mut e, "s3")));
+    assert!(mark(&mut e, "s4").is_null());
+    let audit = lonca_audit::audit(&e.store(), lonca_audit::Options::default()).unwrap();
+    assert!(audit.ok(), "{:#?}", audit.findings);
 }
 
 #[test]

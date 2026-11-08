@@ -350,7 +350,8 @@ That happens `[sessions] stop_rounds` times in a row (3 by default; a proposal
 that stands starts over, and 0 only records), so an agent that can not
 propose still ends. Then `status` lists the session under `unproposed work`,
 and `status.sessions[].unproposed` has the files: read this to tell "stopped"
-from "done". `lonca session end` records the same, for a harness with no
+from "done". A clean stop or end leaves `total: 0` there, and `null` means the
+session never said (it expired, or ended without its files). `lonca session end` records the same, for a harness with no
 stop event.
 
 A mark means work was left. Its absence proves nothing: only a proposal does.

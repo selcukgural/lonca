@@ -1,0 +1,357 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.go#A",
+          "src/sample.go#T.<def>"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.go"
+        ],
+        "signature_changes": [
+          "src/sample.go#T.<def>"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.go#C"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.go#B",
+          "src/sample.go#v"
+        ],
+        "import_only_files": [],
+        "lines_added": 3,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.go"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "package p\n\n// Limits.\nconst (\n\tA = 10\n\t// B is two.\n\tB = 20\n\tC = 3\n)\n\ntype (\n\tT struct{ n int }\n\tU = int\n)\n\nvar (\n\tv = 2\n)\n\nfunc F() {}\n"
+  },
+  "path": "src/sample.go",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fp\u001f)// Limits.\u001fconst_declaration(const\u001f(\u001f)\u001f)type_declaration(type\u001f(\u001f)\u001f)var_declaration(var\u001fvar_spec_list((\u001f)\u001f)))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "A",
+          "own": "",
+          "signature": "A =",
+          "skipped": false,
+          "span": [
+            31,
+            31,
+            36
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "B",
+          "own": "",
+          "signature": "B =",
+          "skipped": false,
+          "span": [
+            38,
+            52,
+            57
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "T",
+          "own": "",
+          "signature": "T struct{}",
+          "skipped": false,
+          "span": [
+            69,
+            69,
+            79
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "U",
+          "own": "",
+          "signature": "U = int",
+          "skipped": false,
+          "span": [
+            81,
+            81,
+            88
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "v",
+          "own": "",
+          "signature": "v =",
+          "skipped": false,
+          "span": [
+            99,
+            99,
+            104
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "F",
+          "own": "",
+          "signature": "func F()",
+          "skipped": false,
+          "span": [
+            108,
+            108,
+            119
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fp\u001f)// Limits.\u001fconst_declaration(const\u001f(\u001f)\u001f)type_declaration(type\u001f(\u001f)\u001f)var_declaration(var\u001fvar_spec_list((\u001f)\u001f)))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "A",
+          "own": "",
+          "signature": "A =",
+          "skipped": false,
+          "span": [
+            31,
+            31,
+            37
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "B",
+          "own": "",
+          "signature": "B =",
+          "skipped": false,
+          "span": [
+            39,
+            53,
+            58
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "T",
+          "own": "",
+          "signature": "T struct{ n int }",
+          "skipped": false,
+          "span": [
+            70,
+            70,
+            87
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "U",
+          "own": "",
+          "signature": "U = int",
+          "skipped": false,
+          "span": [
+            89,
+            89,
+            96
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "v",
+          "own": "",
+          "signature": "v =",
+          "skipped": false,
+          "span": [
+            107,
+            107,
+            112
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "F",
+          "own": "",
+          "signature": "func F()",
+          "skipped": false,
+          "span": [
+            116,
+            116,
+            127
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(package_clause(package\u001fp\u001f)// Limits.\u001fconst_declaration(const\u001f(\u001f)\u001f)type_declaration(type\u001f(\u001f)\u001f)var_declaration(var\u001fvar_spec_list((\u001f)\u001f)))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "A",
+          "own": "",
+          "signature": "A =",
+          "skipped": false,
+          "span": [
+            31,
+            31,
+            36
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "B",
+          "own": "",
+          "signature": "B =",
+          "skipped": false,
+          "span": [
+            38,
+            52,
+            58
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "C",
+          "own": "",
+          "signature": "C =",
+          "skipped": false,
+          "span": [
+            60,
+            60,
+            65
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "T",
+          "own": "",
+          "signature": "T struct{}",
+          "skipped": false,
+          "span": [
+            77,
+            77,
+            87
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "U",
+          "own": "",
+          "signature": "U = int",
+          "skipped": false,
+          "span": [
+            89,
+            89,
+            96
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "v",
+          "own": "",
+          "signature": "v =",
+          "skipped": false,
+          "span": [
+            107,
+            107,
+            112
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "F",
+          "own": "",
+          "signature": "func F()",
+          "skipped": false,
+          "span": [
+            116,
+            116,
+            127
+          ]
+        }
+      ]
+    }
+  }
+}

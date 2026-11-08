@@ -257,6 +257,9 @@ reasons: [docs/decisions.md](docs/decisions.md).
   test commands, their environment and sandbox, starters per language.
 - [docs/decisions.md](docs/decisions.md): decisions and deviations from
   the design ([docs/design.md](docs/design.md), Turkish).
+- [docs/security/owasp.md](docs/security/owasp.md): Lonca against the
+  OWASP lists and an ASVS 5.0 Level 2 checklist;
+  [docs/crypto.md](docs/crypto.md): keys, algorithms and secrets.
 
 ## License
 

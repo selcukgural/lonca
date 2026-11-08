@@ -23,6 +23,13 @@ You should get an answer within a week. Once a fix is ready, it is
 published together with a GitHub security advisory that credits you,
 unless you would rather stay anonymous.
 
+## How Lonca maps to OWASP
+
+[docs/security/owasp.md](docs/security/owasp.md) maps Lonca to the OWASP Top
+10, the LLM and Agentic Top 10, the CI/CD Top 10 and an ASVS 5.0 Level 2
+checklist, with the open issue of every gap. The cryptographic inventory is
+[docs/crypto.md](docs/crypto.md).
+
 ## Scope
 
 Of particular interest are anything that lets an agent get around the

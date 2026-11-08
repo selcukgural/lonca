@@ -2260,6 +2260,7 @@ dependencies = [
  "ignore",
  "libc",
  "lonca-audit",
+ "lonca-client",
  "lonca-core",
  "lonca-daemon",
  "lonca-policy",
@@ -2271,6 +2272,17 @@ dependencies = [
  "similar",
  "tempfile",
  "ureq",
+]
+
+[[package]]
+name = "lonca-client"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "lonca-core",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2298,6 +2310,7 @@ dependencies = [
  "hex",
  "libc",
  "lonca-audit",
+ "lonca-client",
  "lonca-core",
  "lonca-net",
  "lonca-policy",

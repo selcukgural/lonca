@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### A client crate for harnesses
+
+`lonca-client` is what a harness or runner needs to talk to the daemon, and nothing else: the
+protocol's request and response types and `PROTOCOL`, the socket client with the daemon checks
+(socket owner, peer uid, the hardened config), framing, an optional timeout (past it the call
+fails `timed_out` and the connection is dropped, since the request may have run), typed errors
+that tell `rate_limited`, `busy` and `closed` apart (`is_transient`), and the human session file
+reader, which refuses a link, another user's file or one others can read. It depends on
+`lonca-core` without its Git store, which is now the default feature `store`. A protocol number
+change is a major version of the crate (0.x: minor). `lonca` no longer uses a session file
+others can read, and a login writes an old file back as 0600. See `docs/decisions.md`, "A
+client crate for harnesses (#192)".
+
 ### Checks a change owes, named per change
 
 `[verification]` takes named commands, `checks = { api = "cargo test --offline -p api" }`,

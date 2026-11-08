@@ -250,10 +250,8 @@ fn report_unproposed(
     })
 }
 
-/// The runner-facing protocol number (`docs/protocol.md`). It goes up
-/// when a shape changes in a way a client must know about; adding a
-/// field does not count.
-pub const PROTOCOL: u32 = 1;
+/// The runner-facing protocol number, kept with the client types.
+pub use lonca_client::PROTOCOL;
 
 /// Longest a `log` request with `wait_ms` is held.
 pub const LOG_WAIT_MAX_MS: i64 = 30_000;

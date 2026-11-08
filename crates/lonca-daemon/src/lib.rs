@@ -1,6 +1,6 @@
 //! The Lonca daemon: the Gatekeeper every write goes through.
 
-pub mod client;
+pub use lonca_client::client;
 pub mod gitcmd;
 pub mod home;
 pub mod hooked;
@@ -15,7 +15,7 @@ pub mod security;
 pub mod server;
 pub mod service;
 pub mod sys;
-pub mod trust;
+pub use lonca_client::trust;
 
 pub use client::Client;
 pub use home::Home;

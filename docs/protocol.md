@@ -3,7 +3,14 @@
 What a client of the Lonca daemon (a runner such as imece, `lonca-cli`,
 an MCP bridge) needs to know, and nothing it does not. The daemon's
 crates are not an interface: a client speaks this protocol over the
-socket and copies nothing from `crates/`.
+socket and copies nothing from `crates/`, except the one crate made for
+it. `lonca-client` (Rust) holds the request and response types and this
+number (`PROTOCOL`), the socket client with the checks of "Verifying the
+daemon", framing, an optional timeout and typed errors
+(`ErrorKind::is_transient` for `rate_limited`, `busy`, `closed`), and the
+reader of the human session file. No store, no policy, no daemon code. A
+change of the protocol number is a major version of the crate (while it is
+0.x, a minor one); pin an exact version.
 
 **Protocol number: 1.** `ping` returns it as `protocol`. It goes up when
 a shape changes in a way a client must know about: a field removed or
@@ -1067,7 +1074,11 @@ Exit codes:
 **The human session file is an interface.** `lonca human login` keeps
 the session at `$LONCA_HUMANS/<name>.session`, else
 `~/.config/lonca/humans/<name>.session`, mode 0600, as `{"token",
-"expires_ms"}`. A runner that speaks to the socket itself may read the
+"expires_ms"}`. Read it only if it is a regular file (not a link) of your
+own user that group and others can neither read nor write
+(`lonca_client::session::read_session` checks this; `lonca` itself does
+not use a file that fails it, and the login that follows writes it back as
+0600). A runner that speaks to the socket itself may read the
 token from there and send it as `token`; when the daemon answers
 `unauthenticated` (expired, or the daemon restarted on another home)
 or `forbidden` after a key change, it runs `lonca human login --json`
@@ -1130,3 +1141,4 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `checks` and `runs` on `status.changes[]`, `status.pending[]` and
   `change.get`, the attestation kind `named`, and the reasons
   `unknown_check:<name>`, `invalid_checks` and `checks_not_a_change` (#191).
+  The `lonca-client` crate (#192).

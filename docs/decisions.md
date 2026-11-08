@@ -3115,6 +3115,53 @@ without knowing whether it would.
   in force). `decide()` reads what is owed from the change record and the
   entry's policy, so the auditor recomputes it like any other decision.
 
+## A client crate for harnesses (#192)
+
+imece talks to the daemon as a client of its socket and kept its own copy of
+the protocol, with a job that watched our commits for changes to it.
+`lonca-client` makes that copy a dependency.
+
+- **What is in it is what a client needs.** The request and response types
+  (`protocol`, moved from the daemon, which re-exports it), `PROTOCOL` (the
+  daemon re-exports it too), the socket client and the daemon checks
+  (`client`, `trust`, moved), the two libc calls they make (`sys`:
+  `current_uid`, `peer_uid`), and the human session file (`session`). No
+  store, no policy, no daemon code: a client is never a second writer.
+- **`lonca-core` without its store.** The types a request carries (`Op`,
+  `Claim`, `GitId`, `ChangeId`, ...) are in `lonca-core`, which also holds the
+  Git store (gitoxide). The store and the log kept in it (`Store`, `OpLog`)
+  are the default feature `store`; `GitId`, `FileMode`, `FileEntry` and
+  `FileMap` moved to `objects` and need no Git library. `GitId::parse` checks
+  40 hex digits itself; a test holds it to what gix accepts and gives.
+  `lonca-client` depends on `lonca-core` without default features: 54 crates,
+  no gix, no Cedar.
+- **`repo.prepare_init` stays the daemon's.** Its `profile` is a policy type.
+  A client that creates repositories sends that request as JSON.
+- **Typed errors keep the code.** `CallError` is still the daemon's
+  `{code, message}`; `kind()` reads it as `ErrorKind` (`#[non_exhaustive]`,
+  `Other` for a code this version does not know), and `is_transient()` is
+  true for `rate_limited`, `busy` and `closed`: nothing ran, send it again.
+  Two kinds are the client's own: `io` (the connection failed, or the answer
+  was not one) and `timed_out`.
+- **A timeout drops the connection.** `Client::set_timeout` holds both the
+  write and the wait for the answer. Past it the request may have run, so it
+  is not transient, and the late answer must not be read as the next
+  request's: the next call opens a new connection. An answer whose id is
+  neither the request's nor 0 is refused the same way. Default: no timeout,
+  because `log` may wait 30 seconds by design.
+- **The test override is opt-in.** `Trust::load` reads
+  `LONCA_TEST_DAEMON_UID` only in a debug build with the feature `test-env`,
+  which the daemon and the CLI turn on for their tests. A harness's debug
+  build does not get it by depending on the crate.
+- **The session file is read as `lonca` left it.** A regular file (opened
+  with `O_NOFOLLOW`, checked on the open file), owned by the current user,
+  with no group or other bits, at most 64 KiB. `lonca` uses the same reader,
+  so a file someone loosened is not used, and its writer now sets 0600 on an
+  old file too (the mode on `open` counts only for a new one).
+- **Semver.** A protocol number change is a major version (0.x: minor);
+  fields added to a shape are not. Publishing waits for #8, which puts
+  `lonca-core` on crates.io first.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

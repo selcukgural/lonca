@@ -4,7 +4,6 @@
 //! understand. Lonca metadata lives in Git objects too, under `refs/lonca/*`.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::path::{Path, PathBuf};
 
 use gix::ObjectId;
@@ -12,30 +11,16 @@ use gix::bstr::ByteSlice;
 use gix::objs::Write as _;
 use gix::objs::tree::{self, EntryKind};
 use gix::refs::transaction::PreviousValue;
-use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result, git};
 use crate::paths::validate_repo_path;
 
-/// A Git object id in lowercase hex.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct GitId(pub String);
+pub use crate::objects::{FileEntry, FileMap, FileMode, GitId};
 
 impl GitId {
-    pub fn parse(s: &str) -> Result<Self> {
-        let oid = ObjectId::from_hex(s.as_bytes())
-            .map_err(|e| Error::Invalid(format!("git id {s:?}: {e}")))?;
-        Ok(Self(oid.to_string()))
-    }
-
     pub fn oid(&self) -> Result<ObjectId> {
         ObjectId::from_hex(self.0.as_bytes())
             .map_err(|e| Error::Invalid(format!("git id {:?}: {e}", self.0)))
-    }
-
-    pub fn short(&self) -> &str {
-        &self.0[..self.0.len().min(10)]
     }
 
     /// The id Git gives `bytes` as a blob (SHA-1 repositories), without
@@ -56,37 +41,6 @@ impl From<ObjectId> for GitId {
         Self(id.to_string())
     }
 }
-
-impl fmt::Display for GitId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl fmt::Debug for GitId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "GitId({})", self.short())
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FileMode {
-    Regular,
-    Executable,
-    Symlink,
-    /// A submodule commit; carried through unchanged, never materialized.
-    Submodule,
-}
-
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct FileEntry {
-    pub mode: FileMode,
-    pub blob: GitId,
-}
-
-/// A flattened tree: repository path -> entry.
-pub type FileMap = BTreeMap<String, FileEntry>;
 
 #[derive(Clone, Debug)]
 pub struct CommitSpec {
@@ -525,6 +479,29 @@ fn walk(repo: &gix::Repository, id: ObjectId, prefix: &str, out: &mut FileMap) -
 
 #[cfg(test)]
 mod tests {
+    /// The parser without gix accepts and gives what gix's does.
+    #[test]
+    fn a_plain_parse_is_gixs() {
+        let lower = "0123456789abcdef0123456789abcdef01234567";
+        let cases = [
+            lower.to_string(),
+            lower.to_ascii_uppercase(),
+            "AbCdEf0123456789abcdef0123456789ABCDEF01".to_string(),
+            lower[..39].to_string(),
+            format!("{lower}0"),
+            lower.replace('a', "g"),
+            "0".repeat(64),
+            String::new(),
+            format!("{}é", &lower[..38]),
+            format!(" {}", &lower[..39]),
+        ];
+        for s in cases {
+            let ours = GitId::parse(&s).ok().map(|g| g.0);
+            let gix = ObjectId::from_hex(s.as_bytes()).ok().map(|o| o.to_string());
+            assert_eq!(ours, gix, "{s:?}");
+        }
+    }
+
     use super::*;
 
     fn store() -> (tempfile::TempDir, Store) {

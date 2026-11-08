@@ -14,7 +14,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use crate::server::peer_uid;
+use crate::sys::peer_uid;
 
 /// Where the hardened installers name the daemon's uid.
 pub const CONFIG: &str = if cfg!(target_os = "macos") {
@@ -111,11 +111,12 @@ impl Trust {
         self.hardened
     }
 
-    /// What this machine says. A test build reads its own environment and
-    /// never the machine's file: the tests stay hermetic, and the variable
-    /// does not exist in a release build, where an agent could set it.
+    /// What this machine says. A test build (debug, with the feature
+    /// `test-env`) reads its own environment and never the machine's file:
+    /// the tests stay hermetic, and the variable does not exist in a release
+    /// build or without the feature, where an agent could set it.
     pub fn load() -> Result<Self> {
-        if cfg!(debug_assertions) {
+        if cfg!(all(debug_assertions, feature = "test-env")) {
             let uid = std::env::var("LONCA_TEST_DAEMON_UID").ok();
             let uid = uid.and_then(|u| u.parse().ok());
             return Ok(uid.map_or_else(Self::cooperative, Self::hardened));

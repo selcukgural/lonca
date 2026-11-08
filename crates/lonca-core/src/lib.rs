@@ -13,11 +13,15 @@ pub mod canonical;
 pub mod changeid;
 pub mod error;
 pub mod keys;
+pub mod objects;
 pub mod oplog;
 pub mod ops;
 pub mod paths;
+#[cfg(feature = "store")]
 pub mod store;
 
 pub use changeid::ChangeId;
 pub use error::{Error, Result};
-pub use store::{FileEntry, FileMap, FileMode, GitId, Store};
+pub use objects::{FileEntry, FileMap, FileMode, GitId};
+#[cfg(feature = "store")]
+pub use store::Store;

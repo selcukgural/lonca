@@ -1,0 +1,27 @@
+[package]
+name = "lonca-client"
+version = "0.1.0"
+edition = "2024"
+description = "Client of the Lonca daemon socket: protocol types, framing, daemon checks and the human session file"
+license = "Apache-2.0"
+repository = "https://github.com/selcukgural/lonca"
+keywords = ["vcs", "agents", "lonca", "client"]
+categories = ["development-tools", "api-bindings"]
+
+[features]
+# Debug builds read the daemon's uid from LONCA_TEST_DAEMON_UID instead of
+# the machine's file, for hermetic tests. Off unless asked for, and never in
+# a release build: an agent can set an environment variable.
+test-env = []
+
+[dependencies]
+libc = "0.2.190"
+lonca-core = { version = "0.1.0", path = "../lonca-core", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

@@ -48,10 +48,6 @@ or a `decide()` arm replaced with `Ok(Allow)`. Config: `.cargo/mutants.toml`
 cargo install --locked cargo-mutants@27.1.0 cargo-nextest@0.9.151
 cargo mutants --list -p lonca-policy        # what would be mutated
 cargo mutants -p lonca-policy -j 4          # one crate
-
-# Before a push: each mutant in the diff against its own crate's tests.
-git diff origin/main...HEAD -- crates > /tmp/git.diff
-cargo mutants --in-diff /tmp/git.diff --test-workspace=false --minimum-test-timeout 60 -j 4
 ```
 
 - Results are in `mutants.out/`: `missed.txt` lists survivors (tests still
@@ -59,8 +55,6 @@ cargo mutants --in-diff /tmp/git.diff --test-workspace=false --minimum-test-time
   read it: many mean the tests never ran, and CI fails a shard with more
   timeouts than caught), `unviable.txt` mutants that do not compile
   (ignored), `caught.txt` the rest; `diff/` has each mutant as a patch.
-- For a PR, run `--in-diff` over the whole diff against its base. Do not
-  narrow it with `-f`, because survivors in other files are missed.
 - A new survivor in a security-critical file (`decide.rs`, `chain.rs`,
   `state.rs`, `oplog.rs`, `canonical.rs`, `changeid.rs`, `keys.rs`, the
   auditor, the merge) is fixed with a test, or listed in `exclude_re` with
@@ -69,21 +63,13 @@ cargo mutants --in-diff /tmp/git.diff --test-workspace=false --minimum-test-time
   mutants (cargo-mutants 27.1.0); use file globs or a test.
 - Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
   paths, no writes to `$HOME`. Parallel jobs (`-j`) run copies at once.
-- Before a push, run the first stage above. A survivor in `mutants.out/missed.txt`
-  is a question, not a verdict: the code may be tested from another crate. Close
-  those you can, and let CI's workspace stage decide the rest.
-- CI (`.github/workflows/mutants.yml`): on every PR the mutants in the diff
-  against the base branch run in two stages, less those the last push settled:
-  against their own crate (`own crate k`), then what that leaves against the
-  whole workspace (`workspace k`). A survivor of the second stage fails the
-  `mutants` job that the ruleset requires; a PR waits for it. Survivors are in
-  the `mutants-workspace-<k>` artifacts (`missed.txt`). Results are kept by
-  `lonca-mutants`; the rules are in `docs/decisions.md`. Every night at 00:07
-  UTC, if main changed, and on demand, the whole workspace runs in 20 shards
-  (`full k/20`), with no first stage and no kept results. That run blocks
-  nothing; any survivor fails its shard and is listed in the run's summary.
-- Before the day's first piece of work, look at the last night's run
-  (`gh run list --workflow=mutants.yml --event schedule --limit 1`). If it
-  found survivors, fix those first.
+- CI (`.github/workflows/mutants.yml`) runs mutants only for a release:
+  on a pushed `v*` tag, and on demand (`gh workflow run mutants.yml --ref
+  main`, before tagging). The whole workspace runs in 20 shards
+  (`full k/20`); any survivor fails its shard and is listed in the run's
+  summary and in the `mutants-full-<k>` artifact (`missed.txt`). Survivors
+  are fixed before the release. Pull requests and merges to main run the
+  unit tests only (`ci.yml`); no mutants run before a push or on a PR.
 - Every PR is opened with auto-merge (`gh pr merge --auto --merge`); it
-  lands once every required check, mutants included, is green.
+  lands once the required checks (`test (ubuntu-latest)`, `test
+  (macos-latest)`) are green.

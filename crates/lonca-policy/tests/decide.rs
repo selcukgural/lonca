@@ -4,7 +4,8 @@
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_SYMBOL_KEYS, SignedOp, verify_chain,
+    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_INSERT_NAMES, FORMAT_SYMBOL_KEYS, SignedOp,
+    verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -273,6 +274,7 @@ impl H {
                     .map(|(s, k)| LeaseItem {
                         symbol: s.to_string(),
                         kind: *k,
+                        names: Vec::new(),
                     })
                     .collect(),
                 intent: format!("work on {set}"),
@@ -3760,6 +3762,7 @@ fn interest(h: &mut H, session: &str, sym: &str) -> Decision {
         items: vec![LeaseItem {
             symbol: sym.into(),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }],
         intent: "waiting".into(),
     };
@@ -3800,7 +3803,8 @@ fn a_freed_lease_goes_to_the_oldest_interest_for_a_window() {
             session: "b".into(),
             items: vec![LeaseItem {
                 symbol: F.into(),
-                kind: LeaseKind::Edit
+                kind: LeaseKind::Edit,
+                names: Vec::new()
             }],
             until_ms: until,
         }]
@@ -3837,6 +3841,7 @@ fn acquire_intent(set: &str, sym: &str, intent: &str) -> Op {
         items: vec![LeaseItem {
             symbol: sym.into(),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }],
         intent: intent.into(),
         ttl_ms: 10 * MIN,
@@ -3868,6 +3873,7 @@ fn a_lease_and_an_interest_need_an_intent() {
         items: vec![LeaseItem {
             symbol: F.into(),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }],
         intent: " ".into(),
     };
@@ -4195,6 +4201,7 @@ fn entries_of_an_older_format_need_no_intent_and_stop_nobody() {
         items: vec![LeaseItem {
             symbol: MEMBER_A.into(),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }],
         intent: "w".into(),
     };
@@ -4312,6 +4319,7 @@ fn an_interest_needs_something_to_wait_for_and_the_right_to_acquire() {
         items: vec![LeaseItem {
             symbol: "src/b.rs#g".into(),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }],
         intent: "x".repeat(501),
     };
@@ -4499,6 +4507,7 @@ fn acquire_for(h: &mut H, set: &str, ttl_ms: i64) -> Decision {
         items: vec![LeaseItem {
             symbol: F.into(),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }],
         intent: "ttl".into(),
         ttl_ms,
@@ -4956,6 +4965,7 @@ fn item(symbol: &str) -> LeaseItem {
     LeaseItem {
         symbol: symbol.into(),
         kind: LeaseKind::Edit,
+        names: Vec::new(),
     }
 }
 
@@ -5249,6 +5259,7 @@ fn entries_of_an_older_format_know_no_keys() {
         items: vec![LeaseItem {
             symbol: name.into(),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }],
         ttl_ms: 60_000,
         intent: "work".into(),
@@ -5298,6 +5309,7 @@ fn a_lease_request_may_be_as_long_as_the_limits_and_no_longer() {
         let items = (0..n).map(|i| LeaseItem {
             symbol: format!("src/{set}.rs#f{i}"),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         });
         let op = Op::LeaseAcquire {
             set: set.into(),
@@ -6475,6 +6487,7 @@ fn a_shared_lease_is_refused_where_the_repository_does_not_allow_it() {
             items: vec![LeaseItem {
                 symbol: f.into(),
                 kind: LeaseKind::Shared,
+                names: Vec::new(),
             }],
             intent: "wait".into(),
         },
@@ -7163,5 +7176,336 @@ fn only_a_scope_of_every_symbol_reaches_text_outside_symbols() {
     assert!(!denied_with(&d, "scope_symbol"), "{d:?}");
     let d = h.propose("s2", ChangeId::random(), edit(b));
     assert!(denied_with(&d, &format!("scope_symbol:{b}")), "{d:?}");
+    h.assert_replay();
+}
+
+// ---------------------------------------------------------------- insert names (#45)
+
+/// An `insert` on `container` that reserves `names`.
+fn insert_named(h: &mut H, session: &str, set: &str, container: &str, names: &[&str]) -> Decision {
+    h.agent(
+        session,
+        Op::LeaseAcquire {
+            set: set.into(),
+            items: vec![named_item(container, LeaseKind::Insert, names)],
+            intent: format!("add to {container}"),
+            ttl_ms: 10 * MIN,
+        },
+    )
+}
+
+fn named_item(symbol: &str, kind: LeaseKind, names: &[&str]) -> LeaseItem {
+    LeaseItem {
+        symbol: symbol.into(),
+        kind,
+        names: names.iter().map(|n| n.to_string()).collect(),
+    }
+}
+
+fn adds(syms: &[&str]) -> Facts {
+    let path = syms[0].split('#').next().unwrap().to_string();
+    Facts {
+        adds: syms.iter().map(|s| s.to_string()).collect(),
+        modified_files: vec![path],
+        lines_added: 3,
+        ..Default::default()
+    }
+}
+
+fn new_file(path: &str) -> Facts {
+    Facts {
+        added_files: vec![path.into()],
+        lines_added: 3,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn two_inserts_that_reserve_one_name_in_one_container_conflict() {
+    let mut h = H::new();
+    for s in ["a", "b", "c", "d", "e"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let c = "src/a.rs#Client";
+    assert!(insert_named(&mut h, "a", "la", c, &["throttle"]).is_allow());
+    let d = insert_named(&mut h, "b", "lb", c, &["retry", "throttle"]);
+    assert!(denied_with(&d, &format!("lease_held:{c}:a:")), "{d:?}");
+    // Who was refused may wait for it.
+    let wait = Op::LeaseInterest {
+        items: vec![named_item(c, LeaseKind::Insert, &["throttle"])],
+        intent: "wait".into(),
+    };
+    assert!(h.agent("b", wait).is_allow());
+    // Other names, an insert that names nothing, another container: free.
+    assert!(insert_named(&mut h, "c", "lc", c, &["retry"]).is_allow());
+    assert!(h.lease("c", "lc2", &[(c, LeaseKind::Insert)]).is_allow());
+    let file = "src/a.rs#<file>";
+    assert!(insert_named(&mut h, "d", "ld", file, &["throttle"]).is_allow());
+    let other = "src/b.rs#Client";
+    assert!(insert_named(&mut h, "d", "ld2", other, &["throttle"]).is_allow());
+    // A name stands for the keyed container.
+    let keyed = "src/a.rs#S.From(u8)";
+    assert!(insert_named(&mut h, "d", "ld3", keyed, &["from"]).is_allow());
+    let d = insert_named(&mut h, "e", "le", "src/a.rs#S.From", &["from"]);
+    assert!(denied_with(&d, &format!("lease_held:{keyed}:d:")), "{d:?}");
+    // An exclusive lease on the container still meets every insert.
+    let d = h.lease("e", "le", &[(c, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("lease_held:{c}:a:")), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn an_addition_outside_the_reserved_names_is_refused() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    let c = "src/a.rs#Client";
+    assert!(insert_named(&mut h, "a", "la", c, &["throttle"]).is_allow());
+    h.wrote("a", "src/a.rs");
+    let d = h.propose("a", ChangeId::random(), adds(&["src/a.rs#Client.retry"]));
+    assert!(denied_with(&d, &format!("lease_missing:{c}")), "{d:?}");
+    let both = adds(&["src/a.rs#Client.throttle", "src/a.rs#Client.retry"]);
+    let d = h.propose("a", ChangeId::random(), both);
+    assert!(denied_with(&d, &format!("lease_missing:{c}")), "{d:?}");
+    // By its name alone: a key or a number is still that name.
+    for added in [
+        "src/a.rs#Client.throttle",
+        "src/a.rs#Client.throttle(int)",
+        "src/a.rs#Client.throttle~2",
+    ] {
+        let change = ChangeId::random();
+        let d = h.propose("a", change, adds(&[added]));
+        assert!(d.is_allow(), "{added}: {d:?}");
+        assert!(h.agent("a", Op::ChangeWithdraw { change }).is_allow());
+    }
+    h.assert_replay();
+}
+
+#[test]
+fn a_reserved_type_brings_its_members_and_nothing_else() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    let file = "src/a.rs#<file>";
+    assert!(insert_named(&mut h, "a", "la", file, &["Limiter"]).is_allow());
+    h.wrote("a", "src/a.rs");
+    // Something else at the top, or a member of a type it did not name.
+    for added in ["src/a.rs#helper", "src/a.rs#Client.x"] {
+        let d = h.propose("a", ChangeId::random(), adds(&[added]));
+        assert!(denied_with(&d, "lease_missing:"), "{added}: {d:?}");
+    }
+    let change = ChangeId::random();
+    let new_type = adds(&["src/a.rs#Limiter", "src/a.rs#Limiter.new"]);
+    let d = h.propose("a", change, new_type);
+    assert!(d.is_allow(), "{d:?}");
+    let pinned = &h.chain.state.leases["la"].pins[&change];
+    assert_eq!(pinned, &[named_item(file, LeaseKind::Insert, &["Limiter"])]);
+    h.assert_replay();
+}
+
+#[test]
+fn a_new_file_needs_its_path_exclusively() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["src/**"]);
+    let (path, file) = ("src/new.rs", "src/new.rs#<file>");
+    h.wrote("a", path);
+    let d = h.propose("a", ChangeId::random(), new_file(path));
+    assert!(denied_with(&d, &format!("lease_missing:{file}")), "{d:?}");
+    // An insert is shared, so it does not make a path anyone's.
+    assert!(h.lease("a", "li", &[(file, LeaseKind::Insert)]).is_allow());
+    let d = h.propose("a", ChangeId::random(), new_file(path));
+    assert!(denied_with(&d, &format!("lease_missing:{file}")), "{d:?}");
+    assert!(h.lease("a", "la", &[(file, LeaseKind::Edit)]).is_allow());
+    let change = ChangeId::random();
+    assert!(h.propose("a", change, new_file(path)).is_allow());
+    assert_eq!(
+        h.chain.state.leases["la"].pins[&change],
+        [LeaseItem::new(file, LeaseKind::Edit)]
+    );
+    // Whoever else would create it is refused, by either kind.
+    for kind in [LeaseKind::Edit, LeaseKind::Insert] {
+        let d = h.lease("b", "lb", &[(file, kind)]);
+        assert!(denied_with(&d, &format!("lease_held:{file}:a:")), "{d:?}");
+    }
+    h.assert_replay();
+}
+
+#[test]
+fn reserved_names_are_for_an_insert_and_must_be_names() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    let c = "src/a.rs#Client";
+    for kind in [LeaseKind::Edit, LeaseKind::Rename] {
+        let d = h.agent(
+            "a",
+            Op::LeaseAcquire {
+                set: "la".into(),
+                items: vec![named_item(c, kind, &["x"])],
+                intent: "x".into(),
+                ttl_ms: 10 * MIN,
+            },
+        );
+        assert!(denied_with(&d, &format!("names_need_insert:{c}")), "{d:?}");
+    }
+    let many: Vec<String> = (0..65).map(|i| format!("n{i}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let long = "x".repeat(129);
+    for names in [
+        &[""][..],
+        &["a.b"],
+        &["x(int)"],
+        &["x~2"],
+        &[" a"],
+        &["<def>"],
+        &["a#b"],
+        &[long.as_str()],
+        &many,
+    ] {
+        let d = insert_named(&mut h, "a", "la", c, names);
+        assert!(
+            denied_with(&d, &format!("invalid_names:{c}")),
+            "{names:?}: {d:?}"
+        );
+    }
+    let most: Vec<String> = (0..64).map(|i| format!("n{i}")).collect();
+    let most: Vec<&str> = most.iter().map(String::as_str).collect();
+    let longest = "x".repeat(128);
+    assert!(insert_named(&mut h, "a", "la", c, &most).is_allow());
+    assert!(insert_named(&mut h, "a", "lb", c, &[longest.as_str(), "_ok"]).is_allow());
+    h.assert_replay();
+}
+
+/// Before format 22 a new file needed no lease, and replays as it was.
+#[test]
+fn before_the_format_a_new_file_needs_no_lease() {
+    let mut h = H::new();
+    h.start_observed("a", &["src/**"]);
+    h.wrote("a", "src/new.rs");
+    let facts = new_file("src/new.rs");
+    let op = Op::ChangePropose {
+        change: ChangeId::random(),
+        commit: gid('e'),
+        base: h.chain.state.trunk.clone().unwrap(),
+        claim: claim_of(&facts),
+    };
+    let actor = Actor::Agent {
+        name: h.chain.state.sessions["a"].agent.clone(),
+        session: "a".into(),
+    };
+    let decided = |format: u32| {
+        decide(
+            &h.chain.state,
+            &actor,
+            &op,
+            None,
+            &Ctx {
+                format,
+                time_ms: h.now,
+                policy: &h.policy,
+                facts: Some(&facts),
+                evidence: &[],
+                symbols_engine: Some(0),
+            },
+        )
+    };
+    let d = decided(FORMAT_CURRENT);
+    assert!(denied_with(&d, "lease_missing:src/new.rs#<file>"), "{d:?}");
+    let d = decided(FORMAT_INSERT_NAMES - 1);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// Reserving a member of a file reserves what goes into it: two named
+/// inserts on nested containers can not both cover one addition.
+#[test]
+fn a_reservation_holds_what_goes_into_the_member_it_names() {
+    let mut h = H::new();
+    for s in ["a", "b"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let file = "src/a.rs#<file>";
+    assert!(insert_named(&mut h, "a", "la", file, &["Client"]).is_allow());
+    let d = insert_named(&mut h, "b", "lb", "src/a.rs#Client", &["throttle"]);
+    assert!(denied_with(&d, &format!("lease_held:{file}:a:")), "{d:?}");
+    let d = insert_named(&mut h, "b", "lb", "src/a.rs#Server", &["throttle"]);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// A name another session reserved is its own: not under an unnamed
+/// insert, and not as the new name of a rename.
+#[test]
+fn a_reserved_name_is_not_added_by_anyone_else() {
+    let mut h = H::new();
+    for s in ["a", "b"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let c = "src/a.rs#Client";
+    assert!(insert_named(&mut h, "a", "la", c, &["throttle"]).is_allow());
+    assert!(h.lease("b", "lb", &[(c, LeaseKind::Insert)]).is_allow());
+    let old = "src/a.rs#Client.old";
+    assert!(h.lease("b", "lb2", &[(old, LeaseKind::Rename)]).is_allow());
+    h.wrote("b", "src/a.rs");
+    let taken = "src/a.rs#Client.throttle";
+    let reason = format!("name_reserved:{taken}:a");
+    let d = h.propose("b", ChangeId::random(), adds(&[taken]));
+    assert!(denied_with(&d, &reason), "{d:?}");
+    let d = h.propose(
+        "b",
+        ChangeId::random(),
+        adds(&["src/a.rs#Client.throttle(int)"]),
+    );
+    assert!(denied_with(&d, "name_reserved:"), "{d:?}");
+    let renamed = Facts {
+        deletes: vec![old.into()],
+        adds: vec![taken.into()],
+        renames: vec![[old.into(), taken.into()]],
+        modified_files: vec!["src/a.rs".into()],
+        lines_added: 1,
+        lines_removed: 1,
+        ..Default::default()
+    };
+    let d = h.propose("b", ChangeId::random(), renamed);
+    assert!(denied_with(&d, &reason), "{d:?}");
+    // Another name is free, and the one who reserved it adds it.
+    let d = h.propose("b", ChangeId::random(), adds(&["src/a.rs#Client.retry"]));
+    assert!(d.is_allow(), "{d:?}");
+    h.wrote("a", "src/a.rs");
+    let d = h.propose("a", ChangeId::random(), adds(&[taken]));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+/// A path trunk got after the change's base would be merged with the new
+/// file as if from nothing: the agent syncs first.
+#[test]
+fn a_file_created_since_the_base_is_refused_until_a_sync() {
+    let mut h = H::new();
+    for s in ["a", "b"] {
+        h.start_observed(s, &["src/**"]);
+    }
+    let (path, file) = ("src/new.rs", "src/new.rs#<file>");
+    let old_base = h.chain.state.trunk.clone().unwrap();
+    assert!(h.lease("a", "la", &[(file, LeaseKind::Edit)]).is_allow());
+    h.wrote("a", path);
+    let change = ChangeId::random();
+    assert!(h.propose("a", change, new_file(path)).is_allow());
+    assert!(integrate(&mut h, change, Some(gid('n')), &[]).is_allow());
+    assert!(h.lease("b", "lb", &[(file, LeaseKind::Edit)]).is_allow());
+    h.wrote("b", path);
+    let facts = new_file(path);
+    let stale = Op::ChangePropose {
+        change: ChangeId::random(),
+        commit: gid('c'),
+        base: old_base,
+        claim: claim_of(&facts),
+    };
+    let d = h.agent_facts("b", stale, Some(facts.clone()));
+    assert!(
+        denied_with(&d, &format!("created_since_base:{path}")),
+        "{d:?}"
+    );
+    // From the trunk that has it, it is no longer new; nor is another path.
+    let d = h.propose("b", ChangeId::random(), facts);
+    assert!(!denied_with(&d, "created_since_base"), "{d:?}");
     h.assert_replay();
 }

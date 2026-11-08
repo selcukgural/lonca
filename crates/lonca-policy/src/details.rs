@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::ChangeId;
+use lonca_core::oplog::FORMAT_CURRENT;
 use lonca_core::ops::{Facts, LeaseItem, LeaseKind};
 use serde::Serialize;
 
@@ -39,6 +40,9 @@ pub struct Detail {
     pub expires_ms: Option<i64>,
     pub set: Option<String>,
     pub pinned_to: Option<ChangeId>,
+    /// For a free `insert`: the names to reserve for what the change adds.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
 }
 
 impl Detail {
@@ -53,6 +57,7 @@ impl Detail {
             expires_ms: None,
             set: None,
             pinned_to: None,
+            names: Vec::new(),
         }
     }
 
@@ -69,6 +74,7 @@ impl Detail {
             expires_ms: pin.is_none().then_some(l.expires_ms),
             set: Some(l.set.clone()),
             pinned_to: pin.map(|(change, _)| *change),
+            names: Vec::new(),
         }
     }
 }
@@ -160,21 +166,28 @@ pub fn lease_report(
         .collect();
     let mine = || leases.iter().flat_map(|l| l.items.iter().copied());
     let mut out = Vec::new();
-    for need in symbols::lease_needs_under(facts, unparsed) {
+    for need in symbols::lease_needs_under(facts, unparsed, FORMAT_CURRENT) {
         let kind = need.kinds[0];
         if mine().any(|i| state.covers_need(&need, i, None)) {
             out.push(Detail::free(HELD_BY_YOU, &need.symbol, kind));
             continue;
         }
+        // What the change adds is asked for by name, so a name another
+        // session reserved shows who did.
+        let names: Vec<String> = symbols::reserved_name(&need).into_iter().collect();
         let item = LeaseItem {
             symbol: need.symbol.clone(),
             kind,
+            names: names.clone(),
         };
         let wanted = std::slice::from_ref(&item);
         let mut blockers = lease_held(state, session, wanted, now_ms);
         blockers.extend(lease_wanted(state, session, wanted, now_ms));
         if blockers.is_empty() {
-            out.push(Detail::free(FREE, &need.symbol, kind));
+            out.push(Detail {
+                names,
+                ..Detail::free(FREE, &need.symbol, kind)
+            });
         }
         out.extend(blockers);
     }
@@ -244,14 +257,26 @@ pub fn advice(details: &[Detail]) -> Option<String> {
     Some(out.join(" "))
 }
 
-/// What to pass to `lease.acquire` for what a report says is free.
+/// What to pass to `lease.acquire` for what a report says is free: one item
+/// per symbol and kind, with every name the additions under it take. One
+/// addition no name stands for leaves the item unnamed, which covers all.
 pub fn to_acquire(report: &[Detail]) -> Vec<LeaseItem> {
-    let free = report.iter().filter(|d| d.code == FREE);
-    let items = free.map(|d| LeaseItem {
-        symbol: d.symbol.clone(),
-        kind: d.needed_kind,
+    let mut items: BTreeMap<(String, LeaseKind), Option<BTreeSet<String>>> = BTreeMap::new();
+    for d in report.iter().filter(|d| d.code == FREE) {
+        let key = (d.symbol.clone(), d.needed_kind);
+        let names = items.entry(key).or_insert_with(|| Some(BTreeSet::new()));
+        match (names.as_mut(), d.names.is_empty()) {
+            (Some(_), true) => *names = None,
+            (Some(set), false) => set.extend(d.names.iter().cloned()),
+            (None, _) => {}
+        }
+    }
+    let items = items.into_iter().map(|((symbol, kind), names)| LeaseItem {
+        symbol,
+        kind,
+        names: names.unwrap_or_default().into_iter().collect(),
     });
-    items.collect::<BTreeSet<_>>().into_iter().collect()
+    items.collect()
 }
 
 #[cfg(test)]
@@ -323,5 +348,38 @@ mod tests {
         };
         let text = advice(&[held("a.rs#f", "s1"), pinned]).unwrap();
         assert!(text.contains("merge queue"), "{text}");
+    }
+
+    /// A free insert is offered with the names the additions under it take;
+    /// one addition no name stands for leaves it unnamed.
+    #[test]
+    fn a_free_insert_is_offered_with_the_names_it_needs() {
+        let free = |symbol: &str, kind, names: &[&str]| Detail {
+            names: names.iter().map(|n| n.to_string()).collect(),
+            ..Detail::free(FREE, symbol, kind)
+        };
+        let report = [
+            free("a.rs#T", LeaseKind::Insert, &["m"]),
+            free("a.rs#T", LeaseKind::Insert, &["n"]),
+            free("a.rs#T", LeaseKind::Insert, &["m"]),
+            free("a.rs#<file>", LeaseKind::Insert, &["f"]),
+            free("a.rs#<file>", LeaseKind::Insert, &[]),
+            free("a.rs#<file>", LeaseKind::Insert, &["g"]),
+            free("a.rs#g", LeaseKind::Edit, &[]),
+            held("a.rs#U", "s"),
+        ];
+        let item = |symbol: &str, kind, names: &[&str]| LeaseItem {
+            symbol: symbol.into(),
+            kind,
+            names: names.iter().map(|n| n.to_string()).collect(),
+        };
+        assert_eq!(
+            to_acquire(&report),
+            [
+                item("a.rs#<file>", LeaseKind::Insert, &[]),
+                item("a.rs#T", LeaseKind::Insert, &["m", "n"]),
+                item("a.rs#g", LeaseKind::Edit, &[]),
+            ]
+        );
     }
 }

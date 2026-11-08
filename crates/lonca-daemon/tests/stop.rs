@@ -303,6 +303,7 @@ fn a_change_integrated_and_a_deletion_proposed_count_as_delivered() {
     let items = vec![LeaseItem {
         symbol: "notes.md#<file>".into(),
         kind: LeaseKind::Rename,
+        names: Vec::new(),
     }];
     let p = json!({"items": items, "intent": "drop", "ttl_ms": 600_000});
     e.ok("lease.acquire", None, Some(&t2), p);

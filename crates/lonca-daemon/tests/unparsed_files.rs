@@ -252,3 +252,19 @@ fn an_allowed_proposal_says_no_lease_was_needed() {
     assert_eq!(r["details"], json!([]), "{r}");
     assert_eq!(r["advice"], json!(null), "{r}");
 }
+
+/// Creating a file is no edit of one: optimistic or not, the report asks
+/// for the path, and does not call the new file free.
+#[test]
+fn a_new_file_no_parser_reads_still_needs_its_path() {
+    let (mut e, base) = repo();
+    let t = e.session("a", &["src/**"]);
+    let fresh = "src/New.zig";
+    let files = vec![file(fresh, "int b = 1;\n")];
+    let args = json!({"base": base, "files": files});
+    let r = e.ok("facts.preview", None, Some(&t), args);
+    assert_eq!(r["no_lease"], json!([]), "{r}");
+    assert_eq!(r["leases"][0]["symbol"], format!("{fresh}#<file>"), "{r}");
+    assert_eq!(r["leases"][0]["needed_kind"], "edit", "{r}");
+    assert_eq!(r["acquire"][0]["kind"], "edit", "{r}");
+}

@@ -330,6 +330,7 @@ impl Env {
         let items = vec![LeaseItem {
             symbol: sym.into(),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }];
         self.ok(
             "lease.acquire",

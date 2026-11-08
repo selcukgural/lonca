@@ -38,6 +38,7 @@ fn lease(e: &mut Env, token: &str, symbol: &str, kind: LeaseKind) -> Value {
     let items = vec![LeaseItem {
         symbol: format!("{PATH}#{symbol}"),
         kind,
+        names: Vec::new(),
     }];
     let args = json!({"items": items, "intent": "work", "ttl_ms": 600_000});
     e.ok("lease.acquire", None, Some(token), args)["decision"].clone()
@@ -193,6 +194,7 @@ fn a_key_changed_on_the_trunk_is_one_symbol_with_the_old_key() {
         vec![LeaseItem {
             symbol: format!("{CS}#C.{symbol}"),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }]
     };
     let acquire = |e: &mut Env, token: &str, symbol: &str| {
@@ -226,6 +228,7 @@ fn a_key_taken_back_by_a_change_of_parameters_is_free_of_the_rename() {
         let items = vec![LeaseItem {
             symbol: format!("{CS}#C.{name}"),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }];
         let args = json!({"items": items, "intent": "work", "ttl_ms": 600_000});
         e.ok("lease.acquire", None, Some(token), args)["decision"]["outcome"].clone()
@@ -257,6 +260,7 @@ fn a_method_follows_its_type() {
         let items = vec![LeaseItem {
             symbol: format!("{GO}#{name}"),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }];
         let args = json!({"items": items, "intent": "work", "ttl_ms": 600_000});
         e.ok("lease.acquire", None, Some(token), args)["decision"]["outcome"].clone()
@@ -327,6 +331,7 @@ fn a_proposal_from_an_older_base_pins_the_new_name() {
     let items = vec![LeaseItem {
         symbol: id("bill"),
         kind: LeaseKind::Edit,
+        names: Vec::new(),
     }];
     let args = json!({"items": items, "intent": "work", "ttl_ms": 600_000});
     let set = e.ok("lease.acquire", None, Some(&t), args)["set"].clone();
@@ -386,6 +391,7 @@ fn the_overload_left_behind_a_rename_is_free_of_it() {
         let items = vec![LeaseItem {
             symbol: format!("{CS}#C.{name}"),
             kind: LeaseKind::Edit,
+            names: Vec::new(),
         }];
         let args = json!({"items": items, "intent": "work", "ttl_ms": 600_000});
         e.ok("lease.acquire", None, Some(token), args)["decision"]["outcome"].clone()

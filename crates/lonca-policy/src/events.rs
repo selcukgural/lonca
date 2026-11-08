@@ -392,6 +392,7 @@ mod tests {
             items: vec![LeaseItem {
                 symbol: "a.rs#f".into(),
                 kind: LeaseKind::Edit,
+                names: Vec::new(),
             }],
             until_ms,
         }

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Insert leases reserve names; a new file needs its path
+
+An `insert` lease item can list the names of the members it adds (`"names"`, `lonca lease
+acquire --kind insert --name throttle`). Two inserts into one container that reserve one name
+conflict, an addition outside the reserved names is denied with `lease_missing`, and adding a
+name another session reserved is denied with `name_reserved`, whatever lease covers it. An insert
+without names otherwise works as before; `lease_needed` now offers inserts with the names the
+change adds. A change that adds a file now needs an `edit` lease on its `path#<file>`, so two
+agents can not create one path; until now a new file needed no lease. A path trunk created
+after the change's base is `created_since_base`: sync first. The agent rules say all of this.
+Additions at one place are merged in queue order, the last integrated nearest to its neighbour.
+Log format 22. See `docs/decisions.md`, "Insert leases (#45)".
+
 ### Shared leases
 
 A new lease kind, `shared`: several agents can hold one symbol at once, where a signed

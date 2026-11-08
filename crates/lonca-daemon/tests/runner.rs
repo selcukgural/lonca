@@ -923,8 +923,10 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
         .collect();
     assert!(big.len() < 2 * 1024 * 1024 && 2 * big.len() > DIFF_CAP_BYTES);
     let base = e.trunk();
-    e.wrote(&token, "src/big1.rs");
-    e.wrote(&token, "src/big2.rs");
+    for path in ["src/big1.rs", "src/big2.rs"] {
+        e.wrote(&token, path);
+        e.lease(&token, &format!("{path}#<file>"));
+    }
     let r = e.propose(
         &token,
         &base,
@@ -1452,7 +1454,7 @@ fn a_proposal_and_a_preview_say_which_leases_are_missing() {
     assert_eq!(
         p["acquire"],
         json!([
-            {"symbol": "src/lib.rs#<file>", "kind": "insert"},
+            {"symbol": "src/lib.rs#<file>", "kind": "insert", "names": ["extra"]},
             {"symbol": "src/lib.rs#refund", "kind": "edit"},
         ])
     );

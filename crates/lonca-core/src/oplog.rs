@@ -42,8 +42,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// version 16 adds `unread_files`; version 17 adds `change.integrate_batch`;
 /// version 18 adds `affected` to facts and reports who holds it; version 19
 /// adds `session.isolate`; version 20 adds `harness` to `session.start`, and
-/// a level rests on it; version 21 adds the lease kind `shared`.
-pub const FORMAT_CURRENT: u32 = 21;
+/// a level rests on it; version 21 adds the lease kind `shared`; version 22
+/// adds reserved `names` to an `insert` and makes a new file need a lease.
+pub const FORMAT_CURRENT: u32 = 22;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -99,6 +100,10 @@ pub const FORMAT_ISOLATE: u32 = 19;
 pub const FORMAT_SESSION_HARNESS: u32 = 20;
 /// The first format with the lease kind `shared`.
 pub const FORMAT_SHARED_LEASES: u32 = 21;
+/// The first format with reserved `names` on an `insert` item. From here a
+/// change that adds a file needs an exclusive lease on its `path#<file>`.
+/// Older entries replay as they were.
+pub const FORMAT_INSERT_NAMES: u32 = 22;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -161,6 +166,11 @@ impl OpEntry {
             Op::Reject { .. } => FORMAT_REJECT,
             Op::ChangeIntegrateBatch { .. } => FORMAT_BATCH,
             Op::SessionIsolate { .. } => FORMAT_ISOLATE,
+            Op::LeaseAcquire { ref items, .. } | Op::LeaseInterest { ref items, .. }
+                if items.iter().any(|i| !i.names.is_empty()) =>
+            {
+                FORMAT_INSERT_NAMES
+            }
             Op::LeaseAcquire { ref items, .. } | Op::LeaseInterest { ref items, .. }
                 if items.iter().any(LeaseItem::is_shared) =>
             {
@@ -815,6 +825,7 @@ mod tests {
             let item = |&kind| LeaseItem {
                 symbol: "a.rs#f".into(),
                 kind,
+                names: Vec::new(),
             };
             kinds.iter().map(item).collect()
         };
@@ -851,6 +862,52 @@ mod tests {
             at(&interest(items(&others)), 10).min_format(),
             FORMAT_LEASE_QUEUE
         );
+    }
+
+    /// Reserved names need their format, in an acquire or an interest, and
+    /// come before `shared` in what an entry needs.
+    #[test]
+    fn reserved_names_need_format_22() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 2), &key);
+        let named = LeaseItem {
+            names: vec!["throttle".into()],
+            ..LeaseItem::new("a.rs#T", LeaseKind::Insert)
+        };
+        let shared = LeaseItem::new("a.rs#f", LeaseKind::Shared);
+        let acquire = |items| Op::LeaseAcquire {
+            set: "l".into(),
+            items,
+            intent: "x".into(),
+            ttl_ms: 1000,
+        };
+        let interest = |items| Op::LeaseInterest {
+            items,
+            intent: "x".into(),
+        };
+        let at = |op: &Op, format| OpEntry {
+            format,
+            op: op.clone(),
+            ..next(&g, 2000)
+        };
+        for op in [
+            acquire(vec![named.clone()]),
+            acquire(vec![shared.clone(), named.clone()]),
+            interest(vec![named.clone()]),
+        ] {
+            assert_eq!(at(&op, 22).min_format(), FORMAT_INSERT_NAMES, "{op:?}");
+            let chain = |format| verify_chain(&[g.clone(), SignedOp::sign(at(&op, format), &key)]);
+            assert!(chain(22).is_ok(), "{op:?}");
+            let err = chain(21).unwrap_err();
+            assert!(err.to_string().contains("needs log format 22"), "{err}");
+        }
+        let unnamed = acquire(vec![LeaseItem::new("a.rs#T", LeaseKind::Insert)]);
+        assert_eq!(at(&unnamed, 2).min_format(), FORMAT_LEGACY);
+        // No names, no field: the bytes of an older item.
+        let bytes = serde_json::to_string(&LeaseItem::new("a.rs#T", LeaseKind::Insert)).unwrap();
+        assert_eq!(bytes, r#"{"symbol":"a.rs#T","kind":"insert"}"#);
     }
 
     #[test]

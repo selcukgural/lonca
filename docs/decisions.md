@@ -124,6 +124,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   replay as they were.
 - **Version 21** adds the lease kind `shared` (see "Shared leases (#112)"). An
   acquire or an interest with a `shared` item needs it.
+- **Version 22** adds `names` to a lease item, left out of the encoding when
+  empty, and makes a change that adds a file need an exclusive lease on its
+  `path#<file>` (see "Insert leases (#45)"). An acquire or an interest with
+  names needs it. Older entries replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -2537,6 +2541,71 @@ to it line by line.
 - **Recorded state grows with trunk.** One record per integration that
   changed something exclusively; a lookup reads only the records since the
   change's base.
+
+## Insert leases (#45)
+
+An `insert` lease is shared: several agents add to one type or file at once.
+It said nothing of what they would add, so two agents adding `Client.throttle`
+both did the work and the second met a conflict in the merge. A new file
+needed no lease at all, and two agents creating one path got a merge of two
+files neither wrote.
+
+- **Reserved names.** A lease item has `names`, for `insert` only
+  (`names_need_insert`): the bare names of the members it adds, `throttle`
+  and not `Client.throttle(int)`. Two inserts into one container (by name or
+  by a keyed name it stands for) conflict when their names meet, and so do
+  two on nested containers when the outer one reserves the member the inner
+  one is or is in: `Client` reserved in `path#<file>` holds what goes into
+  `path#Client`. Without names an insert reserves nothing and meets no other
+  insert at lease time, as before.
+- **A reserved name is its holder's.** A proposal that adds a symbol another
+  session reserved is denied (`name_reserved:<symbol>:<session>`) whatever
+  lease covers it: an unnamed insert, or a `rename` whose new name it is. The
+  reservation lasts while the lease does, and while the change it is pinned
+  to is in the queue.
+- **Deny by default.** With names, an addition under the item must be one of
+  them by its name alone, so `throttle(int)` and `throttle~2` are `throttle`;
+  any other is `lease_missing` on the container. The name is that of the
+  member of the item's container the addition is or is in, so reserving a new
+  type `Limiter` on `path#<file>` brings `Limiter.new` with it, and so does
+  reserving an existing type's name: `decide()` does not know which exist.
+  A heading is its own name. A name has no key, number, `.`, `#`, `<`, path or
+  brackets, no space at either end, at most 128 bytes and 64 names to an item
+  (`invalid_names`). Additions of `<module>`, `<def>` or a Markdown `<append>`
+  can not be named: an unnamed insert covers them.
+- **The tools ask by name.** `lease_needed` and `facts.preview` offer a free
+  insert with the names the change adds (`names` on the detail, merged per
+  container in `acquire`), and a name taken shows who reserved it. A partial
+  release by symbol releases a named item too.
+- **A new file takes its path exclusively.** The issue proposed an `insert` on
+  the new `path#<file>` that conflicts with a second one while the path does
+  not exist. `decide()` does not know what trunk holds, and the daemon would
+  have to write that into the entry for the auditor to check. An exclusive
+  lease does the same with what is there: from format 22 an added file needs
+  `edit` or `rename` on `path#<file>`, which two sessions can not hold, and
+  which is pinned to the change until it leaves the queue. An insert does
+  not do. `leases.unparsed_files = "optimistic"` frees edits, not creation. A
+  person needs no lease, as before, so two creations of one path can still
+  meet in the merge when one is a person's.
+- **Nor after the other lands.** A lease is exclusive only while held: an
+  agent that wrote the path from an older base could lease it once the first
+  creation integrated, and its file would be merged with trunk's as if from
+  nothing. The state records the files each integration created
+  (`State::created`), and an agent's proposal that adds a path trunk created
+  after its base is denied (`created_since_base:<path>`): it syncs, and the
+  file is then an edit. An import from outside records nothing, so a path it
+  brought is not caught.
+- **The order of additions at one place is the queue's, last nearest.** The
+  design said lease order. The merge places a new symbol right behind the
+  neighbour it has in the base, so of several additions behind one symbol the
+  one integrated last stands nearest to it, and the first furthest. It is
+  deterministic and the auditor recomputes it from the log; lease order would
+  make the merge read the lease state for no gain in what compiles. The test
+  is `additions_at_one_place_stand_in_the_order_written_down`
+  (`crates/lonca-symbols/src/merge.rs`).
+- **Log format 22.** An old reader would drop `names` and compute another
+  digest, so the chain check refuses names in an older entry. The new-file
+  rules are gated on the entry's format in `decide()` and in pinning.
 
 ## Open questions (carried from the design)
 

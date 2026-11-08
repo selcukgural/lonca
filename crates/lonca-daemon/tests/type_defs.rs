@@ -7,6 +7,7 @@ mod common;
 use common::*;
 
 use lonca_audit::{Options, audit};
+use lonca_core::oplog::FORMAT_CURRENT;
 use lonca_core::ops::Facts;
 use lonca_core::{FileEntry, FileMap, FileMode};
 use lonca_policy::decide::leases_conflict;
@@ -271,11 +272,8 @@ impl Case {
 
     /// The first lease each need names, as `lease_needed` offers them.
     fn leases(&self, facts: &Facts) -> Vec<LeaseItem> {
-        let needs = lease_needs(facts).into_iter();
-        let item = needs.map(|n| LeaseItem {
-            symbol: n.symbol,
-            kind: n.kinds[0],
-        });
+        let needs = lease_needs(facts, FORMAT_CURRENT).into_iter();
+        let item = needs.map(|n| LeaseItem::new(n.symbol, n.kinds[0]));
         item.collect()
     }
 

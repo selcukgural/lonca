@@ -1481,6 +1481,29 @@ mod tests {
         }
     }
 
+    /// The order of additions at one place (docs/decisions.md, "Insert
+    /// leases"): integrated one after another into trunk (`ours`), each new
+    /// symbol stands right behind the neighbour it has in the base, so the
+    /// last integrated is nearest to it. With the sides the other way round
+    /// the order is the other one: the side merged into keeps its own last.
+    #[test]
+    fn additions_at_one_place_stand_in_the_order_written_down() {
+        let base = "fn a() {}\n\nfn z() {}\n";
+        let with = |n: &str| format!("fn a() {{}}\n\nfn {n}() {{}}\n\nfn z() {{}}\n");
+        let mut trunk = base.to_string();
+        for n in ["x", "y", "w"] {
+            trunk = merge_text_at(ENGINE_CURRENT, "a.rs", base, &trunk, &with(n)).unwrap();
+        }
+        let order = "fn a() {}\n\nfn w() {}\n\nfn y() {}\n\nfn x() {}\n\nfn z() {}\n";
+        assert_eq!(trunk, order);
+        let mut other = base.to_string();
+        for n in ["x", "y", "w"] {
+            other = merge_text_at(ENGINE_CURRENT, "a.rs", base, &with(n), &other).unwrap();
+        }
+        let order = "fn a() {}\n\nfn x() {}\n\nfn y() {}\n\nfn w() {}\n\nfn z() {}\n";
+        assert_eq!(other, order);
+    }
+
     /// With one text for two symbols, the order of the base tells them.
     #[test]
     fn equal_texts_keep_their_order_in_both_queue_orders() {

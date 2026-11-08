@@ -44,6 +44,11 @@ const MAX_FIELD_CHARS: usize = 4_000;
 const MAX_ITEMS: usize = 50;
 /// A lock on the ledger older than this was left by a crash.
 const STALE_LOCK: Duration = Duration::from_secs(10);
+/// How long a call waits for a live lock, by the clock and not by a count of
+/// sleeps: a loaded machine oversleeps, and a wait that outlasts
+/// [`STALE_LOCK`] would break a lock its holder still has.
+const WAIT_LOCK: Duration = Duration::from_secs(2);
+const _: () = assert!(WAIT_LOCK.as_millis() < STALE_LOCK.as_millis());
 
 fn schema() -> Value {
     json!({
@@ -170,7 +175,8 @@ fn reserve_at(path: &std::path::Path, day: &str, limit: u32) -> Result<u32> {
 /// [`STALE_LOCK`] was left by a process that died holding it, and is broken.
 fn take_lock(lock: &std::path::Path) -> Result<fs::File> {
     use std::io::Write;
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + WAIT_LOCK;
+    while std::time::Instant::now() < deadline {
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)

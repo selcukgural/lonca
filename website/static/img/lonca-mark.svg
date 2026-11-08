@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Lonca">
+  <!-- A guild's seal on a hash chain: three linked blocks, the last one
+       sealed. Lonca's log is a chain every record of which is checked. -->
+  <rect width="64" height="64" rx="14" fill="#11181a"/>
+  <g fill="none" stroke="#4fc1a6" stroke-width="3.5" stroke-linecap="round">
+    <path d="M20 22 L30 32 M34 36 L42 44"/>
+  </g>
+  <rect x="9" y="11" width="14" height="14" rx="3" fill="#4fc1a6"/>
+  <rect x="25" y="27" width="14" height="14" rx="3" fill="#4fc1a6"/>
+  <circle cx="47" cy="47" r="9" fill="#e7c76a"/>
+  <path d="M42.5 47.2 l3.2 3.2 l6 -6.4" fill="none" stroke="#11181a" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

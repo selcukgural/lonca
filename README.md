@@ -70,7 +70,7 @@ authority.
 - **Proposal.** An agent submits its workspace changes with a *claim*: the
   symbols it says it changed. Lonca computes the *facts* from the Git
   objects with tree-sitter (Rust, Python, TypeScript/TSX, JavaScript, C#,
-  Go); any mismatch is refused. Every touched symbol must be leased.
+  Go, Java, Kotlin, C, C++, Ruby, PHP, Swift); any mismatch is refused. Every touched symbol must be leased.
 - **Taint.** Hooks in the agent's harness report every tool call; a network
   proxy sees every outbound connection of sandboxed commands. A session that
   reads external content (a web page, an issue, another MCP server) is
@@ -252,7 +252,7 @@ reasons: [docs/decisions.md](docs/decisions.md).
 - Prototype. Not yet used on real projects; formats may change.
 - One daemon per machine, one sequencer per repository. A team server is
   designed for, not built.
-- Symbol extraction covers six languages; other files are leased whole.
+- Symbol extraction covers thirteen languages; other files are leased whole.
   Signature changes are detected and must be declared, but their callers
   are not analyzed; the merge queue's tests are what catch broken callers.
 - Verification needs `bubblewrap` on Linux to be sandboxed.
@@ -263,6 +263,9 @@ reasons: [docs/decisions.md](docs/decisions.md).
 - The advisor has been tested against a fake API only.
 
 ## Documentation
+
+The site: https://selcukgural.github.io/lonca/ (built from `docs/` by
+`website/`).
 
 - [docs/protocol.md](docs/protocol.md): the daemon's protocol for
   runners and other clients (methods, credentials, shapes, error codes,

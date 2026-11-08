@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Releases: prebuilt binaries, crates.io and Homebrew
+
+The first release with prebuilt binaries: `lonca` and `lonca-audit` for macOS
+(arm64, x86_64) and Linux (x86_64, arm64, static), with `lonca-se` on macOS,
+checksums, a CycloneDX SBOM and a build provenance attestation per archive
+(`gh attestation verify lonca-<target>.tar.gz --repo selcukgural/lonca`).
+Install with `curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh`,
+`brew install selcukgural/lonca/lonca` or `cargo install --locked lonca`;
+every crate of the workspace is on crates.io at the same version. The CLI's
+package is now `lonca` (was `lonca-cli`), and the minimum Rust is 1.90. Each
+archive carries the hardened install scripts. See `docs/decisions.md`,
+"Releases and install paths (#7, #8)".
+
 ### A client crate for harnesses
 
 `lonca-client` is what a harness or runner needs to talk to the daemon, and nothing else: the

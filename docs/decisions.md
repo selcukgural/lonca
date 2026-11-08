@@ -3007,16 +3007,17 @@ it and what it runs are part of the trust model.
   (1.99.1, with clippy and rustfmt), here and in every CI job (`rustup
   toolchain install` reads it). It is raised by hand in a pull request of its
   own; Dependabot does not bump it.
-- **Actions**: the repository allows GitHub's own actions and four others by
+- **Actions**: the repository allows GitHub's own actions and five others by
   name (`EmbarkStudios/cargo-deny-action`, `ossf/scorecard-action`,
-  `taiki-e/install-action`, `zizmorcore/zizmor-action`), each pinned by commit
-  as the repository already required.
+  `taiki-e/install-action`, `zizmorcore/zizmor-action`, and
+  `rust-lang/crates-io-auth-action` for trusted publishing, see "Releases and
+  install paths"), each pinned by commit as the repository already required.
 - **zizmor** (`.github/workflows/zizmor.yml`, version pinned) checks the
   workflows where they change and fails on anything above `low`; today it
   reports one `low` (the self-repository syntax of the mutants runner).
 - **SBOM**: a `v*` tag builds a CycloneDX bill of materials of every crate
-  (`cargo cyclonedx`, pinned) and keeps it with the run; #7 attaches it to
-  the release with the provenance.
+  (`cargo cyclonedx`, pinned) in `release.yml` and attaches it to the
+  release (`lonca-sbom.cdx.tar.gz`, listed in `SHA256SUMS`).
 - **CodeQL for Rust** was on already (default setup, actions and rust).
 - **Not adopted: `cargo vet`.** The trusted core pulls in gix, cedar-policy
   and the tree-sitter grammars; vetting them by hand is more than one
@@ -3159,8 +3160,71 @@ the protocol, with a job that watched our commits for changes to it.
   so a file someone loosened is not used, and its writer now sets 0600 on an
   old file too (the mode on `open` counts only for a new one).
 - **Semver.** A protocol number change is a major version (0.x: minor);
-  fields added to a shape are not. Publishing waits for #8, which puts
-  `lonca-core` on crates.io first.
+  fields added to a shape are not. It is published with the rest of the
+  workspace (see "Releases and install paths").
+
+## Releases and install paths (#7, #8)
+
+There was no release: the quick start built from source, and only
+`lonca-net` 0.1.0 was on crates.io (Kule's sandbox proxy). 0.2.0 is the first
+release (roadmap M2).
+
+- **One version for the workspace.** Every crate takes `version`, `edition`,
+  `rust-version`, `license`, `repository` and `homepage` from the workspace,
+  and the internal dependencies name the same version. A release bumps one
+  line (and those dependency lines). `lonca-net` jumps from 0.1.2 to 0.2.0
+  with the rest.
+- **Every crate is published but `lonca-mutants`.** The CLI's package is
+  `lonca` (the name was free), so `cargo install --locked lonca` gives the
+  `lonca` binary; its directory stays `crates/lonca-cli`. `lonca-audit` is
+  its own crate and binary (`cargo install --locked lonca-audit`): the
+  auditor is meant to run elsewhere (design §5.13). The libraries are on
+  crates.io because the binaries need them there, and because Kule depends
+  on `lonca-core` and `lonca-net` (by git revision until now) and imece is
+  to take `lonca-client`; of those only
+  `lonca-client` and `lonca-net` are an API kept stable on purpose (0.x:
+  a minor version may break).
+- **MSRV 1.90**, what the dependencies ask (`tree-sitter` 0.27 asks 1.90,
+  `cedar-policy` 4.14 1.89), checked with `cargo +1.90 check --workspace
+  --all-targets --locked`. Builds and CI still use the pinned toolchain.
+- **A tag drafts the release; a person publishes it.** `release.yml` builds
+  `lonca` and `lonca-audit` for macOS arm64 and x86_64 and Linux x86_64 and
+  arm64. Linux builds are static (musl), so any distribution runs them. The
+  archives carry the hardened install scripts (`sudo ./install-hardened.sh
+  --bin .`) and, on macOS, `lonca-se`. `SHA256SUMS`, the SBOM and a build
+  provenance attestation per archive go with them; the notes are the
+  version's section of `docs/release-notes.md` (`## X.Y.Z`), and a tag with
+  none fails. `ci.yml` and `mutants.yml` run on the same tag, and the
+  maintainer publishes the draft only when both are green: the binaries are
+  built before the tests have passed, but nobody downloads them until then.
+- **`lonca-se` is signed ad hoc**, as `build-lonca-se.sh` does. CryptoKit's
+  Secure Enclave keys need no keychain entitlement, so no Developer ID is
+  needed for them to work. A file downloaded with `curl` carries no
+  quarantine flag, so Gatekeeper does not stop it; one downloaded by a
+  browser does, and `xattr -d com.apple.quarantine` lifts it. Notarization
+  waits until someone asks for a browser download.
+- **crates.io by trusted publishing.** Publishing the draft starts
+  `registries.yml`: a job with no token packages and builds every crate
+  (`cargo publish --workspace --dry-run`, which runs build scripts), then a
+  job in the `release` environment (tags `v*` only) exchanges its OIDC token
+  for a crates.io token that lives for that job and uploads with
+  `--no-verify`, building nothing. No registry token is stored. Trusted
+  publishing needs the crate to exist, so 0.2.0 of each new crate is
+  published by hand (`docs/release-checklist.md`); the workflow is off until
+  the repository variable `PUBLISH_CRATES` is `true`.
+- **Homebrew from a tap of its own,** `selcukgural/homebrew-lonca`
+  (`brew install selcukgural/lonca/lonca`). The tap's workflow reads the
+  latest published release, verifies every archive's attestation against
+  `release.yml` of this repository, writes the formula from `SHA256SUMS` and
+  commits it with its own token. This repository holds no token for the tap,
+  and a draft or pre-release never reaches it.
+- **`install.sh`** (served by the site, `website/static/install.sh`) picks
+  the archive for the machine, checks it against `SHA256SUMS` and installs
+  the binaries in `~/.local/bin`, over HTTPS only.
+- **Every install path is cooperative mode.** Homebrew, `install.sh` and
+  `cargo install` put the binaries where the developer's account can write,
+  which hardened mode forbids (the invariant). Hardened mode installs from
+  the unpacked archive with its script, which copies them root-owned.
 
 ## Open questions (carried from the design)
 

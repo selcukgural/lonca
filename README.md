@@ -9,9 +9,9 @@ same time. Content stays plain Git, so GitHub and every Git tool keep
 working. What changes is everything around it: who may do what, how
 concurrent work merges, and how every action is recorded and checked.
 
-> Status: early prototype (v0.1). Every phase of the design is implemented
-> and tested, but it has not been used on real projects yet. See
-> [Limitations](#limitations).
+> Status: 0.2, the first release. Every phase of the design is implemented
+> and tested; formats are versioned, and a log written by any 0.x release
+> stays readable by every later one. See [Limitations](#limitations).
 
 ## Why
 
@@ -87,12 +87,31 @@ authority.
   in the Mac's Secure Enclave and every signature needs Touch ID or the
   password, so an agent running as you can not approve on your behalf.
 
+## Install
+
+macOS (arm64, x86_64) and Linux (x86_64, arm64):
+
+```sh
+curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh   # ~/.local/bin
+brew install selcukgural/lonca/lonca                             # Homebrew
+cargo install --locked lonca lonca-audit                         # from source, Rust 1.90+
+```
+
+The installer checks the archive against the release's `SHA256SUMS`. Every
+archive on the [releases page](https://github.com/selcukgural/lonca/releases)
+has a build provenance attestation:
+`gh attestation verify lonca-<target>.tar.gz --repo selcukgural/lonca`. On
+macOS the archive and the installer also bring `lonca-se`, the Secure
+Enclave helper (`cargo install` does not; build it with
+`packaging/macos/build-lonca-se.sh`).
+
+These put Lonca where your account can write: cooperative mode. For
+hardened mode, unpack the archive and run `sudo ./install-hardened.sh --bin
+.` from it (see [Observation levels](#observation-levels)).
+
 ## Quick start (cooperative mode)
 
 ```sh
-cargo build --release
-export PATH="$PWD/target/release:$PATH"
-
 lonca daemon &                       # the gatekeeper (~/.lonca)
 lonca human keygen ayse              # or: --secure-enclave
 lonca init demo --import ~/src/myproject
@@ -221,8 +240,9 @@ lonca-audit verify ~/.lonca/repos/demo.git
 | `lonca-symbols` | tree-sitter symbols, facts, structural merge, integration |
 | `lonca-verify` | Sandboxed build/test evidence (Seatbelt, bubblewrap) |
 | `lonca-daemon` | Gatekeeper service, socket server, hooks, network proxy |
+| `lonca-net` | Loopback CONNECT proxy that asks a gate about every connection (shared with Kule) |
 | `lonca-audit` | Independent auditor (`lonca-audit` binary) |
-| `lonca-cli` | `lonca` command, workspaces, Claude Code hook, MCP server, advisor |
+| `lonca` (`crates/lonca-cli`) | `lonca` command, workspaces, Claude Code hook, MCP server, advisor |
 
 Design: [docs/design.md](docs/design.md) (Turkish). Decisions and their
 reasons: [docs/decisions.md](docs/decisions.md).

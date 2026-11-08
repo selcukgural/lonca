@@ -646,6 +646,32 @@ entry format, so they have their own version
   says it may (`Joins`): one held `shared` (see "Shared leases (#112)"). With
   nothing to join its output is engine 13's. The cases under
   `tests/engine/v14/` with a `joins` file pin what it joins.
+- **Engine 15** fixes what the merge's property tests found (#40,
+  `crates/lonca-symbols/tests/merge_props.rs`). Every case of v14 has the same
+  output in v15; `rust-gaps` and `python-already` are new.
+  - **A change `ours` already has merges into `ours`.** When the symbol merge
+    finds every change of `theirs` in `ours` already, nothing of `theirs`
+    comes through, and the merge went to the lines in case `theirs` changed
+    something only lines show. When `ours` had also added something where
+    `theirs` added the same, the lines met and the file was a conflict. Now,
+    where the line merge fails, `ours` is the merge. Code outside symbols that
+    only `theirs` changed never gets here: it goes to the lines before the
+    walk, as it did. What can be lost is a change of layout only that meets
+    the lines of `ours`.
+  - **A deletion takes the wider gap.** A deleted symbol took the whitespace in
+    front of it, so the first one of a file or of a container left the blank
+    line behind it at the top: a merge neither side wrote, and one a format
+    check fails. A run of symbols deleted next to each other now goes as one,
+    with the gap around it that holds more line breaks, the one in front on a
+    tie, and never a gap another edit goes into. A symbol in a list or one
+    that holds its line end goes as before.
+  - **No blank line at the top that no side has.** An addition behind a symbol
+    the other side deleted can go to the end of what is left, with the gap
+    it had in front; when nothing is left in front of it, a merged file
+    starting with a blank line loses it unless `ours` or `theirs` starts so.
+  - **Known limit, every engine:** when the two sides together delete every
+    symbol of a file and add none, there is nothing to hold the result to,
+    and the file is a conflict.
     Engines before 13 read everything, as they always did.
 - **The cost of a merge grows with the file**, in every engine. Going through a
   list for each symbol, node or change made a merge of 300 KB take minutes.

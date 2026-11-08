@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use lonca_core::{FileEntry, FileMap, GitId, Result};
 
 use crate::engine::{
-    ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LANGUAGES, ENGINE_LINE_MERGE,
-    ENGINE_PLACES, ENGINE_SECTIONS, ENGINE_SHARED, reads_size,
+    ENGINE_ALREADY, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GAPS, ENGINE_GROUPS, ENGINE_KEYS,
+    ENGINE_LANGUAGES, ENGINE_LINE_MERGE, ENGINE_PLACES, ENGINE_SECTIONS, ENGINE_SHARED, reads_size,
 };
 use crate::extract::{
     Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_at,
@@ -877,12 +877,17 @@ impl<'a> Merger<'a> {
                 }
             }
         }
+        let mut gone = Vec::new();
         for b_sym in bs {
             if tm.contains_key(b_sym.name.as_str()) || renamed.contains(b_sym.name.as_str()) {
                 continue;
             }
             if let Some(o_sym) = om.get(b_sym.name.as_str()) {
                 if o_sym.same(self.o, b_sym, self.b) {
+                    if self.by_gaps(o_sym) {
+                        gone.push(*o_sym);
+                        continue;
+                    }
                     let (start, end) = self.span_to_delete(o_sym);
                     self.replace(start, end, String::new());
                 } else {
@@ -895,6 +900,43 @@ impl<'a> Merger<'a> {
                     self.conflict(&b_sym.name);
                 }
             }
+        }
+        self.delete_runs(gone);
+    }
+
+    /// `sym` is deleted with a gap around it, from [`ENGINE_GAPS`] on: one
+    /// that stands in no list and does not hold its line end.
+    fn by_gaps(&self, sym: &Sym) -> bool {
+        self.engine >= ENGINE_GAPS && sym.around == (None, None) && !self.holds_line_end(sym.end)
+    }
+
+    /// Deletes `syms` of `o`, a run of them with nothing but whitespace
+    /// between at once, with the gap around the run that holds more line
+    /// breaks: the one in front of it unless the one behind is wider and no
+    /// other edit goes into it. The first symbol of a file or of a container
+    /// then takes the blank line behind it along, and the last the one in
+    /// front.
+    fn delete_runs(&mut self, mut syms: Vec<&Sym>) {
+        syms.sort_by_key(|s| s.start);
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for s in syms {
+            match runs.last_mut() {
+                Some((_, end)) if self.o[*end..s.start].trim().is_empty() => *end = s.end,
+                _ => runs.push((s.start, s.end)),
+            }
+        }
+        let breaks = |s: &str| s.matches('\n').count();
+        for (start, end) in runs {
+            let before = ws_before(self.o, start);
+            let after = ws_after(self.o, end);
+            let behind = end..end + after.len();
+            let free = !self.edits.iter().any(|e| behind.contains(&e.start));
+            let span = if free && breaks(after) > breaks(before) {
+                (start, end + after.len())
+            } else {
+                (start - before.len(), end)
+            };
+            self.replace(span.0, span.1, String::new());
         }
     }
 
@@ -1045,6 +1087,18 @@ impl<'a> Merger<'a> {
     }
 }
 
+/// `text` without the blank lines it starts with, unless a side starts so:
+/// what came in behind a symbol the other side deleted brings the gap it had
+/// in front.
+fn no_new_gap_at_the_top(text: String, sides: [&str; 2]) -> String {
+    let gap = |s: &str| s.starts_with(['\n', '\r']);
+    if gap(&text) && !sides.iter().any(|s| gap(s)) {
+        text.trim_start_matches(['\n', '\r']).to_string()
+    } else {
+        text
+    }
+}
+
 fn symbol_merge(engine: u32, path: &str, lang: Lang, [b, o, t]: [&str; 3], joins: Joins) -> Sm {
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
@@ -1073,10 +1127,23 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, [b, o, t]: [&str; 3], joins
         return Sm::Fallback;
     }
     let mut joined = std::mem::take(&mut m.joined);
-    match m.apply() {
+    let applied = m.apply().map(|text| match engine >= ENGINE_GAPS {
+        true => no_new_gap_at_the_top(text, [o, t]),
+        false => text,
+    });
+    match applied {
         // Nothing of `theirs` came through, though the files differ: only
-        // the line merge sees what it changed.
-        Some(text) if engine >= ENGINE_EXACT && text == o => Sm::Fallback,
+        // the line merge sees what it changed. Unless its lines meet those
+        // of `ours`: then every change of `theirs` is in `ours` already (code
+        // outside symbols that only `theirs` changed went to the lines
+        // above), and the line merge would make a conflict of both having it.
+        Some(text) if engine >= ENGINE_EXACT && text == o => {
+            if engine >= ENGINE_ALREADY && lines::merge(b, o, t).is_none() {
+                Sm::Merged(text)
+            } else {
+                Sm::Fallback
+            }
+        }
         Some(text) if holds_up(engine, path, lang, &text, &naming, [&pb, &po, &pt], &[]) => {
             Sm::Merged(text)
         }
@@ -1094,6 +1161,120 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, [b, o, t]: [&str; 3], joins
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Cases the merge's property tests (`tests/merge_props.rs`, #40) shrank
+    /// to, held to the engine that fixed them and the one before.
+    mod found {
+        use super::super::*;
+
+        fn f(name: &str, body: &str) -> String {
+            format!("fn {name}() -> i32 {{\n    {body}\n}}\n")
+        }
+
+        fn file(parts: &[String]) -> String {
+            parts.join("\n")
+        }
+
+        fn at(engine: u32, b: &str, o: &str, t: &str) -> std::result::Result<String, Vec<String>> {
+            merge_text_at(engine, "a.rs", b, o, t)
+        }
+
+        /// `theirs` added what `ours` added too, and `ours` one more behind
+        /// it: the line merge sees two additions at one place.
+        #[test]
+        fn a_change_ours_already_has_merges_into_ours() {
+            let b = f("f0", "1");
+            let o = file(&[
+                f("f0", "1"),
+                f("t0", "7 + 7"),
+                f("o0", "[8; 2].len() as i32"),
+            ]);
+            let t = file(&[f("f0", "1"), f("t0", "7 + 7")]);
+            assert_eq!(at(ENGINE_ALREADY, &b, &o, &t), Ok(o.clone()));
+            let file_conflict = Err(vec!["a.rs#<file>".to_string()]);
+            assert_eq!(at(ENGINE_ALREADY - 1, &b, &o, &t), file_conflict);
+            // Code outside symbols that only `theirs` changed goes by lines,
+            // as before, and comes through.
+            let t_const = format!("const X: i32 = 1;\n\n{t}");
+            let both = format!("const X: i32 = 1;\n\n{o}");
+            assert_eq!(at(ENGINE_ALREADY, &b, &o, &t_const), Ok(both.clone()));
+            assert_eq!(at(ENGINE_ALREADY, &b, &both, &t_const), Ok(both));
+            // Where the lines merge, they do as before: a blank line only
+            // `theirs` added comes through.
+            let b = file(&[f("a", "1"), f("b", "2")]);
+            let o = file(&[f("a", "1"), f("b", "2"), f("c", "3 * 3")]);
+            let t = format!("{}\n\n{}\n{}", f("a", "1"), f("b", "2"), f("c", "3 * 3"));
+            assert_eq!(at(ENGINE_ALREADY, &b, &o, &t), Ok(t.clone()));
+        }
+
+        /// A deleted symbol takes the wider gap around it along: the one
+        /// behind it at the top of a file or a container, the one in front
+        /// elsewhere.
+        #[test]
+        fn a_deletion_leaves_no_blank_line_at_the_top() {
+            let b = file(&[f("f0", "1"), f("f1", "2"), f("f2", "3")]);
+            let o = file(&[f("f0", "1"), f("f1", "2"), f("f2", "9")]);
+            let t = file(&[f("f1", "2"), f("f2", "3")]);
+            let want = file(&[f("f1", "2"), f("f2", "9")]);
+            assert_eq!(at(ENGINE_GAPS, &b, &o, &t), Ok(want.clone()));
+            assert_eq!(at(ENGINE_GAPS - 1, &b, &o, &t), Ok(format!("\n\n{want}")));
+            // The last and one in the middle go with the gap in front.
+            let t = file(&[f("f0", "1"), f("f1", "2")]);
+            let o = file(&[f("f0", "5"), f("f1", "2"), f("f2", "3")]);
+            assert_eq!(
+                at(ENGINE_GAPS, &b, &o, &t),
+                Ok(file(&[f("f0", "5"), f("f1", "2")]))
+            );
+            let t = file(&[f("f0", "1"), f("f2", "3")]);
+            assert_eq!(
+                at(ENGINE_GAPS, &b, &o, &t),
+                Ok(file(&[f("f0", "5"), f("f2", "3")]))
+            );
+
+            let b = "impl C {\n    fn a() {}\n\n    fn b() {}\n}\n";
+            let o = "impl C {\n    fn a() {}\n\n    fn b() { x }\n}\n";
+            let t = "impl C {\n    fn b() {}\n}\n";
+            let want = "impl C {\n    fn b() { x }\n}\n";
+            assert_eq!(at(ENGINE_GAPS, b, o, t), Ok(want.into()));
+            let blank = "impl C {\n\n    fn b() { x }\n}\n";
+            assert_eq!(at(ENGINE_GAPS - 1, b, o, t), Ok(blank.into()));
+            // The only member: gaps of one line break each, and the one in
+            // front goes, so the closing brace keeps its place.
+            let b = "struct C;\n\nimpl C {\n    fn a() {}\n}\n\nfn z() {}\n";
+            let o = "struct C;\n\nimpl C {\n    fn a() {}\n}\n\nfn z() { y }\n";
+            let t = "struct C;\n\nimpl C {\n}\n\nfn z() {}\n";
+            let want = "struct C;\n\nimpl C {\n}\n\nfn z() { y }\n";
+            assert_eq!(at(ENGINE_GAPS, b, o, t), Ok(want.into()));
+
+            let py = |b: &str, o: &str, t: &str, engine| merge_text_at(engine, "a.py", b, o, t);
+            let b = "class C:\n    def a(self):\n        return 1\n\n    def b(self):\n        return 2\n";
+            let o = "class C:\n    def a(self):\n        return 1\n\n    def b(self):\n        return 3\n";
+            let t = "class C:\n    def b(self):\n        return 2\n";
+            let want = "class C:\n    def b(self):\n        return 3\n";
+            assert_eq!(py(b, o, t, ENGINE_GAPS), Ok(want.into()));
+        }
+
+        /// Symbols deleted next to each other go as one: their gaps would
+        /// overlap. A run that reaches the end takes no gap an addition
+        /// goes into, and what is added behind a symbol the other side
+        /// deleted does not start the file with a blank line.
+        #[test]
+        fn symbols_deleted_side_by_side_go_as_one() {
+            let n = |i: u32| f(&format!("f{i}"), &(1000 + i).to_string());
+            let added = f("t0", "1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12");
+            let b = file(&[n(0), n(1), n(2), n(3)]);
+            let o = file(&[n(0), n(1), n(3)]);
+            let t = file(&[n(1), n(2)]);
+            assert_eq!(at(ENGINE_GAPS, &b, &o, &t), Ok(n(1)));
+            assert_eq!(at(ENGINE_GAPS - 1, &b, &o, &t), Ok(format!("\n\n{}", n(1))));
+            let t = file(&[n(2), added.clone()]);
+            assert_eq!(at(ENGINE_GAPS, &b, &o, &t), Ok(added.clone()));
+            assert_eq!(at(ENGINE_GAPS - 1, &b, &o, &t), Ok(format!("\n\n{added}")));
+            // A side that starts with a blank line keeps it.
+            let o = format!("\n{o}");
+            assert_eq!(at(ENGINE_GAPS, &b, &o, &t), Ok(format!("\n\n{added}")));
+        }
+    }
 
     mod joins {
         use super::super::*;

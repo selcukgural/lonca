@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Merge: a change already in trunk, and deletions at the top
+
+Symbol engine 15. A change whose every edit trunk already has merges into trunk unchanged; it
+used to be a conflict on the file when trunk had also added something at the same place. A
+function or method deleted at the top of a file or of a class no longer leaves a blank line
+there, which a format check in verification would refuse. Found by the new merge property tests.
+Older entries are recomputed with the engine they name. See `docs/decisions.md`, "Symbol engine
+versions", Engine 15.
+
 ### A delegated lease comes back when the child expires
 
 A lease set handed to a child session with `cap.attenuate` went back to the parent only when the

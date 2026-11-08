@@ -28,8 +28,10 @@ use lonca_core::{Error, Result};
 /// 11 gives every declaration a signature and lists what mentions the names a
 /// change takes away; version 12 reads symbols down to a depth; version 13
 /// reads a file up to a size, and its names up to a total; version 14 joins
-/// by lines a symbol both sides changed, where the caller says it may.
-pub const ENGINE_CURRENT: u32 = 14;
+/// by lines a symbol both sides changed, where the caller says it may;
+/// version 15 takes ours as the merge when it already has every change of
+/// theirs, and deletes a symbol with the wider of the gaps around it.
+pub const ENGINE_CURRENT: u32 = 15;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -88,6 +90,16 @@ pub const ENGINE_LIMITS: u32 = 13;
 /// [`crate::merge::Joins`] says it may: one held `shared`.
 pub const ENGINE_SHARED: u32 = 14;
 
+/// The first engine that takes ours as the merge when the symbol merge finds
+/// every change of theirs in it already and the lines of the two meet: the
+/// line merge would call that a conflict.
+pub const ENGINE_ALREADY: u32 = 15;
+
+/// The first engine that deletes a symbol with the gap around it that holds
+/// more line breaks, so that the first of a file or of a container does not
+/// leave a blank line behind.
+pub const ENGINE_GAPS: u32 = 15;
+
 /// The longest file read for symbols or sections. A longer one goes by its
 /// lines, as a file no grammar reads: what people write stays far below this,
 /// and what a merge costs grows with it.
@@ -99,7 +111,7 @@ pub fn reads_size(engine: u32, len: usize) -> bool {
 }
 
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

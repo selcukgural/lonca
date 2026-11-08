@@ -132,7 +132,9 @@ fn local_remotes_stay_out_of_the_daemon_home() {
     std::os::unix::fs::symlink(&store, &link).unwrap();
     assert_eq!(try_import(&mut e, &link).unwrap_err().0, "forbidden");
     let nowhere = e.root.join("nowhere");
-    assert_eq!(try_import(&mut e, &nowhere).unwrap_err().0, "forbidden");
+    let (code, message) = try_import(&mut e, &nowhere).unwrap_err();
+    assert_eq!(code, "forbidden");
+    assert!(message.contains("does not exist"), "{message}");
 
     // Past the check, git fetches: an unrelated history is refused later.
     let passed = |r: Result<Value, (String, String)>| {

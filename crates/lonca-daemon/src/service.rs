@@ -726,7 +726,7 @@ impl Service {
         }
         let refuse = |why: &str| fail("forbidden", format!("local remote {r}: {why}"));
         let Ok(path) = std::fs::canonicalize(r) else {
-            return refuse("no such directory");
+            return refuse("it does not exist");
         };
         let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
         let backups = canon(&self.home.backups());

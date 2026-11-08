@@ -2353,7 +2353,9 @@ fn run(cmd: Cmd) -> Result<()> {
 /// A session that stopped with work nobody proposed: "done" and "stopped"
 /// read differently here, for a session that has ended too.
 fn left_unproposed(session: &Value) -> Option<String> {
-    let left = session.get("unproposed").filter(|u| !u.is_null())?;
+    let left = session
+        .get("unproposed")
+        .filter(|u| u["total"].as_u64().is_some_and(|t| t > 0))?;
     let paths: Vec<&str> = left["paths"]
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_str).collect())
@@ -2652,6 +2654,13 @@ mod tests {
         assert_eq!(
             super::left_unproposed(&serde_json::json!({"unproposed": null})),
             None
+        );
+        let clean =
+            serde_json::json!({"id": "s1", "unproposed": {"paths": [], "total": 0, "rounds": 0}});
+        assert_eq!(
+            super::left_unproposed(&clean),
+            None,
+            "a clean stop left nothing"
         );
     }
 

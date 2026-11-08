@@ -1019,6 +1019,13 @@ started it read "done" and the work stayed in the workspace (issue #121).
   after a restart, so the mark comes from the fold, like everything else
   `status` says. A report is written only when it says something new, so an
   agent that stops for ever can not fill the log.
+- **A clean report is kept (issue #189).** It used to clear the mark, so a
+  clean stop and no report both read `null`, and a client deciding whether a
+  dead session's workspace could go had to ask with a live token. Now it
+  leaves `total: 0` and `rounds: 0`; `null` is "nobody said since the session
+  began or last proposed". It costs one entry per proposal at most, since an
+  unchanged report is not written. No log format: the fold changed, not a
+  decision, and an older log's clean reports now read as clean too.
 - **The count is of stops without progress.** A proposal that stands clears
   it, because a long session may stop many times and deliver each time. A
   denied proposal does not, so an agent that can not propose still ends.

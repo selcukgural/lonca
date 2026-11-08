@@ -224,13 +224,10 @@ fn report_unproposed(
         .and_then(|s| s.unproposed.as_ref());
     let rounds = mark.map_or(0, |m| m.rounds);
     let told = total > 0 && rounds < limit;
+    // A clean report is news too, once: it tells "ended clean" from "never
+    // said" (#189).
     let unchanged = mark.is_some_and(|m| m.total == total && m.paths == paths);
-    let news = if total == 0 {
-        mark.is_some()
-    } else {
-        told || !unchanged
-    };
-    if news {
+    if told || !unchanged {
         let op = Op::Observe {
             session: session.to_string(),
             events: vec![Observation {

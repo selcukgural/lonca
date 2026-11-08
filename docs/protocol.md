@@ -365,8 +365,11 @@ with a signed `daemon.rotate` through `human.submit`.
   capability's origin. `unproposed` is what the workspace held the last time
   the session stopped or ended, with no standing proposal carrying it:
   `paths` names at most 32 of `total` files, and `rounds` counts the stops
-  since the last proposal. It says a session did not finish; `null` does not
-  prove that one did, since only a client reports it.
+  since the last proposal. A stop or end that found nothing gives `"paths":
+  [], "total": 0, "rounds": 0`. `null` means no report since the session
+  began or last proposed (it expired, or ended without `files`), so a client
+  can tell "ended clean" from "nobody said". It is the client's report, not
+  a check: only a proposal proves delivery.
 - **detail**: `{"code", "symbol", "needed_kind": lease kind,
   "holder_session": string | null, "holder_agent": string | null,
   "intent": string | null, "expires_ms": time | null, "set": string |
@@ -751,7 +754,8 @@ allowed.
 its token stops working. Logged. `files` are the workspace's local changes,
 as for `hook.stop`: what no standing proposal carries is recorded for
 `status`, and the result adds `"unproposed"` ([path]) and
-`"unproposed_total"` (integer). Without `files` nothing is recorded.
+`"unproposed_total"` (integer), both empty when nothing was left, which is
+recorded too. Without `files` nothing is recorded.
 
 ### `session.rotate`
 
@@ -824,7 +828,8 @@ and answers `{"unproposed": [path], "total": integer, "round": integer,
 the harness's shape, while `round` is within `[sessions] stop_rounds`.
 Without `output` the turn ends. A harness with no stop event is `invalid`.
 A report goes in the log as an `unproposed` observation when it says
-something new. It is a reminder and a record, not a check: the client
+something new; a clean report is new once after the session began or
+proposed. It is a reminder and a record, not a check: the client
 computes `files`.
 
 ### `harness.setup`

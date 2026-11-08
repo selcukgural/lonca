@@ -2892,8 +2892,8 @@ fn unproposed(h: &mut H, session: &str, paths: Vec<String>, total: u64) -> Decis
     )
 }
 
-/// What a session left: counted by the fold, cleared by a proposal or a
-/// clean report, and bounded in size.
+/// What a session left: counted by the fold, cleared by a proposal, set to
+/// "nothing" by a clean report, and bounded in size.
 #[test]
 fn a_session_s_unproposed_work_is_on_the_record_until_it_is_gone() {
     let mut h = H::new();
@@ -2915,10 +2915,18 @@ fn a_session_s_unproposed_work_is_on_the_record_until_it_is_gone() {
     // Nothing is tainted by it, and nothing else of the session changes.
     assert_eq!(h.chain.state.sessions["s1"].taint, None);
 
+    // A clean report is kept, not dropped: `None` would read as "never
+    // reported" (#189). The count starts over.
+    h.now += 5;
     unproposed(&mut h, "s1", vec![], 0);
-    assert_eq!(mark(&h), None);
+    let m = mark(&h).unwrap();
+    assert_eq!((m.paths.len(), m.total, m.rounds), (0, 0, 0));
+    assert_eq!(m.seen_ms, h.now);
     unproposed(&mut h, "s1", vec![], 1);
     assert_eq!(mark(&h).unwrap().rounds, 1, "the count starts over");
+    unproposed(&mut h, "s1", vec![], 0);
+    unproposed(&mut h, "s1", vec![], 0);
+    assert_eq!(mark(&h).unwrap().rounds, 0, "clean twice is still clean");
 
     let full = vec!["x".to_string(); MAX_UNPROPOSED_PATHS];
     assert!(unproposed(&mut h, "s1", full.clone(), 99).is_allow());

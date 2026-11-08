@@ -71,7 +71,7 @@ pub fn path_matches(pattern: &str, path: &str) -> bool {
         Some(prefix) => {
             path.len() > prefix.len()
                 && path.starts_with(prefix)
-                && path.as_bytes()[prefix.len()] == b'/'
+                && path.as_bytes().get(prefix.len()) == Some(&b'/')
         }
         None => pattern == path,
     }

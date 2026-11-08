@@ -69,18 +69,7 @@ impl Limits {
 /// Asks for [`WANTED_FILES`] descriptors, as far as the hard limit goes
 /// (a launchd daemon starts with 256), and says what it has.
 pub fn open_files() -> u64 {
-    let mut l = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: both calls read or write the one live struct above.
-    unsafe {
-        libc::getrlimit(libc::RLIMIT_NOFILE, &mut l);
-        l.rlim_cur = l.rlim_cur.max(WANTED_FILES.min(l.rlim_max));
-        libc::setrlimit(libc::RLIMIT_NOFILE, &l);
-        libc::getrlimit(libc::RLIMIT_NOFILE, &mut l);
-    }
-    l.rlim_cur
+    crate::sys::raise_open_files(WANTED_FILES)
 }
 
 /// How often each limit said no. The daemon's own count: nothing refused

@@ -229,6 +229,11 @@ impl H {
 
     fn start_observed_as(&mut self, human: &str, session: &str, paths: &[&str]) {
         self.start_as(human, session, paths);
+        self.bind_observed(session);
+    }
+
+    /// Binds a started session as observed by locked hooks + sandbox.
+    fn bind_observed(&mut self, session: &str) {
         let checks = BindChecks {
             harness: "claude-code".into(),
             harness_session: format!("h-{session}"),
@@ -7755,5 +7760,102 @@ fn a_child_renews_what_it_was_given_and_holds_apart_from_its_parent() {
     assert!(h.agent("a", renew("l1", 10 * MIN)).is_allow());
     let d = h.lease("b", "lb", &[(F, LeaseKind::Edit)]);
     assert!(denied_with(&d, &format!("lease_held:{F}:a:")), "{d:?}");
+    h.assert_replay();
+}
+
+// ---------------------------------------------------------- extreme values
+
+/// Numbers at the ends of their types, in a request or in a policy, become
+/// denials: the single writer must never panic on them (#61). Tests build
+/// with overflow checks, as the release profile does.
+#[test]
+fn extreme_numbers_are_denied_without_a_panic() {
+    let mut h = H::new();
+    for (session, ms) in [("s1", i64::MIN), ("s2", i64::MAX), ("s3", 0)] {
+        let mut op = h.start_op(session, &["src/**"], None);
+        let Op::SessionStart { expires_ms, .. } = &mut op else {
+            unreachable!()
+        };
+        *expires_ms = ms;
+        assert!(denied_with(&h.human("ayse", op), "session_ttl"), "{ms}");
+    }
+    let op = Op::BridgePush {
+        remote: "origin".into(),
+        oplog_seq: u64::MAX,
+        oplog_hash: h.chain.state.head_hash.clone(),
+    };
+    assert!(denied_with(&h.human("ayse", op), "stale_anchor"));
+
+    h.start_observed("s4", &["src/**"]);
+    for ttl_ms in [i64::MIN, i64::MAX] {
+        let op = Op::LeaseAcquire {
+            set: "l1".into(),
+            items: vec![LeaseItem {
+                symbol: "src/a.rs#f".into(),
+                kind: LeaseKind::Edit,
+                names: Vec::new(),
+            }],
+            intent: "work".into(),
+            ttl_ms,
+        };
+        assert!(denied_with(&h.agent("s4", op), "lease_ttl"), "{ttl_ms}");
+    }
+    assert!(
+        h.lease("s4", "l1", &[("src/a.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    for ttl_ms in [i64::MIN, i64::MAX] {
+        assert!(denied_with(
+            &h.agent("s4", renew("l1", ttl_ms)),
+            "lease_ttl"
+        ));
+    }
+    h.assert_replay();
+}
+
+/// A policy whose minutes do not fit in milliseconds saturates: the
+/// longest life is then as long as an `i64` goes, and nothing overflows.
+#[test]
+fn policy_minutes_too_large_saturate() {
+    let config = DEFAULT_CONFIG
+        .replace(
+            "max_ttl_minutes = 480",
+            &format!("max_ttl_minutes = {}", i64::MAX),
+        )
+        .replace(
+            "max_ttl_minutes = 30",
+            &format!("max_ttl_minutes = {}", i64::MAX),
+        )
+        .replace(
+            "max_hold_minutes = 120",
+            &format!("max_hold_minutes = {}", i64::MAX),
+        )
+        .replace(
+            "window_minutes = 5",
+            &format!("window_minutes = {}", i64::MAX),
+        );
+    let mut h = H::with_policy(PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap());
+    let mut op = h.start_op("s1", &["src/**"], None);
+    let Op::SessionStart { expires_ms, .. } = &mut op else {
+        unreachable!()
+    };
+    *expires_ms = i64::MAX;
+    let d = h.human("ayse", op);
+    assert!(d.is_allow(), "{d:?}");
+    h.bind_observed("s1");
+    let op = Op::LeaseAcquire {
+        set: "l1".into(),
+        items: vec![LeaseItem {
+            symbol: "src/a.rs#f".into(),
+            kind: LeaseKind::Edit,
+            names: Vec::new(),
+        }],
+        intent: "work".into(),
+        ttl_ms: i64::MAX,
+    };
+    let d = h.agent("s1", op);
+    assert!(d.is_allow(), "{d:?}");
+    let d = h.agent("s1", renew("l1", i64::MAX));
+    assert!(d.is_allow(), "{d:?}");
     h.assert_replay();
 }

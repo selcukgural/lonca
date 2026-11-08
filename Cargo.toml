@@ -8,3 +8,15 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/selcukgural/lonca"
 rust-version = "1.85"
+
+# Unsafe code is refused everywhere; the few modules that call libc say so
+# with `#![allow(unsafe_code)]` and a `// SAFETY:` comment on every block.
+# Crates with no FFI at all `#![forbid(unsafe_code)]` in their root.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+# Arithmetic on sequence numbers, times and sizes from requests panics on
+# overflow instead of wrapping into a wrong answer; `decide()` turns extreme
+# values into denials before that can happen (docs/decisions.md).
+[profile.release]
+overflow-checks = true

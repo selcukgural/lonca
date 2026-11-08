@@ -32,10 +32,7 @@ fn refuse(message: String) -> Error {
     Error::new(ErrorKind::PermissionDenied, message)
 }
 
-pub fn current_uid() -> u32 {
-    // SAFETY: getuid has no preconditions.
-    unsafe { libc::getuid() }
-}
+pub use crate::sys::current_uid;
 
 /// `daemon_uid = N`; anything else in the file is ignored.
 pub fn parse_config(text: &str) -> Option<u32> {

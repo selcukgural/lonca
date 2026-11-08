@@ -8,6 +8,10 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+#[allow(
+    clippy::expect_used,
+    reason = "Lonca types have string keys and no floats, so serde_json can not fail on them"
+)]
 pub fn canonical_bytes<T: Serialize + ?Sized>(value: &T) -> Vec<u8> {
     serde_json::to_vec(value).expect("lonca types always serialize")
 }
@@ -20,6 +24,10 @@ pub fn digest_of<T: Serialize + ?Sized>(value: &T) -> String {
     sha256_hex(&canonical_bytes(value))
 }
 
+#[allow(
+    clippy::expect_used,
+    reason = "without the OS random source no token or id can be made safely: stop"
+)]
 pub fn random_bytes<const N: usize>() -> [u8; N] {
     let mut buf = [0u8; N];
     getrandom::fill(&mut buf).expect("operating system random source");

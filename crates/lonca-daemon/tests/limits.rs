@@ -164,8 +164,7 @@ fn a_uid_that_is_not_listed_gets_nothing() {
 #[test]
 fn a_listed_uid_is_served() {
     let e = Env::new();
-    // SAFETY: getuid has no preconditions.
-    let me = unsafe { libc::getuid() };
+    let me = lonca_daemon::sys::current_uid();
     let listed = Access {
         allowed_uids: Some(vec![me]),
         ..Access::default()

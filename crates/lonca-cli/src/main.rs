@@ -10,6 +10,7 @@ mod keys;
 mod mcp;
 mod run;
 mod setup;
+mod sys;
 mod undo;
 mod workspace;
 mod wsfs;

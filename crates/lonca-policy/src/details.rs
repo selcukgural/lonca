@@ -167,7 +167,9 @@ pub fn lease_report(
     let mine = || leases.iter().flat_map(|l| l.items.iter().copied());
     let mut out = Vec::new();
     for need in symbols::lease_needs_under(facts, unparsed, FORMAT_CURRENT) {
-        let kind = need.kinds[0];
+        let Some(&kind) = need.kinds.first() else {
+            continue;
+        };
         if mine().any(|i| state.covers_need(&need, i, None)) {
             out.push(Detail::free(HELD_BY_YOU, &need.symbol, kind));
             continue;
@@ -220,10 +222,13 @@ pub fn lease_missing(
 fn holder_sentence(session: &str, of: &[&Detail]) -> String {
     let symbols: Vec<&str> = of.iter().map(|d| d.symbol.as_str()).collect();
     let symbols = symbols.join(", ");
-    let agent = of[0].holder_agent.as_deref().unwrap_or("Another agent");
+    let first = of.first();
+    let agent = first
+        .and_then(|d| d.holder_agent.as_deref())
+        .unwrap_or("Another agent");
     let intent = of.iter().find_map(|d| d.intent.as_deref());
     let mut out = match intent {
-        Some(intent) if of[0].code == LEASE_WANTED => format!(
+        Some(intent) if first.is_some_and(|d| d.code == LEASE_WANTED) => format!(
             "{agent} (session {session}) is waiting for {symbols} and goes first: {intent:?}."
         ),
         Some(intent) => format!("{agent} (session {session}) is on {symbols}: {intent:?}."),

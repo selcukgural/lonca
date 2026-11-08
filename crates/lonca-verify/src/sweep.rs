@@ -13,6 +13,9 @@
 //! `.cargo/mutants.toml` leaves this file out, and the end-to-end tests of
 //! `lonca run` and the verifier's own hold it on macOS.
 
+// Process control is libc calls; each unsafe block says why it is sound.
+#![allow(unsafe_code)]
+
 /// Ends every process in the sandbox marked `mark`, and what they start
 /// meanwhile. Returns how many would not end.
 #[cfg(target_os = "macos")]

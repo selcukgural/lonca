@@ -18,6 +18,11 @@
 //!
 //! It contains no AI and calls no network.
 
+#![forbid(unsafe_code)]
+// The trusted core: a panic in the single writer stops every repository,
+// so bad input must become an error or a denial (clippy.toml lets tests panic).
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -297,7 +302,7 @@ fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp,
                     rep.skip(e.seq, "merge", "integration objects not present");
                     return;
                 }
-                let joins = state.joins(*change, &members[..k], config);
+                let joins = state.joins(*change, members.get(..k).unwrap_or_default(), config);
                 let may_join = |s: &str| joins.allows(s);
                 match integrate_joining(store, engine, &rec.base, &trunk, &rec.commit, &may_join) {
                     Ok(i) if i.merged.as_ref() == Some(commit) => {}

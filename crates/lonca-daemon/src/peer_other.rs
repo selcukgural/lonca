@@ -3,6 +3,8 @@
 //! compiled: `.cargo/mutants.toml` leaves this file out, and the end-to-end
 //! tests of `lonca run` hold it on macOS.
 
+#![allow(unsafe_code)]
+
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 

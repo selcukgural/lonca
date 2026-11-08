@@ -2640,6 +2640,42 @@ next got it, ahead of the parent that had handed it over for a while.
   that reaches format 23 is decided and applied by the same rule. Older logs
   replay as they were.
 
+## Unsafe code, panics and overflow (#61)
+
+A panic in the daemon stops the single writer, and so every repository: a
+denial of service. Bad input must become a denial or an error.
+
+- **Unsafe code is refused** by `[workspace.lints.rust] unsafe_code = "deny"`
+  in every crate, and crates with no FFI at all (`lonca-core`, `lonca-policy`,
+  `lonca-audit`, `lonca-symbols`, `lonca-net`, `lonca-mutants`)
+  `#![forbid(unsafe_code)]`. The libc calls live in modules that say
+  `#![allow(unsafe_code)]` and give a `// SAFETY:` reason on every block:
+  `lonca-daemon/src/sys.rs` (uid, peer credentials, descriptor limit, group
+  lookup), `lonca-daemon/src/peer_other.rs` (macOS sandbox questions),
+  `lonca-verify/src/process.rs` and `sweep.rs` (process control) and
+  `lonca-cli/src/sys.rs` (sessions, signals). A test that sets the
+  environment allows it on that test alone. Unsafe code anywhere else does
+  not compile.
+- **Groups are looked up with `getgrnam_r`.** `getgrnam` returns static
+  storage shared by every thread.
+- **The release profile checks overflow** (`overflow-checks = true`). Where a
+  number comes from a request or a policy, `decide()` and the state use
+  `saturating_*` / `checked_*`: policy minutes saturate when turned into
+  milliseconds (so a check against them fails closed), `bridge.push`'s
+  `oplog_seq + 1` is checked, and ends of leases and sessions saturate. A
+  number at the end of its type is denied, not a panic
+  (`extreme_numbers_are_denied_without_a_panic`). Nothing that could be
+  reached by a log before this changes: those numbers never overflowed, so
+  old logs replay as they were.
+- **Panic lints on the trusted core.** `lonca-core`, `lonca-policy` and
+  `lonca-audit` warn on `unwrap_used`, `expect_used` and `indexing_slicing`
+  (CI runs clippy with `-D warnings`, so they fail it); `clippy.toml` lets
+  tests panic. Indexing became `get`, `first` and `split_first`; an
+  `expect` that holds by construction (constant policy and profiles, the
+  OS random source, serializing Lonca's own types) stays with an
+  `#[allow(..., reason = ...)]` that says why.
+- Not done: a `cargo geiger` report of unsafe code in dependencies.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

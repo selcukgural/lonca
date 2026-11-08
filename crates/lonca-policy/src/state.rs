@@ -448,7 +448,7 @@ impl State {
     /// The session has reported heartbeats and stopped: it dropped out.
     pub fn session_lost(&self, id: &str, now_ms: i64) -> bool {
         let beat = self.sessions.get(id).and_then(|s| s.heartbeat);
-        beat.is_some_and(|h| now_ms - h.seen_ms > h.timeout_ms)
+        beat.is_some_and(|h| now_ms.saturating_sub(h.seen_ms) > h.timeout_ms)
     }
 
     /// The session that holds `l` at `now_ms`: the one it names, unless that
@@ -480,9 +480,9 @@ impl State {
     /// Another active session asked for what `l` holds in the last
     /// `window_ms`.
     pub fn contended(&self, l: &LeaseSet, now_ms: i64, window_ms: i64) -> bool {
-        l.interest
-            .iter()
-            .any(|(s, at)| now_ms - at <= window_ms && self.session_active(s, now_ms))
+        l.interest.iter().any(|(s, at)| {
+            now_ms.saturating_sub(*at) <= window_ms && self.session_active(s, now_ms)
+        })
     }
 
     pub fn active_leases(&self, now_ms: i64) -> impl Iterator<Item = ActiveLease<'_>> {
@@ -620,7 +620,7 @@ impl State {
         // Lines never go down: what came after the base is the end.
         let from = self.exclusive.partition_point(|e| e.line <= base);
         let mut exclusive = Vec::new();
-        for e in &self.exclusive[from..] {
+        for e in self.exclusive.get(from..).unwrap_or_default() {
             match &e.symbols {
                 Some(s) => exclusive.extend(s.iter().cloned()),
                 None => return Joins::default(),
@@ -732,7 +732,7 @@ impl State {
                 out.push(Reservation {
                     session: i.session.clone(),
                     items: i.items.clone(),
-                    until_ms: now_ms + i.window_ms,
+                    until_ms: now_ms.saturating_add(i.window_ms),
                 });
                 served.push(*seq);
             }
@@ -1312,8 +1312,10 @@ impl State {
         let moved: Vec<(String, String)> = self
             .leases
             .values()
-            .map(|l| (l.set.clone(), self.holder(l, now_ms).to_string()))
-            .filter(|(set, holder)| self.leases[set].session != *holder)
+            .filter_map(|l| {
+                let holder = self.holder(l, now_ms);
+                (l.session != holder).then(|| (l.set.clone(), holder.to_string()))
+            })
             .collect();
         for (set, holder) in moved {
             if let Some(l) = self.leases.get_mut(&set) {
@@ -1630,7 +1632,7 @@ impl State {
                             session: session.to_string(),
                             items: items.clone(),
                             intent: intent.clone(),
-                            expires_ms: time_ms + ttl_ms,
+                            expires_ms: time_ms.saturating_add(*ttl_ms),
                             pins: BTreeMap::new(),
                             acquired_ms,
                             interest: BTreeMap::new(),
@@ -1648,7 +1650,7 @@ impl State {
                         found.and_then(|n| n.parse().ok())
                     };
                     let block = value(INTEREST_BLOCK);
-                    let end = block.map(|ms| time_ms + ms);
+                    let end = block.map(|ms| time_ms.saturating_add(ms));
                     let end = end.map(|e| self.block_end(session, items, time_ms, e));
                     self.interests.insert(
                         seq,
@@ -1666,7 +1668,7 @@ impl State {
             Op::LeaseRelease { set } => self.release_set(set, time_ms),
             Op::LeaseRenew { set, ttl_ms } => {
                 if let Some(l) = self.leases.get_mut(set) {
-                    l.expires_ms = time_ms + ttl_ms;
+                    l.expires_ms = time_ms.saturating_add(*ttl_ms);
                 }
             }
             Op::ChangePropose {
@@ -1721,8 +1723,9 @@ impl State {
                     return;
                 };
                 p.approvals.insert(name.clone());
-                if reasons.iter().any(|r| r == RELEASED) {
-                    let p = self.pending.remove(target_seq).expect("present");
+                if reasons.iter().any(|r| r == RELEASED)
+                    && let Some(p) = self.pending.remove(target_seq)
+                {
                     self.effects(&p.actor, &p.op, p.facts.as_ref(), p.seq, time_ms, &[], true);
                 }
             }

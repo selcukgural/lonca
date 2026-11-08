@@ -818,6 +818,10 @@ pub struct PolicyBundle {
 }
 
 impl PolicyBundle {
+    #[allow(
+        clippy::expect_used,
+        reason = "the built-in policy is a constant; a test parses it"
+    )]
     pub fn default_bundle() -> Self {
         Self::parse(DEFAULT_CONFIG, DEFAULT_POLICY).expect("default policy parses")
     }
@@ -1022,6 +1026,10 @@ impl PolicyBundle {
             Actor::Agent { name, .. } => ("Lonca::Agent", name.as_str()),
             Actor::Daemon => ("Lonca::Daemon", "daemon"),
         };
+        #[allow(
+            clippy::expect_used,
+            reason = "t is always one of the constant type names below"
+        )]
         let uid = |t: &str, id: &str| {
             EntityUid::from_type_name_and_id(
                 EntityTypeName::from_str(t).expect("valid type"),
@@ -1074,10 +1082,9 @@ impl PolicyBundle {
         let mut approvals = 1u32;
         let mut all_escalate = true;
         for id in &reasons {
-            let policy = self
-                .cedar
-                .policy(id)
-                .expect("reason ids come from this set");
+            let Some(policy) = self.cedar.policy(id) else {
+                return CedarOutcome::Deny(vec![format!("policy_unknown_reason:{id}")]);
+            };
             let name = policy
                 .annotation("id")
                 .map(str::to_string)

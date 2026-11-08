@@ -1048,6 +1048,7 @@ mod tests {
     /// The names a policy could never set still must not pass, and `TMPDIR`
     /// stays the sandbox's when a policy lists it.
     #[test]
+    #[allow(unsafe_code, reason = "a test sets the environment the verifier reads")]
     fn what_passes_stops_at_the_forbidden_and_at_tmpdir() {
         let (dir, store, files, tree) = setup(&[("a", "")]);
         let v = Verifier::new(dir.path().join("scratch"));
@@ -1075,6 +1076,7 @@ mod tests {
     /// names never, even if a policy object carries them; the log says
     /// which names were set and never a value.
     #[test]
+    #[allow(unsafe_code, reason = "a test sets the environment the verifier reads")]
     fn the_environment_is_deny_by_default_and_named_in_the_log() {
         let (dir, store, files, tree) = setup(&[("a", "")]);
         let v = Verifier::new(dir.path().join("scratch"));

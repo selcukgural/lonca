@@ -11,6 +11,7 @@ pub mod proxy;
 pub mod repo;
 pub mod server;
 pub mod service;
+pub mod sys;
 pub mod trust;
 
 pub use client::Client;

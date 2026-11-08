@@ -361,6 +361,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code, reason = "a test points the ledger at its own directory")]
     fn budget_is_reserved_before_calls() {
         let dir = tempfile::tempdir().unwrap();
         // SAFETY: tests in this module run single-threaded with respect to this variable.

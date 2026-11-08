@@ -10,3 +10,6 @@ keywords = ["proxy", "sandbox", "network", "agents"]
 categories = ["network-programming"]
 
 [dependencies]
+
+[lints]
+workspace = true

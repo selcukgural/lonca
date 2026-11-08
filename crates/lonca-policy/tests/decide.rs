@@ -6619,6 +6619,13 @@ fn what_an_integration_may_join_comes_from_the_state() {
     assert!(h.human("ayse", import).is_allow());
     assert_eq!(h.chain.state.exclusive.last().unwrap().symbols, None);
     assert!(!joins(&h, &[]).allows(f));
+    // What came from outside before the base is in the base.
+    h.start_observed("d", &["src/**"]);
+    assert!(h.lease("d", "ld", &[(f, LeaseKind::Shared)]).is_allow());
+    h.wrote("d", "src/a.rs");
+    let cd = ChangeId::random();
+    assert!(h.propose("d", cd, edit(f)).is_allow());
+    assert!(h.chain.state.joins(cd, &[], &config).allows(f));
     h.assert_replay();
 }
 

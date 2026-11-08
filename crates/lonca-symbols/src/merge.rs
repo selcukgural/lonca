@@ -1127,6 +1127,8 @@ mod tests {
             assert_eq!(join(ENGINE_SHARED - 1, &o, &t, &["a.rs#f"]), conflict);
             assert_eq!(join(ENGINE_SHARED, &o, &t, &[]), conflict);
             assert_eq!(join(ENGINE_SHARED, &o, &t, &["a.rs#g"]), conflict);
+            // A merge not told what may be joined joins nothing.
+            assert_eq!(merge_text_at(ENGINE_SHARED, "a.rs", F, &o, &t), conflict);
             // Lines both changed are no join.
             let t = line(1, "    let a = 11;");
             assert_eq!(join(ENGINE_SHARED, &o, &t, &["a.rs#f"]), conflict);

@@ -4,8 +4,10 @@
 
 1. `rust-toolchain.toml`: is a newer stable out? Raise it in a pull request of
    its own, with the clippy fixes it needs, before the release.
-2. Run `ci.yml` and `mutants.yml` on main (`gh workflow run ci.yml --ref main`,
-   `gh workflow run mutants.yml --ref main`); both green.
+2. Run `ci.yml`, `mutants.yml` and `fuzz.yml` on main (`gh workflow run
+   ci.yml --ref main`, `gh workflow run mutants.yml --ref main`,
+   `gh workflow run fuzz.yml --ref main`); all green. A fuzz failure's
+   input is encrypted (docs/fuzzing.md): fix it before the release.
 3. Try the four builds: `gh workflow run release.yml --ref main` (builds
    only, drafts nothing).
 4. Review `docs/security/owasp.md`: every row still true, every gap still has

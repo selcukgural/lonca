@@ -1,0 +1,1 @@
+{"id":1,"method":"change.propose","repo":null,"token":"$AGENT2","params":{"base":"$TRUNK","files":[{"path":"src/app.py","content_b64":"ZGVmIG1haW4oKToKICAgIHJldHVybiAyCg=="}],"claim":{"intent":"two","edits":["src/app.py#main"]}}}

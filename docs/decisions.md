@@ -3461,6 +3461,56 @@ policy and lists the decisions that would change
   and a script reads `--json`. A file that does not parse exits 3, as any
   error that never reached the daemon.
 
+## Fuzzing (#15)
+
+Seven libFuzzer targets over the inputs that cross a trust boundary; how to
+run them and what each holds: `docs/fuzzing.md`.
+
+- **The checks are a workspace crate, the fuzzer is not.** What a target
+  holds is a function in `crates/lonca-fuzz` (`publish = false`); `fuzz/` is
+  a cargo-fuzz project with its own workspace and lock file, whose targets
+  only call those functions. So `cargo test --workspace` runs every seed and
+  every kept crash on stable, clippy and fmt see the checks, and libFuzzer's
+  C++ build stays out of every other build. The crate is left out of
+  mutants: it is test code, held by the inputs it runs.
+- **Stable, no sanitizer.** cargo-fuzz runs with `-s none` on the toolchain
+  of `rust-toolchain.toml`. Only AddressSanitizer needs a nightly; it
+  instruments Rust, which denies `unsafe`, and not the C grammars, which
+  cargo-fuzz builds without it. A second, nightly toolchain to pin and raise
+  would buy little.
+- **Properties, not only panics.** The canonical form of an entry is a fixed
+  point; the auditor and the merge give the same answer twice; under the
+  current engine sides that parse never merge into a file that does not;
+  after any socket traffic the log audits clean and the daemon opens again.
+  Facts and merges are recomputed by whoever audits, so a result that
+  depends on more than its input is a fault even without a crash.
+- **A socket input runs on a fresh copy** of a repository built once per
+  process (a human change, two bound agent sessions, leases, integrated
+  and denied proposals, a policy change), so a crash is reproduced by its
+  input alone. Markers in the input stand for the tokens; the fuzzer can not
+  sign a human operation, and remotes on disk are refused, so it never
+  reaches the network or files outside the copy.
+- **Not on pull requests**, a deviation from the issue, kept from "CI runs
+  for a release": every night on main and on demand, which the release
+  checklist does before tagging. Not on a tag either, unlike the mutants:
+  the corpus lives in the Actions cache, and a release run restoring a cache
+  is what zizmor's `cache-poisoning` refuses.
+- **What it finds is not published.** The repository and its logs are
+  public, and a crash input is an exploit until fixed. The log names the
+  target and the kind (`crash`, `timeout`, `oom`); the input and output are
+  uploaded encrypted with age to the maintainer's key
+  (`fuzz/crash-recipient.txt`). A fixed crash goes to
+  `fuzz/regressions/<target>/`.
+- **Git ids are read as written.** The first run found that a `GitId` took
+  any string from JSON and `short()` cut it by bytes. JSON now gives one
+  only as Lonca writes it, 40 lowercase hex digits (`TryFrom<String>`); no
+  log or request of Lonca's holds another, and an entry decoded never
+  changes on the way, so its hash does not either.
+- **Not covered by a target:** `lonca mcp` and `lonca hook` read their input
+  in the CLI, as the agent's own process; what they pass on crosses the
+  boundary at the daemon (`hook.input`, `mcp.call`, every request), which
+  `request` fuzzes.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

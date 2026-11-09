@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fuzzing
+
+The parsers and the merge are fuzzed (`docs/fuzzing.md`): stored log
+entries, whole logs as the auditor reads them, daemon requests, hook
+events, the symbol engine, the three-way merge, and repository
+configuration and policy. Every saved input runs under `cargo test`. A git
+id in a request or a log entry is now refused unless it is 40 lowercase
+hex digits, as Lonca writes them.
+
 ### `lonca policy check`, and a guide to writing policies
 
 `lonca policy check --policy policy.cedar` (or `--config`, or both) tries

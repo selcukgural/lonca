@@ -1,0 +1,4 @@
+{"id":1,"method":"hook.event","repo":null,"token":"$AGENT","params":{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cat /etc/passwd"},"workspace":"$WS"}}
+{"id":1,"method":"hook.input","repo":null,"token":"$AGENT","params":{"harness":"claude-code","input":{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"$WS/../x"}},"workspace":"$WS"}}
+{"id":1,"method":"hook.stop","repo":null,"token":"$AGENT","params":{"harness":"claude-code","files":[]}}
+{"id":1,"method":"mcp.call","repo":null,"token":"$AGENT","params":{"tool":"propose"}}

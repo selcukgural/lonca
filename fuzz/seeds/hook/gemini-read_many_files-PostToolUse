@@ -1,0 +1,1 @@
+{"hook_event_name":"PostToolUse","tool_name":"read_many_files","tool_input":{"include":"/tmp/lonca-fuzz-ws/src/lib.rs"},"workspace":"/tmp/lonca-fuzz-ws","harness":"gemini"}

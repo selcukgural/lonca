@@ -1,0 +1,72 @@
+# The cargo-fuzz project (#15, docs/fuzzing.md). Its own workspace, so that
+# libFuzzer and its build are no part of the main one; what each target checks
+# is in crates/lonca-fuzz, which `cargo test` runs on every saved input.
+[package]
+name = "lonca-fuzz-targets"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+lonca-fuzz = { path = "../crates/lonca-fuzz" }
+
+[workspace]
+
+# Overflow and debug assertions on, as cargo-fuzz builds by default; the
+# release profile of the main workspace has overflow checks too.
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "entry"
+path = "fuzz_targets/entry.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hook"
+path = "fuzz_targets/hook.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "merge"
+path = "fuzz_targets/merge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy"
+path = "fuzz_targets/policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "replay"
+path = "fuzz_targets/replay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request"
+path = "fuzz_targets/request.rs"
+test = false
+doc = false
+bench = false

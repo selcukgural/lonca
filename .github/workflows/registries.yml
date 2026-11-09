@@ -56,7 +56,7 @@ jobs:
       - name: Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - name: Package and build the workspace, without uploading
-        run: cargo publish --workspace --exclude lonca-mutants --locked --dry-run
+        run: cargo publish --workspace --exclude lonca-mutants --exclude lonca-fuzz --locked --dry-run
 
   # Uploads what crates-check built, from the same tag. It builds nothing
   # (`--no-verify`), so no dependency's code runs while the token exists.
@@ -80,4 +80,4 @@ jobs:
       - name: Publish, in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish --workspace --exclude lonca-mutants --locked --no-verify
+        run: cargo publish --workspace --exclude lonca-mutants --exclude lonca-fuzz --locked --no-verify

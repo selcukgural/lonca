@@ -84,6 +84,26 @@ cargo mutants -p lonca-policy -j 4          # one crate
   an unlisted exclusion in a gated file. Survivors are fixed before the
   release. No mutants run before a push or on a PR.
 
+## Fuzzing
+
+Seven cargo-fuzz targets (`entry`, `replay`, `request`, `hook`, `parse`,
+`merge`, `policy`); what each holds and how to run it: `docs/fuzzing.md`.
+
+```sh
+cargo install --locked cargo-fuzz@0.13.2
+cd fuzz && cargo fuzz run -s none <target> corpus/<target> seeds/<target> -- -max_total_time=300
+```
+
+- The checks live in `crates/lonca-fuzz`; `fuzz/` (own workspace and lock)
+  only wraps them. `-s none` on the pinned stable: no nightly.
+- A fixed crash's input goes to `fuzz/regressions/<target>/`; `cargo test`
+  runs every seed and regression. An unfixed one stays out of the repo, PRs
+  and issues. CI (`fuzz.yml`: nightly and on demand; not on PRs or tags)
+  uploads what it finds encrypted to `fuzz/crash-recipient.txt`; the key is
+  `~/.config/lonca/fuzz-crashes.age-key`.
+- A new target: a module with `check(&[u8])`, `TARGETS`, a `[[bin]]` and its
+  file in `fuzz/`, seeds in `write_seeds`, the `fuzz.yml` matrix.
+
 ## CI
 
 The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,

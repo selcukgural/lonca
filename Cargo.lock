@@ -2323,6 +2323,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lonca-fuzz"
+version = "0.2.1"
+dependencies = [
+ "base64",
+ "lonca-audit",
+ "lonca-client",
+ "lonca-core",
+ "lonca-daemon",
+ "lonca-policy",
+ "lonca-symbols",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+ "zeroize",
+]
+
+[[package]]
 name = "lonca-mutants"
 version = "0.2.1"
 dependencies = [

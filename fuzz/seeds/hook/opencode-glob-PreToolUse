@@ -1,0 +1,1 @@
+{"hook_event_name":"PreToolUse","tool_name":"glob","tool_input":{"path":"/tmp/lonca-fuzz-ws/src/lib.rs"},"workspace":"/tmp/lonca-fuzz-ws","harness":"opencode"}

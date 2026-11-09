@@ -9,10 +9,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// A Git object id in lowercase hex.
+/// A Git object id in lowercase hex. Read from JSON (a request, a log
+/// entry) only as Lonca writes one, 40 lowercase hex digits: anything else
+/// is refused there, not found later by whatever looks at it, and what is
+/// read is never changed on the way (an entry's hash covers it).
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(try_from = "String", into = "String")]
 pub struct GitId(pub String);
+
+impl TryFrom<String> for GitId {
+    type Error = Error;
+
+    fn try_from(s: String) -> Result<Self> {
+        let id = Self::parse(&s)?;
+        if id.0 != s {
+            return Err(Error::Invalid(format!("git id {s:?}: not in lowercase")));
+        }
+        Ok(id)
+    }
+}
+
+impl From<GitId> for String {
+    fn from(id: GitId) -> String {
+        id.0
+    }
+}
 
 /// Hex digits in a SHA-1 object id, the only kind Lonca stores.
 const HEX_LEN: usize = 40;
@@ -28,8 +49,14 @@ impl GitId {
         Ok(Self(s.to_ascii_lowercase()))
     }
 
+    /// The first ten characters, for people to read.
     pub fn short(&self) -> &str {
-        &self.0[..self.0.len().min(10)]
+        let end = self
+            .0
+            .char_indices()
+            .nth(10)
+            .map_or(self.0.len(), |(i, _)| i);
+        &self.0[..end]
     }
 }
 
@@ -91,5 +118,28 @@ mod tests {
         assert_eq!(GitId("abc".into()).short(), "abc");
         assert_eq!(format!("{:?}", GitId(lower.into())), "GitId(0123456789)");
         assert_eq!(GitId(lower.into()).to_string(), lower);
+        // Ten characters, not ten bytes: a cut inside one would panic.
+        assert_eq!(GitId("ééééééééééé".into()).short(), "éééééééééé");
+        assert_eq!(GitId("ab".repeat(8)).short(), "ababababab");
+    }
+
+    /// JSON gives a git id only as Lonca writes one, unchanged.
+    #[test]
+    fn a_git_id_is_read_from_json_only_as_written() {
+        let lower = "0123456789abcdef0123456789abcdef01234567";
+        let id: GitId = serde_json::from_value(serde_json::json!(lower)).unwrap();
+        assert_eq!(id.0, lower);
+        assert_eq!(serde_json::to_value(&id).unwrap(), serde_json::json!(lower));
+        let upper = lower.to_uppercase();
+        for bad in [
+            "",
+            "abc",
+            "ééééééééééééééééééé",
+            &format!("{}é", &lower[..38]),
+            &upper,
+        ] {
+            let r = serde_json::from_value::<GitId>(serde_json::json!(bad));
+            assert!(r.is_err(), "{bad}");
+        }
     }
 }

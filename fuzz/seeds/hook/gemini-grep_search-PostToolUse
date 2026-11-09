@@ -1,0 +1,1 @@
+{"hook_event_name":"PostToolUse","tool_name":"grep_search","tool_input":{"dir_path":"/tmp/lonca-fuzz-ws/src/lib.rs"},"workspace":"/tmp/lonca-fuzz-ws","harness":"gemini"}

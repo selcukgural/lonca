@@ -16,12 +16,26 @@ use serde_json::json;
 use crate::ctx::call;
 use crate::workspace::fetch;
 
+/// Entries from `from`, at most `limit` of them (all with `None`). The
+/// daemon answers a page at a time, so a longer log takes several requests:
+/// one alone would plan a revert from the first page and undo a policy
+/// update to a policy older than the one before it.
 fn ops(c: &mut Client, from: u64, limit: Option<u64>) -> Result<Vec<SignedOp>> {
-    Ok(serde_json::from_value(call(
-        c,
-        "log",
-        json!({"from": from, "limit": limit}),
-    )?)?)
+    entries(from, limit, crate::LOG_PAGE, |from, limit| {
+        let page = call(c, "log", json!({"from": from, "limit": limit}))?;
+        Ok(page.as_array().cloned().unwrap_or_default())
+    })
+}
+
+fn entries(
+    from: u64,
+    limit: Option<u64>,
+    page: u64,
+    fetch: impl FnMut(u64, u64) -> Result<Vec<serde_json::Value>>,
+) -> Result<Vec<SignedOp>> {
+    let pages = crate::log_pages(from, limit, page, fetch)?;
+    let entries = pages.into_iter().map(serde_json::from_value);
+    Ok(entries.collect::<Result<_, _>>()?)
 }
 
 fn trunk(c: &mut Client) -> Result<GitId> {
@@ -379,6 +393,41 @@ mod batch_tests {
             decision: Decision::allow(),
             human: None,
         }
+    }
+
+    /// A log longer than a page is read whole, and a range ends where it
+    /// was asked to: the daemon never answers more than a page.
+    #[test]
+    fn the_log_is_read_past_the_first_page() {
+        let log: Vec<serde_json::Value> = (0..5)
+            .map(|seq| {
+                let op = Op::Freeze {
+                    reason: format!("r{seq}"),
+                };
+                let entry = entry(seq, Actor::Daemon, op);
+                let signed = SignedOp {
+                    entry,
+                    hash: String::new(),
+                    sig: String::new(),
+                };
+                serde_json::to_value(signed).unwrap()
+            })
+            .collect();
+        let daemon = |from: u64, limit: u64| {
+            let end = (from + limit.min(2)).min(log.len() as u64);
+            Ok(log[from.min(end) as usize..end as usize].to_vec())
+        };
+        let seqs = |ops: Vec<SignedOp>| ops.iter().map(|o| o.entry.seq).collect::<Vec<_>>();
+        assert_eq!(seqs(entries(0, None, 2, daemon).unwrap()), [0, 1, 2, 3, 4]);
+        assert_eq!(seqs(entries(0, Some(3), 2, daemon).unwrap()), [0, 1, 2]);
+        assert_eq!(seqs(entries(4, Some(1), 2, daemon).unwrap()), [4]);
+        let bad = |from: u64, _| {
+            Ok(vec![json!({"no": "entry"})]
+                .into_iter()
+                .take((from == 0).into())
+                .collect())
+        };
+        assert!(entries(0, None, 2, bad).is_err());
     }
 
     /// Only `ann`'s: of two sessions alike, of a batch with `bob`'s change.

@@ -122,7 +122,7 @@ fn in_file(
         has_error,
         ..
     } = parse_at(engine, lang, src);
-    let tree = lang.parse(src).filter(|_| !has_error);
+    let tree = lang.parse_at(engine, src).filter(|_| !has_error);
     let Some(tree) = tree else { return false };
     let kinds = &lang.rules().names;
     tokens(tree.root_node(), &mut |n| {

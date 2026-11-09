@@ -310,7 +310,10 @@ fn keyed_names(engine: u32, lang: Lang, texts: &[&str]) -> Keyed {
     if engine < ENGINE_KEYS {
         return keyed;
     }
-    let trees: Vec<_> = texts.iter().map(|t| (lang.parse(t), *t)).collect();
+    let trees: Vec<_> = texts
+        .iter()
+        .map(|t| (lang.parse_at(engine, t), *t))
+        .collect();
     loop {
         let before = keyed.len();
         for (tree, src) in &trees {
@@ -331,7 +334,7 @@ fn keyed_names(engine: u32, lang: Lang, texts: &[&str]) -> Keyed {
 
 /// `src` with the names in `keyed` read by their key.
 pub fn parse_keyed(engine: u32, lang: Lang, src: &str, keyed: &Keyed) -> Parsed {
-    let Some(tree) = lang.parse(src) else {
+    let Some(tree) = lang.parse_at(engine, src) else {
         return Parsed {
             syms: vec![],
             imports: vec![],

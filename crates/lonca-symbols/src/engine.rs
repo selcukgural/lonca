@@ -15,6 +15,8 @@
 
 use lonca_core::{Error, Result};
 
+use crate::lang::Lang;
+
 /// The engine this build writes. Version 0 is the engine of every entry
 /// written before versions were recorded; version 1 adds the sections of
 /// Markdown, TOML, JSON and YAML files; version 2 compares code exactly;
@@ -30,8 +32,9 @@ use lonca_core::{Error, Result};
 /// reads a file up to a size, and its names up to a total; version 14 joins
 /// by lines a symbol both sides changed, where the caller says it may;
 /// version 15 takes ours as the merge when it already has every change of
-/// theirs, and deletes a symbol with the wider of the gaps around it.
-pub const ENGINE_CURRENT: u32 = 15;
+/// theirs, and deletes a symbol with the wider of the gaps around it; version
+/// 16 parses a file within a budget of steps.
+pub const ENGINE_CURRENT: u32 = 16;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -110,8 +113,50 @@ pub fn reads_size(engine: u32, len: usize) -> bool {
     engine < ENGINE_LIMITS || len <= MAX_READ
 }
 
+/// The first engine that parses within [`parse_budget`]: a grammar can take
+/// far more work, and memory, than its file is long, and stops there.
+pub const ENGINE_BUDGET: u32 = 16;
+
+/// The steps every parse may take, whatever its length.
+pub const PARSE_BASE: u64 = 256;
+
+/// The bytes of a file that earn one more step.
+pub const PARSE_BYTES_PER_STEP: u64 = 4;
+
+/// The most steps a parse may take.
+pub const PARSE_MAX: u64 = 8192;
+
+/// The steps a parse of `len` bytes may take. A step is one check of
+/// tree-sitter's progress callback, which it makes after a fixed count of
+/// parse actions (100 in tree-sitter 0.27): it counts work, not time, so the
+/// auditor stops where the daemon stopped. Code people write takes under a
+/// tenth of a step per byte and stays below [`PARSE_MAX`] up to about 200 KB.
+pub fn parse_budget(len: usize) -> u64 {
+    let len = u64::try_from(len).unwrap_or(u64::MAX);
+    PARSE_BASE
+        .saturating_add(len / PARSE_BYTES_PER_STEP)
+        .min(PARSE_MAX)
+}
+
+/// `engine` reads `text` with `lang` for symbols: it is within
+/// [`MAX_READ`], and the grammar gets through it within [`parse_budget`]. A
+/// text it does not read goes by its lines, as a file no grammar reads.
+pub fn reads_text(engine: u32, lang: Lang, text: &str) -> bool {
+    reads_size(engine, text.len())
+        && (engine < ENGINE_BUDGET || lang.parse_at(engine, text).is_some())
+}
+
+/// [`reads_text`] for the bytes of a file; text that is not UTF-8 is not
+/// parsed, so only its size counts.
+pub fn reads_bytes(engine: u32, lang: Lang, bytes: &[u8]) -> bool {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => reads_text(engine, lang, text),
+        Err(_) => reads_size(engine, bytes.len()),
+    }
+}
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {
@@ -134,6 +179,37 @@ mod tests {
         assert!(reads_size(ENGINE_LIMITS, MAX_READ));
         assert!(!reads_size(ENGINE_LIMITS, MAX_READ + 1));
         assert!(reads_size(ENGINE_LIMITS - 1, MAX_READ + 1));
+    }
+
+    #[test]
+    fn a_text_is_read_within_its_size_and_its_budget() {
+        let rust = Lang::named("rust");
+        let large = crate::lang::past_budget("fn a() {}\n");
+        assert!(reads_text(ENGINE_BUDGET, rust, "fn a() {}\n"));
+        assert!(!reads_text(ENGINE_BUDGET, rust, &large));
+        assert!(reads_text(ENGINE_BUDGET - 1, rust, &large));
+        let long = "/".repeat(MAX_READ + 1);
+        assert!(!reads_text(ENGINE_BUDGET, rust, &long));
+        assert!(!reads_text(ENGINE_BUDGET - 1, rust, &long));
+        assert!(reads_bytes(ENGINE_BUDGET, rust, b"fn a() {}\n"));
+        assert!(!reads_bytes(ENGINE_BUDGET, rust, large.as_bytes()));
+        assert!(reads_bytes(ENGINE_BUDGET, rust, b"\xff fn"));
+        let mut bad = vec![0xff];
+        bad.resize(MAX_READ + 1, b' ');
+        assert!(!reads_bytes(ENGINE_BUDGET, rust, &bad));
+    }
+
+    #[test]
+    fn a_parse_takes_steps_by_its_length_up_to_the_most() {
+        assert_eq!(parse_budget(0), PARSE_BASE);
+        assert_eq!(parse_budget(3), PARSE_BASE);
+        assert_eq!(parse_budget(4), PARSE_BASE + 1);
+        assert_eq!(parse_budget(4000), PARSE_BASE + 1000);
+        let full = usize::try_from((PARSE_MAX - PARSE_BASE) * PARSE_BYTES_PER_STEP).unwrap();
+        assert_eq!(parse_budget(full - 4), PARSE_MAX - 1);
+        assert_eq!(parse_budget(full), PARSE_MAX);
+        assert_eq!(parse_budget(full + 4), PARSE_MAX);
+        assert_eq!(parse_budget(usize::MAX), PARSE_MAX);
     }
 
     #[test]

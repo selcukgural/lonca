@@ -1,0 +1,678 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.php#Client.charge"
+        ],
+        "import_only_files": [
+          "src/sample.php"
+        ],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.php"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.php#Shape.side"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.php#Client.__construct",
+          "src/sample.php#top"
+        ],
+        "import_only_files": [],
+        "lines_added": 3,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.php"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "<?php\ndeclare(strict_types=1);\n\nnamespace App\\Models;\n\nuse Foo\\Bar;\nuse Foo\\Baz;\n\n/** A client. */\n#[Entity]\nclass Client extends Base {\n    const LIMIT = 10;\n\n    private int $total = 0;\n\n    public function __construct(int $total) {\n        $this->total = $total + 1;\n    }\n\n    public function charge(int $amount): int {\n        return $this->total + $amount + 1;\n    }\n\n    public function testCharge() {\n        $this->assertTrue(true);\n    }\n\n    #[Test]\n    public function later() {\n        $this->markTestSkipped();\n    }\n}\n\ninterface Shape {\n    public function area(): float;\n    public function side(): int;\n}\n\nenum Color: string {\n    case Red = 'r';\n    public function code() { return 1; }\n}\n\nfunction top($x) {\n    return $x + 1;\n}\n"
+  },
+  "path": "src/sample.php",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          55,
+          67
+        ]
+      ],
+      "js_tests": [],
+      "residual": "program(<?php\u001fdeclare_statement(declare\u001f(\u001fdeclare_directive(strict_types\u001f=\u001f1\u001f))\u001f;\u001f)namespace_definition(namespace\u001fnamespace_name(App\u001f\\\u001fModels\u001f);\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.LIMIT",
+              "own": "",
+              "signature": "LIMIT = 10;",
+              "skipped": false,
+              "span": [
+                128,
+                128,
+                145
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.$total",
+              "own": "",
+              "signature": "private int $total =",
+              "skipped": false,
+              "span": [
+                151,
+                151,
+                174
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.__construct",
+              "own": "",
+              "signature": "public function __construct(int $total)",
+              "skipped": false,
+              "span": [
+                180,
+                180,
+                258
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge",
+              "own": "",
+              "signature": "public function charge(int $amount): int",
+              "skipped": false,
+              "span": [
+                264,
+                264,
+                351
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.testCharge",
+              "own": "",
+              "signature": "public function testCharge()",
+              "skipped": false,
+              "span": [
+                357,
+                357,
+                426
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.later",
+              "own": "",
+              "signature": "public function later()",
+              "skipped": true,
+              "span": [
+                432,
+                432,
+                509
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(attribute_list(attribute_group(#[\u001fattribute(Entity\u001f)]\u001f))class\u001fClient\u001fbase_clause(extends\u001fBase\u001f)declaration_list({\u001f}\u001f))",
+          "signature": "Client extends Base",
+          "skipped": false,
+          "span": [
+            69,
+            86,
+            511
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": "public function area(): float;",
+              "skipped": false,
+              "span": [
+                535,
+                535,
+                565
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "interface_declaration(interface\u001fShape\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "Shape",
+          "skipped": false,
+          "span": [
+            513,
+            513,
+            567
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Color.Red",
+              "own": "",
+              "signature": "Red =",
+              "skipped": false,
+              "span": [
+                594,
+                594,
+                609
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Color.code",
+              "own": "",
+              "signature": "public function code()",
+              "skipped": false,
+              "span": [
+                614,
+                614,
+                650
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Color",
+          "own": "enum_declaration(enum\u001fColor\u001f:\u001fstring\u001fenum_declaration_list({\u001f}\u001f))",
+          "signature": "Color: string",
+          "skipped": false,
+          "span": [
+            569,
+            569,
+            652
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "top($x)",
+          "skipped": false,
+          "span": [
+            654,
+            654,
+            689
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          55,
+          67
+        ],
+        [
+          68,
+          80
+        ]
+      ],
+      "js_tests": [],
+      "residual": "program(<?php\u001fdeclare_statement(declare\u001f(\u001fdeclare_directive(strict_types\u001f=\u001f1\u001f))\u001f;\u001f)namespace_definition(namespace\u001fnamespace_name(App\u001f\\\u001fModels\u001f);\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.LIMIT",
+              "own": "",
+              "signature": "LIMIT = 10;",
+              "skipped": false,
+              "span": [
+                141,
+                141,
+                158
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.$total",
+              "own": "",
+              "signature": "private int $total =",
+              "skipped": false,
+              "span": [
+                164,
+                164,
+                187
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.__construct",
+              "own": "",
+              "signature": "public function __construct(int $total)",
+              "skipped": false,
+              "span": [
+                193,
+                193,
+                271
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge",
+              "own": "",
+              "signature": "public function charge(int $amount): int",
+              "skipped": false,
+              "span": [
+                277,
+                277,
+                368
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.testCharge",
+              "own": "",
+              "signature": "public function testCharge()",
+              "skipped": false,
+              "span": [
+                374,
+                374,
+                443
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.later",
+              "own": "",
+              "signature": "public function later()",
+              "skipped": true,
+              "span": [
+                449,
+                449,
+                526
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(attribute_list(attribute_group(#[\u001fattribute(Entity\u001f)]\u001f))class\u001fClient\u001fbase_clause(extends\u001fBase\u001f)declaration_list({\u001f}\u001f))",
+          "signature": "Client extends Base",
+          "skipped": false,
+          "span": [
+            82,
+            99,
+            528
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": "public function area(): float;",
+              "skipped": false,
+              "span": [
+                552,
+                552,
+                582
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "interface_declaration(interface\u001fShape\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "Shape",
+          "skipped": false,
+          "span": [
+            530,
+            530,
+            584
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Color.Red",
+              "own": "",
+              "signature": "Red =",
+              "skipped": false,
+              "span": [
+                611,
+                611,
+                626
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Color.code",
+              "own": "",
+              "signature": "public function code()",
+              "skipped": false,
+              "span": [
+                631,
+                631,
+                667
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Color",
+          "own": "enum_declaration(enum\u001fColor\u001f:\u001fstring\u001fenum_declaration_list({\u001f}\u001f))",
+          "signature": "Color: string",
+          "skipped": false,
+          "span": [
+            586,
+            586,
+            669
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "top($x)",
+          "skipped": false,
+          "span": [
+            671,
+            671,
+            706
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          55,
+          67
+        ]
+      ],
+      "js_tests": [],
+      "residual": "program(<?php\u001fdeclare_statement(declare\u001f(\u001fdeclare_directive(strict_types\u001f=\u001f1\u001f))\u001f;\u001f)namespace_definition(namespace\u001fnamespace_name(App\u001f\\\u001fModels\u001f);\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.LIMIT",
+              "own": "",
+              "signature": "LIMIT = 10;",
+              "skipped": false,
+              "span": [
+                128,
+                128,
+                145
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.$total",
+              "own": "",
+              "signature": "private int $total =",
+              "skipped": false,
+              "span": [
+                151,
+                151,
+                174
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.__construct",
+              "own": "",
+              "signature": "public function __construct(int $total)",
+              "skipped": false,
+              "span": [
+                180,
+                180,
+                262
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Client.charge",
+              "own": "",
+              "signature": "public function charge(int $amount): int",
+              "skipped": false,
+              "span": [
+                268,
+                268,
+                355
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.testCharge",
+              "own": "",
+              "signature": "public function testCharge()",
+              "skipped": false,
+              "span": [
+                361,
+                361,
+                430
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": true,
+              "name": "Client.later",
+              "own": "",
+              "signature": "public function later()",
+              "skipped": true,
+              "span": [
+                436,
+                436,
+                513
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Client",
+          "own": "/** A client. */\nclass_declaration(attribute_list(attribute_group(#[\u001fattribute(Entity\u001f)]\u001f))class\u001fClient\u001fbase_clause(extends\u001fBase\u001f)declaration_list({\u001f}\u001f))",
+          "signature": "Client extends Base",
+          "skipped": false,
+          "span": [
+            69,
+            86,
+            515
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.area",
+              "own": "",
+              "signature": "public function area(): float;",
+              "skipped": false,
+              "span": [
+                539,
+                539,
+                569
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Shape.side",
+              "own": "",
+              "signature": "public function side(): int;",
+              "skipped": false,
+              "span": [
+                574,
+                574,
+                602
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Shape",
+          "own": "interface_declaration(interface\u001fShape\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "Shape",
+          "skipped": false,
+          "span": [
+            517,
+            517,
+            604
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Color.Red",
+              "own": "",
+              "signature": "Red =",
+              "skipped": false,
+              "span": [
+                631,
+                631,
+                646
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Color.code",
+              "own": "",
+              "signature": "public function code()",
+              "skipped": false,
+              "span": [
+                651,
+                651,
+                687
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Color",
+          "own": "enum_declaration(enum\u001fColor\u001f:\u001fstring\u001fenum_declaration_list({\u001f}\u001f))",
+          "signature": "Color: string",
+          "skipped": false,
+          "span": [
+            606,
+            606,
+            689
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "top",
+          "own": "",
+          "signature": "top($x)",
+          "skipped": false,
+          "span": [
+            691,
+            691,
+            730
+          ]
+        }
+      ]
+    }
+  }
+}

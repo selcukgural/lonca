@@ -6,10 +6,13 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::ControlFlow;
 use std::sync::LazyLock;
 
 use serde::Deserialize;
-use tree_sitter::{Language, Parser, Tree};
+use tree_sitter::{Language, ParseOptions, ParseState, Parser, Tree};
+
+use crate::engine::{ENGINE_BUDGET, parse_budget};
 
 /// Every grammar in this build, one line each. A grammar is native code, so
 /// it can not come from a table, and a new one needs a release.
@@ -413,11 +416,55 @@ impl Lang {
         self.rules
     }
 
+    /// `text` parsed as the current engine parses it.
     pub fn parse(self, text: &str) -> Option<Tree> {
-        let mut p = Parser::new();
-        p.set_language(&grammar(&self.entry.grammar)?).ok()?;
-        p.parse(text, None)
+        self.parse_at(crate::engine::ENGINE_CURRENT, text)
     }
+
+    /// `text` parsed as `engine` parses it: from [`ENGINE_BUDGET`] within
+    /// [`parse_budget`] of its length, and `None` past it.
+    pub fn parse_at(self, engine: u32, text: &str) -> Option<Tree> {
+        let budget = if engine < ENGINE_BUDGET {
+            u64::MAX
+        } else {
+            parse_budget(text.len())
+        };
+        self.parse_within(text, budget).0
+    }
+
+    /// `text` parsed in at most `budget` steps, and the steps it took; `None`
+    /// once it would take one more.
+    pub(crate) fn parse_within(self, text: &str, budget: u64) -> (Option<Tree>, u64) {
+        let mut steps = 0u64;
+        let Some(language) = grammar(&self.entry.grammar) else {
+            return (None, steps);
+        };
+        let mut p = Parser::new();
+        if p.set_language(&language).is_err() {
+            return (None, steps);
+        }
+        let mut step = |_: &ParseState| {
+            steps += 1;
+            if steps > budget {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        };
+        let options = ParseOptions::new().progress_callback(&mut step);
+        let bytes = text.as_bytes();
+        let mut read = |at: usize, _| bytes.get(at..).unwrap_or_default();
+        let tree = p.parse_with_options(&mut read, None, Some(options));
+        (tree, steps)
+    }
+}
+
+/// `code` with Rust behind it that takes more than
+/// [`crate::engine::PARSE_MAX`] steps to parse: about 10,500, in 150 KB, far
+/// within [`crate::engine::MAX_READ`].
+#[cfg(test)]
+pub(crate) fn past_budget(code: &str) -> String {
+    format!("{code}fn filler() {{ {} }}\n", "-!-a;".repeat(30_000))
 }
 
 #[cfg(test)]
@@ -425,6 +472,35 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::engine::{ENGINE_CURRENT, PARSE_MAX};
+
+    #[test]
+    fn a_parse_stops_at_the_step_past_its_budget() {
+        let rust = Lang::named("rust");
+        let text = "fn f() { -!-a; }\n".repeat(200);
+        let (tree, steps) = rust.parse_within(&text, u64::MAX);
+        assert!(tree.is_some_and(|t| !t.root_node().has_error()));
+        assert!(steps > 10, "{steps}");
+        let (whole, taken) = rust.parse_within(&text, steps);
+        assert!(whole.is_some());
+        assert_eq!(taken, steps);
+        let (cut, taken) = rust.parse_within(&text, steps - 1);
+        assert!(cut.is_none());
+        assert_eq!(taken, steps);
+    }
+
+    #[test]
+    fn the_budget_holds_from_its_engine_on() {
+        let rust = Lang::named("rust");
+        let large = past_budget("");
+        let (_, steps) = rust.parse_within(&large, u64::MAX);
+        assert!(steps > PARSE_MAX && steps < PARSE_MAX * 2, "{steps}");
+        assert!(rust.parse_at(ENGINE_BUDGET, &large).is_none());
+        assert!(rust.parse_at(ENGINE_CURRENT, &large).is_none());
+        assert!(rust.parse(&large).is_none());
+        assert!(rust.parse_at(ENGINE_BUDGET - 1, &large).is_some());
+        assert!(rust.parse_at(ENGINE_BUDGET, "fn f() {}\n").is_some());
+    }
 
     fn grammars_of(rules: &str) -> Vec<Language> {
         let using = TABLE.language.iter().filter(|e| e.rules == rules);

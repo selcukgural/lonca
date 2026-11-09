@@ -688,6 +688,32 @@ entry format, so they have their own version
     symbol of a file and add none, there is nothing to hold the result to,
     and the file is a conflict.
     Engines before 13 read everything, as they always did.
+- **Engine 16** parses within a budget of work. A grammar can take far more
+  work, and memory, than its file is long: the Kotlin grammar found by the
+  fuzzer (#15) grew past 3 GB in half a minute on 1.2 KB, and one agent
+  proposing such a file took the daemon down.
+  - A parse may take `PARSE_BASE` (256) steps and one more for every
+    `PARSE_BYTES_PER_STEP` (4) bytes, and never more than `PARSE_MAX` (8192).
+    A step is one call of tree-sitter's progress callback, which it makes after
+    a fixed count of parse actions (100 in tree-sitter 0.27): it counts work,
+    not time, so the auditor stops where the daemon stopped. A change of that
+    count in tree-sitter is a new engine, as any grammar update is.
+  - The numbers come from 38,790 source files of every language read (the
+    cargo registry, node modules, Homebrew, local projects): none took more
+    than 0.034 steps per byte, and 11 of them, all generated and over 1 MB,
+    more than 8192. Deeply nested C++ templates, the densest valid code found,
+    take 0.16. The Kotlin input stops at about 330 steps, in under half a
+    second; at `PARSE_MAX` such an input costs about 10 s and 270 MB a parse.
+  - A text past its budget goes as one past `MAX_READ` does: its file goes by
+    its lines on every side of a comparison or merge, and the verifier's
+    syntax check leaves it alone, so a strict language does not refuse a long
+    generated file. `Lang::parse_at` stops at the budget on every path, the
+    scan of what mentions a removed name too.
+  - A file is parsed once more to tell whether it is within its budget, so
+    what a file costs at most doubles.
+  - Engines before 16 parse as they did, without a budget, so that entries are
+    recomputed as they were written. The auditor reads at those engines only
+    an entry, and an entry exists only if its daemon got through its files.
 - **The cost of a merge grows with the file**, in every engine. Going through a
   list for each symbol, node or change made a merge of 300 KB take minutes.
   What did that now has a look-up (`Cuts`, `Namespaces`, `neighbours`,

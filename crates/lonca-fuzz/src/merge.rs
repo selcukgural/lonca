@@ -6,13 +6,14 @@
 //! answer twice, as the auditor recomputes it, and a conflict must name
 //! something. Under the current engine a merge of three sides that read
 //! must read too: it may conflict, but never succeed into a file the
-//! grammar can not read.
+//! grammar can not read. An engine without a parse budget sees only texts
+//! the budget lets through (`parse::bounded`).
 
 use lonca_symbols::engine::ENGINE_CURRENT;
 use lonca_symbols::merge::{marked_around_conflicts, merge_around_conflicts, merge_text_at};
 use lonca_symbols::{Lang, parse_at};
 
-use crate::parse::header;
+use crate::parse::{bounded, header};
 use crate::texts;
 
 pub fn check(data: &[u8]) {
@@ -20,6 +21,9 @@ pub fn check(data: &[u8]) {
         return;
     };
     let [b, o, t] = texts::<3>(rest);
+    if !bounded(engine, path, &[&b, &o, &t]) {
+        return;
+    }
     let merged = merge_text_at(engine, path, &b, &o, &t);
     assert_eq!(
         merged,

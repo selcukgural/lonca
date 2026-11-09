@@ -16,6 +16,7 @@ use lonca_core::{FileEntry, FileMap, GitId, Result};
 use crate::engine::{
     ENGINE_ALREADY, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GAPS, ENGINE_GROUPS, ENGINE_KEYS,
     ENGINE_LANGUAGES, ENGINE_LINE_MERGE, ENGINE_PLACES, ENGINE_SECTIONS, ENGINE_SHARED, reads_size,
+    reads_text,
 };
 use crate::extract::{
     Holder, Keyed, Pair, Parsed, Placed, Sym, align, key_twice, moved, normalize, parse_at,
@@ -181,7 +182,7 @@ fn section_merge(
     o: &str,
     t: &str,
 ) -> Option<std::result::Result<String, Vec<String>>> {
-    if engine < ENGINE_SECTIONS || !all_read(engine, [b, o, t]) {
+    if engine < ENGINE_SECTIONS || ![b, o, t].iter().all(|t| reads_size(engine, t.len())) {
         return None;
     }
     let format = Format::detect(path)?;
@@ -194,8 +195,8 @@ fn section_merge(
 
 /// `engine` reads all three sides of a file: a side it does not read has no
 /// symbols, and a file that has them on one side only has nothing to compare.
-fn all_read(engine: u32, texts: [&str; 3]) -> bool {
-    texts.iter().all(|t| reads_size(engine, t.len()))
+fn all_read(engine: u32, lang: Lang, texts: [&str; 3]) -> bool {
+    texts.iter().all(|t| reads_text(engine, lang, t))
 }
 
 /// Merges one file's text with the given engine.
@@ -222,7 +223,7 @@ pub fn merge_text_joining(
         return r;
     }
     let file_conflict = || vec![format!("{path}#<file>")];
-    let lang = Lang::detect_at(engine, path).filter(|_| all_read(engine, [b, o, t]));
+    let lang = Lang::detect_at(engine, path).filter(|&l| all_read(engine, l, [b, o, t]));
     if let Some(lang) = lang {
         match symbol_merge(engine, path, lang, [b, o, t], joins) {
             Sm::Merged(s) => return Ok(s),
@@ -334,7 +335,7 @@ fn around_conflicts(
     o: &str,
     t: &str,
 ) -> Option<(String, Vec<String>)> {
-    let lang = Lang::detect_at(engine, path).filter(|_| all_read(engine, [b, o, t]))?;
+    let lang = Lang::detect_at(engine, path).filter(|&l| all_read(engine, l, [b, o, t]))?;
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
         return None;
@@ -1348,12 +1349,14 @@ mod tests {
             }
         }
     }
+    use crate::engine::ENGINE_BUDGET;
     use crate::engine::ENGINE_CURRENT;
     use crate::engine::ENGINE_LEVELS;
     use crate::engine::ENGINE_LIMITS;
     use crate::engine::ENGINE_RENAMES;
     use crate::engine::MAX_READ;
     use crate::extract::{parse, parse_at};
+    use crate::lang::past_budget;
 
     /// `text` of exactly `len` bytes, with what it holds in front.
     fn filled(text: &str, len: usize) -> String {
@@ -1384,6 +1387,22 @@ mod tests {
         }
         let [b, o, t] = neighbours_of(MAX_READ + 1);
         assert!(merge_text_at(ENGINE_LIMITS - 1, "a.rs", &b, &o, &t).is_ok());
+    }
+
+    #[test]
+    fn a_file_past_the_parse_budget_merges_by_its_lines() {
+        let [b, o, t] = neighbours_of(64).map(|s| past_budget(&s));
+        assert_eq!(
+            merge_text_at(ENGINE_BUDGET, "a.rs", &b, &o, &t),
+            Err(vec!["a.rs#<file>".to_string()])
+        );
+        assert_eq!(
+            merge_around_conflicts(ENGINE_BUDGET, "a.rs", &b, &o, &t),
+            None
+        );
+        assert!(merge_text_at(ENGINE_BUDGET - 1, "a.rs", &b, &o, &t).is_ok());
+        let [b, o, t] = neighbours_of(64).map(|s| s + "fn filler() { -!-a; }\n");
+        assert!(merge_text_at(ENGINE_BUDGET, "a.rs", &b, &o, &t).is_ok());
     }
 
     #[test]

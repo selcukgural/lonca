@@ -15,8 +15,8 @@ name: release
 # (`gh attestation verify lonca-<target>.tar.gz --repo selcukgural/lonca`).
 # The notes are the version's section of docs/release-notes.md (`## X.Y.Z`).
 #
-# The release stays a draft: ci.yml and mutants.yml run on the same tag, and
-# a maintainer publishes the draft once both are green. Publishing starts
+# The release stays a draft: ci.yml runs on the same tag, and a maintainer
+# publishes the draft once it is green. Publishing starts
 # registries.yml (crates.io); the Homebrew tap and install.sh read the
 # latest published release.
 #

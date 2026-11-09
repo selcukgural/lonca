@@ -1880,14 +1880,14 @@ tainted the session for good, closing every critical path to it.
 ## CI runs for a release
 
 Since 2026-11-08 the tests (`ci.yml`: Ubuntu, macOS and the bubblewrap
-`sandbox` job) and the mutants run only when a `v*` tag is pushed, and on
-demand before tagging. Pull requests and merges to main run neither, and the
+`sandbox` job) run only when a `v*` tag is pushed, and on demand before
+tagging; the mutants only on demand (since 2026-11-09, "Mutation testing"). Pull requests and merges to main run neither, and the
 main ruleset requires no status check (since #60 it requires a pull request,
 see "CI and the repository's own settings"). Waiting for CI on every pull request cost more time than it saved.
 What this gives up: main can take a commit that fails to build or breaks a
 test, and that is seen only at the next release run or a local
-`cargo test --workspace`. A release is tagged only after both workflows,
-run on demand on main, are green. `cargo-deny` and CodeQL still run on pull
+`cargo test --workspace`. A release is tagged only after `ci.yml`, run on
+demand on main, is green. `cargo-deny` and CodeQL still run on pull
 requests and block nothing.
 
 ## Mutation testing
@@ -1898,21 +1898,29 @@ Passing tests do not show that they would catch a flipped `>=` or a
 - **Tool: cargo-mutants** (27.1.0, pinned with `--locked` and an explicit
   version). It needs no code changes or annotations, reads
   `.cargo/mutants.toml`, and supports `--shard` for splitting a full run.
-- **Every night, and for a release (2026-11-08).** Mutants run every night
-  on main (00:07 UTC, the whole workspace in 20 shards, a few hours), when
-  a `v*` tag is pushed, and on demand, never on a pull request or a merge to main (see "CI
-  runs for a release"). The per-PR run, even in two stages
-  with settled results kept between pushes, made every pull request wait for
-  minutes to tens of minutes. The nightly run was dropped with the PR
-  stages the same morning and came back that evening: a full run takes
-  hours, too long to wait for just before tagging, so the survivors are
-  found overnight and fixed the next day. 0.2.0 goes out without a
-  mutants run (user's decision, 2026-11-08); the nightly finds its
-  survivors, fixed in a patch release. A release runs the whole workspace in 20 shards with no shortcut,
-  so it also sees a test weakened but not removed, or a callee change that
-  stops a test reaching a function. Survivors are fixed before the release.
-  The PR stages (own crate, then workspace) and the results cache are gone
-  from CI; `lonca-mutants`, which kept those results, has no caller in CI now.
+- **On demand, on the gated files' changes only; it gates nothing
+  (2026-11-09, user's decision).** `mutants.yml` runs only when started by
+  hand. It mutates the gated files (below) and only what changed in them
+  since the last `v*` tag, each mutant against the whole workspace. No
+  release, pull request or merge waits for it. Before this, every release
+  and every night ran the whole workspace in 20 shards: 5,669 mutants at
+  about 60 s of build and 90 s of tests each, some 180 hours of runner time,
+  and shards hit the six-hour limit so a run never finished and blocked
+  0.2.2. What it bought did not pay for that: of 47 commits that answered
+  mutants, nearly all only added tests (about 23,000 lines under `tests/`),
+  and the behaviour they changed was minor (the CLI inventing a session
+  expiry the daemon left out, a merge corner). The real bugs of the same
+  weeks (SIGPIPE panics, the proxy's `::1`, the parser's blow-up, the review
+  findings) came from use, fuzzing and review. Mutants are kept where a
+  silently weakened test would hurt most, the trust model, and there the
+  diff since the last release is small (31 mutants for 0.2.1..main, minutes
+  of runner time). Measured and rejected as not enough on their own: no
+  debug info (no faster to rebuild), running fast tests first (about 40 %
+  off the test half), two stages with results kept (#147's setup). Given
+  up: a test weakened outside the diff, or a callee change that stops a
+  test reaching a gated function, goes unseen until someone runs
+  cargo-mutants on that code. `lonca-mutants`, which kept the PR stages'
+  results, has no caller in CI.
 - **`nextest` runs the tests of a mutant** (`test_tool`), still the whole
   workspace. `cargo test` goes crate by crate, so a mutant in `lonca-symbols`
   waited for the daemon's and the CLI's tests before its own could catch it.
@@ -1943,13 +1951,13 @@ Passing tests do not show that they would catch a flipped `>=` or a
   lists the files that hold the trust model: `decide.rs`, `chain.rs`,
   `state.rs` and `human.rs` of `lonca-policy`; `oplog.rs`, `canonical.rs`,
   `changeid.rs`, `keys.rs` and `paths.rs` of `lonca-core`; all of
-  `lonca-audit`; `merge.rs` and `integrate.rs` of `lonca-symbols`. A survivor
-  anywhere already fails a release, so the gate adds what that rule lets
-  through. A timeout counts as caught, but in a gated file it fails: it is a
+  `lonca-audit`; `merge.rs` and `integrate.rs` of `lonca-symbols`. They are the
+  only files `mutants.yml` mutates. A timeout counts as caught, but in a
+  gated file it fails: it is a
   loop no test ends or a test too slow to tell, and either hides whether the
   mutant was found. Every exclusion in a gated file is listed by name
   (path and mutant, no line) in `.cargo/mutants-gated-exclusions.txt`; the
-  release run's `exclusions` job compares that list with what
+  run's `exclusions` job compares that list with what
   `cargo mutants --list` with and without the config tells apart, so a new
   regex that happens to hide a gated mutant fails until it is listed, and
   the listing shows in review: CODEOWNERS names an owner for `.cargo/` and
@@ -1958,8 +1966,8 @@ Passing tests do not show that they would catch a flipped `>=` or a
   prints each crate's score and the gated files' from all shards in the
   run's summary. The issue asked for the gate on the PR job and for a floor
   under the scores of `lonca-policy` and `lonca-core`; the PR job is gone
-  (mutants run only for a release), and with no survivor allowed anywhere a
-  floor below 100 % checks nothing more.
+  (mutants run only on demand), and with no survivor allowed in the gated
+  files a floor below 100 % checks nothing more.
 - **Tests are hermetic under mutation.** cargo-mutants runs copies of the
   tree in parallel. Tests use their own temp dirs, `127.0.0.1:0` ports and
   short socket paths; the CLI tests point `HOME` and `LONCA_HOME` into
@@ -3256,8 +3264,8 @@ release (roadmap M2).
   --bin .`) and, on macOS, `lonca-se`. `SHA256SUMS`, the SBOM and a build
   provenance attestation per archive go with them; the notes are the
   version's section of `docs/release-notes.md` (`## X.Y.Z`), and a tag with
-  none fails. `ci.yml` and `mutants.yml` run on the same tag, and the
-  maintainer publishes the draft only when both are green: the binaries are
+  none fails. `ci.yml` runs on the same tag, and the
+  maintainer publishes the draft only when it is green: the binaries are
   built before the tests have passed, but nobody downloads them until then.
 - **`lonca-se` is signed ad hoc**, as `build-lonca-se.sh` does. CryptoKit's
   Secure Enclave keys need no keychain entitlement, so no Developer ID is
@@ -3518,7 +3526,7 @@ run them and what each holds: `docs/fuzzing.md`.
   reaches the network or files outside the copy.
 - **Not on pull requests**, a deviation from the issue, kept from "CI runs
   for a release": every night on main and on demand, which the release
-  checklist does before tagging. Not on a tag either, unlike the mutants:
+  checklist does before tagging. Not on a tag either:
   the corpus lives in the Actions cache, and a release run restoring a cache
   is what zizmor's `cache-poisoning` refuses.
 - **What it finds is not published.** The repository and its logs are

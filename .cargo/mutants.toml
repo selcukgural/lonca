@@ -6,8 +6,8 @@
 # lonca-policy chain/state from tests/decide.rs, most of lonca-core from
 # downstream crates), so per-package testing reports false survivors. A
 # workspace run is about 200 s on a CI runner, which a mutant pays in full if
-# it survives. So on a pull request this setting is the second stage: the first
-# passes `--test-workspace=false`, and only what that leaves comes here.
+# it survives. That is why CI mutates only the gated files' changes since the
+# last release (docs/decisions.md, "Mutation testing").
 test_workspace = true
 
 # `cargo test` runs one crate after another, so a mutant in a crate late in the
@@ -17,7 +17,7 @@ test_workspace = true
 test_tool = "nextest"
 
 # `--in-diff` measures the baseline with `--package` of the changed crates only,
-# while every mutant runs the whole workspace (`test_workspace`). For a PR on
+# while every mutant runs the whole workspace (`test_workspace`). For a diff in
 # one crate the baseline is ~1 s, so the auto timeout falls to this minimum.
 # A timeout counts as caught, so this must clear a whole run with room to spare,
 # or a survivor on a busy runner passes as caught: 600 s is three times the

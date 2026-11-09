@@ -104,8 +104,9 @@ process on the socket.
 ## Scope of 0.x
 
 One machine, one daemon, one developer with many agents. Claude Code is the
-harness whose hooks are checked in every release; other harnesses are
-profiles of data ([Running agents](runners.md)). A team server is designed
+harness whose hooks are checked in every release
+([Lonca with Claude Code](claude-code.md)); other harnesses are profiles of
+data ([Running agents](runners.md)). A team server is designed
 for, not built. A log written by any 0.x release stays readable, verifiable
 and auditable by every later release.
 

@@ -6,15 +6,30 @@
 // and Kule's sites (website/ in those repositories).
 // @ts-check
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { themes as prismThemes } from 'prism-react-renderer';
 
 const repo = 'https://github.com/selcukgural/lonca';
+
+// The release the site describes: the workspace's version in ../Cargo.toml,
+// the one every crate shares, so the site never names an older one. The
+// build runs in website/ (docs.yml, npm run build).
+function workspaceVersion() {
+  const cargo = fs.readFileSync(path.join(process.cwd(), '..', 'Cargo.toml'), 'utf8');
+  const block = /^\[workspace\.package\]$([\s\S]*?)(?=^\[|$(?![\s\S]))/m.exec(cargo);
+  const version = block && /^version\s*=\s*"([^"]+)"/m.exec(block[1]);
+  if (!version) throw new Error('no [workspace.package] version in ../Cargo.toml');
+  return version[1];
+}
+const version = workspaceVersion();
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Lonca',
   tagline: 'Agent-native, Git-compatible version control',
   favicon: 'img/favicon.svg',
+  customFields: { version },
 
   url: 'https://selcukgural.github.io',
   baseUrl: '/lonca/',
@@ -64,14 +79,25 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       colorMode: { respectPrefersColorScheme: true },
+      // Link previews take no SVG: lonca-banner.png is lonca-banner.svg,
+      // rendered (rsvg-convert -w 1280).
+      image: 'img/lonca-banner.png',
       navbar: {
         title: 'Lonca',
         logo: { alt: 'Lonca', src: 'img/lonca-mark.svg' },
         items: [
           { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
+          { to: '/docs/guide/claude-code', label: 'Claude Code', position: 'left' },
           { to: '/docs/guide/install', label: 'Install', position: 'left' },
           { to: '/docs/protocol', label: 'Protocol', position: 'left' },
           { to: '/docs/release-notes', label: 'Release notes', position: 'left' },
+          {
+            to: '/docs/release-notes',
+            label: `v${version}`,
+            position: 'right',
+            className: 'lonca-navbar-version',
+            'aria-label': `Lonca ${version}, release notes`,
+          },
           { href: repo, label: 'GitHub', position: 'right' },
         ],
       },
@@ -83,6 +109,7 @@ const config = {
             items: [
               { label: 'Install', to: '/docs/guide/install' },
               { label: 'Quick start', to: '/docs/guide/quick-start' },
+              { label: 'Lonca with Claude Code', to: '/docs/guide/claude-code' },
               { label: 'Running agents', to: '/docs/guide/runners' },
             ],
           },

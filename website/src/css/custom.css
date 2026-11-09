@@ -14,6 +14,12 @@
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
   --lonca-ground: #11181a;
   --lonca-brass: #e7c76a;
+  --lonca-band: #f2f6f5;
+  --lonca-card: #ffffff;
+  --lonca-line: #d9e2e0;
+  --lonca-muted: #55635f;
+  --lonca-claude: #c2603f;
+  --lonca-soon: #8a6a12;
 }
 
 [data-theme='dark'] {
@@ -27,6 +33,12 @@
   --ifm-background-color: var(--lonca-ground);
   --ifm-navbar-background-color: #172023;
   --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.1);
+  --lonca-band: #151f21;
+  --lonca-card: #0f1618;
+  --lonca-line: #2a3836;
+  --lonca-muted: #93a3a0;
+  --lonca-claude: #e08a6b;
+  --lonca-soon: #e7c76a;
 }
 
 /* Wide tables of the protocol scroll instead of squeezing. */
@@ -149,6 +161,163 @@
   margin: 0 auto;
   padding: 0 1rem 3rem;
 }
+
+/* The release in the navbar and the hero. */
+.lonca-navbar-version {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.85rem;
+  border: 1px solid var(--lonca-line);
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem !important;
+  margin-right: 0.4rem;
+}
+.lonca-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.9rem;
+  color: #eef3f2;
+  border: 1px solid #33413f;
+  border-radius: 999px;
+  padding: 0.2rem 0.85rem;
+  margin-bottom: 0.9rem;
+}
+.lonca-version:hover {
+  color: #eef3f2;
+  border-color: #4fc1a6;
+  text-decoration: none;
+}
+.lonca-version-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #4fc1a6;
+  box-shadow: 0 0 0 3px rgba(79, 193, 166, 0.25);
+}
+
+/* Home page sections after the features. */
+.lonca-claude,
+.lonca-harnesses {
+  padding: 4rem 0 3.5rem;
+}
+.lonca-claude {
+  background: var(--lonca-band);
+  border-top: 1px solid var(--lonca-line);
+  border-bottom: 1px solid var(--lonca-line);
+}
+.lonca-section-head {
+  max-width: 46rem;
+  margin: 0 auto 2.2rem;
+  text-align: center;
+}
+.lonca-section-head h2 {
+  font-size: clamp(1.6rem, 4vw, 2.2rem);
+  margin: 0.3rem 0 0.8rem;
+}
+.lonca-section-head p {
+  color: var(--lonca-muted);
+  font-size: 1.05rem;
+  margin: 0;
+}
+.lonca-eyebrow {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ifm-color-primary);
+}
+.lonca-claude .lonca-eyebrow {
+  color: var(--lonca-claude);
+}
+.lonca-claude-grid,
+.lonca-harness-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 1rem;
+  margin-bottom: 2.2rem;
+}
+.lonca-claude-card,
+.lonca-harness {
+  background: var(--lonca-card);
+  border: 1px solid var(--lonca-line);
+  border-radius: 12px;
+  padding: 1.1rem 1.2rem 0.4rem;
+}
+.lonca-claude-card code {
+  font-size: 0.8rem;
+  color: var(--lonca-claude);
+  background: none;
+  border: 1px solid var(--lonca-line);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+}
+.lonca-claude-card h3,
+.lonca-harness h3 {
+  font-size: 1.05rem;
+  margin: 0.7rem 0 0.4rem;
+}
+.lonca-claude-card p,
+.lonca-harness p {
+  color: var(--lonca-muted);
+  font-size: 0.95rem;
+}
+.lonca-figure {
+  display: block;
+  width: 100%;
+  max-width: 1100px;
+  height: auto;
+  margin: 0 auto 2rem;
+  border-radius: 16px;
+}
+.lonca-claude .theme-code-block {
+  max-width: 860px;
+  margin: 0 auto 1.8rem;
+}
+.lonca-center {
+  text-align: center;
+}
+.lonca-harness-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.lonca-harness-top h3 {
+  margin: 0;
+}
+.lonca-harness {
+  padding-top: 1.1rem;
+}
+.lonca-harness p {
+  margin-top: 0.7rem;
+}
+.lonca-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.15rem 0.65rem;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.lonca-harness--full {
+  border-color: var(--lonca-claude);
+  box-shadow: 0 0 0 1px var(--lonca-claude) inset;
+}
+.lonca-harness--full .lonca-badge {
+  color: #fff;
+  background: var(--lonca-claude);
+  border-color: var(--lonca-claude);
+}
+.lonca-harness--soon .lonca-badge {
+  color: var(--lonca-soon);
+}
+.lonca-harness--planned .lonca-badge,
+.lonca-harness--data .lonca-badge {
+  color: var(--lonca-muted);
+}
+
 @media (max-width: 600px) {
   .lonca-hero .button {
     display: block;

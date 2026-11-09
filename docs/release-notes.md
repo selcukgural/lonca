@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### The site names the release, and a page for Claude Code
+
+The site said nothing of which release it described, and the install guide's
+examples still named 0.2.0. The version now comes from the workspace's
+`Cargo.toml` when the site is built and shows in the navigation bar and on the
+home page, and the examples name 0.2.2. A new page,
+[Lonca with Claude Code](guide/claude-code.md), says what each hook event and
+MCP tool does for a Claude Code session, how far each observation level goes,
+and where the other harnesses stand. The home page and the README have
+diagrams of the same.
+
 ## 0.2.2 (2026-11-09)
 
 ### `lonca doctor` reads like `flutter doctor`

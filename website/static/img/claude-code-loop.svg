@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" width="1200" height="640" role="img" aria-label="Claude Code and Lonca: SessionStart binds the session and injects the rules; PreToolUse denies writes outside the workspace; PostToolUse records writes and delivers news from other agents; Stop sends an agent with unproposed work back; Lonca's MCP tools lease, propose and sync, each decided, signed and logged by the daemon.">
+  <!-- Every hook event of Claude Code and what Lonca's daemon does with it.
+       Its own dark ground, so it reads the same on a light and a dark page. -->
+  <defs>
+    <marker id="to" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#e7c76a"/>
+    </marker>
+    <marker id="back" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#4fc1a6"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="640" rx="22" fill="#11181a"/>
+  <rect x="0.5" y="0.5" width="1199" height="639" rx="22" fill="none" stroke="#2a3836"/>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <!-- Column heads. -->
+    <rect x="40" y="40" width="360" height="520" rx="16" fill="#0c1214" stroke="#2a3836"/>
+    <rect x="800" y="40" width="360" height="520" rx="16" fill="#0c1214" stroke="#2a3836"/>
+    <circle cx="70" cy="74" r="8" fill="#d97757"/>
+    <text x="88" y="81" font-size="20" font-weight="700" fill="#eef3f2">Claude Code</text>
+    <text x="388" y="80" font-size="13" fill="#93a3a0" text-anchor="end">in the workspace</text>
+    <rect x="822" y="64" width="20" height="20" rx="4" fill="#4fc1a6"/>
+    <text x="852" y="81" font-size="20" font-weight="700" fill="#eef3f2">Lonca daemon</text>
+    <text x="1148" y="80" font-size="13" fill="#93a3a0" text-anchor="end">single writer</text>
+    <text x="600" y="80" font-size="13" fill="#93a3a0" text-anchor="middle">one Unix socket</text>
+    <path d="M60 100 H380 M820 100 H1140" stroke="#2a3836"/>
+  </g>
+
+  <!-- Rows: event, the program that carries it, and the answer. -->
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <!-- y centre 150 -->
+    <text x="64" y="146" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#e7c76a">SessionStart</text>
+    <text x="64" y="168" font-size="14" fill="#93a3a0">a session opens</text>
+    <text x="824" y="146" font-size="15" fill="#eef3f2">binds the session, names its level</text>
+    <text x="824" y="168" font-size="13" fill="#93a3a0">rules, repository, scratch dirs injected</text>
+
+    <!-- y centre 238 -->
+    <text x="64" y="234" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#e7c76a">PreToolUse</text>
+    <text x="64" y="256" font-size="14" fill="#93a3a0">before every tool, MCP tools too</text>
+    <text x="824" y="234" font-size="15" fill="#eef3f2">a write outside the workspace? denied</text>
+    <text x="824" y="256" font-size="13" fill="#93a3a0">reads, fetches, shell: observed, may taint</text>
+
+    <!-- y centre 326 -->
+    <text x="64" y="322" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#e7c76a">PostToolUse</text>
+    <text x="64" y="344" font-size="14" fill="#93a3a0">after every tool</text>
+    <text x="824" y="322" font-size="15" fill="#eef3f2">every workspace write recorded</text>
+    <text x="824" y="344" font-size="13" fill="#93a3a0">news from other agents, mid-turn</text>
+
+    <!-- y centre 414 -->
+    <text x="64" y="410" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#e7c76a">Stop</text>
+    <text x="64" y="432" font-size="14" fill="#93a3a0">the agent says it is done</text>
+    <text x="824" y="410" font-size="15" fill="#eef3f2">unproposed work? sent back to propose</text>
+    <text x="824" y="432" font-size="13" fill="#93a3a0">at most stop_rounds times (3)</text>
+
+    <path d="M60 466 H380 M820 466 H1140" stroke="#2a3836" stroke-dasharray="4 6"/>
+
+    <!-- y centre 510 -->
+    <text x="64" y="506" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="17" fill="#4fc1a6">mcp__lonca__*</text>
+    <text x="64" y="528" font-size="14" fill="#93a3a0">lease_acquire, propose, sync, …</text>
+    <text x="824" y="506" font-size="15" fill="#eef3f2">decide · sign · append to the log</text>
+    <text x="824" y="528" font-size="13" fill="#93a3a0">heartbeats; leases renewed while it runs</text>
+  </g>
+
+  <!-- The wires. -->
+  <g fill="none" stroke-width="2">
+    <path d="M404 144 H794" stroke="#e7c76a" marker-end="url(#to)"/>
+    <path d="M796 158 H406" stroke="#4fc1a6" marker-end="url(#back)"/>
+    <path d="M404 232 H794" stroke="#e7c76a" marker-end="url(#to)"/>
+    <path d="M796 246 H406" stroke="#4fc1a6" marker-end="url(#back)"/>
+    <path d="M404 320 H794" stroke="#e7c76a" marker-end="url(#to)"/>
+    <path d="M796 334 H406" stroke="#4fc1a6" marker-end="url(#back)"/>
+    <path d="M404 408 H794" stroke="#e7c76a" marker-end="url(#to)"/>
+    <path d="M796 422 H406" stroke="#4fc1a6" marker-end="url(#back)"/>
+    <path d="M404 504 H794" stroke="#e7c76a" marker-end="url(#to)"/>
+    <path d="M796 518 H406" stroke="#4fc1a6" marker-end="url(#back)"/>
+  </g>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#eef3f2" text-anchor="middle">
+    <rect x="535" y="138" width="130" height="26" rx="13" fill="#1c2628" stroke="#33413f"/>
+    <text x="600" y="156">lonca hook</text>
+    <rect x="535" y="226" width="130" height="26" rx="13" fill="#1c2628" stroke="#33413f"/>
+    <text x="600" y="244">lonca hook</text>
+    <rect x="535" y="314" width="130" height="26" rx="13" fill="#1c2628" stroke="#33413f"/>
+    <text x="600" y="332">lonca hook</text>
+    <rect x="535" y="402" width="130" height="26" rx="13" fill="#1c2628" stroke="#33413f"/>
+    <text x="600" y="420">lonca hook</text>
+    <rect x="535" y="498" width="130" height="26" rx="13" fill="#1c2628" stroke="#4fc1a6"/>
+    <text x="600" y="516">lonca mcp</text>
+  </g>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="14" text-anchor="middle">
+    <text x="600" y="596" fill="#eef3f2"><tspan fill="#e7c76a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">onFailure: block</tspan>  a hook that can not reach the daemon blocks the tool: it fails closed</text>
+    <text x="600" y="620" fill="#93a3a0">a call to lonca mcp with no PreToolUse before it marks the session unhooked</text>
+  </g>
+</svg>

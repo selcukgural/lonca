@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 430" width="1280" height="430" role="img" aria-label="Lonca: agents lease symbols and propose; the daemon decides, signs and logs; the merge queue builds and tests; trunk stays plain Git; lonca-audit replays every decision.">
+  <!-- The README's and the site's banner. Its own dark ground, so it reads
+       the same on a light and a dark page. -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#e7c76a"/>
+    </marker>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2a2c"/>
+      <stop offset="1" stop-color="#11181a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="430" rx="22" fill="url(#glow)"/>
+  <rect x="0.5" y="0.5" width="1279" height="429" rx="22" fill="none" stroke="#2a3836"/>
+
+  <!-- The mark, as in lonca-mark.svg. -->
+  <g transform="translate(64 48) scale(1.15)">
+    <rect width="64" height="64" rx="14" fill="#0c1214" stroke="#2a3836"/>
+    <path d="M20 22 L30 32 M34 36 L42 44" fill="none" stroke="#4fc1a6" stroke-width="3.5" stroke-linecap="round"/>
+    <rect x="9" y="11" width="14" height="14" rx="3" fill="#4fc1a6"/>
+    <rect x="25" y="27" width="14" height="14" rx="3" fill="#4fc1a6"/>
+    <circle cx="47" cy="47" r="9" fill="#e7c76a"/>
+    <path d="M42.5 47.2 l3.2 3.2 l6 -6.4" fill="none" stroke="#11181a" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <text x="164" y="102" font-size="56" font-weight="700" fill="#eef3f2" letter-spacing="1">Lonca</text>
+    <text x="166" y="138" font-size="22" fill="#e7c76a">Agent-native, Git-compatible version control</text>
+    <text x="64" y="196" font-size="17" fill="#93a3a0">Many AI agents and a few humans in one repository: one deterministic gatekeeper, one signed log.</text>
+  </g>
+
+  <!-- The way of a change. -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#eef3f2">
+    <rect x="64" y="236" width="240" height="38" rx="19" fill="#0c1214" stroke="#4fc1a6"/>
+    <text x="184" y="260" text-anchor="middle">claude-1 · billing.rs#charge</text>
+    <rect x="64" y="286" width="240" height="38" rx="19" fill="#0c1214" stroke="#4fc1a6"/>
+    <text x="184" y="310" text-anchor="middle">claude-2 · billing.rs#refund</text>
+    <rect x="64" y="336" width="240" height="38" rx="19" fill="#0c1214" stroke="#4fc1a6"/>
+    <text x="184" y="360" text-anchor="middle">claude-3 · auth.rs#login</text>
+  </g>
+  <g fill="none" stroke="#e7c76a" stroke-width="2.2" marker-end="url(#arrow)">
+    <path d="M308 255 C 322 255, 322 290, 336 296"/>
+    <path d="M308 305 L 336 305"/>
+    <path d="M308 355 C 322 355, 322 320, 336 314"/>
+    <path d="M602 305 L 632 305"/>
+    <path d="M908 305 L 938 305"/>
+  </g>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif">
+    <rect x="340" y="236" width="260" height="138" rx="14" fill="#0c1214" stroke="#2a3836"/>
+    <text x="364" y="268" font-size="18" font-weight="700" fill="#e7c76a">daemon</text>
+    <text x="364" y="298" font-size="15" fill="#eef3f2">decide(): pure, no AI</text>
+    <text x="364" y="323" font-size="15" fill="#eef3f2">sign · append to the log</text>
+    <text x="364" y="348" font-size="15" fill="#93a3a0">allow · deny · ask a human</text>
+
+    <rect x="636" y="236" width="270" height="138" rx="14" fill="#0c1214" stroke="#2a3836"/>
+    <text x="660" y="268" font-size="18" font-weight="700" fill="#e7c76a">merge queue</text>
+    <text x="660" y="298" font-size="15" fill="#eef3f2">structural, symbol by symbol</text>
+    <text x="660" y="323" font-size="15" fill="#eef3f2">build + test in a sandbox</text>
+    <text x="660" y="348" font-size="15" fill="#93a3a0">evidence recorded</text>
+
+    <rect x="942" y="236" width="274" height="138" rx="14" fill="#0c1214" stroke="#4fc1a6"/>
+    <text x="966" y="268" font-size="18" font-weight="700" fill="#4fc1a6">trunk</text>
+    <text x="966" y="298" font-size="15" fill="#eef3f2">plain Git: GitHub just works</text>
+    <text x="966" y="323" font-size="15" fill="#eef3f2">refs/lonca/* travels with push</text>
+    <text x="966" y="348" font-size="15" fill="#93a3a0">verified before it lands</text>
+
+    <path d="M64 398 H1216" stroke="#2a3836" stroke-dasharray="4 6"/>
+    <text x="640" y="418" font-size="14" fill="#93a3a0" text-anchor="middle">lonca-audit replays every decision and recomputes every fact and merge</text>
+  </g>
+</svg>

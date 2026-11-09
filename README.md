@@ -1,5 +1,9 @@
 # Lonca
 
+<p align="center">
+  <a href="https://selcukgural.github.io/lonca/"><img src="https://selcukgural.github.io/lonca/img/lonca-banner.svg" alt="Lonca: agents lease symbols and propose; the daemon decides, signs and logs; the merge queue builds and tests; trunk stays plain Git; lonca-audit replays every decision" width="100%"></a>
+</p>
+
 [![crates.io](https://img.shields.io/crates/v/lonca.svg)](https://crates.io/crates/lonca)
 [![lonca-client on docs.rs](https://img.shields.io/docsrs/lonca-client?label=docs.rs%20lonca-client)](https://docs.rs/lonca-client)
 [![Licence](https://img.shields.io/crates/l/lonca.svg)](LICENSE)
@@ -13,26 +17,36 @@ same time. Content stays plain Git, so GitHub and every Git tool keep
 working. What changes is everything around it: who may do what, how
 concurrent work merges, and how every action is recorded and checked.
 
-Everything else is on the site: **<https://selcukgural.github.io/lonca/>**
-([why and how it works](https://selcukgural.github.io/lonca/docs/guide),
-the guides, the protocol, the release notes).
+Everything else is on the site: **<https://selcukgural.github.io/lonca/>**.
 
-> Status: 0.2. Every phase of the design is implemented and tested; formats
-> are versioned, and a log written by any 0.x release stays readable by every
-> later one. 0.x is one machine: one developer with many agents, Claude Code
-> as the harness checked in every release
-> ([scope and limitations](https://selcukgural.github.io/lonca/docs/guide#scope-of-0x)).
+> Status: **0.2.2** ([release notes](https://selcukgural.github.io/lonca/docs/release-notes)).
+> Every phase of the design is implemented and tested, and a log written by
+> any 0.x release stays readable by every later one. 0.x is one machine: one
+> developer with many agents
+> ([scope](https://selcukgural.github.io/lonca/docs/guide#scope-of-0x)).
 
-## In use
+## Works with Claude Code
 
-[imece](https://github.com/selcukgural/imece), a terminal for many coding
-agents, runs its workers on Lonca: each worker is a Lonca session in its own
-workspace, its finished work is a proposal, and the person's approval sends
-it through the merge queue into trunk, which lives in Lonca's store. That
-use shaped much of 0.2: proving a session is observed
-([#190](https://github.com/selcukgural/lonca/issues/190)), checks chosen per
-change at approval ([#191](https://github.com/selcukgural/lonca/issues/191)),
-and the client crate harnesses depend on.
+Claude Code is the harness Lonca is built and checked against, live, before
+every release. Start a session with `--harness claude-code`, run `claude` in
+its workspace, and every hook event and Lonca's MCP tools are already wired
+to the daemon:
+
+<p align="center">
+  <img src="https://selcukgural.github.io/lonca/img/claude-code-loop.svg" alt="Claude Code's hook events (SessionStart, PreToolUse, PostToolUse, Stop) and Lonca's MCP tools, each carried to the daemon by lonca hook or lonca mcp" width="100%">
+</p>
+
+| Harness | Support |
+|---|---|
+| **Claude Code** | **Full**: every hook, the MCP server, the hardened and isolated levels |
+| Codex, Gemini CLI, OpenCode | Profiles included; full support is coming. Isolated today under `lonca run` |
+| IDE agents (Copilot, Cursor, JetBrains AI) | Planned; any MCP client can use `lonca mcp` today |
+
+How it works, step by step:
+[Lonca with Claude Code](https://selcukgural.github.io/lonca/docs/guide/claude-code).
+
+In use: [imece](https://github.com/selcukgural/imece), a terminal for many
+coding agents, runs every worker as a Lonca session.
 
 ## Install
 
@@ -40,19 +54,11 @@ macOS (arm64, x86_64) and Linux (x86_64, arm64):
 
 ```sh
 curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh   # ~/.local/bin
+brew tap selcukgural/lonca && brew install lonca                 # or Homebrew
+cargo install --locked lonca lonca-audit                         # or crates.io, Rust 1.90+
 ```
 
-```sh
-brew tap selcukgural/lonca                                       # Homebrew
-brew install lonca
-```
-
-```sh
-cargo install --locked lonca lonca-audit                         # crates.io, Rust 1.90+
-```
-
-These install cooperative mode. Hardened mode (the daemon as its own system
-user, the harness's hooks and sandbox locked), checking a download, upgrade
+These install cooperative mode. Hardened mode, checking a download, upgrade
 and uninstall: [Install](https://selcukgural.github.io/lonca/docs/guide/install).
 
 ## Quick start
@@ -62,8 +68,9 @@ lonca daemon &                       # the gatekeeper (~/.lonca)
 lonca human keygen ayse              # or: --secure-enclave
 lonca init demo --import ~/src/myproject
 lonca session start --repo demo --agent claude --paths 'src/**' \
-      --task T-142 --ttl 2h --workspace ~/ws/claude-1
+      --task T-142 --ttl 2h --workspace ~/ws/claude-1 --harness claude-code
 lonca doctor                         # what a first run trips over
+cd ~/ws/claude-1 && claude           # the agent, hooks and MCP set up
 ```
 
 The agent leases the symbols it edits and proposes; you review, approve and
@@ -91,17 +98,12 @@ APIs have no stability promise.
 
 ## Documentation
 
-- [The site](https://selcukgural.github.io/lonca/): what Lonca is, install,
-  quick start, guides for humans, profiles, runners and verification.
-- [docs/protocol.md](docs/protocol.md): the daemon's protocol for runners
-  and other clients.
+- [The site](https://selcukgural.github.io/lonca/): guides, the protocol,
+  release notes, the OWASP review and cryptography.
 - [docs/design.md](docs/design.md) (Turkish) and
   [docs/decisions.md](docs/decisions.md): the design, and every decision
-  and deviation from it with its reasons.
-- [docs/release-notes.md](docs/release-notes.md),
-  [SECURITY.md](SECURITY.md),
-  [docs/security/owasp.md](docs/security/owasp.md),
-  [docs/crypto.md](docs/crypto.md).
+  and deviation from it with its reasons. [SECURITY.md](SECURITY.md) to
+  report a vulnerability.
 
 ## License
 

@@ -25,15 +25,15 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 | Item | Status | In place | Open |
 |---|---|---|---|
 | A01 Broken Access Control (incl. SSRF) | met | every daemon method names its credential, deny by default (`METHODS`, `crates/lonca-daemon/src/service.rs`); capabilities only narrow (`cap.attenuate`, `scope_within` in `decide.rs`); peer uid allowlist (`server.rs`); proxy: private ranges, metadata always, port allowlist, per-host rules (`crates/lonca-net`, #64); local-path remotes kept out of the daemon home (#57) | — |
-| A02 Security Misconfiguration | met | hardened profile and installers, root-owned hook and managed-settings checks, no silent unsandboxed verification (#54); key and home ownership checks (#62) | policy guide #13 |
+| A02 Security Misconfiguration | met | hardened profile and installers, root-owned hook and managed-settings checks, no silent unsandboxed verification (#54); key and home ownership checks (#62); `lonca policy check` tries a policy against the log before it is set, and a guide to writing one (#13) | — |
 | A03 Software Supply Chain Failures | met | cargo-deny (crates.io only, advisories, licenses), actions pinned by commit and allowlisted, Dependabot with cooldown, pinned toolchain, zizmor, SBOM and build provenance attestation of a release (#7), Scorecard (#60) | — |
 | A04 Cryptographic Failures | met | Ed25519 `verify_strict`, Secure Enclave P-256, SHA-256 chain, tokens stored as hashes, keys private on load and wiped in memory (`docs/crypto.md`, #62); human and daemon key rotation and recovery (#4, #5) | — |
-| A05 Injection | met | git: `--`, scheme allowlist, clean environment, no hooks, `GIT_ALLOW_PROTOCOL` (#57); strict repository paths (`crates/lonca-core/src/paths.rs`); Cedar context built from typed values; advisor input framed as data (#63) | fuzzing #15 |
+| A05 Injection | met | git: `--`, scheme allowlist, clean environment, no hooks, `GIT_ALLOW_PROTOCOL` (#57); strict repository paths (`crates/lonca-core/src/paths.rs`); Cedar context built from typed values; advisor input framed as data (#63); every parser of untrusted input fuzzed, found crashes kept as regressions (#15, `docs/fuzzing.md`) | — |
 | A06 Insecure Design | met | pure `decide()`, single writer, append-only log replayed by the auditor; socket, request and rate limits (#50); verifier process-tree kill, rlimits, quota (#59) | threat model #14 |
 | A07 Authentication Failures | met | random 32-byte tokens, presence signatures with nonce and age checks (`human.rs`), clients verify the daemon (#52), token expiry, sweep and rotation (#53) | — |
 | A08 Software or Data Integrity Failures | met | hash-chained signed log, every ref held to it by `reconcile()` and the auditor (#58), anchors in pushed remotes | independent auditor #18 |
 | A09 Security Logging & Alerting Failures | met | every decision logged, denials included; security events outside the log and notification of freezes (#56) | — |
-| A10 Mishandling of Exceptional Conditions | met | Cedar errors deny; hooks fail closed; no panics on extreme numbers, overflow checks, panic lints on the trusted core (#61); a failed reconcile is an event (#56) | fuzzing #15 |
+| A10 Mishandling of Exceptional Conditions | met | Cedar errors deny; hooks fail closed; no panics on extreme numbers, overflow checks, panic lints on the trusted core (#61); a failed reconcile is an event (#56); the parsers and the merge fuzzed (#15); a symbol parse stops at a budget of work (engine 16) | — |
 
 ## Top 10 for LLM Applications 2025
 
@@ -72,11 +72,11 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 | CICD-SEC-1 Insufficient Flow Control | met | main takes pull requests only, and requires the `ci.yml` jobs (Ubuntu, macOS, sandbox) as status checks; no approval is required (one maintainer) (`docs/decisions.md`, "CI runs on every pull request" and #60) | — |
 | CICD-SEC-2 Inadequate IAM | met | one maintainer; workflows hold read-only tokens, `persist-credentials: false` | — |
 | CICD-SEC-3 Dependency Chain Abuse | met | cargo-deny crates.io only, Dependabot cooldown, lockfile `--locked`; `cargo vet` not adopted (`docs/decisions.md`, #60) | — |
-| CICD-SEC-4 Poisoned Pipeline Execution | met | no `pull_request_target`, no event data in `run:`; zizmor on workflow changes | — |
-| CICD-SEC-5 Insufficient PBAC | met | `permissions: contents: read` per workflow; OIDC (`id-token: write`) only in the Scorecard job, which runs no project code | — |
+| CICD-SEC-4 Poisoned Pipeline Execution | met | no `pull_request_target`, no event data in `run:`; no run on a tag restores a cache; zizmor on workflow changes | — |
+| CICD-SEC-5 Insufficient PBAC | met | `permissions: contents: read` per workflow; OIDC (`id-token: write`) only on the jobs that need it, none of which runs the tests: Scorecard, the Pages deploy, the release attestation, and the crates.io publish (environment `release`, tags `v*`) | — |
 | CICD-SEC-6 Insufficient Credential Hygiene | met | no long-lived secrets in CI; secret scanning with push protection | — |
 | CICD-SEC-7 Insecure System Configuration | met | pinned toolchain, timeouts, actions allowlist and SHA pinning required | — |
-| CICD-SEC-8 Ungoverned 3rd Party Services | met | four named third-party actions, nothing else | — |
+| CICD-SEC-8 Ungoverned 3rd Party Services | met | five named third-party actions, nothing else (`docs/decisions.md`, "CI and the repository's own settings") | — |
 | CICD-SEC-9 Improper Artifact Integrity Validation | met | each release archive has a build provenance attestation (`gh attestation verify`), `SHA256SUMS` and a CycloneDX SBOM (`release.yml`, #7, #60) | — |
 | CICD-SEC-10 Insufficient Logging and Visibility | met | Actions logs, Scorecard, CodeQL; the auditor workflow for pushed repositories (`docs/ci/lonca-audit.yml`) | — |
 
@@ -152,6 +152,6 @@ requirement in it met, or the exception named.
 
 Tests stand behind each "met": decision scenarios end with a replay
 (`assert_replay`), the auditor recomputes facts and merges, and mutation
-testing (#27) checks that the tests would notice a broken check before a
-release. Parsers and the merge are not fuzzed yet (#15), and nobody outside
-has reviewed the design (#23).
+testing (#27, on demand) checks that the tests would notice a broken check
+in the trust model, and the fuzzer (#15) runs before every release and on its
+tag. Nobody outside has reviewed the design yet (#23).

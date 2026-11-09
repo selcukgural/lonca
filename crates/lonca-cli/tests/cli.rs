@@ -2996,6 +2996,102 @@ fn doctor_says_when_it_can_not_look_at_repositories() {
     assert_eq!(checks(&report, "human")["detail"], "no human identity");
 }
 
+/// `lonca policy check` (issue #13): what a new policy would have decided
+/// differently, and nothing written.
+#[test]
+fn policy_check_lists_the_decisions_a_new_policy_would_change() {
+    let e = Env::new();
+    let r = &e.root;
+    agent_workspace(&e);
+    let shown = e.run(r, &["policy", "show", "--repo", "demo"]);
+    let (_, rest) = shown.split_once("==> lonca.toml <==\n").unwrap();
+    let (config, policy) = rest.split_once("==> policy.cedar <==\n").unwrap();
+    let entries = parse(&e.run(r, &["log", "--repo", "demo", "--json"]))
+        .as_array()
+        .unwrap()
+        .len();
+
+    // The files in force, together or one at a time, change nothing.
+    std::fs::write(r.join("c.toml"), config.trim_end()).unwrap();
+    std::fs::write(r.join("same.cedar"), policy.trim_end()).unwrap();
+    let none = format!("no decision of the {entries} entries would change\n");
+    for args in [
+        &["--config", "c.toml", "--policy", "same.cedar"][..],
+        &["--config", "c.toml"],
+        &["--policy", "same.cedar"],
+    ] {
+        let check = [&["policy", "check", "--repo", "demo"][..], args].concat();
+        assert_eq!(e.run(r, &check), none, "{args:?}");
+    }
+
+    // Humans may no longer add files under src/: the seed would be denied.
+    let closed = format!(
+        "{policy}\n@id(\"src-is-closed\")\nforbid(principal is Lonca::Human, \
+         action == Lonca::Action::\"file.add\", resource) when {{ context.path like \"src/*\" }};\n"
+    );
+    std::fs::write(r.join("p.cedar"), closed).unwrap();
+    let check = ["policy", "check", "--repo", "demo", "--policy", "p.cedar"];
+    let out = e.run(r, &check);
+    assert!(out.contains(" change.propose    human:ayse\n"), "{out}");
+    assert!(out.contains("\n      was    allow\n"), "{out}");
+    assert!(
+        out.contains("\n      would  deny     policy:src-is-closed\n"),
+        "{out}"
+    );
+    let total = format!("\n1 of {entries} entries would be decided differently\n");
+    assert!(out.ends_with(&total), "{out}");
+    let json = parse(&e.run(r, &[&check[..], &["--json"]].concat()));
+    assert_eq!(json["entries"], entries, "{json}");
+    assert_eq!(json["lockouts"], serde_json::json!([]), "{json}");
+    let diffs = json["differences"].as_array().unwrap();
+    assert_eq!(diffs.len(), 1, "{json}");
+    assert_eq!(diffs[0]["op"], "change.propose");
+    assert_eq!(diffs[0]["actor"], "human:ayse");
+    assert_eq!(diffs[0]["recorded"]["outcome"], "allow");
+    assert_eq!(diffs[0]["candidate"]["outcome"], "deny");
+    assert_eq!(diffs[0]["candidate"]["reasons"][0], "policy:src-is-closed");
+
+    // A policy that would leave the humans no way back says so.
+    std::fs::write(
+        r.join("agents.cedar"),
+        "permit(principal is Lonca::Agent, action, resource);",
+    )
+    .unwrap();
+    let agents = [
+        "policy",
+        "check",
+        "--repo",
+        "demo",
+        "--policy",
+        "agents.cedar",
+    ];
+    let out = e.run(r, &agents);
+    let warn = "warning: human:ayse could no longer request policy.update \
+                (policy_default_deny:policy.update)\n";
+    assert!(out.contains(warn), "{out}");
+    assert!(out.ends_with("may have no way back; escalate these instead of denying them\n"));
+    let json = parse(&e.run(r, &[&agents[..], &["--json"]].concat()));
+    assert_eq!(json["lockouts"].as_array().unwrap().len(), 8, "{json}");
+
+    // A policy that does not parse is refused with the reason.
+    std::fs::write(r.join("bad.cedar"), "forbid(").unwrap();
+    let bad = ["policy", "check", "--repo", "demo", "--policy", "bad.cedar"];
+    let o = e.cmd(r, &bad).output().unwrap();
+    assert_eq!(o.status.code(), Some(3), "{o:?}");
+    assert!(text(&o.stderr).contains("policy.cedar:"), "{o:?}");
+    // Neither file: a usage error.
+    let o = e
+        .cmd(r, &["policy", "check", "--repo", "demo"])
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(3), "{o:?}");
+
+    // Nothing was written.
+    let after = parse(&e.run(r, &["log", "--repo", "demo", "--json"]));
+    assert_eq!(after.as_array().unwrap().len(), entries);
+    assert_eq!(e.run(r, &["policy", "show", "--repo", "demo"]), shown);
+}
+
 /// A repository that asks for what this human's key can not give.
 #[test]
 fn doctor_warns_of_a_file_key_in_a_repository_that_requires_presence() {

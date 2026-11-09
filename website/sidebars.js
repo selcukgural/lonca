@@ -25,6 +25,7 @@ const sidebars = {
         { type: 'doc', id: 'guide/humans', label: 'Working as a human' },
         { type: 'doc', id: 'guide/reviewing', label: "Reviewing agents' work" },
         { type: 'doc', id: 'guide/profiles', label: 'Profiles' },
+        { type: 'doc', id: 'guide/policies', label: 'Writing policies' },
         { type: 'doc', id: 'guide/runners', label: 'Running agents' },
         { type: 'doc', id: 'guide/verification', label: 'Verification' },
         { type: 'doc', id: 'guide/recovery', label: 'Recovery' },

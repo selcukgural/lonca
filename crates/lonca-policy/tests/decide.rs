@@ -20,6 +20,7 @@ use lonca_policy::config::{
 use lonca_policy::decide::{Ctx, decide, evidence_problems, quota_problems, scope_within};
 use lonca_policy::human::intent_bytes;
 use lonca_policy::state::{ChangeStatus, Provenance, Renamed, State};
+use lonca_policy::whatif::{Lockout, WAYS_OUT, compare};
 
 const REPO: &str = "demo";
 const T0: i64 = 1_760_000_000_000;
@@ -1072,6 +1073,103 @@ fn policy_rules_deny_and_escalate_with_approval_counts() {
     assert!(second.reasons.contains(&"released".to_string()));
     assert_eq!(h.chain.state.changes[&c].status, ChangeStatus::Queued);
     h.assert_replay();
+}
+
+/// `lonca policy check`: the log decided again with another policy, on the
+/// state the log really had, lists exactly the entries that would change.
+#[test]
+fn a_candidate_policy_lists_the_decisions_it_would_change() {
+    let mut h = H::new();
+    h.start_observed("s1", &["**"]);
+    h.wrote("s1", "migrations/001.sql");
+    h.wrote("s1", "auth/login.rs");
+    let items = [
+        ("migrations/001.sql#<file>", LeaseKind::Rename),
+        ("auth/login.rs#check", LeaseKind::Edit),
+    ];
+    assert!(h.lease("s1", "l1", &items).is_allow());
+    let del = Facts {
+        deleted_files: vec!["migrations/001.sql".into()],
+        lines_removed: 3,
+        ..Default::default()
+    };
+    let deleted = h.propose("s1", ChangeId::random(), del);
+    assert!(denied_with(&deleted, "policy:migrations-no-agent-delete"));
+    let auth = h.propose("s1", ChangeId::random(), edit("auth/login.rs#check"));
+    assert_eq!(auth.outcome, Outcome::Escalate);
+    h.assert_replay();
+
+    // The policy in force changes nothing.
+    let same = compare(&h.log, &h.policy);
+    assert_eq!(same.entries, h.log.len() as u64);
+    assert!(same.differences.is_empty(), "{same:?}");
+
+    // Deletions allowed, and auth/ refused outright instead of escalated.
+    let candidate = PolicyBundle::parse(
+        DEFAULT_CONFIG,
+        r#"permit(principal, action, resource);
+@id("auth-is-closed")
+forbid(principal is Lonca::Agent, action == Lonca::Action::"file.modify", resource)
+when { context.path like "auth/*" };"#,
+    )
+    .unwrap();
+    let out = compare(&h.log, &candidate);
+    assert_eq!(out.entries, h.log.len() as u64);
+    let n = h.log.len();
+    let (del_entry, auth_entry) = (&h.log[n - 2].entry, &h.log[n - 1].entry);
+    assert_eq!(out.differences.len(), 2, "{out:?}");
+    let [d0, d1] = [&out.differences[0], &out.differences[1]];
+    assert_eq!(
+        (d0.seq, d0.time_ms, d0.op.as_str(), d0.actor.as_str()),
+        (
+            del_entry.seq,
+            del_entry.time_ms,
+            "change.propose",
+            "agent:bot-s1/s1"
+        )
+    );
+    assert_eq!(d0.recorded, deleted);
+    assert_eq!(d0.candidate.outcome, Outcome::Allow, "{d0:?}");
+    assert_eq!((d1.seq, d1.time_ms), (auth_entry.seq, auth_entry.time_ms));
+    assert_eq!(d1.recorded, auth);
+    assert!(
+        denied_with(&d1.candidate, "policy:auth-is-closed"),
+        "{d1:?}"
+    );
+    assert!(same.lockouts.is_empty() && out.lockouts.is_empty());
+
+    // A policy that permits only agents leaves the humans no way back; one
+    // that escalates a way out still lets it happen.
+    let agents_only = r#"permit(principal is Lonca::Agent, action, resource);
+@id("policy-needs-two")
+@escalate("policy")
+forbid(principal, action == Lonca::Action::"policy.update", resource);"#;
+    let out = compare(
+        &h.log,
+        &PolicyBundle::parse(DEFAULT_CONFIG, agents_only).unwrap(),
+    );
+    let closed: Vec<_> = out.lockouts.iter().map(|l| l.action.as_str()).collect();
+    assert_eq!(closed, &WAYS_OUT[1..], "{out:?}");
+    assert!(
+        out.lockouts.iter().all(
+            |l| l.human == "ayse" && l.reasons == [format!("policy_default_deny:{}", l.action)]
+        )
+    );
+    let refused = r#"permit(principal, action, resource);
+@id("frozen-for-good")
+forbid(principal is Lonca::Human, action == Lonca::Action::"unfreeze", resource);"#;
+    let out = compare(
+        &h.log,
+        &PolicyBundle::parse(DEFAULT_CONFIG, refused).unwrap(),
+    );
+    assert_eq!(
+        out.lockouts,
+        [Lockout {
+            human: "ayse".into(),
+            action: "unfreeze".into(),
+            reasons: vec!["policy:frozen-for-good".into()],
+        }]
+    );
 }
 
 #[test]

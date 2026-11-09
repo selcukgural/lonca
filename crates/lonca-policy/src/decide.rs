@@ -527,7 +527,11 @@ fn sorted(v: &[String]) -> Vec<String> {
     v
 }
 
-fn session_context(state: &State, actor: &Actor, format: u32) -> Vec<(&'static str, CVal)> {
+pub(crate) fn session_context(
+    state: &State,
+    actor: &Actor,
+    format: u32,
+) -> Vec<(&'static str, CVal)> {
     let (tainted, level, task) = match actor.session().and_then(|s| state.sessions.get(s)) {
         Some(s) => (
             s.taint.is_some(),

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### `lonca policy check`, and a guide to writing policies
+
+`lonca policy check --policy policy.cedar` (or `--config`, or both) tries
+a policy before `lonca policy set`: it decides every entry of the log again
+with it and lists the decisions that would change, writing nothing. It also
+warns when the new policy would deny an enrolled human a way back, such as
+`policy.update`, `unfreeze` or `approve`. The new
+[Writing policies](guide/policies.md) page lists what a Cedar rule sees
+(principals, actions, every context key), what `@escalate` and
+`@approvals` do, why an evaluation error denies, and examples.
+
 ### A lost Mac comes back with the recovery key
 
 When the Mac is lost, the daemon's key and your Secure Enclave key go with

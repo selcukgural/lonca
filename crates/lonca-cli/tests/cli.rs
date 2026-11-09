@@ -2913,9 +2913,11 @@ fn doctor_reports_the_setup_and_no_secrets() {
     e.run(r, &["freeze", "hold on", "--repo", "demo"]);
     let args = ["doctor", "--managed-settings", missing.to_str().unwrap()];
     let out = e.run(r, &args);
-    assert!(out.contains("pass  log demo:"), "{out}");
-    assert!(out.contains("warn  frozen demo: hold on"), "{out}");
-    assert!(out.contains("warn  hooks:"), "{out}");
+    assert!(out.contains("[!] Repository demo\n"), "{out}");
+    assert!(out.contains("    ✓ log: "), "{out}");
+    assert!(out.contains("    ! frozen: hold on\n"), "{out}");
+    assert!(out.contains("[!] Hooks\n"), "{out}");
+    assert!(!out.contains("\x1b["), "no colour into a pipe: {out}");
 }
 
 /// A failing check does not stop the others, and the exit code says so.

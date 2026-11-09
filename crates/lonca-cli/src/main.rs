@@ -816,7 +816,9 @@ fn main() -> ExitCode {
             },
             Err(e) if out::is_closed_pipe(&e) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("lonca: {e:#}");
+                if !doctor::reported(&e) {
+                    eprintln!("lonca: {e:#}");
+                }
                 ExitCode::from(ctx::exit_code(&e))
             }
         },

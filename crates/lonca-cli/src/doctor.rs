@@ -18,7 +18,8 @@ use serde_json::{Value, json};
 use crate::ctx;
 use crate::workspace;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// Worst last: a category shows the worst of its checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
     Pass,
@@ -27,13 +28,32 @@ pub enum Level {
 }
 
 impl Level {
-    fn word(self) -> &'static str {
+    fn mark(self) -> &'static str {
         match self {
-            Level::Pass => "pass",
-            Level::Warn => "warn",
-            Level::Fail => "fail",
+            Level::Pass => "✓",
+            Level::Warn => "!",
+            Level::Fail => "✗",
         }
     }
+
+    /// The ANSI colour: green, yellow, red.
+    fn colour(self) -> &'static str {
+        match self {
+            Level::Pass => "32",
+            Level::Warn => "33",
+            Level::Fail => "31",
+        }
+    }
+}
+
+/// Where a check is shown in text: checks about one thing under one
+/// heading. A check without a group is a heading of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Group {
+    Daemon,
+    Tools,
+    Human,
+    Repository(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -43,6 +63,43 @@ pub struct Check {
     pub detail: String,
     /// What to do about it, for anything that does not pass.
     pub hint: Option<String>,
+    /// Text only: `--json` keeps the flat list of names.
+    #[serde(skip)]
+    pub group: Option<Group>,
+}
+
+impl Check {
+    fn in_group(mut self, group: Group) -> Self {
+        self.group = Some(group);
+        self
+    }
+
+    fn title(&self) -> String {
+        match &self.group {
+            Some(Group::Daemon) => "Daemon".into(),
+            Some(Group::Tools) => "Tools".into(),
+            Some(Group::Human) => "Human".into(),
+            Some(Group::Repository(r)) => format!("Repository {r}"),
+            None => {
+                let mut chars = self.name.chars();
+                let first = chars.next().map(|f| f.to_uppercase().collect::<String>());
+                first.unwrap_or_default() + chars.as_str()
+            }
+        }
+    }
+
+    /// The name under its heading: `log demo` is `log` under
+    /// `Repository demo`.
+    fn label(&self) -> &str {
+        match &self.group {
+            Some(Group::Repository(r)) => self
+                .name
+                .strip_suffix(r.as_str())
+                .and_then(|s| s.strip_suffix(' '))
+                .unwrap_or(&self.name),
+            _ => &self.name,
+        }
+    }
 }
 
 fn pass(name: impl Into<String>, detail: impl Into<String>) -> Check {
@@ -51,6 +108,7 @@ fn pass(name: impl Into<String>, detail: impl Into<String>) -> Check {
         level: Level::Pass,
         detail: detail.into(),
         hint: None,
+        group: None,
     }
 }
 
@@ -60,6 +118,7 @@ fn warn(name: impl Into<String>, detail: impl Into<String>, hint: impl Into<Stri
         level: Level::Warn,
         detail: detail.into(),
         hint: Some(hint.into()),
+        group: None,
     }
 }
 
@@ -69,17 +128,28 @@ fn fail(name: impl Into<String>, detail: impl Into<String>, hint: impl Into<Stri
         level: Level::Fail,
         detail: detail.into(),
         hint: Some(hint.into()),
+        group: None,
     }
 }
 
-/// A failed check: exit 1, once everything has been printed.
+/// A failed check: exit 1, once everything has been printed. `reported`:
+/// the text summary already said so, and `main` adds nothing to stderr.
 #[derive(Debug)]
-pub struct ChecksFailed(pub usize);
+pub struct ChecksFailed {
+    pub failed: usize,
+    pub reported: bool,
+}
 
 impl std::fmt::Display for ChecksFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} check(s) failed", self.0)
+        write!(f, "{} check(s) failed", self.failed)
     }
+}
+
+/// The error is failed checks the output has already summed up.
+pub fn reported(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|c| c.downcast_ref::<ChecksFailed>().is_some_and(|f| f.reported))
 }
 
 impl std::error::Error for ChecksFailed {}
@@ -228,7 +298,7 @@ fn tools_checks(path: Option<&std::ffi::OsStr>) -> Vec<Check> {
             "install lsof",
         )
     };
-    vec![git, lsof]
+    vec![git.in_group(Group::Tools), lsof.in_group(Group::Tools)]
 }
 
 /// A quick audit, as far as it goes from outside the store: the hash chain
@@ -312,7 +382,8 @@ fn repository_checks(human: &str, repo: &str) -> Result<Vec<Check>> {
             "a human runs `lonca unfreeze`",
         ));
     }
-    Ok(out)
+    let group = || Group::Repository(repo.to_string());
+    Ok(out.into_iter().map(|c| c.in_group(group())).collect())
 }
 
 /// A Secure Enclave key signs a login with a prompt, and a session that is
@@ -359,6 +430,14 @@ fn security_check(c: &mut lonca_daemon::Client) -> Check {
 }
 
 fn humans_checks() -> Vec<Check> {
+    let mut out = human_and_repositories();
+    for c in out.iter_mut().filter(|c| c.group.is_none()) {
+        c.group = Some(Group::Human);
+    }
+    out
+}
+
+fn human_and_repositories() -> Vec<Check> {
     let Ok(human) = ctx::default_human() else {
         return vec![warn(
             "human",
@@ -390,23 +469,154 @@ fn humans_checks() -> Vec<Check> {
     for repo in repos {
         match repository_checks(&human, &repo) {
             Ok(checks) => out.extend(checks),
-            Err(_) => out.push(fail(
-                format!("repository {repo}"),
-                "could not be read",
-                "run `lonca status --repo` on it",
-            )),
+            Err(_) => out.push(
+                fail(
+                    format!("repository {repo}"),
+                    "could not be read",
+                    "run `lonca status --repo` on it",
+                )
+                .in_group(Group::Repository(repo)),
+            ),
         }
     }
     out
 }
 
-fn print(checks: &[Check]) {
-    for c in checks {
-        outln!("{}  {}: {}", c.level.word(), c.name, c.detail);
-        if let Some(hint) = &c.hint {
-            outln!("      {hint}");
+/// ANSI colour on a terminal, unless `NO_COLOR` is set (no-color.org) or
+/// the terminal is `dumb`. A pipe gets plain text.
+#[derive(Clone, Copy)]
+struct Paint(bool);
+
+impl Paint {
+    fn detect() -> Self {
+        use std::io::IsTerminal;
+        let set = |v: &str| std::env::var_os(v).is_some_and(|x| !x.is_empty());
+        let dumb = std::env::var_os("TERM").is_some_and(|t| t == "dumb");
+        Paint(!set("NO_COLOR") && !dumb && std::io::stdout().is_terminal())
+    }
+
+    fn wrap(self, code: &str, text: &str) -> String {
+        if self.0 {
+            format!("\x1b[{code}m{text}\x1b[0m")
+        } else {
+            text.to_string()
         }
     }
+
+    fn level(self, level: Level, text: &str) -> String {
+        self.wrap(level.colour(), text)
+    }
+
+    fn bold(self, text: &str) -> String {
+        self.wrap("1", text)
+    }
+
+    fn dim(self, text: &str) -> String {
+        self.wrap("2", text)
+    }
+
+    /// The commands in a hint, between backticks, in cyan. An unpaired
+    /// backtick leaves the text as it is.
+    fn commands(self, text: &str) -> String {
+        if !self.0 || text.matches('`').count() % 2 == 1 {
+            return text.to_string();
+        }
+        let parts = text.split('`').enumerate();
+        let span = |(i, p): (usize, &str)| {
+            if i % 2 == 1 {
+                self.wrap("36", &format!("`{p}`"))
+            } else {
+                p.to_string()
+            }
+        };
+        parts.map(span).collect()
+    }
+}
+
+/// What reaches the terminal from elsewhere (an error, a freeze reason a
+/// human wrote, a repository's name) carries no escape sequence.
+fn plain(text: &str) -> String {
+    crate::advise::printable(text, 2000)
+}
+
+/// Checks next to each other under the same heading, in order.
+fn categories(checks: &[Check]) -> Vec<(String, Vec<&Check>)> {
+    let mut out: Vec<(String, Vec<&Check>)> = Vec::new();
+    for c in checks {
+        let title = c.title();
+        match out.last_mut() {
+            Some((last, items)) if *last == title => items.push(c),
+            _ => out.push((title, vec![c])),
+        }
+    }
+    out
+}
+
+fn worst<'a>(checks: impl IntoIterator<Item = &'a Check>) -> Level {
+    checks
+        .into_iter()
+        .map(|c| c.level)
+        .max()
+        .unwrap_or(Level::Pass)
+}
+
+/// As `flutter doctor` does: a heading per category marked with its worst
+/// check. A check of its own (no group) that passes takes one line; a
+/// group lists its checks by name. What to do follows each problem, and
+/// the last line says how many categories have issues.
+fn render(checks: &[Check], paint: Paint) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    let version = format!("(lonca {}):", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(
+        s,
+        "{} {}\n",
+        paint.bold("Doctor summary"),
+        paint.dim(&version)
+    );
+    let cats = categories(checks);
+    for (title, items) in &cats {
+        let level = worst(items.iter().copied());
+        let head = paint.level(level, &format!("[{}]", level.mark()));
+        let title = paint.bold(&plain(title));
+        if let [only] = items.as_slice()
+            && only.level == Level::Pass
+            && only.group.is_none()
+        {
+            let _ = writeln!(s, "{head} {title}: {}", plain(&only.detail));
+            continue;
+        }
+        let _ = writeln!(s, "{head} {title}");
+        for c in items {
+            let mark = paint.level(c.level, c.level.mark());
+            let detail = paint.commands(&plain(&c.detail));
+            if c.group.is_none() {
+                let _ = writeln!(s, "    {mark} {detail}");
+            } else {
+                let _ = writeln!(s, "    {mark} {}: {detail}", plain(c.label()));
+            }
+            if let Some(hint) = &c.hint {
+                let hint = paint.commands(&plain(hint));
+                let _ = writeln!(s, "      {} {hint}", paint.dim("→"));
+            }
+        }
+    }
+    let troubled = cats
+        .iter()
+        .filter(|(_, items)| worst(items.iter().copied()) != Level::Pass);
+    let n = troubled.count();
+    let level = worst(checks);
+    let said = match n {
+        0 => "No issues found.".to_string(),
+        1 => "Doctor found issues in 1 category.".to_string(),
+        n => format!("Doctor found issues in {n} categories."),
+    };
+    let _ = writeln!(
+        s,
+        "\n{}",
+        paint.level(level, &format!("{} {said}", level.mark()))
+    );
+    s
 }
 
 /// `{"ok", "mode", "checks"}`: `ok` is false when a check failed, and a
@@ -427,18 +637,19 @@ pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
     let mut proxy_port = None;
     if let Ok(t) = &trust {
         let socket = ctx::socket();
-        checks.push(socket_check(t, &socket));
-        match Client::connect(&socket) {
+        checks.push(socket_check(t, &socket).in_group(Group::Daemon));
+        let daemon = match Client::connect(&socket) {
             Ok(mut c) => match c.call("ping", json!({})) {
                 Ok(ping) => {
                     reachable = true;
                     proxy_port = proxy_port_of(&ping);
-                    checks.push(version_check(&ping));
+                    version_check(&ping)
                 }
-                Err(e) => checks.push(fail("daemon", e.to_string(), "restart the daemon")),
+                Err(e) => fail("daemon", e.to_string(), "restart the daemon"),
             },
-            Err(e) => checks.push(fail("daemon", e.to_string(), "start `lonca daemon`")),
-        }
+            Err(e) => fail("daemon", e.to_string(), "start `lonca daemon`"),
+        };
+        checks.push(daemon.in_group(Group::Daemon));
         for locked in built_in().values().filter_map(|p| p.locked.as_ref()) {
             let named = || locked.file_here().map(PathBuf::from);
             if let Some(file) = managed_settings.clone().or_else(named) {
@@ -466,11 +677,15 @@ pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
     if as_json {
         ctx::print_json(&report(mode, &checks))?;
     } else {
-        print(&checks);
+        out!("{}", render(&checks, Paint::detect()));
     }
     match checks.iter().filter(|c| c.level == Level::Fail).count() {
         0 => Ok(()),
-        n => Err(ChecksFailed(n).into()),
+        failed => Err(ChecksFailed {
+            failed,
+            reported: !as_json,
+        }
+        .into()),
     }
 }
 
@@ -491,9 +706,6 @@ mod tests {
         assert_eq!(warn("x", "d", "h").hint.as_deref(), Some("h"));
         assert_eq!(warn("x", "d", "h").level, Level::Warn);
         assert_eq!(fail("x", "d", "h").level, Level::Fail);
-        assert_eq!(pass("x", "d").level.word(), "pass");
-        assert_eq!(warn("x", "d", "h").level.word(), "warn");
-        assert_eq!(fail("x", "d", "h").level.word(), "fail");
     }
 
     #[test]
@@ -668,7 +880,94 @@ mod tests {
     }
 
     #[test]
+    fn text_groups_checks_under_headings_as_flutter_doctor_does() {
+        let checks = vec![
+            pass("mode", "cooperative: the daemon runs as you"),
+            fail(
+                "socket",
+                "no socket at /x/lonca.sock",
+                "start `lonca daemon`",
+            )
+            .in_group(Group::Daemon),
+            fail("daemon", "no such file", "start `lonca daemon`").in_group(Group::Daemon),
+            warn(
+                "hooks",
+                "no managed settings",
+                "sessions count as unobserved",
+            ),
+            pass("sandbox", "seatbelt"),
+            pass("git", "found").in_group(Group::Tools),
+            pass("lsof", "found").in_group(Group::Tools),
+            pass("log demo", "3 entries verify").in_group(Group::Repository("demo".into())),
+        ];
+        let want = format!(
+            "Doctor summary (lonca {}):
+
+[✓] Mode: cooperative: the daemon runs as you
+[✗] Daemon
+    ✗ socket: no socket at /x/lonca.sock
+      → start `lonca daemon`
+    ✗ daemon: no such file
+      → start `lonca daemon`
+[!] Hooks
+    ! no managed settings
+      → sessions count as unobserved
+[✓] Sandbox: seatbelt
+[✓] Tools
+    ✓ git: found
+    ✓ lsof: found
+[✓] Repository demo
+    ✓ log: 3 entries verify
+
+✗ Doctor found issues in 2 categories.
+",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(render(&checks, Paint(false)), want);
+
+        let fine = render(&[pass("mode", "m")], Paint(false));
+        assert!(fine.ends_with("\n✓ No issues found.\n"), "{fine}");
+        let one = render(
+            &[warn("lsof", "d", "h").in_group(Group::Tools)],
+            Paint(false),
+        );
+        assert!(
+            one.ends_with("\n! Doctor found issues in 1 category.\n"),
+            "{one}"
+        );
+    }
+
+    #[test]
+    fn colour_marks_the_level_and_the_commands_and_nothing_else_gets_in() {
+        let p = Paint(true);
+        assert_eq!(p.level(Level::Pass, "✓"), "\x1b[32m✓\x1b[0m");
+        assert_eq!(p.level(Level::Warn, "!"), "\x1b[33m!\x1b[0m");
+        assert_eq!(p.level(Level::Fail, "✗"), "\x1b[31m✗\x1b[0m");
+        assert_eq!(
+            p.commands("run `a` or `b`"),
+            "run \x1b[36m`a`\x1b[0m or \x1b[36m`b`\x1b[0m"
+        );
+        assert_eq!(p.commands("one ` only"), "one ` only");
+        assert_eq!(Paint(false).commands("run `a`"), "run `a`");
+        let reason =
+            warn("frozen demo", "hold \x1b[2Jon", "h").in_group(Group::Repository("demo".into()));
+        let text = render(&[reason], p);
+        assert!(!text.contains("\x1b[2J"), "{text:?}");
+        assert!(text.contains("frozen: hold [2Jon"), "{text:?}");
+    }
+
+    #[test]
     fn the_failure_counts_what_failed() {
-        assert_eq!(ChecksFailed(2).to_string(), "2 check(s) failed");
+        let e = ChecksFailed {
+            failed: 2,
+            reported: false,
+        };
+        assert_eq!(e.to_string(), "2 check(s) failed");
+        assert!(!reported(&e.into()));
+        let e = ChecksFailed {
+            failed: 1,
+            reported: true,
+        };
+        assert!(reported(&anyhow::Error::from(e).context("doctor")));
     }
 }

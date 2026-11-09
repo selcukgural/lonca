@@ -763,7 +763,10 @@ lacks: `lease_missing` with the holder if there is one). `outcome: "escalate"` m
 human (`status.pending`); `"allow"` means it is queued and the merge
 queue integrates it (`status.changes[].status`). A denied change is
 logged with its reasons (`claim_mismatch:edits`, `lease_missing:…`,
-`scope_path:…`, …).
+`scope_path:…`, …). An agent's proposal that is not denied replaces the
+changes of its workspace (its session and the sessions it continues) that
+wait for a human: each is `withdrawn` in the same entry and named in the
+reasons as `replaces:<change>`. A queued change stays.
 
 ### `change.withdraw`
 
@@ -975,6 +978,9 @@ The `reasons` of a decision. The ones a runner acts on:
 - `scope_path:<path>`, `scope_symbol:<symbol>`, `scope_op:<op>`,
   `scope_max_files`, `scope_max_lines`: outside the session's scope.
 - `stale_trunk`, `unknown_base`: propose on the current trunk.
+- `replaces:<change>`, on an allowed or escalated proposal: that change of
+  the same workspace was waiting for a human and is `withdrawn` now; the
+  new one holds its edits. Approve the new one.
 - `unobserved_write:<path>`, `tainted_session`, `tainted_critical_path`,
   `critical_path:<path>`, `unobserved_session`: escalated to a human.
   `unhooked_session` and `unhooked_critical_path` are a taint's, for a

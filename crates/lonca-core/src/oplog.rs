@@ -53,8 +53,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// version 23 gives a delegated lease back to the parent when the child
 /// expires or stops beating, as when it ends; version 24 adds the
 /// `unhooked` observation, which taints a session; version 25 adds named
-/// `checks` to `approve`.
-pub const FORMAT_CURRENT: u32 = 25;
+/// `checks` to `approve`; version 26 makes an agent's proposal withdraw the
+/// pending changes of its workspace.
+pub const FORMAT_CURRENT: u32 = 26;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -125,6 +126,12 @@ pub const FORMAT_UNHOOKED: u32 = 24;
 /// The first format with named `checks` on `approve`: the checks of
 /// `verification.checks` a change owes. Evidence of them is `named`.
 pub const FORMAT_NAMED_CHECKS: u32 = 25;
+/// The first format in which an agent's `change.propose` that is not denied
+/// withdraws the pending changes of its workspace: those of its session and
+/// of the sessions it continues that wait for a human. The decision names
+/// each with `replaces:<change>`. No new field: older entries replay as they
+/// were.
+pub const FORMAT_REPLACES: u32 = 26;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

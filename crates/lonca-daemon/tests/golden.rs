@@ -95,7 +95,32 @@ fn golden_repo() -> Env {
     give_back(&mut e);
     unhooked(&mut e);
     named_checks(&mut e);
+    replaces(&mut e);
     e
+}
+
+/// From format 26: a workspace proposes twice while the first waits; the
+/// second replaces it, and its approval lands the work once.
+fn replaces(e: &mut Env) {
+    let base = e.trunk();
+    let t = e.session("s-rep", &["card.md"]);
+    e.lease(&t, "card.md#<file>");
+    let first = vec![file("card.md", "first draft\n")];
+    let r = e.propose(&t, &base, first, &["card.md#<file>"]);
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let older = r["change"].as_str().expect("change").to_string();
+    let second = vec![file("card.md", "second draft\n")];
+    let r = e.propose(&t, &base, second, &["card.md#<file>"]);
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let reasons = r["decision"]["reasons"].to_string();
+    assert!(reasons.contains(&format!("replaces:{older}")), "{r}");
+    let d = e.human(Op::Approve {
+        target_seq: r["seq"].as_u64().expect("seq"),
+        note: "golden".into(),
+        checks: vec![],
+    });
+    assert_eq!(d["decision"]["outcome"], "allow", "{d}");
+    assert_eq!(e.svc.process_all(), 1);
 }
 
 /// From format 25: a human approves a proposal with a named check, and the
@@ -1293,6 +1318,25 @@ fn golden_v25_log_still_verifies_replays_and_audits() {
             && a.result == lonca_core::ops::CheckResult::Pass
     });
     assert_eq!(ran.count(), 1);
+}
+
+/// A workspace's second proposal names the first in `replaces:`; the first
+/// is never approved, and the second integrates.
+#[test]
+fn golden_v26_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v26.bundle",
+        "23493ecb2bf18f990b6e13d29fd8e58861b188f1140815cd58f2a92289509b4d",
+        26,
+    );
+    let reasons = ops.iter().flat_map(|o| &o.entry.decision.reasons);
+    let replaced: Vec<&String> = reasons.filter(|r| r.starts_with("replaces:")).collect();
+    assert_eq!(replaced.len(), 1, "{replaced:?}");
+    let older = replaced[0].strip_prefix("replaces:").unwrap();
+    let s = lonca_policy::state::State::replay(&ops);
+    let rec = s.changes.values().find(|c| c.change.to_string() == older);
+    let rec = rec.expect("the replaced change");
+    assert_eq!(rec.status, lonca_policy::state::ChangeStatus::Withdrawn);
 }
 
 #[test]

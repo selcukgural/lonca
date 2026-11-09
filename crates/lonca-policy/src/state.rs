@@ -10,7 +10,7 @@ use lonca_core::ChangeId;
 use lonca_core::GitId;
 use lonca_core::oplog::{
     FORMAT_GIVE_BACK, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS,
-    FORMAT_SYMBOL_KEYS, GENESIS_PREV, OpEntry, SignedOp,
+    FORMAT_REPLACES, FORMAT_SYMBOL_KEYS, GENESIS_PREV, OpEntry, SignedOp,
 };
 use lonca_core::ops::{
     Actor, Attestation, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind,
@@ -385,6 +385,9 @@ const DAY_MS: i64 = 86_400_000;
 /// session that holds code the change's facts list as affected.
 pub const AFFECTED_LEASE: &str = "affected_lease:";
 pub const LEASES_KEPT: &str = "leases_kept";
+/// A reason of a proposal from [`FORMAT_REPLACES`]: `replaces:<change>`, a
+/// pending change of the same workspace that the proposal withdraws.
+pub const REPLACES: &str = "replaces:";
 /// On a heartbeat's decision, followed by `leases.heartbeat_timeout_ms`.
 pub const HEARTBEAT_TIMEOUT: &str = "heartbeat_timeout=";
 /// On a `lease.interest` decision: `leases.reservation_ms`.
@@ -474,6 +477,26 @@ impl State {
     /// `session` is `earlier`, or took over its workspace.
     pub fn continues(&self, session: &str, earlier: &str) -> bool {
         self.lineage(session).iter().any(|s| s == earlier)
+    }
+
+    /// The changes a proposal by `session` withdraws, from
+    /// [`FORMAT_REPLACES`]: those waiting for a human whose session is
+    /// `session` or one it continues. A workspace proposes all it has, so
+    /// the new proposal holds their edits. A child has a workspace of its
+    /// own and is not in the line; a queued change lands anyway and stays.
+    pub fn replaced_by(&self, session: &str) -> Vec<ChangeId> {
+        let line = self.lineage(session);
+        let ours = |c: &&ChangeRecord| {
+            c.actor
+                .session()
+                .is_some_and(|s| line.iter().any(|l| l == s))
+        };
+        self.changes
+            .values()
+            .filter(|c| matches!(c.status, ChangeStatus::Pending { .. }))
+            .filter(ours)
+            .map(|c| c.change)
+            .collect()
     }
 
     /// `child` is `ancestor` or was (transitively) created from it.
@@ -1053,6 +1076,17 @@ impl State {
         {
             self.pin(session, *change, e.facts.as_ref(), e.time_ms, e.format);
         }
+        // The newer proposal of a workspace replaces its pending ones; what
+        // was pinned to them is pinned to it now, as far as it needs it.
+        if e.format >= FORMAT_REPLACES
+            && e.decision.outcome != Outcome::Deny
+            && matches!(e.op, Op::ChangePropose { .. })
+            && let Some(session) = e.actor.session()
+        {
+            for change in self.replaced_by(session) {
+                self.withdraw(change);
+            }
+        }
         // A proposal that stands is progress: the next stop starts over. An
         // agent that can only get denied keeps counting, and ends.
         if e.decision.outcome != Outcome::Deny
@@ -1197,6 +1231,19 @@ impl State {
                 l.pins.insert(change, items);
             }
         }
+    }
+
+    /// `change` is taken back: out of the pending set and the queue, its
+    /// pinned items back to the TTL of their sets.
+    fn withdraw(&mut self, change: ChangeId) {
+        if let Some(c) = self.changes.get_mut(&change) {
+            if let ChangeStatus::Pending { seq } = c.status {
+                self.pending.remove(&seq);
+            }
+            c.status = ChangeStatus::Withdrawn;
+        }
+        self.queue.retain(|q| *q != change);
+        self.unpin(change, false);
     }
 
     /// The change left the queue. Its items are released, or go back to
@@ -1745,16 +1792,7 @@ impl State {
                 self.queue.retain(|q| q != change);
                 self.queue.push(*change);
             }
-            Op::ChangeWithdraw { change } => {
-                if let Some(c) = self.changes.get_mut(change) {
-                    if let ChangeStatus::Pending { seq } = c.status {
-                        self.pending.remove(&seq);
-                    }
-                    c.status = ChangeStatus::Withdrawn;
-                }
-                self.queue.retain(|q| q != change);
-                self.unpin(*change, false);
-            }
+            Op::ChangeWithdraw { change } => self.withdraw(*change),
             Op::ChangeIntegrate { change, merged, .. } => {
                 let Some(merged) = merged else { return };
                 self.move_trunk(merged);

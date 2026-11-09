@@ -14,9 +14,9 @@ categories = ["development-tools"]
 [dependencies]
 hex = "0.4.3"
 libc = "0.2.190"
-lonca-core = { version = "0.2.0", path = "../lonca-core" }
-lonca-policy = { version = "0.2.0", path = "../lonca-policy" }
-lonca-symbols = { version = "0.2.0", path = "../lonca-symbols" }
+lonca-core = { version = "0.2.1", path = "../lonca-core" }
+lonca-policy = { version = "0.2.1", path = "../lonca-policy" }
+lonca-symbols = { version = "0.2.1", path = "../lonca-symbols" }
 tempfile = "3.27.0"
 
 [lints]

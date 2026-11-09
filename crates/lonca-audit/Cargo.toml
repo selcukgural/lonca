@@ -12,9 +12,9 @@ keywords = ["vcs", "audit", "agents", "lonca"]
 categories = ["development-tools"]
 
 [dependencies]
-lonca-core = { version = "0.2.0", path = "../lonca-core" }
-lonca-policy = { version = "0.2.0", path = "../lonca-policy" }
-lonca-symbols = { version = "0.2.0", path = "../lonca-symbols" }
+lonca-core = { version = "0.2.1", path = "../lonca-core" }
+lonca-policy = { version = "0.2.1", path = "../lonca-policy" }
+lonca-symbols = { version = "0.2.1", path = "../lonca-symbols" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 

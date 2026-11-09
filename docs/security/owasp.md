@@ -26,7 +26,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 |---|---|---|---|
 | A01 Broken Access Control (incl. SSRF) | met | every daemon method names its credential, deny by default (`METHODS`, `crates/lonca-daemon/src/service.rs`); capabilities only narrow (`cap.attenuate`, `scope_within` in `decide.rs`); peer uid allowlist (`server.rs`); proxy: private ranges, metadata always, port allowlist, per-host rules (`crates/lonca-net`, #64); local-path remotes kept out of the daemon home (#57) | — |
 | A02 Security Misconfiguration | met | hardened profile and installers, root-owned hook and managed-settings checks, no silent unsandboxed verification (#54); key and home ownership checks (#62) | policy guide #13 |
-| A03 Software Supply Chain Failures | met | cargo-deny (crates.io only, advisories, licenses), actions pinned by commit and allowlisted, Dependabot with cooldown, pinned toolchain, zizmor, SBOM of a release, Scorecard (#60) | release provenance #7 |
+| A03 Software Supply Chain Failures | met | cargo-deny (crates.io only, advisories, licenses), actions pinned by commit and allowlisted, Dependabot with cooldown, pinned toolchain, zizmor, SBOM and build provenance attestation of a release (#7), Scorecard (#60) | — |
 | A04 Cryptographic Failures | met | Ed25519 `verify_strict`, Secure Enclave P-256, SHA-256 chain, tokens stored as hashes, keys private on load and wiped in memory (`docs/crypto.md`, #62); human and daemon key rotation and recovery (#4, #5) | — |
 | A05 Injection | met | git: `--`, scheme allowlist, clean environment, no hooks, `GIT_ALLOW_PROTOCOL` (#57); strict repository paths (`crates/lonca-core/src/paths.rs`); Cedar context built from typed values; advisor input framed as data (#63) | fuzzing #15 |
 | A06 Insecure Design | met | pure `decide()`, single writer, append-only log replayed by the auditor; socket, request and rate limits (#50); verifier process-tree kill, rlimits, quota (#59) | threat model #14 |
@@ -41,7 +41,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 |---|---|---|---|
 | LLM01 Prompt Injection | met | taint tracking: outside content marks a session and its changes wait for a human; unobserved sessions count as tainted; agent instruction and tool config files are critical paths (#55); the advisor gets agent text as framed data (#63) | — |
 | LLM02 Sensitive Information Disclosure | met | tokens never logged (log, `daemon.log`, security log masks them); verification environment deny by default; credential directories unreadable in the sandbox; redaction | — |
-| LLM03 Supply Chain | met | as A03; the advisor's model is named, not discovered | #7 |
+| LLM03 Supply Chain | met | as A03; the advisor's model is named, not discovered | — |
 | LLM04 Data and Model Poisoning | n/a | Lonca trains and fine-tunes nothing | — |
 | LLM05 Improper Output Handling | met | advisor output never reaches a decision; printed text has no control or bidi characters and is labelled tainted (#63) | — |
 | LLM06 Excessive Agency | met | agents get agent operations only (MCP and protocol), scopes by path and symbol, leases, blast-radius rules, critical paths escalate | — |
@@ -57,7 +57,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 | ASI01 Agent Goal Hijack | met | as LLM01; tainted work goes to a human | — |
 | ASI02 Tool Misuse and Exploitation | met | hooks refuse tools that touch Lonca's own files, socket, keys or harness settings; refusals are security events (#56) | — |
 | ASI03 Identity and Privilege Abuse | met | sessions per agent, attenuation only narrows, cascading revocation, tokens end with their session (#53); harness levels (#21) | — |
-| ASI04 Agentic Supply Chain Vulnerabilities | met | build files and agent config are critical paths (#55); CI as A03 | #7 |
+| ASI04 Agentic Supply Chain Vulnerabilities | met | build files and agent config are critical paths (#55); CI as A03 | — |
 | ASI05 Unexpected Code Execution | met | verification of the merged tree in a sandbox; `lonca run` isolation; no silent unsandboxed run (#54, #59) | — |
 | ASI06 Memory and Context Poisoning | met | provenance labels on changes and advice; instruction files are critical paths (#55) | — |
 | ASI07 Insecure Inter-Agent Communication | met | negotiation only through the daemon, authenticated, logged, bounded rounds | — |

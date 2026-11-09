@@ -510,6 +510,15 @@ pub struct HumanKey {
     pub public: String,
 }
 
+/// What a `daemon.recover` signed with a recovery key also does: replace
+/// that human's lost key, as `human.recover` does. The recovery key is
+/// used up by it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Recovery {
+    pub human: String,
+    pub key: HumanKey,
+}
+
 /// A new session taking over the workspace of an earlier one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Continuation {
@@ -552,9 +561,15 @@ pub enum Op {
     DaemonRotate { key: String },
     /// Re-anchors the log on a new daemon key when the old one is gone (or
     /// belongs to a daemon that is being replaced). Signed by the new key
-    /// and by a human.
+    /// and by a human: with the human's key, or, with `recover`, with
+    /// their recovery key, when the Mac that held both keys is lost (log
+    /// format 27).
     #[serde(rename = "daemon.recover")]
-    DaemonRecover { key: String },
+    DaemonRecover {
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recover: Option<Recovery>,
+    },
     #[serde(rename = "policy.update")]
     PolicyUpdate { policy: GitId },
     #[serde(rename = "session.start")]
@@ -747,10 +762,23 @@ impl Op {
         }
     }
 
+    /// Whether the human's recovery key signs this operation, not their
+    /// current key: `human.recover`, and `daemon.recover` with `recover`.
+    pub fn signed_by_recovery_key(&self) -> bool {
+        matches!(
+            self,
+            Op::HumanRecover { .. }
+                | Op::DaemonRecover {
+                    recover: Some(_),
+                    ..
+                }
+        )
+    }
+
     /// The daemon key this operation installs, if it is a key switch.
     pub fn daemon_key_switch(&self) -> Option<&str> {
         match self {
-            Op::DaemonRotate { key } | Op::DaemonRecover { key } => Some(key),
+            Op::DaemonRotate { key } | Op::DaemonRecover { key, .. } => Some(key),
             _ => None,
         }
     }

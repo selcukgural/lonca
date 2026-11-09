@@ -664,7 +664,15 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
         args.extend_from_slice(more);
         e.cmd(r, &args).output().unwrap()
     };
-    assert!(!recover(&["--repo", "nosuch"]).status.success());
+    // Only `foreign_key` sends the daemon recovery; any other refusal is
+    // the answer.
+    let o = recover(&["--repo", "nosuch"]);
+    assert!(!o.status.success());
+    assert!(
+        text(&o.stderr).contains("human.submit: not_found"),
+        "{}",
+        text(&o.stderr)
+    );
     let out = recover(&[]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let out = text(&out.stdout);
@@ -1021,6 +1029,83 @@ fn backup_and_restore_through_the_cli() {
     assert!(rep.ok(), "{:#?}", rep.findings);
     assert_eq!(rep.key_switches.len(), 1);
     assert_eq!(rep.key_switches[0].kind, "daemon.recover");
+}
+
+/// A lost Mac: the daemon key and ayse's key are both gone. On a new
+/// daemon, `restore` and `human recover` with the recovery key bring the
+/// repository back; no other key is needed.
+#[test]
+fn a_lost_mac_comes_back_with_the_recovery_key_alone() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    e.run(r, &["init", "demo"]);
+    let rec = r.join("ayse.recovery");
+    e.run(
+        r,
+        &[
+            "human",
+            "recovery-key",
+            "--repo",
+            "demo",
+            "--out",
+            rec.to_str().unwrap(),
+        ],
+    );
+    e.run(r, &["backup", "--repo", "demo", "--out", "off-site"]);
+    let trunk = status_json(&e)["trunk"].clone();
+
+    // The Mac is gone: a new daemon, and none of ayse's keys.
+    std::fs::remove_dir_all(r.join("humans")).unwrap();
+    let home2 = r.join("home2");
+    let sock2 = r.join("s2");
+    start_daemon(r, &home2, &sock2);
+    let run2 =
+        |args: &[&str]| -> Output { e.cmd(r, args).env("LONCA_SOCKET", &sock2).output().unwrap() };
+    let bundle = std::fs::read_dir(r.join("off-site"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let o = run2(&["restore", "demo", "--from", bundle.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(
+        out.contains("lonca human recover --repo demo --recovery-key <file>"),
+        "{out}"
+    );
+    let o = run2(&[
+        "human",
+        "recover",
+        "--repo",
+        "demo",
+        "--recovery-key",
+        rec.to_str().unwrap(),
+        "--as",
+        "ayse",
+    ]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let out = text(&o.stdout);
+    assert!(out.contains("demo: #2 allow"), "{out}");
+    assert!(out.contains("demo moved onto this daemon's key"), "{out}");
+    assert!(out.contains("recovered."), "{out}");
+
+    // The repository is live on the new daemon, under ayse's new key.
+    let o = run2(&["status", "--repo", "demo", "--json"]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["trunk"], trunk);
+    assert!(v["humans"]["ayse"]["recovery"].is_null(), "used up");
+    let o = run2(&["human", "whoami"]);
+    let me = text(&o.stdout);
+    let public = v["humans"]["ayse"]["public"].as_str().unwrap();
+    assert!(me.contains(public), "{me}");
+    let store = lonca_core::Store::open(&home2.join("repos/demo.git")).unwrap();
+    let rep = lonca_audit::audit(&store, lonca_audit::Options::default()).unwrap();
+    assert!(rep.ok(), "{:#?}", rep.findings);
+    assert_eq!(rep.key_switches.len(), 1);
+    assert_eq!(rep.key_switches[0].actor, "human:ayse");
 }
 
 /// The kept human session: reused while it is good, renewed when it is

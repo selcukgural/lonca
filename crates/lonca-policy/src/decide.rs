@@ -611,7 +611,7 @@ pub fn decide(
             }
         }
         Actor::Human { name } => {
-            let recover = matches!(op, Op::HumanRecover { .. });
+            let recover = op.signed_by_recovery_key();
             if !state.humans.contains_key(name) {
                 return Decision::deny("unknown_human");
             }
@@ -705,7 +705,7 @@ pub fn decide(
             }
             check_new_key(state, key, &mut v);
         }
-        Op::DaemonRotate { key } | Op::DaemonRecover { key } => {
+        Op::DaemonRotate { key } | Op::DaemonRecover { key, .. } => {
             if !valid_daemon_key(key) {
                 v.deny("invalid_key");
             } else if *key == state.daemon_key
@@ -713,6 +713,17 @@ pub fn decide(
                 || state.key_known(key)
             {
                 v.deny("key_reused");
+            }
+            // With the recovery key: the lost key of its own human, as in
+            // `human.recover`.
+            if let Op::DaemonRecover {
+                recover: Some(r), ..
+            } = op
+            {
+                if actor.label() != format!("human:{}", r.human) {
+                    v.deny("not_own_key");
+                }
+                check_new_key(state, &r.key, &mut v);
             }
         }
         Op::HumanRevoke { human: who, reason } => {

@@ -187,10 +187,14 @@ fn a_repository_whose_daemon_key_is_lost_is_recovered_by_a_human() {
     let before = log_len(&e);
     let other = Op::DaemonRecover {
         key: KeyPair::generate().public_hex(),
+        recover: None,
     };
     let err = submit_to(&mut e, "demo", other).unwrap_err();
     assert_eq!(err.0, "invalid", "{err:?}");
-    let op = Op::DaemonRecover { key: new.clone() };
+    let op = Op::DaemonRecover {
+        key: new.clone(),
+        recover: None,
+    };
     let forged = sign_ed25519(&KeyPair::generate(), "ayse", "demo", &op, e.now());
     let err = e
         .call(
@@ -213,6 +217,7 @@ fn a_repository_whose_daemon_key_is_lost_is_recovered_by_a_human() {
     // Recovering a repository this daemon holds the key of is refused.
     let again = Op::DaemonRecover {
         key: KeyPair::generate().public_hex(),
+        recover: None,
     };
     let err = submit_to(&mut e, "demo", again).unwrap_err();
     assert!(err.1.contains("use `lonca daemon-key rotate`"), "{err:?}");
@@ -242,6 +247,7 @@ fn a_forged_key_switch_in_the_store_stops_the_daemon_and_fails_the_audit() {
     for op in [
         Op::DaemonRecover {
             key: attacker.public_hex(),
+            recover: None,
         },
         Op::DaemonRotate {
             key: daemon.clone(),

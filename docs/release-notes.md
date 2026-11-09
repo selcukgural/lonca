@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### A lost Mac comes back with the recovery key
+
+When the Mac is lost, the daemon's key and your Secure Enclave key go with
+it. A repository restored onto a new daemon then accepted only
+`daemon.recover`, signed with an enrolled human's key, so the recovery key
+alone could not bring it back. Now `lonca human recover` does it: on a
+restored repository it sends a `daemon.recover` signed with the recovery
+key, which moves the repository onto the new daemon and installs your new
+key in one entry (log format 27). Every session ends; the recovery key is
+used up. See [Recovery](guide/recovery.md#a-lost-mac).
+
 ### Short change ids work
 
 `lonca pending` and `lonca log` show the first 12 letters of a change id,

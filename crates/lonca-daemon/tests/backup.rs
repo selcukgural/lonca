@@ -297,7 +297,10 @@ fn a_restore_on_another_daemon_is_foreign_until_a_human_recovers_it() {
         .unwrap()
         .to_string();
     assert_ne!(new, before["daemon_key"].as_str().unwrap());
-    let op = Op::DaemonRecover { key: new.clone() };
+    let op = Op::DaemonRecover {
+        key: new.clone(),
+        recover: None,
+    };
     let r = o.ok("human.submit", Some("demo"), e.sign(&op));
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     let after = o.ok("status", Some("demo"), json!({}));
@@ -314,6 +317,133 @@ fn a_restore_on_another_daemon_is_foreign_until_a_human_recovers_it() {
     assert!(rep.ok(), "{:#?}", rep.findings);
     assert_eq!(rep.key_switches.len(), 1);
     assert_eq!(rep.key_switches[0].kind, "daemon.recover");
+}
+
+/// A lost Mac: the daemon key and ayse's key are both gone. Her recovery
+/// key alone moves the restored repository onto the new daemon and
+/// replaces her key, in one entry and with no session.
+#[test]
+fn a_lost_mac_is_recovered_with_the_recovery_key_alone() {
+    use lonca_core::ops::Recovery;
+    use lonca_policy::human::sign_ed25519;
+    let mut e = repo();
+    let rec = KeyPair::generate();
+    let file_key = |k: &KeyPair| HumanKey {
+        alg: "ed25519".into(),
+        public: k.public_hex(),
+    };
+    let set = Op::HumanRecoveryKey {
+        human: "ayse".into(),
+        key: file_key(&rec),
+    };
+    assert_eq!(e.human(set)["decision"]["outcome"], "allow");
+    let before = e.ok("status", Some("demo"), None, json!({}));
+    let bundle = backup(&mut e);
+
+    let mut o = Other::open(&e, "home4", false);
+    assert_eq!(o.restore("demo", &bundle).unwrap()["foreign"], json!(true));
+    let daemon = o.ok("ping", None, json!({}))["daemon_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let fresh = KeyPair::generate();
+    let now = || e.clock.load(Ordering::SeqCst);
+    let body = |op: &Op, key: &KeyPair| json!({"op": op, "sig": sign_ed25519(key, "ayse", "demo", op, now())});
+
+    // What failed before: `human.recover` needs the daemon key that was lost.
+    let op = Op::HumanRecover {
+        human: "ayse".into(),
+        key: file_key(&fresh),
+    };
+    let err = o
+        .raw("human.submit", Some("demo"), None, body(&op, &rec))
+        .unwrap_err();
+    assert_eq!(err.0, "foreign_key", "{err:?}");
+    // A plain recovery still needs a human session.
+    let plain = Op::DaemonRecover {
+        key: daemon.clone(),
+        recover: None,
+    };
+    let err = o
+        .raw("human.submit", Some("demo"), None, body(&plain, &rec))
+        .unwrap_err();
+    assert_eq!(err.0, "unauthenticated", "{err:?}");
+    let recover = |key: &str| Op::DaemonRecover {
+        key: key.into(),
+        recover: Some(Recovery {
+            human: "ayse".into(),
+            key: file_key(&fresh),
+        }),
+    };
+    // Another daemon's key, a forged signature or the lost key itself:
+    // refused, nothing logged, still foreign.
+    let other = KeyPair::generate().public_hex();
+    let err = o
+        .raw(
+            "human.submit",
+            Some("demo"),
+            None,
+            body(&recover(&other), &rec),
+        )
+        .unwrap_err();
+    assert_eq!(err.0, "invalid", "{err:?}");
+    for signer in [&KeyPair::generate(), &e.human] {
+        let err = o
+            .raw(
+                "human.submit",
+                Some("demo"),
+                None,
+                body(&recover(&daemon), signer),
+            )
+            .unwrap_err();
+        assert_eq!(err.0, "denied", "{err:?}");
+        assert!(err.1.contains("bad_human_signature"), "{err:?}");
+    }
+    // Her old key still signs in (the copy is all it touches), into a
+    // repository that refuses everything.
+    let err = o.call("status", Some("demo"), json!({})).unwrap_err();
+    assert_eq!(err.0, "foreign_key", "{err:?}");
+    assert!(
+        err.1
+            .contains("`lonca human recover --repo demo --recovery-key <file>`"),
+        "{err:?}"
+    );
+    let old_token = o.token.take().expect("old key signed in");
+
+    let r = o
+        .raw(
+            "human.submit",
+            Some("demo"),
+            None,
+            body(&recover(&daemon), &rec),
+        )
+        .unwrap();
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    // Her new key signs in; the old key's session reaches nothing.
+    let err = o
+        .raw("status", Some("demo"), Some(&old_token), json!({}))
+        .unwrap_err();
+    assert_eq!(err.0, "forbidden", "{err:?}");
+    o.human = fresh;
+    let after = o.ok("status", Some("demo"), json!({}));
+    assert_eq!(after["daemon_key"], json!(daemon));
+    assert_eq!(after["trunk"], before["trunk"]);
+    assert_eq!(
+        after["next_seq"],
+        json!(before["next_seq"].as_u64().unwrap() + 1)
+    );
+    let op = Op::Freeze { reason: "x".into() };
+    let r = o.ok(
+        "human.submit",
+        Some("demo"),
+        json!({"op": op, "sig": sign_ed25519(&o.human, "ayse", "demo", &op, now())}),
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let rep = audit(&o.store("demo"), deep()).unwrap();
+    assert!(rep.ok(), "{:#?}", rep.findings);
+    assert_eq!(rep.key_switches.len(), 1);
+    assert_eq!(rep.key_switches[0].kind, "daemon.recover");
+    assert_eq!(rep.key_switches[0].actor, "human:ayse");
 }
 
 #[test]

@@ -139,6 +139,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 26** adds no field: an agent's proposal that is not denied
   withdraws the pending changes of its workspace (see "A newer proposal
   replaces the pending one (#107)"). Older entries replay as they were.
+- **Version 27** adds `recover` on `daemon.recover`: signed with a human's
+  recovery key, it also replaces that human's key (see "Daemon keys", "A
+  lost Mac"). Left out of the encoding when absent, so earlier recoveries
+  keep their bytes; one that has it needs format 27.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -942,6 +946,23 @@ belongs to `_lonca`.
   with it again.
 - **A repository on another key** (`foreign_key`) accepts nothing but
   `daemon.recover`; the daemon still starts, and lists it at startup.
+- **A lost Mac** (log format 27). The daemon key and the human's key were
+  on one machine, so after a restore neither `human.recover` (the daemon
+  can not sign for the log) nor a plain `daemon.recover` (no human key
+  left) is possible. `daemon.recover {key, recover: {human, key}}` is the
+  way back with the recovery key alone: signed by the new daemon key and
+  by that human's recovery key, it re-anchors the log and installs the
+  human's new key, with the effects of both operations (every session
+  ends; the old key and the recovery key are retired). It is decided like
+  `human.recover`: only the human's own recovery key signs it, with the
+  same presence exemption, and the new human key is checked like any new
+  key. Like `human.recover` it needs no session; refused, it writes
+  nothing. A recovery key now carries the power any enrolled human key
+  already has here: whoever holds it and a copy of the log can re-anchor
+  that copy on a daemon of their own. That fork is visible to every
+  auditor of the original, and the same file already lets its holder
+  replace the human's key on the live daemon, so the recovery key stays
+  what it was: keep it off the machine, and replace it after use.
 - **Mode change (cooperative to hardened).** The hardened daemon gets a
   copy of each store (for example `git clone --mirror` of the cooperative
   store or of a pushed remote into its `repos/`, as `_lonca`) and runs
@@ -1108,7 +1129,7 @@ A01/A07, zero trust: every request authenticated).
 | `human.prepare_import` | human | `git fetch` from a remote |
 | `human.prepare_push` | human | the push operation to sign |
 | `human.prepare_isolate` | human | what a sandbox is built from: scratch roots and proxy |
-| `human.submit` | human | a signed human operation; `human.recover` alone needs no session |
+| `human.submit` | human | a signed human operation; what the recovery key signs needs no session |
 | `lease.acquire` | agent | |
 | `lease.release` | agent | |
 | `lease.renew` | agent | |
@@ -1172,10 +1193,11 @@ another repository, or for a human the repository does not know:
   operation log: a session writes nothing, every write still needs a
   signature over the operation, and the human of the session must be
   the signer (`forbidden` otherwise), so a session can not be used to
-  submit someone else's signed operation. One exception: a
-  `human.recover` submission needs no session, because the key that
-  would open one is the key that was lost; its recovery-key signature is
-  the credential, checked by `decide()` like any other.
+  submit someone else's signed operation. One exception: what the
+  recovery key signs (`human.recover`, and `daemon.recover` with
+  `recover`) needs no session, because the key that would open one is the
+  key that was lost; its recovery-key signature is the credential, checked
+  by `decide()` like any other.
 - **Interrupted key changes.** A rotation or recovery that stopped
   halfway leaves the new key waiting next to the current one; some
   repositories already know only the new key. The CLI therefore signs in

@@ -479,7 +479,8 @@ Operation kinds (`op.op`) and their fields:
 | `repo.init` | `repo`, `daemon_key`, `human`, `human_key`, `policy`, `trunk` |
 | `human.enroll` / `human.rotate` / `human.recovery_key` / `human.recover` | `human`, `key` |
 | `human.revoke` | `human`, `reason` |
-| `daemon.rotate` / `daemon.recover` | `key` |
+| `daemon.rotate` | `key` |
+| `daemon.recover` | `key`, `recover`: `{"human", "key": human key}` or absent. With it, the human's recovery key signs, and the entry also replaces that human's key (log format 27) |
 | `policy.update` | `policy` (id) |
 | `session.start` | `session`, `agent`, `model`, `task`, `scope`, `expires_ms` |
 | `session.bind` | `session`, `checks`, `level` |
@@ -658,8 +659,9 @@ setup in the policy, as `harness.setup` gives it. Errors: `not_found`.
 
 ### `human.submit`
 
-*human* (a `human.recover` operation needs no session: its recovery-key
-signature is the credential). `{"op": op, "sig": human signature,
+*human* (a `human.recover` operation, and a `daemon.recover` with
+`recover`, need no session: their recovery-key signature is the
+credential). `{"op": op, "sig": human signature,
 "workspace": string | null}`. `workspace` goes with `session.isolate`:
 the absolute path connections through the proxy are attributed by, not
 logged. Only the human who started a session can isolate it, only before
@@ -1172,4 +1174,4 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `change.get`, the attestation kind `named`, and the reasons
   `unknown_check:<name>`, `invalid_checks` and `checks_not_a_change` (#191).
   The `lonca-client` crate (#192).
-  `change.resolve`.
+  `change.resolve`; `recover` on `daemon.recover` (log format 27).

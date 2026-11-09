@@ -9,7 +9,7 @@ use lonca_core::{FileEntry, FileMap, FileMode, GitId, Result};
 use crate::engine::ENGINE_KEYS;
 use crate::engine::{
     ENGINE_EXACT, ENGINE_LINE_EDITS, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS,
-    ENGINE_SIGNATURES, ENGINE_UNPARSED, reads_size,
+    ENGINE_SIGNATURES, ENGINE_UNPARSED, reads_bytes, reads_size,
 };
 use crate::extract::{
     MAX_COMPARED, Parsed, Sym, align, best_pairs, likeness, moved, parse_at, parse_together,
@@ -93,7 +93,7 @@ pub fn analyze(
             (None, Some(n)) => {
                 f.added_files.push(path.clone());
                 let bytes = read(&n.blob)?;
-                let lang = lang.filter(|_| reads_size(engine, bytes.len()));
+                let lang = lang.filter(|&l| reads_bytes(engine, l, &bytes));
                 if lang.is_some_and(|l| !l.is_strict() && !reads(engine, l, &bytes)) {
                     f.unread_files.push(path.clone());
                 }
@@ -111,7 +111,7 @@ pub fn analyze(
             (Some(b), None) => {
                 f.deleted_files.push(path.clone());
                 let bytes = read(&b.blob)?;
-                let lang = lang.filter(|_| reads_size(engine, bytes.len()));
+                let lang = lang.filter(|&l| reads_bytes(engine, l, &bytes));
                 if let Ok(text) = std::str::from_utf8(&bytes) {
                     f.lines_removed += count_lines(text);
                     if let Some(lang) = lang {
@@ -134,7 +134,9 @@ pub fn analyze(
                 let (old, new_bytes) = (read(&b.blob)?, read(&n.blob)?);
                 let in_size = [&old, &new_bytes].map(|t| reads_size(engine, t.len()));
                 let in_size = in_size == [true, true];
-                let lang = lang.filter(|_| in_size);
+                let lang = lang.filter(|&l| {
+                    in_size && [&old, &new_bytes].iter().all(|t| reads_bytes(engine, l, t))
+                });
                 let (Ok(old), Ok(newt)) =
                     (std::str::from_utf8(&old), std::str::from_utf8(&new_bytes))
                 else {
@@ -513,7 +515,8 @@ fn diff_level(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{ENGINE_LIMITS, MAX_READ};
+    use crate::engine::{ENGINE_BUDGET, ENGINE_LIMITS, MAX_READ};
+    use crate::lang::past_budget;
 
     /// `text`, filled to `len` bytes with a comment.
     fn filled(text: &str, len: usize) -> String {
@@ -614,6 +617,58 @@ mod tests {
         let small = filled(BROKEN, MAX_READ);
         assert_eq!(
             analysis(e, "a.rs", None, Some(&small)).syntax_errors,
+            ["a.rs"]
+        );
+    }
+
+    #[test]
+    fn a_file_past_the_parse_budget_goes_by_its_lines() {
+        let e = ENGINE_BUDGET;
+        let (old, new) = (past_budget(CODE), past_budget(EDITED));
+        for (o, n) in [
+            (&old, &new),
+            (&CODE.to_string(), &new),
+            (&old, &EDITED.to_string()),
+        ] {
+            let a = analysis(e, "a.rs", Some(o), Some(n));
+            assert_eq!(a.facts.edits, ["a.rs#<file>"], "{}", o.len());
+            assert_eq!(a.facts.unparsed_files, ["a.rs"]);
+        }
+        assert_eq!(
+            analysis(e - 1, "a.rs", Some(&old), Some(&new)).facts.edits,
+            ["a.rs#a"]
+        );
+        let tested = past_budget("#[test]\nfn t() {}\n");
+        assert_eq!(
+            analysis(e, "a.rs", None, Some(&tested)).facts.tests.added,
+            0
+        );
+        assert_eq!(
+            analysis(e - 1, "a.rs", None, Some(&tested))
+                .facts
+                .tests
+                .added,
+            1
+        );
+        assert_eq!(
+            analysis(e, "a.rs", Some(&tested), None).facts.tests.deleted,
+            0
+        );
+        assert_eq!(
+            analysis(e - 1, "a.rs", Some(&tested), None)
+                .facts
+                .tests
+                .deleted,
+            1
+        );
+        let broken = past_budget(BROKEN);
+        assert!(
+            analysis(e, "a.rs", None, Some(&broken))
+                .syntax_errors
+                .is_empty()
+        );
+        assert_eq!(
+            analysis(e - 1, "a.rs", None, Some(&broken)).syntax_errors,
             ["a.rs"]
         );
     }

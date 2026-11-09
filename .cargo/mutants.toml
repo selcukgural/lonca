@@ -56,6 +56,14 @@ exclude_re = [
   # each one: the run waits for it to the timeout while it grows by about 80 MB
   # a second (measured with four threads), more than a runner holds.
   'replace \+ with \* in log_pages',
+  # The parse budget in lang.rs: these three turn it off at the current engine
+  # (`<=` or `==` for `<` in `parse_at`) or never count a step (`*=` in
+  # `parse_within`). `the_budget_holds_from_its_engine_on` fails at once, but
+  # nextest runs the saved fuzz inputs beside it, and the Kotlin one
+  # (`fuzz/regressions/*/kotlin-budget-e16`) then grows by about 100 MB a
+  # second until the timeout, more than a runner holds.
+  'replace < with (==|<=) in Lang::parse_at',
+  'replace \+= with \*= in Lang::parse_within',
   # `lonca run` ending its session: the guard tells "already over" from any
   # other failure, which only a daemon gone in the middle of a run produces,
   # and all that changes then is a line on stderr.

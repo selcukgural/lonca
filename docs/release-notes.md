@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Symbol engine 16: a parse within a budget
+
+A tree-sitter grammar can take far more work and memory than a file is
+long: the fuzzer found a short Kotlin file that took gigabytes, so a
+proposal holding one could take the daemon down. From engine 16 a parse
+stops after a budget of work that grows with the file's length (256 steps
+and one per 4 bytes, at most 8192), counted in parse actions and not in
+time, so the auditor gets the same answer. A file past it goes by its lines,
+as one over 2 MiB does: code people write stays far below it. Entries of
+older engines are recomputed as they were written.
+
 ### Fuzzing
 
 The parsers and the merge are fuzzed (`docs/fuzzing.md`): stored log

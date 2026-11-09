@@ -16,7 +16,7 @@ use lonca_core::canonical::sha256_hex;
 use lonca_core::ops::{Attestation, CheckKind, CheckResult};
 use lonca_core::{FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::config::Verification;
-use lonca_symbols::engine::{ENGINE_CURRENT, reads_size};
+use lonca_symbols::engine::{ENGINE_CURRENT, reads_text};
 use lonca_symbols::{Lang, parse};
 
 pub mod jail;
@@ -100,7 +100,7 @@ impl Verifier {
             }
             let bytes = store.read_blob(&e.blob)?;
             let ok = std::str::from_utf8(&bytes)
-                .map(|t| !reads_size(ENGINE_CURRENT, t.len()) || !parse(lang, t).has_error)
+                .map(|t| !reads_text(ENGINE_CURRENT, lang, t) || !parse(lang, t).has_error)
                 .unwrap_or(false);
             if !ok {
                 bad.push(p.clone());
@@ -1265,6 +1265,21 @@ mod tests {
         let a = v.syntax(&store, &files, &["past.rs".into()], &tree);
         assert_eq!(a.unwrap().result, CheckResult::Pass);
         let a = v.syntax(&store, &files, &["at.rs".into()], &tree);
+        assert_eq!(a.unwrap().result, CheckResult::Fail);
+    }
+
+    /// So does a file the grammar does not get through within its budget.
+    #[test]
+    fn syntax_leaves_a_file_past_the_parse_budget_to_its_lines() {
+        let filler = |n: usize| format!("fn f() {{ {} }}\n", "-!-a;".repeat(n));
+        let (within, past) = (format!("fn bad( {{\n{}", filler(1)), filler(30_000));
+        let past = format!("fn bad( {{\n{past}");
+        let (dir, store, files, tree) =
+            setup(&[("within.rs", within.as_str()), ("past.rs", past.as_str())]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let a = v.syntax(&store, &files, &["past.rs".into()], &tree);
+        assert_eq!(a.unwrap().result, CheckResult::Pass);
+        let a = v.syntax(&store, &files, &["within.rs".into()], &tree);
         assert_eq!(a.unwrap().result, CheckResult::Fail);
     }
 

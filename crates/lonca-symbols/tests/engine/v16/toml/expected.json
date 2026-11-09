@@ -1,0 +1,125 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.toml#dependencies.anyhow"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.toml"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.toml#dependencies.clap"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.toml#package.name"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.toml"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "[package]\nname = \"y\"\n\n[dependencies]\nserde = \"1\"\nclap = \"4\"\nanyhow = \"1\"\n"
+  },
+  "path": "src/sample.toml",
+  "symbols": {
+    "base": [
+      {
+        "name": "package",
+        "text": "[package]\n"
+      },
+      {
+        "name": "package.name",
+        "text": "name = \"x\"\n"
+      },
+      {
+        "name": "dependencies",
+        "text": "\n[dependencies]\n"
+      },
+      {
+        "name": "dependencies.serde",
+        "text": "serde = \"1\"\n"
+      }
+    ],
+    "ours": [
+      {
+        "name": "package",
+        "text": "[package]\n"
+      },
+      {
+        "name": "package.name",
+        "text": "name = \"x\"\n"
+      },
+      {
+        "name": "dependencies",
+        "text": "\n[dependencies]\n"
+      },
+      {
+        "name": "dependencies.serde",
+        "text": "serde = \"1\"\n"
+      },
+      {
+        "name": "dependencies.anyhow",
+        "text": "anyhow = \"1\"\n"
+      }
+    ],
+    "theirs": [
+      {
+        "name": "package",
+        "text": "[package]\n"
+      },
+      {
+        "name": "package.name",
+        "text": "name = \"y\"\n"
+      },
+      {
+        "name": "dependencies",
+        "text": "\n[dependencies]\n"
+      },
+      {
+        "name": "dependencies.serde",
+        "text": "serde = \"1\"\n"
+      },
+      {
+        "name": "dependencies.clap",
+        "text": "clap = \"4\"\n"
+      }
+    ]
+  }
+}

@@ -33,6 +33,11 @@ pushes, fetches or imports; remotes on disk are refused anyway.
 Where an input holds several texts they are cut at NUL bytes; a first byte
 that chooses (a file kind, a harness) wraps around the list.
 
+Engines before 16 parse without a budget, and a grammar can take memory
+without end on a short text. `parse` and `merge` run such an engine only on
+texts the current engine gets through within its budget; the auditor runs
+one only on an entry, whose daemon got through its files.
+
 ## Running it
 
 ```sh

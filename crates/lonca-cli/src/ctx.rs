@@ -168,7 +168,7 @@ pub fn call(c: &mut Client, method: &str, params: Value) -> Result<Value> {
 
 /// One line of JSON on stdout, for runners.
 pub fn print_json(v: &Value) -> Result<()> {
-    println!("{}", serde_json::to_string(v)?);
+    outln!("{}", serde_json::to_string(v)?);
     Ok(())
 }
 

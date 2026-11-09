@@ -179,27 +179,27 @@ impl Prepared {
     /// `print`: the caller wrote nothing and wants all of it.
     pub fn print(&self, written: &[String], print: bool) -> Result<()> {
         for path in written {
-            println!("wrote {path}");
+            outln!("wrote {path}");
         }
         if self.setup.is_none() {
-            println!(
+            outln!(
                 "no profile for harness {}: give it the MCP server and the rules",
                 self.harness
             );
-            println!("{}", serde_json::to_string_pretty(&self.mcp)?);
-            println!("{}", self.rules);
+            outln!("{}", serde_json::to_string_pretty(&self.mcp)?);
+            outln!("{}", self.rules);
             return Ok(());
         }
         for (key, value) in &self.filled.env {
-            println!("{key}={}", shell_quote(value));
+            outln!("{key}={}", shell_quote(value));
         }
         if print || written.is_empty() {
             let flags: Vec<String> = self.filled.flags.iter().map(|f| shell_quote(f)).collect();
-            println!("{}", flags.join(" "));
+            outln!("{}", flags.join(" "));
         }
         if print {
             for (path, text) in &self.filled.files {
-                print!("--- {path}\n{text}");
+                out!("--- {path}\n{text}");
             }
         }
         if !self.filled.note.is_empty() {

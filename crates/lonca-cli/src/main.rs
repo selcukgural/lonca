@@ -1,5 +1,8 @@
 //! `lonca`: the command line for humans and agents.
 
+#[macro_use]
+mod out;
+
 mod advise;
 mod checkout;
 mod ctx;
@@ -777,7 +780,16 @@ fn main() -> ExitCode {
     match cli.cmd {
         Cmd::Hook { harness, fail_open } => hook::run(&harness, fail_open),
         cmd => match run(cmd) {
-            Ok(()) => ExitCode::SUCCESS,
+            // The reader of stdout went away: the command ran to its end
+            // (or an MCP client hung up), which is no failure.
+            Ok(()) => match out::failed() {
+                None => ExitCode::SUCCESS,
+                Some(e) => {
+                    eprintln!("lonca: writing to stdout: {e}");
+                    ExitCode::from(3)
+                }
+            },
+            Err(e) if out::is_closed_pipe(&e) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("lonca: {e:#}");
                 ExitCode::from(ctx::exit_code(&e))
@@ -834,7 +846,7 @@ fn backup(repos: &[String], out: Option<&Path>) -> Result<()> {
                 .with_context(|| format!("cannot copy {} to {}", path.display(), dest.display()))?;
             path = dest;
         }
-        println!(
+        outln!(
             "{repo}: {} (operations 0..={}, head {})",
             path.display(),
             r["seq"],
@@ -845,7 +857,7 @@ fn backup(repos: &[String], out: Option<&Path>) -> Result<()> {
                 .unwrap_or_default()
         );
     }
-    println!(
+    outln!(
         "Verify a backup before trusting it: git init --bare x.git && git -C x.git fetch <bundle> \
          '+refs/*:refs/*' && lonca-audit verify x.git"
     );
@@ -858,7 +870,7 @@ fn restore(repo: &str, from: &str) -> Result<()> {
     let from = source(from)?;
     let mut c = session_or_bootstrap(ctx::default_human().ok().as_deref())?;
     let r = call(&mut c, "repo.restore", json!({"repo": repo, "from": from}))?;
-    println!(
+    outln!(
         "{repo}: restored operations 0..={} (head {})",
         r["seq"],
         r["head_hash"]
@@ -868,7 +880,7 @@ fn restore(repo: &str, from: &str) -> Result<()> {
             .unwrap_or_default()
     );
     if r["foreign"].as_bool() == Some(true) {
-        println!(
+        outln!(
             "its log is on daemon key {}, which this daemon does not hold: run \
              `lonca daemon-key recover --repo {repo}` as an enrolled human to continue it.",
             r["daemon_key"]
@@ -878,9 +890,9 @@ fn restore(repo: &str, from: &str) -> Result<()> {
                 .unwrap_or_default()
         );
     } else {
-        println!("ready; sessions in the log continue only if their tokens survived.");
+        outln!("ready; sessions in the log continue only if their tokens survived.");
     }
-    println!("Audit it: lonca-audit verify <home>/repos/{repo}.git");
+    outln!("Audit it: lonca-audit verify <home>/repos/{repo}.git");
     Ok(())
 }
 
@@ -1023,9 +1035,9 @@ pub(crate) fn print_decision(r: &Value) {
         .map(|s| format!("#{s} "))
         .unwrap_or_default();
     if reasons.is_empty() {
-        println!("{seq}{outcome}");
+        outln!("{seq}{outcome}");
     } else {
-        println!("{seq}{outcome}: {}", reasons.join(", "));
+        outln!("{seq}{outcome}: {}", reasons.join(", "));
     }
 }
 
@@ -1222,15 +1234,15 @@ fn run(cmd: Cmd) -> Result<()> {
                 }
                 let public = ctx::se_keygen(&name)?;
                 std::fs::write(ctx::humans_dir().join("default"), &name)?;
-                println!("{name}: p256-se {public}");
-                println!("every signature will ask for Touch ID or your password.");
+                outln!("{name}: p256-se {public}");
+                outln!("every signature will ask for Touch ID or your password.");
                 return Ok(());
             }
             let p = ctx::human_key_path(&name);
             let k = KeyPair::load_or_create(&p, sys::current_uid())?;
             std::fs::write(ctx::humans_dir().join("default"), &name)?;
-            println!("{name}: ed25519 {} ({})", k.public_hex(), p.display());
-            println!(
+            outln!("{name}: ed25519 {} ({})", k.public_hex(), p.display());
+            outln!(
                 "note: file keys have no user presence; anything running as you can sign with them."
             );
             Ok(())
@@ -1241,7 +1253,7 @@ fn run(cmd: Cmd) -> Result<()> {
             if as_json {
                 return ctx::print_json(&json!({"human": name, "alg": k.alg, "public": k.public}));
             }
-            println!("{name}: {} {}", k.alg, k.public);
+            outln!("{name}: {} {}", k.alg, k.public);
             Ok(())
         }
         Cmd::Human(HumanCmd::Login {
@@ -1270,7 +1282,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     "session_file": ctx::session_path(&human), "repos": repos,
                 }));
             }
-            println!(
+            outln!(
                 "{human}: signed in for {} (until {}); enrolled in: {}",
                 ctx::describe_ms(ttl),
                 s.expires_ms,
@@ -1292,7 +1304,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 let _ = c.call("human.logout", json!({}));
             }
             ctx::clear_session(&human)?;
-            println!("{human}: signed out");
+            outln!("{human}: signed out");
             Ok(())
         }
         Cmd::Human(HumanCmd::Enroll {
@@ -1397,7 +1409,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 }))?;
             } else {
                 print_decision(&r);
-                println!("profile {}", prep["profile"].as_str().unwrap_or_default());
+                outln!("profile {}", prep["profile"].as_str().unwrap_or_default());
             }
             ctx::denied(&r)
         }
@@ -1501,12 +1513,12 @@ fn run(cmd: Cmd) -> Result<()> {
                     "continues": old, "setup": setup.as_ref().map(|(p, w)| p.report(w)),
                 }));
             }
-            println!("session {session}; workspace {}", ws.root.display());
+            outln!("session {session}; workspace {}", ws.root.display());
             if let Some(old) = old {
-                println!("continues {old}");
+                outln!("continues {old}");
             }
             for s in &scratch {
-                println!("scratch {s}");
+                outln!("scratch {s}");
             }
             match setup {
                 Some((prepared, written)) => prepared.print(&written, false),
@@ -1554,11 +1566,11 @@ fn run(cmd: Cmd) -> Result<()> {
             let Some(table) = lonca_policy::harness::built_in_table(&harness) else {
                 bail!("no built-in profile for harness {harness}");
             };
-            print!("{}", table.map_err(anyhow::Error::msg)?);
+            out!("{}", table.map_err(anyhow::Error::msg)?);
             Ok(())
         }
         Cmd::Rules => {
-            println!(
+            outln!(
                 "{}",
                 setup::neutral_rules(Workspace::current().ok().as_ref())
             );
@@ -1596,7 +1608,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 "the old token is gone and the new one could not be written; \
                  a human revokes this session (`lonca session revoke`)"
             })?;
-            println!("new session token in place");
+            outln!("new session token in place");
             Ok(())
         }
         Cmd::Session(SessionCmd::End { json: as_json }) => {
@@ -1612,7 +1624,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 print_decision(&r);
                 let total = r["unproposed_total"].as_u64().unwrap_or(0);
                 if total > 0 {
-                    println!("left unproposed: {total} file(s) never reached the repository");
+                    outln!("left unproposed: {total} file(s) never reached the repository");
                 }
             }
             ctx::denied(&r)
@@ -1632,7 +1644,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     "workspace": ws.root, "repo": repo, "base": ws.meta.base,
                 }));
             }
-            println!(
+            outln!(
                 "workspace {} at {}",
                 ws.root.display(),
                 ws.meta.base.short()
@@ -1668,7 +1680,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     "git_warning": r.git_warning,
                 }));
             }
-            println!(
+            outln!(
                 "{} -> {}: {} updated, {} merged, {} conflicts",
                 r.from.short(),
                 r.to.short(),
@@ -1677,9 +1689,9 @@ fn run(cmd: Cmd) -> Result<()> {
                 r.conflicts.len()
             );
             for p in &r.conflicts {
-                println!("  conflict: {p} (trunk version written to {p}.trunk)");
+                outln!("  conflict: {p} (trunk version written to {p}.trunk)");
                 for s in r.symbols_of(p) {
-                    println!("    {s}");
+                    outln!("    {s}");
                 }
             }
             if let Some(w) = &r.git_warning {
@@ -1715,9 +1727,9 @@ fn run(cmd: Cmd) -> Result<()> {
             };
             let s = call(&mut c, "status", json!({}))?;
             if as_json {
-                println!("{}", serde_json::to_string_pretty(&s)?);
+                outln!("{}", serde_json::to_string_pretty(&s)?);
             } else {
-                print_status(&s);
+                out!("{}", status_text(&s));
             }
             Ok(())
         }
@@ -1733,7 +1745,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 return ctx::print_json(&d);
             }
             for f in d["files"].as_array().into_iter().flatten() {
-                println!(
+                outln!(
                     "{:<9} +{} -{} {}",
                     f["status"].as_str().unwrap_or(""),
                     f["added"]
@@ -1748,11 +1760,11 @@ fn run(cmd: Cmd) -> Result<()> {
                 );
             }
             for p in d["redacted"].as_array().into_iter().flatten() {
-                println!("redacted  {}", p.as_str().unwrap_or(""));
+                outln!("redacted  {}", p.as_str().unwrap_or(""));
             }
-            print!("{}", d["diff"].as_str().unwrap_or(""));
+            out!("{}", d["diff"].as_str().unwrap_or(""));
             if d["truncated"] == true {
-                println!("[diff truncated]");
+                outln!("[diff truncated]");
             }
             Ok(())
         }
@@ -1760,7 +1772,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let ws = Workspace::current()?;
             let changes = ws.changes()?;
             if changes.is_empty() {
-                println!("no local changes");
+                outln!("no local changes");
                 return Ok(());
             }
             let facts = match &ws.meta.session {
@@ -1783,7 +1795,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     )?
                 }
             };
-            println!("{}", serde_json::to_string_pretty(&facts["facts"])?);
+            outln!("{}", serde_json::to_string_pretty(&facts["facts"])?);
             Ok(())
         }
         Cmd::Lease(l) => {
@@ -1827,7 +1839,7 @@ fn run(cmd: Cmd) -> Result<()> {
                         && let Some(set) = r["set"].as_str()
                         && r["decision"]["outcome"] == "allow"
                     {
-                        println!("lease set {set}");
+                        outln!("lease set {set}");
                     }
                     (r, as_json)
                 }
@@ -1867,9 +1879,9 @@ fn run(cmd: Cmd) -> Result<()> {
                 return ctx::print_json(&r);
             }
             for e in r["events"].as_array().into_iter().flatten() {
-                println!("{e}");
+                outln!("{e}");
             }
-            println!("next {}", r["next"]);
+            outln!("next {}", r["next"]);
             Ok(())
         }
         Cmd::Fetch {
@@ -1886,7 +1898,7 @@ fn run(cmd: Cmd) -> Result<()> {
             if as_json {
                 return ctx::print_json(&r);
             }
-            println!(
+            outln!(
                 "refs/lonca/trunk -> {} ({} bytes{}){}",
                 r["trunk"].as_str().unwrap_or("").get(..12).unwrap_or(""),
                 r["bytes"],
@@ -1927,7 +1939,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 }))?;
             } else {
                 print_decision(&r);
-                println!("change {}", r["change"].as_str().unwrap_or(""));
+                outln!("change {}", r["change"].as_str().unwrap_or(""));
             }
             ctx::denied(&r)
         }
@@ -2011,7 +2023,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 }))?;
             } else {
                 print_decision(&r);
-                println!("change {change}");
+                outln!("change {change}");
             }
             if status != "denied" {
                 ws.meta.submitted = Some((change, commit));
@@ -2028,15 +2040,15 @@ fn run(cmd: Cmd) -> Result<()> {
             let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
             let rec = call(&mut c, "change.get", json!({"change": change}))?;
             if !evidence {
-                println!("{}", serde_json::to_string_pretty(&rec)?);
+                outln!("{}", serde_json::to_string_pretty(&rec)?);
                 return Ok(());
             }
             let checks = rec["evidence"].as_array().cloned().unwrap_or_default();
             if checks.is_empty() {
-                println!("no integration attempt yet");
+                outln!("no integration attempt yet");
             }
             for a in checks {
-                println!(
+                outln!(
                     "{}: {} (exit {}, {} ms, sandbox {})",
                     a["check"].as_str().unwrap_or(""),
                     a["result"].as_str().unwrap_or(""),
@@ -2049,10 +2061,10 @@ fn run(cmd: Cmd) -> Result<()> {
                 );
                 if let Some(log) = a["log"].as_str().filter(|l| !l.is_empty()) {
                     if a["log_truncated"] == true {
-                        println!("  [log tail]");
+                        outln!("  [log tail]");
                     }
                     for line in log.lines() {
-                        println!("  {line}");
+                        outln!("  {line}");
                     }
                 }
             }
@@ -2078,7 +2090,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     .filter(|i| !i.is_empty())
                     .map(|i| format!(" \"{i}\""))
                     .unwrap_or_default();
-                println!(
+                outln!(
                     "#{} {} {}{change}{intent} [{}/{}] {}",
                     p["seq"],
                     p["op"].as_str().unwrap_or(""),
@@ -2157,7 +2169,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 Ok(page.as_array().cloned().unwrap_or_default())
             })?;
             if as_json {
-                println!("{}", serde_json::to_string_pretty(&ops)?);
+                outln!("{}", serde_json::to_string_pretty(&ops)?);
                 return Ok(());
             }
             for o in ops {
@@ -2175,7 +2187,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     .as_array()
                     .map(|a| a.iter().filter_map(Value::as_str).collect())
                     .unwrap_or_default();
-                println!(
+                outln!(
                     "{:>5} {:<17} {:<7} {:<34} {}",
                     e["seq"],
                     e["op"]["op"].as_str().unwrap_or(""),
@@ -2195,7 +2207,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 use base64::Engine;
                 let text = base64::engine::general_purpose::STANDARD
                     .decode(f.content_b64.unwrap_or_default())?;
-                println!("==> {} <==\n{}", f.path, String::from_utf8_lossy(&text));
+                outln!("==> {} <==\n{}", f.path, String::from_utf8_lossy(&text));
             }
             Ok(())
         }
@@ -2237,7 +2249,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 serde_json::from_value(prep["op"].clone())?,
             )?;
             if let Some(p) = r["push"].as_str() {
-                print!("{p}");
+                out!("{p}");
             }
             Ok(())
         }
@@ -2285,7 +2297,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let mut c = human_client(&repo, &human)?;
             let blob = GitId::parse(&blob)?;
             submit(&mut c, &human, &repo, Op::Redact { blob, reason })?;
-            println!(
+            outln!(
                 "note: the blob is withheld by Lonca; copies already pushed to other remotes are not removed."
             );
             Ok(())
@@ -2327,7 +2339,7 @@ fn run(cmd: Cmd) -> Result<()> {
         Cmd::Queue => {
             let mut c = human_client_any(&ctx::default_human()?)?;
             call(&mut c, "queue.run", json!({}))?;
-            println!("queue woken; `lonca status` shows what the worker does");
+            outln!("queue woken; `lonca status` shows what the worker does");
             Ok(())
         }
         Cmd::Hook { .. } => unreachable!("handled in main"),
@@ -2340,7 +2352,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let mut c = human_client(&repo_name(repo)?, &ctx::default_human()?)?;
             let advice = advise::advise(&mut c, &change)?;
             if as_json {
-                println!("{}", serde_json::to_string_pretty(&advice)?);
+                outln!("{}", serde_json::to_string_pretty(&advice)?);
             } else {
                 advise::print(&advice);
             }
@@ -2367,13 +2379,13 @@ fn run(cmd: Cmd) -> Result<()> {
                     } else {
                         format!("  ({})", tags.join(", "))
                     };
-                    println!("{}{}{}", "  ".repeat(depth), x.name, tags);
+                    outln!("{}{}{}", "  ".repeat(depth), x.name, tags);
                     walk(&x.children, depth + 1);
                 }
             }
             walk(&parsed.syms, 0);
             if parsed.has_error {
-                println!("(the file has syntax errors)");
+                outln!("(the file has syntax errors)");
             }
             Ok(())
         }
@@ -2406,25 +2418,29 @@ fn below_hardened_note(s: &Value) -> Option<String> {
     Some(format!("BELOW HARDENED {}", names.join(", ")))
 }
 
-fn print_status(s: &Value) {
-    println!("repo   {}", s["repo"].as_str().unwrap_or(""));
-    println!("trunk  {}", s["trunk"].as_str().unwrap_or(""));
+/// What `lonca status` prints for people.
+fn status_text(s: &Value) -> String {
+    use std::fmt::Write as _;
+    let mut t = String::new();
+    let _ = writeln!(t, "repo   {}", s["repo"].as_str().unwrap_or(""));
+    let _ = writeln!(t, "trunk  {}", s["trunk"].as_str().unwrap_or(""));
     if let Some(f) = s["frozen"].as_str() {
-        println!("FROZEN {f}");
+        let _ = writeln!(t, "FROZEN {f}");
     }
     if let Some(line) = below_hardened_note(s) {
-        println!("{line}");
+        let _ = writeln!(t, "{line}");
     }
     if let Some(n) = s["proxy_unattributed"].as_u64().filter(|n| *n > 0) {
-        println!(
+        let _ = writeln!(
+            t,
             "PROXY  {n} connection(s) could not be traced to a process, so every proxied session answered for them"
         );
     }
     let q = s["queue"].as_array().map(|a| a.len()).unwrap_or(0);
-    println!("queue  {q} change(s)");
-    println!("{}", unparsed_note(s));
+    let _ = writeln!(t, "queue  {q} change(s)");
+    let _ = writeln!(t, "{}", unparsed_note(s));
     let now = s["now_ms"].as_i64().unwrap_or(0);
-    println!("sessions:");
+    let _ = writeln!(t, "sessions:");
     for x in s["sessions"]
         .as_array()
         .cloned()
@@ -2436,7 +2452,8 @@ fn print_status(s: &Value) {
             .as_str()
             .map(|t| format!("  TAINTED: {t}"))
             .unwrap_or_default();
-        println!(
+        let _ = writeln!(
+            t,
             "  {} {} [{}] task={}{}",
             x["id"].as_str().unwrap_or(""),
             x["agent"].as_str().unwrap_or(""),
@@ -2448,12 +2465,12 @@ fn print_status(s: &Value) {
     let sessions = s["sessions"].as_array().cloned().unwrap_or_default();
     let left: Vec<String> = sessions.iter().filter_map(left_unproposed).collect();
     if !left.is_empty() {
-        println!("unproposed work:");
+        let _ = writeln!(t, "unproposed work:");
         for line in left {
-            println!("  {line}");
+            let _ = writeln!(t, "  {line}");
         }
     }
-    println!("leases:");
+    let _ = writeln!(t, "leases:");
     for l in s["leases"].as_array().cloned().unwrap_or_default() {
         let items: Vec<String> = l["items"]
             .as_array()
@@ -2469,7 +2486,8 @@ fn print_status(s: &Value) {
             })
             .collect();
         let left = (l["expires_ms"].as_i64().unwrap_or(0) - now) / 1000;
-        println!(
+        let _ = writeln!(
+            t,
             "  {} {} {}s \"{}\" {}{}",
             l["set"].as_str().unwrap_or(""),
             l["session"].as_str().unwrap_or(""),
@@ -2481,8 +2499,9 @@ fn print_status(s: &Value) {
     }
     let pending = s["pending"].as_array().map(|a| a.len()).unwrap_or(0);
     if pending > 0 {
-        println!("pending approvals: {pending} (lonca pending)");
+        let _ = writeln!(t, "pending approvals: {pending} (lonca pending)");
     }
+    t
 }
 
 /// One line for each lease a change needs.
@@ -2522,13 +2541,13 @@ fn no_lease_lines(report: &Value) -> Vec<String> {
 
 fn print_lease_needs(report: &Value) {
     for l in lease_need_lines(report) {
-        println!("{l}");
+        outln!("{l}");
     }
     for l in no_lease_lines(report) {
-        println!("{l}");
+        outln!("{l}");
     }
     if let Some(advice) = report["advice"].as_str() {
-        println!("{advice}");
+        outln!("{advice}");
     }
 }
 
@@ -2544,9 +2563,32 @@ fn pin_note(lease: &Value) -> String {
 mod tests {
     use super::{
         claim_of, lease_items, lease_need_lines, log_pages, no_lease_lines, pin_note, source,
-        split_ids, unparsed_note,
+        split_ids, status_text, unparsed_note,
     };
     use lonca_core::ops::LeaseKind;
+
+    #[test]
+    fn status_text_says_what_is_there_and_nothing_that_is_not() {
+        let quiet = serde_json::json!({
+            "repo": "demo", "now_ms": 10_000, "proxy_unattributed": 0,
+            "pending": [],
+            "leases": [{"set": "s1", "session": "a1", "intent": "fix",
+                "expires_ms": 70_000, "items": []}],
+        });
+        let t = status_text(&quiet);
+        assert!(
+            !t.contains("PROXY") && !t.contains("pending approvals"),
+            "{t}"
+        );
+        assert!(t.contains("  s1 a1 60s \"fix\""), "{t}");
+        let busy = serde_json::json!({
+            "repo": "demo", "now_ms": 0, "proxy_unattributed": 2,
+            "pending": [{"change": "c1"}],
+        });
+        let t = status_text(&busy);
+        assert!(t.contains("PROXY  2 connection(s)"), "{t}");
+        assert!(t.contains("pending approvals: 1 (lonca pending)"), "{t}");
+    }
 
     #[test]
     fn names_go_with_an_insert_only() {

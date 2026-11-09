@@ -3380,6 +3380,30 @@ signed `reject` each, one Touch ID per older proposal.
 - **Log format 26**, with no new field. From it the entry means more, so
   older entries replay as they were: two pending proposals stay two.
 
+## A closed stdout ends a command quietly (#207)
+
+`lonca status | head` panicked: Rust ignores SIGPIPE, so `println!` meets
+`EPIPE` and panics. `unsafe` is denied in the workspace, so the signal
+handler stays as it is and the CLI writes through `out!`/`outln!`
+(`crates/lonca-cli/src/out.rs`).
+
+- **The command runs to its end.** After the first `BrokenPipe` the rest
+  of the output is dropped, but the command is not cut off: `keys rotate`
+  prints each repository as it goes, and stopping between two of them
+  would leave some on the old key. Nothing the CLI prints streams for
+  ever, so finishing costs little. Then the exit status is the command's:
+  0 when it succeeded, like `rg`, not 141 like a shell's SIGPIPE, so a
+  `set -o pipefail` script reading the first lines does not fail.
+- **Any other write error is reported.** A full disk under a redirect is
+  output lost that the reader wanted: the command still ends, and then says
+  `lonca: writing to stdout: ...` and exits 3.
+- **The MCP server ends quietly** when its client hangs up: an error that
+  only says the pipe closed exits 0, without a message.
+- **The hook fails closed.** Its answer is the decision; a harness that can
+  not read it must not see a silent success. A failed write is handled as
+  any other hook failure: exit 2 and a message on stderr, or exit 0 under
+  `--fail-open` (the stop hook).
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

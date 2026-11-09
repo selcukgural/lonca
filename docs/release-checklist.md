@@ -4,9 +4,9 @@
 
 1. `rust-toolchain.toml`: is a newer stable out? Raise it in a pull request of
    its own, with the clippy fixes it needs, before the release.
-2. Run `ci.yml`, `mutants.yml` and `fuzz.yml` on main (`gh workflow run
-   ci.yml --ref main`, `gh workflow run mutants.yml --ref main`,
-   `gh workflow run fuzz.yml --ref main`); all green. A fuzz failure's
+2. Run `ci.yml` and `fuzz.yml` on main (`gh workflow run ci.yml --ref
+   main`, `gh workflow run fuzz.yml --ref main`); both green. Mutants do
+   not gate a release (docs/decisions.md, "Mutation testing"). A fuzz failure's
    input is encrypted (docs/fuzzing.md): fix it before the release.
 3. Try the four builds: `gh workflow run release.yml --ref main` (builds
    only, drafts nothing).
@@ -23,9 +23,9 @@
    `docs/release-notes.md` renamed `## X.Y.Z (YYYY-MM-DD)`, with a new empty
    `## Unreleased` above it. Merge it.
 2. Tag main and push the tag: `git tag -a vX.Y.Z -m "Lonca X.Y.Z"`, `git
-   push origin vX.Y.Z`. `release.yml` drafts the release; `ci.yml` and
-   `mutants.yml` run on the tag.
-3. Both green, and the draft has four archives, `SHA256SUMS` and
+   push origin vX.Y.Z`. `release.yml` drafts the release; `ci.yml` runs on
+   the tag.
+3. `ci.yml` green, and the draft has four archives, `SHA256SUMS` and
    `lonca-sbom.cdx.tar.gz`: check one archive with `gh attestation verify
    lonca-aarch64-apple-darwin.tar.gz --repo selcukgural/lonca`.
 4. crates.io. A crate that is not on crates.io yet is published by hand

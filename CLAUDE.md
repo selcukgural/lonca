@@ -74,15 +74,15 @@ cargo mutants -p lonca-policy -j 4          # one crate
   mutants (cargo-mutants 27.1.0); use file globs or a test.
 - Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
   paths, no writes to `$HOME`. Parallel jobs (`-j`) run copies at once.
-- CI (`.github/workflows/mutants.yml`) runs mutants every night on main
-  (00:07 UTC, a few hours), on a pushed `v*` tag, and on demand
-  (`gh workflow run mutants.yml --ref main`, before tagging). The whole
-  workspace runs in 20 shards
-  (`full k/20`); any survivor fails its shard and is listed in the run's
-  summary and in the `mutants-full-<k>` artifact (`missed.txt`). The `score`
-  job prints each crate's score and fails on the gate; `exclusions` fails on
-  an unlisted exclusion in a gated file. Survivors are fixed before the
-  release. No mutants run before a push or on a PR.
+- CI (`.github/workflows/mutants.yml`) runs only on demand and blocks
+  nothing: no release, PR or merge waits for it (decided 2026-11-09,
+  docs/decisions.md). It mutates only the gated files, only what changed in
+  them since the last `v*` tag, each mutant against the whole workspace
+  (minutes, not hours). Run it after changing a gated file:
+  `gh workflow run mutants.yml --ref main` (`-f base=<tag>` for another
+  base). A survivor or a gated timeout makes the run red; `exclusions`
+  fails on an unlisted exclusion in a gated file. Elsewhere, run
+  cargo-mutants locally on what you changed when it is worth it.
 
 ## Fuzzing
 
@@ -108,8 +108,8 @@ cd fuzz && cargo fuzz run -s none <target> corpus/<target> seeds/<target> -- -ma
 
 The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,
 `sandbox`) run only for a release: on a pushed `v*` tag, and on demand
-before tagging (`gh workflow run ci.yml --ref main`). The mutants run the
-same way and also every night on main. Pull requests and merges to main run
+before tagging (`gh workflow run ci.yml --ref main`). The mutants run only
+on demand (see "Mutation testing"). Pull requests and merges to main run
 neither. The main ruleset requires a pull request (no
 direct push) but no check. `cargo-deny`, CodeQL and zizmor (workflow changes)
 run on pull requests; they block nothing. The toolchain is pinned in

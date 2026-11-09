@@ -4,8 +4,9 @@
 # the structural merge it recomputes. One path per line; a path ending in `/`
 # covers everything under it.
 #
-# In the release run (.github/workflows/mutants.yml) a gated file must have
-# no missed and no timed-out mutant, and every mutant `.cargo/mutants.toml`
+# .github/workflows/mutants.yml mutates only these files, only what changed
+# since the last release. A gated file must have no missed and no timed-out
+# mutant, and every mutant `.cargo/mutants.toml`
 # excludes in one must be listed, by name, in `mutants-gated-exclusions.txt`.
 # `.github/scripts/mutants-gate.sh` checks both, also locally.
 crates/lonca-policy/src/decide.rs

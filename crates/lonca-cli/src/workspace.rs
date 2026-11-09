@@ -155,6 +155,14 @@ impl Workspace {
         wsfs::write(&self.root, &name, token.as_bytes(), wsfs::SECRET)
     }
 
+    /// Refuses `dir` for a new workspace unless it is missing or empty.
+    pub fn check_empty(dir: &Path) -> Result<()> {
+        if dir.exists() && fs::read_dir(dir)?.next().is_some() {
+            bail!("{} is not empty", dir.display());
+        }
+        Ok(())
+    }
+
     /// Creates a workspace in `dir` (which must be empty or missing); `git`
     /// makes it a repository as well.
     pub fn create(
@@ -165,9 +173,7 @@ impl Workspace {
         human: Option<String>,
         git: bool,
     ) -> Result<Workspace> {
-        if dir.exists() && fs::read_dir(dir)?.next().is_some() {
-            bail!("{} is not empty", dir.display());
-        }
+        Self::check_empty(dir)?;
         fs::create_dir_all(dir)?;
         let status = call(client, "status", json!({}))?;
         let base: GitId = serde_json::from_value(status["trunk"].clone())?;

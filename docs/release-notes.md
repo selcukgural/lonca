@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### `session start` into a full directory starts nothing
+
+`lonca session start --workspace DIR` with a `DIR` that is not empty was
+refused only after the daemon had started the session: the log had an
+`allow`, and `status` listed an active session whose token nobody held
+until its TTL ran out (#223). The directory is now checked first, and
+anything that fails after the session started (making the workspace,
+writing its token) ends that session again.
+
 ### Symbol engine 16: a parse within a budget
 
 A tree-sitter grammar can take far more work and memory than a file is

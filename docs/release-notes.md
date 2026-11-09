@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### A newer proposal replaces the pending one
+
+A workspace that proposed again while its first proposal waited for a
+human had two pending changes, the second holding the first's edits:
+approving both landed the work twice, the second time as an empty commit.
+Now the newer proposal withdraws the older in the same entry and names it
+in its reasons (`replaces:<change>`). The older reads `withdrawn`, leaves
+`status.pending` and can not be approved; its pinned leases pass to the
+newer. A queued change is left to land. Log format 26; older logs replay as
+they were. See `docs/decisions.md`, "A newer proposal replaces the pending
+one (#107)".
+
 ### Hardened mode, installed for real on Linux
 
 The Linux installer ran for real with `sudo` (Debian 12, systemd), and what

@@ -133,6 +133,12 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   comes back (#40)").
 - **Version 24** adds the `unhooked` observation (see "A session whose hooks do
   not run (#190)"). An `observe` with one needs it.
+- **Version 25** adds `checks` to `approve`, left out of the encoding when
+  empty (see "Checks a change owes, chosen per change (#191)"). An approval
+  that names one needs it.
+- **Version 26** adds no field: an agent's proposal that is not denied
+  withdraws the pending changes of its workspace (see "A newer proposal
+  replaces the pending one (#107)"). Older entries replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -1042,8 +1048,8 @@ started it read "done" and the work stayed in the workspace (issue #121).
   proves nothing; a proposal is the only evidence of delivery.
 - **A proposal that a sync merged is reported.** After `sync` a file holds
   the merge, which differs from the pending proposal, so the agent is told
-  to propose again. It costs a round, and #107 makes the new proposal
-  replace the old one.
+  to propose again. It costs a round; the new proposal replaces the old
+  one (#107).
 - **OpenCode is sent back from `experimental.idle` (issue #124).** It has no stop
   hook, and watching for `session.execution.succeeded` was too late: the event says
   the turn is over, `opencode run` left at once with the prompt unanswered, and the
@@ -3337,6 +3343,42 @@ install.
    `daemon.toml` names). Whether the harness's own hooks are the locked
    ones shows after the first hook, as the session's level in `status`;
    #190 makes a session that never bound visible.
+
+## A newer proposal replaces the pending one (#107)
+
+A workspace proposes all it has, so a second proposal while the first waited
+for a human held the first one's edits. Both stayed pending: approving the
+second landed both edits and left the first waiting, and approving the first
+afterwards integrated a commit with nothing new in it. The agent had no way
+to take the first back over MCP, and imece turned the older ones down with a
+signed `reject` each, one Touch ID per older proposal.
+
+- **The proposal withdraws them, in the same entry.** An agent's
+  `change.propose` that is allowed or escalated withdraws every change of
+  its workspace that is `pending`: the old one reads `withdrawn`, leaves
+  `status.pending` and can no longer be approved. The decision names each
+  with `replaces:<change>` among its reasons, so the agent and the person
+  see it. `State::replaced_by` gives the set to both `decide()` and the
+  state, so the reasons and the effect can not differ.
+- **The workspace is the session's line.** The session that proposes and
+  the sessions it continues (`session start --continue`): those took over
+  one workspace. A child of `cap.attenuate` has a workspace of its own and
+  is left alone, as is another session's work.
+- **Only what waits for a human.** A queued change is already accepted and
+  lands; the newer one lands after it with what is left. It is not
+  withdrawn. A denied proposal withdraws nothing, and a human's proposal
+  has no workspace and replaces nothing.
+- **The leases follow the work.** The new proposal pins what it needs from
+  its session's sets, which include the items pinned to the old one, before
+  the old one is withdrawn; what only the old one needed goes back to the
+  TTL of its set. A pin that kept a set alive past its session's end passes
+  to the new change the same way.
+- **Not a new status.** The issue asked for `withdrawn` or a `superseded`
+  naming the successor. `withdrawn` is what a runner already handles, and
+  the successor is in the newer decision's reasons; a new status would be a
+  protocol change for every client.
+- **Log format 26**, with no new field. From it the entry means more, so
+  older entries replay as they were: two pending proposals stay two.
 
 ## Open questions (carried from the design)
 

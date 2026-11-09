@@ -39,7 +39,10 @@ page is the harness side.
    every third of that, or lives by the TTL (`lonca lease renew`).
 4. **The worker is done.** Its `propose` leaves a change that is queued
    (`allow`) or waiting for a human (`escalate`, in `status.pending`
-   and `lonca pending --json`). The person approves (`lonca approve
+   and `lonca pending --json`). If the worker proposes again while the
+   first waits, the new change replaces it: the first is `withdrawn` and
+   the answer names it (`replaces:<change>`), so there is one change to
+   approve. The person approves (`lonca approve
    <seq> --json`) or, for now, lets it be; the merge queue integrates
    it and verifies. A card's own acceptance check is a named check of the
    policy (`verification.checks`): the person adds it with `--also
@@ -117,7 +120,8 @@ lonca session start --repo demo --agent claude --paths 'src/**' \
 - **Leases do not**, and the worker leases again; `lease_needed` says
   what. Items pinned to a change in flight stay pinned to it and pass to
   the new session, so the worker can sync and propose on top of it, and
-  `change.withdraw` it.
+  `change.withdraw` it. A proposal by the new session replaces the
+  pending one of the old, as it would its own.
 - `--paths` wider than the old session's is refused unless the human
   adds `--widen`, which the prompt and the log both show. Pass
   `--scratch` again if the worker needs its scratch roots; they are part

@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_LEASE_INTENT,
-    FORMAT_LEASE_LIVENESS, FORMAT_SESSION_HARNESS,
+    FORMAT_LEASE_LIVENESS, FORMAT_REPLACES, FORMAT_SESSION_HARNESS,
 };
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
@@ -34,7 +34,7 @@ use crate::config::{
 };
 use crate::state::{
     AFFECTED_LEASE, ActiveLease, ChangeStatus, HEARTBEAT_TIMEOUT, INTEREST_BLOCK, LEASES_KEPT,
-    RELEASED, RESERVATION_WINDOW, Session, State,
+    RELEASED, REPLACES, RESERVATION_WINDOW, Session, State,
 };
 use crate::symbols;
 
@@ -1577,6 +1577,12 @@ fn propose(
                         v.escalate(format!("unobserved_write:{p}"), 1);
                     }
                 }
+            }
+            // What applying it withdraws, unless it is denied.
+            if ctx.format >= FORMAT_REPLACES {
+                let replaced = state.replaced_by(session);
+                v.info
+                    .extend(replaced.iter().map(|c| format!("{REPLACES}{c}")));
             }
         }
     }

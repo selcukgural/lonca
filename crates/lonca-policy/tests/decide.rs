@@ -4,8 +4,8 @@
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_SYMBOL_KEYS,
-    SignedOp, verify_chain,
+    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_REPLACES,
+    FORMAT_SYMBOL_KEYS, SignedOp, verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -3493,22 +3493,40 @@ fn a_pending_change_keeps_its_pin_and_the_continuation_holds_it() {
     assert!(denied_with(&d, &format!("lease_held:{f}:b:")), "{d:?}");
     assert!(h.lease("other", "l3", &[(g, LeaseKind::Edit)]).is_allow());
 
-    // On top of it: the same symbol, no new lease.
-    let c2 = ChangeId::random();
-    assert_eq!(h.propose("b", c2, edit(f)).outcome, Outcome::Escalate);
-    assert!(h.chain.state.leases["l1"].pins.contains_key(&c2));
-
-    // The continuation may take back what its workspace proposed, and an
-    // outsider may not.
-    let withdraw = Op::ChangeWithdraw { change: c };
-    let d = h.agent("other", withdraw.clone());
+    // An outsider may not take it back.
+    let d = h.agent("other", Op::ChangeWithdraw { change: c });
     assert!(denied_with(&d, "not_own_change"), "{d:?}");
-    assert!(h.agent("b", withdraw).is_allow());
+
+    // On top of it: the same symbol, no new lease. The workspace's newer
+    // proposal replaces the pending one, and the pin passes to it.
+    let c2 = ChangeId::random();
+    let d = h.propose("b", c2, edit(f));
+    assert_eq!(d.outcome, Outcome::Escalate);
+    assert!(d.reasons.contains(&format!("replaces:{c}")), "{d:?}");
     assert_eq!(h.chain.state.changes[&c].status, ChangeStatus::Withdrawn);
-    assert!(h.chain.state.leases["l1"].pins.contains_key(&c2));
+    let pins = &h.chain.state.leases["l1"].pins;
+    assert_eq!(pins.keys().collect::<Vec<_>>(), [&c2]);
+    assert_eq!(h.chain.state.pending.len(), 1);
     assert!(h.human("ayse", approve(pending_seq(&h, c2))).is_allow());
     assert!(integrate(&mut h, c2, Some(gid('e')), &[]).is_allow());
     assert!(!h.chain.state.leases.contains_key("l1"));
+    h.assert_replay();
+}
+
+/// The continuation may take back what its workspace proposed.
+#[test]
+fn the_continuation_takes_back_what_its_workspace_proposed() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let c = ChangeId::random();
+    assert_eq!(h.propose("a", c, edit(f)).outcome, Outcome::Escalate);
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+    assert!(h.agent("b", Op::ChangeWithdraw { change: c }).is_allow());
+    assert_eq!(h.chain.state.changes[&c].status, ChangeStatus::Withdrawn);
+    assert!(h.chain.state.pending.is_empty());
+    assert!(held(&h, "b").is_empty());
     h.assert_replay();
 }
 
@@ -8282,4 +8300,187 @@ fn named_evidence_is_held_like_the_built_in_checks() {
         problems,
         ["verification_failed:gone", "verification_missing:gone"]
     );
+}
+
+fn edits(syms: &[&str]) -> Facts {
+    let mut f = edit(syms[0]);
+    f.edits = syms.iter().map(|s| s.to_string()).collect();
+    f
+}
+
+fn replaced(d: &Decision) -> Vec<String> {
+    let r = d.reasons.iter().filter(|r| r.starts_with("replaces:"));
+    r.cloned().collect()
+}
+
+/// Issue #107: a workspace proposes all it has, so its newer proposal
+/// holds the edits of the pending one. It replaces it in the same entry:
+/// the older is withdrawn, its pins pass to the newer, and one approval
+/// lands the work once. Another workspace's pending change stays, and a
+/// denied proposal replaces nothing.
+#[test]
+fn a_newer_proposal_of_a_workspace_replaces_its_pending_one() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start("b", &["src/**"]);
+    let (f, g) = ("src/a.rs#f", "src/a.rs#g");
+    let both = [(f, LeaseKind::Edit), (g, LeaseKind::Edit)];
+    assert!(h.lease("a", "l1", &both).is_allow());
+    let c1 = ChangeId::random();
+    let d = h.propose("a", c1, edit(f));
+    assert_eq!(d.outcome, Outcome::Escalate);
+    assert!(replaced(&d).is_empty(), "{d:?}");
+    let seq1 = pending_seq(&h, c1);
+
+    let c2 = ChangeId::random();
+    let d = h.propose("a", c2, edits(&[f, g]));
+    assert_eq!(d.outcome, Outcome::Escalate);
+    assert_eq!(replaced(&d), [format!("replaces:{c1}")], "{d:?}");
+    let st = &h.chain.state;
+    assert_eq!(st.changes[&c1].status, ChangeStatus::Withdrawn);
+    assert!(matches!(
+        st.changes[&c2].status,
+        ChangeStatus::Pending { .. }
+    ));
+    assert_eq!(
+        st.pending.keys().collect::<Vec<_>>(),
+        [&pending_seq(&h, c2)]
+    );
+    let pins = &st.leases["l1"].pins;
+    assert_eq!(pins.keys().collect::<Vec<_>>(), [&c2]);
+    assert_eq!(pins[&c2].len(), 2);
+    assert_eq!(h.human("ayse", approve(seq1)).outcome, Outcome::Deny);
+
+    // Another workspace's pending change is its own.
+    let other = "src/b.rs#h";
+    assert!(h.lease("b", "l2", &[(other, LeaseKind::Edit)]).is_allow());
+    let c3 = ChangeId::random();
+    assert_eq!(h.propose("b", c3, edit(other)).outcome, Outcome::Escalate);
+    assert!(h.chain.state.pending.len() == 2);
+
+    // Refused: nothing changes.
+    let d = h.propose("a", ChangeId::random(), edit("src/a.rs#unheld"));
+    assert!(denied_with(&d, "lease_missing"), "{d:?}");
+    assert!(replaced(&d).is_empty(), "{d:?}");
+    assert!(matches!(
+        h.chain.state.changes[&c2].status,
+        ChangeStatus::Pending { .. }
+    ));
+
+    let c4 = ChangeId::random();
+    let d = h.propose("a", c4, edits(&[f, g]));
+    assert_eq!(replaced(&d), [format!("replaces:{c2}")], "{d:?}");
+    assert!(matches!(
+        h.chain.state.changes[&c3].status,
+        ChangeStatus::Pending { .. }
+    ));
+    assert!(h.human("ayse", approve(pending_seq(&h, c4))).is_allow());
+    assert_eq!(h.chain.state.changes[&c4].status, ChangeStatus::Queued);
+    assert!(integrate(&mut h, c4, Some(gid('e')), &[]).is_allow());
+    assert_eq!(h.chain.state.changes[&c2].status, ChangeStatus::Withdrawn);
+    assert_eq!(h.chain.state.pending.len(), 1);
+    h.assert_replay();
+}
+
+/// What is queued lands anyway and stays; an allowed proposal replaces the
+/// pending one as an escalated one does; a child has a workspace of its
+/// own, and its parent's proposal leaves the child's pending change.
+#[test]
+fn a_queued_change_and_a_childs_pending_one_are_not_replaced() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    h.wrote("s1", "src/a.rs");
+    let (f, g, k) = ("src/a.rs#f", "src/a.rs#g", "src/a.rs#k");
+    let items = [(f, LeaseKind::Edit), (g, LeaseKind::Edit)];
+    assert!(h.lease("s1", "l1", &items).is_allow());
+    assert!(h.lease("s1", "l2", &[(k, LeaseKind::Edit)]).is_allow());
+    let c1 = ChangeId::random();
+    assert!(h.propose("s1", c1, edit(f)).is_allow());
+
+    let mut weak = edit(g);
+    weak.tests.skipped = 1;
+    let c2 = ChangeId::random();
+    let d = h.propose("s1", c2, weak);
+    assert_eq!(d.outcome, Outcome::Escalate);
+    assert!(replaced(&d).is_empty(), "the queued one stays: {d:?}");
+
+    let op = child_op(&h, "s1", "kid", &["l2"]);
+    assert!(h.agent("s1", op).is_allow());
+    let mut weak = edit(k);
+    weak.tests.skipped = 1;
+    let c3 = ChangeId::random();
+    assert_eq!(h.propose("kid", c3, weak).outcome, Outcome::Escalate);
+
+    let c4 = ChangeId::random();
+    let d = h.propose("s1", c4, edits(&[f, g]));
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(replaced(&d), [format!("replaces:{c2}")], "{d:?}");
+    let st = &h.chain.state;
+    assert_eq!(st.changes[&c1].status, ChangeStatus::Queued);
+    assert_eq!(st.changes[&c2].status, ChangeStatus::Withdrawn);
+    assert!(matches!(
+        st.changes[&c3].status,
+        ChangeStatus::Pending { .. }
+    ));
+    assert_eq!(st.changes[&c4].status, ChangeStatus::Queued);
+    assert_eq!(st.queue, [c1, c4]);
+    assert_eq!(st.pending.len(), 1);
+    h.assert_replay();
+}
+
+/// Before format 26 a newer proposal left the pending one where it was.
+/// Replaying the entries as format 25 keeps that, and so does the decision.
+#[test]
+fn before_the_format_a_newer_proposal_leaves_the_pending_one() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    let f = "src/a.rs#f";
+    assert!(h.lease("a", "l1", &[(f, LeaseKind::Edit)]).is_allow());
+    let (c1, c2) = (ChangeId::random(), ChangeId::random());
+    assert_eq!(h.propose("a", c1, edit(f)).outcome, Outcome::Escalate);
+    let d = h.propose("a", c2, edit(f));
+    assert_eq!(replaced(&d), [format!("replaces:{c1}")], "{d:?}");
+    h.assert_replay();
+
+    let mut old = h.log.clone();
+    for o in &mut old {
+        assert_eq!(o.entry.format, FORMAT_CURRENT);
+        o.entry.format = FORMAT_REPLACES - 1;
+    }
+    let s = State::replay(&old);
+    for c in [c1, c2] {
+        assert!(matches!(s.changes[&c].status, ChangeStatus::Pending { .. }));
+    }
+    assert_eq!(s.pending.len(), 2);
+    assert_eq!(s.leases["l1"].pins.len(), 2);
+
+    let bundle = PolicyBundle::default_bundle();
+    let facts = edit(f);
+    let ctx = |format| Ctx {
+        format,
+        time_ms: h.now + 1,
+        policy: &bundle,
+        facts: Some(&facts),
+        evidence: &[],
+        symbols_engine: Some(h.engine),
+    };
+    let actor = Actor::Agent {
+        name: "bot-a".into(),
+        session: "a".into(),
+    };
+    let op = Op::ChangePropose {
+        change: ChangeId::random(),
+        commit: gid('c'),
+        base: s.trunk.clone().unwrap(),
+        claim: claim_of(&facts),
+    };
+    let before = decide(&s, &actor, &op, None, &ctx(FORMAT_REPLACES - 1));
+    assert_eq!(before.outcome, Outcome::Escalate, "{before:?}");
+    assert!(replaced(&before).is_empty(), "{before:?}");
+    let now = decide(&s, &actor, &op, None, &ctx(FORMAT_REPLACES));
+    let mut both = vec![format!("replaces:{c1}"), format!("replaces:{c2}")];
+    both.sort();
+    let mut got = replaced(&now);
+    got.sort();
+    assert_eq!(got, both, "{now:?}");
 }

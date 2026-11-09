@@ -110,7 +110,7 @@ The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,
 `sandbox`) run on every pull request, every merge to main, a pushed `v*`
 tag, and on demand (`gh workflow run ci.yml --ref main`). Only the mutants
 run on demand alone (see "Mutation testing"). The main ruleset requires a
-pull request (no direct push) but no check. `cargo-deny`, CodeQL and zizmor (workflow changes)
+pull request (no direct push) and those three jobs as status checks. `cargo-deny`, CodeQL and zizmor (workflow changes)
 run on pull requests; they block nothing. The toolchain is pinned in
 `rust-toolchain.toml`; Actions are GitHub's own plus four named ones
 (docs/decisions.md, "CI and the repository's own settings").
@@ -119,6 +119,5 @@ attestations, a *draft* release); publishing the draft runs
 `registries.yml` (crates.io). Steps: `docs/release-checklist.md`. The CLI's
 package is `lonca` (`-p lonca`, directory `crates/lonca-cli`); every crate
 shares the workspace version.
-A PR is merged (`gh pr merge --merge`) once its `ci.yml` run is green
-(`gh pr checks <n> --watch`); with no required check GitHub refuses
-`--auto` ("clean status"), so wait for the run by hand.
+A PR is opened with `gh pr merge <n> --merge --auto`: it merges itself
+once the three jobs are green, and stays open (visible) until then.

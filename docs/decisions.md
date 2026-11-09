@@ -1881,11 +1881,13 @@ tainted the session for good, closing every critical path to it.
 
 The tests (`ci.yml`: Ubuntu, macOS and the bubblewrap `sandbox` job) run on
 every pull request to main, every merge to main, a pushed `v*` tag, and on
-demand. A pull request is merged once that run is green; a newer push to the
-same pull request cancels its older run. The mutants alone run only on
-demand (since 2026-11-09, "Mutation testing"). The main ruleset requires a
-pull request but no status check (#60, "CI and the repository's own
-settings"), so the wait for green is the maintainer's, not GitHub's.
+demand; a newer push to the same pull request cancels its older run. The
+main ruleset requires the three jobs (`test (ubuntu-latest)`,
+`test (macos-latest)`, `sandbox`, from GitHub Actions) as status checks, so a
+pull request merges only once they are green, and `gh pr merge --auto` waits
+for them. The branch need not be up to date with main first (no strict
+policy): a rebase per merge would cost a full run each time. The mutants
+alone run only on demand (since 2026-11-09, "Mutation testing").
 `cargo-deny`, CodeQL and zizmor still run on pull requests and block nothing.
 
 History: from 2026-11-08 (#172) to 2026-11-09 the tests too ran only for a
@@ -3066,10 +3068,9 @@ it and what it runs are part of the trust model.
 
 - **main takes pull requests only.** The ruleset adds `pull_request` (no
   approvals required: there is one maintainer) to its deletion and
-  force-push rules, so a direct push to main is refused. **No status check
-  is required**, a deviation from the issue, kept from "CI runs for a
-  release" (the user's decision of 2026-11-08): a pull request with a failing
-  test can still be merged, and is seen at the next release run. `cargo-deny`,
+  force-push rules, so a direct push to main is refused. Since 2026-11-09
+  it also requires the `ci.yml` jobs as status checks ("CI runs on every
+  pull request"); from 2026-11-08 to then it required none. `cargo-deny`,
   CodeQL and zizmor run on pull requests and block nothing.
 - **CODEOWNERS** names the owner of `.github/`, `deny.toml`,
   `rust-toolchain.toml`, `packaging/`, `lonca-core`, `lonca-policy`,

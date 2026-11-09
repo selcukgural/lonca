@@ -84,6 +84,8 @@ randomness in them.
   password, so an agent running as you can not approve on your behalf. See
   [Working as a human](humans.md).
 
+Each of these is explained on its own in [Concepts](concepts.md).
+
 ## Observation levels
 
 | Mode | Agents run | Store bypass | Observation bypass | Setup |

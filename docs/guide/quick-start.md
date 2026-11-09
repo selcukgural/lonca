@@ -58,7 +58,8 @@ readable by its user only: audit a pushed remote or a backup bundle there
 (see "Backup and moving" below).
 
 Your own edits go through the daemon too, from a Lonca workspace or from a
-Git checkout: see [Working as a human](humans.md).
+Git checkout: see [Working as a human](humans.md). Reading, approving and
+undoing agents' changes: [Reviewing agents' work](reviewing.md).
 
 ## Checking it
 
@@ -66,7 +67,8 @@ Git checkout: see [Working as a human](humans.md).
 Claude Code's managed settings, the sandbox, `git` and `lsof`, and for each
 repository whether your human can act on it and whether its log verifies.
 Each line passes, warns or fails with what to do about it; `--json` is for
-scripts.
+scripts. [Troubleshooting](troubleshooting.md) goes through each check and
+the common denials.
 
 The auditor checks a repository wherever it is, a pushed remote in CI
 included: it replays every decision and recomputes every fact and merge.
@@ -120,5 +122,5 @@ The same `lonca daemon-key recover` continues a repository whose
 `daemon.key` was lost; `lonca daemon-key rotate` replaces a key that is
 still there (the reasons are in
 [docs/decisions.md](https://github.com/selcukgural/lonca/blob/main/docs/decisions.md),
-"Daemon keys"). Moving cooperative repositories into a hardened install is
+"Daemon keys"). Lost keys, rotation and a lost Mac: [Recovery](recovery.md). Moving cooperative repositories into a hardened install is
 in [Install](install.md#hardened-mode).

@@ -56,4 +56,6 @@ lonca fetch                      # after the queue integrated it
 `lonca status --repo demo`, `lonca pending`, `lonca approve`,
 `lonca reject`, `lonca log`, `lonca diff CHANGE` and `lonca change CHANGE
 --evidence` work from anywhere; every command signs in by itself
-(`docs/protocol.md`, "CLI for runners").
+(`docs/protocol.md`, "CLI for runners"). The day-to-day of reviewing
+agents' changes is in [Reviewing agents' work](reviewing.md); keys and
+backups in [Recovery](recovery.md).

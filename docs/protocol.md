@@ -1101,7 +1101,13 @@ Exit codes:
   warning leaves `ok` true. It writes nothing to the log and shows no
   token, no key and no path to one. Names: `mode`, `socket`, `daemon`,
   `hooks`, `sandbox`, `git`, `lsof`, `human`; per repository `log <repo>`,
-  `human <repo>`, `frozen <repo>`.
+  `human <repo>`, `frozen <repo>`. Without `--json` the same checks are
+  grouped under headings as `flutter doctor` does (`[✓] Mode`, `[✗] Daemon`,
+  `[!] Repository demo`), with what to do under each problem and a last
+  line that counts the categories with issues; that line replaces the
+  `check(s) failed` on stderr. Colour only on a terminal, and not with
+  `NO_COLOR` set or `TERM=dumb`. The text is for people; scripts read
+  `--json`.
 
 **The human session file is an interface.** `lonca human login` keeps
 the session at `$LONCA_HUMANS/<name>.session`, else

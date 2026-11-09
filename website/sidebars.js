@@ -14,6 +14,7 @@ const sidebars = {
       items: [
         { type: 'doc', id: 'guide/install', label: 'Install' },
         { type: 'doc', id: 'guide/quick-start', label: 'Quick start' },
+        { type: 'doc', id: 'guide/concepts', label: 'Concepts' },
       ],
     },
     {
@@ -22,9 +23,12 @@ const sidebars = {
       collapsed: false,
       items: [
         { type: 'doc', id: 'guide/humans', label: 'Working as a human' },
+        { type: 'doc', id: 'guide/reviewing', label: "Reviewing agents' work" },
         { type: 'doc', id: 'guide/profiles', label: 'Profiles' },
         { type: 'doc', id: 'guide/runners', label: 'Running agents' },
         { type: 'doc', id: 'guide/verification', label: 'Verification' },
+        { type: 'doc', id: 'guide/recovery', label: 'Recovery' },
+        { type: 'doc', id: 'guide/troubleshooting', label: 'Troubleshooting' },
       ],
     },
     {

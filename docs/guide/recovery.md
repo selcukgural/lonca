@@ -153,34 +153,38 @@ The Mac is lost, stolen or dead, and with it the daemon's key and your
 Secure Enclave key. The repositories come back from a pushed remote or a
 bundle, onto a new daemon.
 
-**The recovery key alone does not do it, today.** `human.recover` is a
-repository operation, and the daemon signs it with the key the log is on. A
-log restored onto a new daemon is on the key that was lost, so it accepts
-only `daemon.recover`, which an enrolled human signs with their own key, and
-that key was on the Mac too. One of these has to have survived:
+The recovery key brings each repository back, on the new Mac:
 
-- **A backup of the old daemon's key**, for example in a Time Machine backup
-  of the Mac: `daemon.key` in the daemon's home (`~/.lonca`, or
-  `/Library/Lonca/home` when hardened). Put it into the new daemon's home
-  before its first start, owned by the daemon's user with mode 0600. The
-  restored repository is then live, and the recovery key works:
+```sh
+lonca restore demo --from git@github.com:me/demo.git
+lonca human recover --repo demo --recovery-key /Volumes/usb/ayse.recovery \
+      --secure-enclave --as ayse
+```
 
-  ```sh
-  lonca restore demo --from git@github.com:me/demo.git
-  lonca human recover --repo demo --recovery-key /Volumes/usb/ayse.recovery \
-        --secure-enclave --as ayse
-  ```
+A restored log is on the daemon key that was lost, so `human.recover` alone
+can not be signed for it (`foreign_key`). `lonca human recover` then sends
+one `daemon.recover` signed with the recovery key instead: it moves the
+repository onto the new daemon's key and installs your new key, in one entry
+and without a session. As after any daemon recovery, every session ends;
+start new ones. The recovery key is used up: register a new one. Audit the
+repository (`lonca-audit verify`): the switch is listed, with you as the one
+who asked for it.
 
-  That copy signs entries as the daemon: keep it as safe as the recovery
-  key. (An auditor still catches entries whose decisions do not replay.)
+Without a recovery key, one of these has to have survived:
+
 - **Another enrolled key you can use on the new Mac**: a second human's,
   or a file key of yours kept off the machine, where the repository does not
   require presence. With it: `lonca restore`, `lonca daemon-key recover
   --repo demo`, then `lonca human revoke ayse` and `lonca human enroll ayse
   --alg p256-se --public <hex>` for your new key (the hex from `lonca human
   whoami`).
+- **A backup of the old daemon's key**, for example in a Time Machine backup
+  of the Mac: `daemon.key` in the daemon's home (`~/.lonca`, or
+  `/Library/Lonca/home` when hardened). Put it into the new daemon's home
+  before its first start, owned by the daemon's user with mode 0600. That
+  copy signs entries as the daemon: keep it as safe as the recovery key.
 
-Without either, the history is still yours: the remote holds trunk and the
-whole log, and `lonca-audit verify` checks it. To go on working,
+Without any of them, the history is still yours: the remote holds trunk and
+the whole log, and `lonca-audit verify` checks it. To go on working,
 `lonca init <new-name> --import` creates a new repository from that trunk,
 with a new log.

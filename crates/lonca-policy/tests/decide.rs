@@ -1993,6 +1993,7 @@ fn daemon_rotate(key: &KeyPair) -> Op {
 fn daemon_recover(key: &KeyPair) -> Op {
     Op::DaemonRecover {
         key: key.public_hex(),
+        recover: None,
     }
 }
 
@@ -2081,7 +2082,10 @@ fn a_lost_daemon_key_is_recovered_with_a_human_signature() {
         (
             &ayse,
             "ayse",
-            Op::DaemonRecover { key: old.clone() },
+            Op::DaemonRecover {
+                key: old.clone(),
+                recover: None,
+            },
             "key_reused",
         ),
     ];
@@ -2127,8 +2131,128 @@ fn a_lost_daemon_key_is_recovered_with_a_human_signature() {
     );
     assert!(d.is_allow(), "{d:?}");
     // Recovery onto a key used before is refused like a rotation.
-    let d = h.recover_daemon_with(&ayse, "ayse", Op::DaemonRecover { key: old }, &new);
+    let op = Op::DaemonRecover {
+        key: old,
+        recover: None,
+    };
+    let d = h.recover_daemon_with(&ayse, "ayse", op, &new);
     assert!(denied_with(&d, "key_reused"), "{d:?}");
+    h.assert_replay();
+}
+
+/// A lost Mac: the daemon key and the human's key are both gone. The
+/// recovery key alone signs a `daemon.recover` that also replaces the key.
+#[test]
+fn a_lost_mac_is_recovered_with_the_recovery_key_alone() {
+    let mut h = H::new();
+    h.enroll("bora");
+    let old = h.key_of("ayse");
+    let rec = KeyPair::generate();
+    let set_rec = Op::HumanRecoveryKey {
+        human: "ayse".into(),
+        key: file_key(&rec),
+    };
+    assert!(h.human("ayse", set_rec).is_allow());
+    h.start_observed("s1", &["src/**"]);
+    assert!(
+        h.lease("s1", "l1", &[("src/a.rs#f", LeaseKind::Edit)])
+            .is_allow()
+    );
+    // Presence does not block it: the Secure Enclave key is on the lost Mac.
+    h.policy = Arc::new(
+        PolicyBundle::parse(
+            &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
+            DEFAULT_POLICY,
+        )
+        .unwrap(),
+    );
+    let old_daemon = h.chain.state.daemon_key.clone();
+    let daemon = KeyPair::generate();
+    let new = KeyPair::generate();
+    let recover = |daemon: String, human: &str, key: &KeyPair| Op::DaemonRecover {
+        key: daemon,
+        recover: Some(Recovery {
+            human: human.into(),
+            key: file_key(key),
+        }),
+    };
+    let to = daemon.public_hex();
+
+    // Refusals are not logged.
+    let seq = h.chain.state.next_seq;
+    let tries = [
+        // The current key can not stand in for the recovery key.
+        (
+            &old,
+            "ayse",
+            recover(to.clone(), "ayse", &new),
+            "bad_human_signature",
+        ),
+        (
+            &rec,
+            "bora",
+            recover(to.clone(), "bora", &new),
+            "no_recovery_key",
+        ),
+        (
+            &rec,
+            "ayse",
+            recover(to.clone(), "bora", &new),
+            "not_own_key",
+        ),
+        (
+            &rec,
+            "ayse",
+            recover(to.clone(), "ayse", &rec),
+            "key_reused",
+        ),
+        (
+            &rec,
+            "ayse",
+            recover(to.clone(), "ayse", &old),
+            "key_reused",
+        ),
+        (
+            &rec,
+            "ayse",
+            recover(old_daemon.clone(), "ayse", &new),
+            "key_reused",
+        ),
+    ];
+    for (signer, name, op, why) in tries {
+        let d = h.recover_daemon_with(signer, name, op, &daemon);
+        assert!(denied_with(&d, why), "{why}: {d:?}");
+    }
+    assert_eq!(h.chain.state.next_seq, seq);
+
+    let d = h.recover_daemon_with(&rec, "ayse", recover(to.clone(), "ayse", &new), &daemon);
+    assert!(d.is_allow(), "{d:?}");
+    let st = &h.chain.state;
+    assert_eq!(st.daemon_key, to);
+    assert!(st.retired_daemon_keys.contains(&old_daemon));
+    assert_eq!(st.humans["ayse"], file_key(&new));
+    assert!(!st.recovery.contains_key("ayse"));
+    assert!(st.retired_keys.contains(&old.public_hex()));
+    assert!(st.retired_keys.contains(&rec.public_hex()));
+    assert_eq!(st.humans["bora"], file_key(&h.key_of("bora")));
+    assert!(st.sessions["s1"].ended.is_some());
+    assert!(st.leases.is_empty());
+
+    // Used up: the recovery key does it once.
+    let again = KeyPair::generate();
+    let d = h.recover_daemon_with(
+        &rec,
+        "ayse",
+        recover(again.public_hex(), "ayse", &again),
+        &again,
+    );
+    assert!(denied_with(&d, "no_recovery_key"), "{d:?}");
+    h.policy = Arc::new(PolicyBundle::parse(DEFAULT_CONFIG, DEFAULT_POLICY).unwrap());
+    h.use_key("ayse", new);
+    assert!(
+        h.human("ayse", Op::Freeze { reason: "x".into() })
+            .is_allow()
+    );
     h.assert_replay();
 }
 

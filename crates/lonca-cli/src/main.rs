@@ -535,6 +535,8 @@ enum HumanCmd {
         human: Option<String>,
     },
     /// Replace a lost key using the recovery key. Uses the recovery key up.
+    /// On a repository restored onto a new daemon (a lost Mac), it also
+    /// moves the repository onto this daemon's key; every session there ends.
     Recover {
         #[arg(long, value_delimiter = ',', required = true)]
         repo: Vec<String>,
@@ -885,7 +887,9 @@ fn restore(repo: &str, from: &str) -> Result<()> {
     if r["foreign"].as_bool() == Some(true) {
         outln!(
             "its log is on daemon key {}, which this daemon does not hold: run \
-             `lonca daemon-key recover --repo {repo}` as an enrolled human to continue it.",
+             `lonca daemon-key recover --repo {repo}` as an enrolled human to continue it, \
+             or, if your key was lost too, `lonca human recover --repo {repo} \
+             --recovery-key <file>`.",
             r["daemon_key"]
                 .as_str()
                 .unwrap_or_default()

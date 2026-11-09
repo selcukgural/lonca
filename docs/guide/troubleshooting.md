@@ -111,7 +111,7 @@ An error means the request never reached the log.
 | `forbidden` | A token of the wrong kind or for another repository, or a human the repository does not know. |
 | `rate_limited` | The session (with the sessions made from it) is past `[sessions] ops_per_minute`. The message says when to try again. |
 | `busy`, `closed` | Send it again. |
-| `foreign_key` | The repository is on a daemon key this daemon does not hold: `lonca daemon-key recover --repo <name>` ([Recovery](recovery.md)). |
+| `foreign_key` | The repository is on a daemon key this daemon does not hold: `lonca daemon-key recover --repo <name>`, or, when your key was lost with it, `lonca human recover --repo <name> --recovery-key <file>` ([Recovery](recovery.md#a-lost-mac)). |
 | `integrity` | The log does not verify or replay. Do not write to the store; audit it and restore from a backup or a pushed remote. |
 | `unsupported` | A log format or symbol engine this daemon does not know: upgrade the daemon. |
 | `redacted` (on `lonca fetch`) | A redacted blob is in trunk's history; Git needs whole objects. Work from a Lonca workspace. |

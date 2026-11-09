@@ -284,9 +284,13 @@ pub fn describe(repo: &str, op: &Op) -> String {
         Op::HumanRecoveryKey { human, .. } => format!("set a recovery key for {human}"),
         Op::HumanRecover { human, .. } => format!("RECOVER {human} with the recovery key"),
         Op::DaemonRotate { key } => format!("REPLACE the daemon key with {}", short_key(key)),
-        Op::DaemonRecover { key } => format!(
-            "HAND the repository to daemon key {} (approve only for your own daemon)",
-            short_key(key)
+        Op::DaemonRecover { key, recover } => format!(
+            "HAND the repository to daemon key {}{} (approve only for your own daemon)",
+            short_key(key),
+            match recover {
+                Some(r) => format!(" and RECOVER {} with the recovery key", r.human),
+                None => String::new(),
+            }
         ),
         Op::PolicyUpdate { .. } => "change the repository policy".to_string(),
         Op::SessionStart {
@@ -699,9 +703,30 @@ mod tests {
             text.ends_with("REPLACE the daemon key with 0123456789abcdef"),
             "{text}"
         );
-        let text = describe("demo", &Op::DaemonRecover { key });
+        let text = describe(
+            "demo",
+            &Op::DaemonRecover {
+                key: key.clone(),
+                recover: None,
+            },
+        );
         assert!(
             text.contains("HAND the repository to daemon key 0123456789abcdef ("),
+            "{text}"
+        );
+        let recover = Some(lonca_core::ops::Recovery {
+            human: "ayse".into(),
+            key: lonca_core::ops::HumanKey {
+                alg: "ed25519".into(),
+                public: "02".into(),
+            },
+        });
+        let text = describe("demo", &Op::DaemonRecover { key, recover });
+        assert!(
+            text.contains(
+                "HAND the repository to daemon key 0123456789abcdef and RECOVER ayse with the \
+                 recovery key ("
+            ),
             "{text}"
         );
         assert_eq!(short_key("abc"), "abc");

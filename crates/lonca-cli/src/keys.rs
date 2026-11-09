@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use lonca_core::keys::KeyPair;
-use lonca_core::ops::{HumanKey, Op};
+use lonca_core::ops::{HumanKey, Op, Recovery};
 use lonca_daemon::Client;
 use serde_json::json;
 
@@ -199,6 +199,7 @@ pub fn recover(
     }
     let next = next_key(name, secure_enclave)?;
     let mut failed = vec![];
+    let mut moved = vec![];
     for repo in repos {
         // The key that would open a session is the one that was lost;
         // without one, `human.recover` goes in on its signature alone.
@@ -222,7 +223,33 @@ pub fn recover(
             key: next.key.clone(),
         };
         let sig = lonca_policy::human::sign_ed25519(&rk, name, repo, &op, ctx::now_ms());
-        let r = call(&mut c, "human.submit", json!({"op": op, "sig": sig}))?;
+        let r = match call(&mut c, "human.submit", json!({"op": op, "sig": sig})) {
+            // The daemon key went with the Mac too: one entry, signed with
+            // the recovery key, moves the repository onto this daemon and
+            // replaces the key.
+            Err(e) if is_code(&e, "foreign_key") => {
+                let op = Op::DaemonRecover {
+                    key: daemon_key_for_new(&mut c)?,
+                    recover: Some(Recovery {
+                        human: name.into(),
+                        key: next.key.clone(),
+                    }),
+                };
+                let sig = lonca_policy::human::sign_ed25519(&rk, name, repo, &op, ctx::now_ms());
+                match call(&mut c, "human.submit", json!({"op": op, "sig": sig})) {
+                    Ok(r) => {
+                        moved.push(repo.clone());
+                        r
+                    }
+                    Err(e) => {
+                        outln!("{e}");
+                        failed.push(repo.clone());
+                        continue;
+                    }
+                }
+            }
+            r => r?,
+        };
         print_decision(&r);
         allowed(repo, &r, &mut failed);
     }
@@ -235,12 +262,36 @@ pub fn recover(
         );
     }
     install(name, next)?;
+    if !moved.is_empty() {
+        outln!(
+            "{} moved onto this daemon's key: every session there ended. Audit them \
+             (`lonca-audit verify`) to see the switch.",
+            moved.join(", ")
+        );
+    }
     outln!(
         "recovered. The recovery key is used up: delete {} and set a new one with \
          `lonca human recovery-key`.",
         recovery_key.display()
     );
     Ok(())
+}
+
+/// Whether the daemon answered `code`.
+fn is_code(e: &anyhow::Error, code: &str) -> bool {
+    e.downcast_ref::<ctx::MethodError>()
+        .is_some_and(|m| m.code == code)
+}
+
+/// The key this daemon puts a repository on: the next one while a rotation
+/// is under way, else the current one.
+fn daemon_key_for_new(c: &mut Client) -> Result<String> {
+    let ping = call(c, "ping", json!({}))?;
+    ping["next_key"]
+        .as_str()
+        .or(ping["daemon_key"].as_str())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("ping: no daemon key in the answer"))
 }
 
 fn strings(v: &serde_json::Value) -> Vec<String> {
@@ -307,17 +358,15 @@ pub fn daemon_rotate(name: &str, repos: &[String]) -> Result<()> {
 /// another daemon, e.g. when moving to hardened mode) on this daemon's key.
 pub fn daemon_recover(name: &str, repos: &[String]) -> Result<()> {
     let mut c = ctx::connect()?;
-    let ping = call(&mut c, "ping", json!({}))?;
-    let key = ping["next_key"]
-        .as_str()
-        .or(ping["daemon_key"].as_str())
-        .unwrap_or_default()
-        .to_string();
+    let key = daemon_key_for_new(&mut c)?;
     let mut failed = vec![];
     for repo in repos {
         let mut c = human_client(repo, name)?;
         out!("{repo}: ");
-        let op = Op::DaemonRecover { key: key.clone() };
+        let op = Op::DaemonRecover {
+            key: key.clone(),
+            recover: None,
+        };
         match submit_outcome(&mut c, name, repo, op) {
             Ok(r) => allowed(repo, &r, &mut failed),
             Err(e) => {

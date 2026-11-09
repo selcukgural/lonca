@@ -54,8 +54,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// expires or stops beating, as when it ends; version 24 adds the
 /// `unhooked` observation, which taints a session; version 25 adds named
 /// `checks` to `approve`; version 26 makes an agent's proposal withdraw the
-/// pending changes of its workspace.
-pub const FORMAT_CURRENT: u32 = 26;
+/// pending changes of its workspace; version 27 lets a recovery key sign a
+/// `daemon.recover` (`recover`).
+pub const FORMAT_CURRENT: u32 = 27;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -132,6 +133,11 @@ pub const FORMAT_NAMED_CHECKS: u32 = 25;
 /// each with `replaces:<change>`. No new field: older entries replay as they
 /// were.
 pub const FORMAT_REPLACES: u32 = 26;
+/// The first format with `recover` on `daemon.recover`: signed with a
+/// human's recovery key, it also replaces that human's lost key, so a
+/// lost Mac (daemon key and Secure Enclave key both gone) is recovered
+/// with the recovery key alone.
+pub const FORMAT_RECOVERY_DAEMON: u32 = 27;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY
@@ -190,6 +196,9 @@ impl OpEntry {
             | Op::HumanRevoke { .. }
             | Op::HumanRecoveryKey { .. }
             | Op::HumanRecover { .. } => FORMAT_HUMAN_KEYS,
+            Op::DaemonRecover {
+                recover: Some(_), ..
+            } => FORMAT_RECOVERY_DAEMON,
             Op::DaemonRotate { .. } | Op::DaemonRecover { .. } => FORMAT_DAEMON_KEYS,
             Op::Reject { .. } => FORMAT_REJECT,
             Op::Approve { ref checks, .. } if !checks.is_empty() => FORMAT_NAMED_CHECKS,
@@ -1159,6 +1168,43 @@ mod tests {
     }
 
     #[test]
+    fn a_recovery_key_on_a_daemon_recovery_needs_format_27() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let g = SignedOp::sign(with_format(genesis(&key, &store), 4), &key);
+        let recover = |with: bool| Op::DaemonRecover {
+            key: "01".into(),
+            recover: with.then(|| crate::ops::Recovery {
+                human: "ayse".into(),
+                key: crate::ops::HumanKey {
+                    alg: "ed25519".into(),
+                    public: "02".into(),
+                },
+            }),
+        };
+        // Denied, so the key in force signs it.
+        let at = |op: Op, format| OpEntry {
+            format,
+            op,
+            decision: Decision::deny("x"),
+            ..next(&g, 2000)
+        };
+        assert_eq!(at(recover(true), 27).min_format(), FORMAT_RECOVERY_DAEMON);
+        assert_eq!(at(recover(false), 4).min_format(), FORMAT_DAEMON_KEYS);
+        let chain =
+            |format| verify_chain(&[g.clone(), SignedOp::sign(at(recover(true), format), &key)]);
+        assert!(chain(27).is_ok());
+        let err = chain(26).unwrap_err();
+        assert!(err.to_string().contains("needs log format 27"), "{err}");
+        // Old recoveries keep their bytes: no `recover` key at all.
+        let text = serde_json::to_string(&recover(false)).unwrap();
+        assert!(!text.contains("\"recover\""), "{text}");
+        assert!(recover(true).signed_by_recovery_key());
+        assert!(!recover(false).signed_by_recovery_key());
+    }
+
+    #[test]
     fn daemon_key_operations_need_format_4() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
@@ -1167,7 +1213,10 @@ mod tests {
         // Denied, so the key in force signs them and nothing switches.
         for op in [
             Op::DaemonRotate { key: "01".into() },
-            Op::DaemonRecover { key: "01".into() },
+            Op::DaemonRecover {
+                key: "01".into(),
+                recover: None,
+            },
         ] {
             let at = |format| OpEntry {
                 format,
@@ -1252,6 +1301,7 @@ mod tests {
         let g = SignedOp::sign(genesis(&old, &store), &old);
         let recover = Op::DaemonRecover {
             key: new.public_hex(),
+            recover: None,
         };
         let r = switch(&g, recover.clone(), Decision::allow(), &new);
         assert_eq!(r.entry.signer(&old.public_hex()), new.public_hex());

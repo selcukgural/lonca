@@ -96,7 +96,44 @@ fn golden_repo() -> Env {
     unhooked(&mut e);
     named_checks(&mut e);
     replaces(&mut e);
+    lost_mac(&mut e);
     e
+}
+
+/// From format 27: ayse sets a recovery key, then the daemon key and her
+/// key are both lost; her recovery key alone moves the log onto the new
+/// daemon key and replaces her key. Her new key signs on.
+fn lost_mac(e: &mut Env) {
+    use lonca_core::ops::Recovery;
+    use lonca_policy::human::sign_ed25519;
+    let key = |k: &KeyPair| HumanKey {
+        alg: "ed25519".into(),
+        public: k.public_hex(),
+    };
+    let allowed = |r: Value| assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let rec = KeyPair::generate();
+    allowed(e.human(Op::HumanRecoveryKey {
+        human: "ayse".into(),
+        key: key(&rec),
+    }));
+    std::fs::remove_file(e.root.join("home/daemon.key")).unwrap();
+    e.reopen();
+    let daemon = e.ok("ping", None, None, json!({}))["daemon_key"]
+        .as_str()
+        .expect("key")
+        .to_string();
+    let fresh = KeyPair::generate();
+    let op = Op::DaemonRecover {
+        key: daemon,
+        recover: Some(Recovery {
+            human: "ayse".into(),
+            key: key(&fresh),
+        }),
+    };
+    let body = json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now())});
+    allowed(e.anon("human.submit", Some("demo"), None, body).unwrap());
+    e.human = fresh;
+    e.session("s-mac", &["notes.md"]);
 }
 
 /// From format 26: a workspace proposes twice while the first waits; the
@@ -675,7 +712,7 @@ fn daemon_keys(e: &mut Env) {
         .as_str()
         .expect("key")
         .to_string();
-    allowed(e.human(Op::DaemonRecover { key }));
+    allowed(e.human(Op::DaemonRecover { key, recover: None }));
     e.session("s7", &["notes.md"]);
 }
 
@@ -1337,6 +1374,43 @@ fn golden_v26_log_still_verifies_replays_and_audits() {
     let rec = s.changes.values().find(|c| c.change.to_string() == older);
     let rec = rec.expect("the replaced change");
     assert_eq!(rec.status, lonca_policy::state::ChangeStatus::Withdrawn);
+}
+
+/// A lost Mac recovered with the recovery key alone: a `daemon.recover`
+/// with `recover`, signed by the new daemon key, then ayse's new key signs.
+#[test]
+fn golden_v27_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v27.bundle",
+        "923d0590d3a5e10cb0b77624c3e8e49d2ecf61be464cfb4010980a1d0ed4a492",
+        27,
+    );
+    let at = ops.iter().position(|o| {
+        matches!(
+            &o.entry.op,
+            Op::DaemonRecover {
+                recover: Some(r),
+                ..
+            } if r.human == "ayse"
+        )
+    });
+    let at = at.expect("the recovery");
+    let s = lonca_policy::state::State::replay(&ops[..=at]);
+    let Op::DaemonRecover {
+        key,
+        recover: Some(r),
+    } = &ops[at].entry.op
+    else {
+        unreachable!()
+    };
+    assert_eq!(&s.daemon_key, key);
+    assert_eq!(s.humans["ayse"], r.key);
+    assert!(!s.recovery.contains_key("ayse"));
+    assert!(
+        ops[at + 1..]
+            .iter()
+            .any(|o| o.entry.actor.label() == "human:ayse")
+    );
 }
 
 #[test]

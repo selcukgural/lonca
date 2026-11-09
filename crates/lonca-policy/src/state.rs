@@ -14,7 +14,7 @@ use lonca_core::oplog::{
 };
 use lonca_core::ops::{
     Actor, Attestation, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind,
-    ObservationLevel, Op, Outcome, Scope,
+    ObservationLevel, Op, Outcome, Recovery, Scope,
 };
 use serde::Serialize;
 
@@ -1482,6 +1482,15 @@ impl State {
         }
     }
 
+    /// A human's lost key replaced with the recovery key, which is used up.
+    fn recover_human(&mut self, human: &str, key: &HumanKey, time_ms: i64) {
+        self.end_human(human, &format!("revoked: human:{human} recovered"), time_ms);
+        let old = self.humans.insert(human.to_string(), key.clone());
+        self.retire(old);
+        let old = self.recovery.remove(human);
+        self.retire(old);
+    }
+
     /// Whether a public key is, or ever was, a key of some human.
     pub fn key_known(&self, public: &str) -> bool {
         self.retired_keys.contains(public)
@@ -1548,18 +1557,12 @@ impl State {
                 let old = self.recovery.insert(human.clone(), key.clone());
                 self.retire(old);
             }
-            Op::HumanRecover { human, key } => {
-                self.end_human(human, &format!("revoked: human:{human} recovered"), time_ms);
-                let old = self.humans.insert(human.clone(), key.clone());
-                self.retire(old);
-                let old = self.recovery.remove(human);
-                self.retire(old);
-            }
+            Op::HumanRecover { human, key } => self.recover_human(human, key, time_ms),
             Op::DaemonRotate { key } => {
                 let old = std::mem::replace(&mut self.daemon_key, key.clone());
                 self.retired_daemon_keys.insert(old);
             }
-            Op::DaemonRecover { key } => {
+            Op::DaemonRecover { key, recover } => {
                 // The daemon that held the session tokens is gone (or is
                 // being replaced): every session ends. What they proposed
                 // keeps its decision, like after `session.end`.
@@ -1574,6 +1577,9 @@ impl State {
                 }
                 let old = std::mem::replace(&mut self.daemon_key, key.clone());
                 self.retired_daemon_keys.insert(old);
+                if let Some(Recovery { human, key }) = recover {
+                    self.recover_human(human, key, time_ms);
+                }
             }
             Op::PolicyUpdate { policy } => self.policy = Some(policy.clone()),
             Op::SessionStart {

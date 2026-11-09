@@ -1165,10 +1165,12 @@ impl Service {
         let Some(&(_, cred)) = METHODS.iter().find(|(m, _)| *m == req.method) else {
             return fail("unknown_method", format!("unknown method {}", req.method));
         };
-        // The one human operation that needs no session: the key that
-        // would open one is the key that was lost. The recovery-key
-        // signature is checked by decide(), like any signature.
-        let cred = if req.method == "human.submit" && p["op"]["op"] == "human.recover" {
+        // The human operations that need no session: those signed with the
+        // recovery key, as the key that would open one is the key that was
+        // lost. The signature is checked by decide(), like any signature.
+        let by_recovery_key = p["op"]["op"] == "human.recover"
+            || (p["op"]["op"] == "daemon.recover" && !p["op"]["recover"].is_null());
+        let cred = if req.method == "human.submit" && by_recovery_key {
             Cred::Public
         } else {
             cred
@@ -1291,7 +1293,8 @@ impl Service {
                 "foreign_key",
                 format!(
                     "repository {name} is on daemon key {}, which this daemon does not hold; \
-                     recover it with `lonca daemon-key recover --repo {name}`",
+                     recover it with `lonca daemon-key recover --repo {name}`, or, if your \
+                     key was lost too, `lonca human recover --repo {name} --recovery-key <file>`",
                     r.chain.state.daemon_key.get(..16).unwrap_or_default()
                 ),
             );

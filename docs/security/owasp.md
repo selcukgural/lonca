@@ -69,7 +69,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 
 | Item | Status | In place | Open |
 |---|---|---|---|
-| CICD-SEC-1 Insufficient Flow Control | accepted | main takes pull requests only; no status check is required, by decision (`docs/decisions.md`, "CI runs for a release" and #60) | — |
+| CICD-SEC-1 Insufficient Flow Control | met | main takes pull requests only, and requires the `ci.yml` jobs (Ubuntu, macOS, sandbox) as status checks; no approval is required (one maintainer) (`docs/decisions.md`, "CI runs on every pull request" and #60) | — |
 | CICD-SEC-2 Inadequate IAM | met | one maintainer; workflows hold read-only tokens, `persist-credentials: false` | — |
 | CICD-SEC-3 Dependency Chain Abuse | met | cargo-deny crates.io only, Dependabot cooldown, lockfile `--locked`; `cargo vet` not adopted (`docs/decisions.md`, #60) | — |
 | CICD-SEC-4 Poisoned Pipeline Execution | met | no `pull_request_target`, no event data in `run:`; zizmor on workflow changes | — |

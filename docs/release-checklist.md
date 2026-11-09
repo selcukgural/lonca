@@ -23,11 +23,13 @@
    `docs/release-notes.md` renamed `## X.Y.Z (YYYY-MM-DD)`, with a new empty
    `## Unreleased` above it. Merge it.
 2. Tag main and push the tag: `git tag -a vX.Y.Z -m "Lonca X.Y.Z"`, `git
-   push origin vX.Y.Z`. `release.yml` drafts the release; `ci.yml` runs on
-   the tag.
-3. `ci.yml` green, and the draft has four archives, `SHA256SUMS` and
-   `lonca-sbom.cdx.tar.gz`: check one archive with `gh attestation verify
-   lonca-aarch64-apple-darwin.tar.gz --repo selcukgural/lonca`.
+   push origin vX.Y.Z`. `release.yml` drafts the release; `ci.yml` and
+   `fuzz.yml` run on the tag.
+3. `ci.yml` and `fuzz.yml` green on the tag (a fuzz failure is fixed and
+   released as a new patch version; a tag is never moved), and the draft
+   has four archives, `SHA256SUMS` and `lonca-sbom.cdx.tar.gz`: check one
+   archive with `gh attestation verify lonca-aarch64-apple-darwin.tar.gz
+   --repo selcukgural/lonca`.
 4. crates.io. A crate that is not on crates.io yet is published by hand
    from the tag, by its owner, in dependency order:
    `git checkout vX.Y.Z && cargo publish --workspace --exclude lonca-mutants

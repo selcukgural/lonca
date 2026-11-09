@@ -71,11 +71,13 @@ is fixed: the input is the exploit.
 ## CI
 
 `.github/workflows/fuzz.yml` runs every target every night on main (30
-minutes each) and on demand (10 minutes each, or
+minutes each), on demand (10 minutes each, or
 `gh workflow run fuzz.yml --ref main -f seconds=N`), which the release
-checklist does before tagging. Pull requests and tags do not run it. Each
-target keeps its corpus in the Actions cache, which a release run must not
-restore, so a tag does not run it.
+checklist does before tagging, and again on a pushed `v*` tag (10 minutes
+each), which must be green before the draft release is published. Pull
+requests do not run it. Each target keeps its corpus in the Actions cache,
+which a release run must not restore: on a tag the targets start from their
+seeds and regressions alone, and the cache is neither restored nor saved.
 
 The repository is public, so the log says only which target found what
 (`crash`, `timeout`, `oom`). The input and the fuzzer's output are uploaded

@@ -71,3 +71,36 @@ fn verify_prints_the_daemon_key_switches_and_reports_findings_in_its_exit_status
     assert_eq!(missing.status.code(), Some(2));
     assert_eq!(audit(&[]).status.code(), Some(2));
 }
+
+/// A store the auditor may not read (a hardened daemon's) is named as such,
+/// not as "not a git repository", with the way that works there.
+#[cfg(unix)]
+#[test]
+fn a_store_it_can_not_read_is_named_permission_denied() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let repo = home.join("r.git");
+    std::fs::create_dir(&home).unwrap();
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", repo.to_str().unwrap()],
+    );
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = std::fs::read_dir(&repo).is_ok();
+    let out = audit(&["verify", repo.to_str().unwrap()]);
+    let compared = audit(&["compare", repo.to_str().unwrap(), repo.to_str().unwrap()]);
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if readable {
+        return; // root reads anything: nothing to see here
+    }
+    for out in [out, compared] {
+        let err = text(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "{err}");
+        assert!(err.contains("permission denied"), "{err}");
+        assert!(err.contains("lonca backup"), "{err}");
+    }
+    // A path that is not there is still what Git says.
+    let out = audit(&["verify", dir.path().join("none").to_str().unwrap()]);
+    assert!(!text(&out.stderr).contains("permission denied"));
+}

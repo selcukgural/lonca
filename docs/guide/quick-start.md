@@ -49,8 +49,13 @@ lonca approve 17 --repo demo
 lonca undo 23 --repo demo                    # compensating operation
 lonca revert --actor agent:claude --since-seq 40 --repo demo   # dry run
 lonca push git@github.com:me/myproject.git --repo demo
-lonca-audit verify ~/.lonca/repos/demo.git
+lonca-audit verify ~/.lonca/repos/demo.git  # cooperative mode's store
 ```
+
+`~/.lonca/repos/` is where a cooperative daemon keeps its stores. A
+hardened daemon's home (`/Library/Lonca/home`, `/var/lib/lonca`) is
+readable by its user only: audit a pushed remote or a backup bundle there
+(see "Backup and moving" below).
 
 Your own edits go through the daemon too, from a Lonca workspace or from a
 Git checkout: see [Working as a human](humans.md).
@@ -77,8 +82,11 @@ is a fetch:
 lonca backup --out /Volumes/usb/lonca     # one bundle per repository
 lonca restore demo --from /Volumes/usb/lonca/demo-000412.bundle
 lonca daemon-key recover --repo demo      # only if this daemon's key is new
-lonca-audit verify ~/.lonca/repos/demo.git
+lonca-audit verify ~/.lonca/repos/demo.git  # cooperative; restore prints the path
 ```
+
+On a hardened daemon `lonca restore` says to verify the source instead,
+since the store it wrote is not yours to read; it holds the same log.
 
 - **What is backed up:** the bundle written by the daemon (every ref, at
   one point of the log), or the remote `lonca push` sends trunk, the log,

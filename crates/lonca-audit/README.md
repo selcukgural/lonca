@@ -8,8 +8,12 @@ are signed with the daemon's own key. Run it in CI on a pushed remote:
 
 ```sh
 cargo install --locked lonca-audit
-lonca-audit verify ~/.lonca/repos/demo.git
+lonca-audit verify ~/.lonca/repos/demo.git   # a cooperative daemon's store
 ```
+
+A hardened daemon's store is readable by its user only; the auditor says
+so (permission denied) and you verify a pushed remote or a `lonca backup`
+bundle instead.
 
 This crate is a part of [Lonca](https://selcukgural.github.io/lonca/),
 agent-native, Git-compatible version control; the `lonca` command

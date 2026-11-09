@@ -986,6 +986,12 @@ fn backup_and_restore_through_the_cli() {
         out.contains("lonca daemon-key recover --repo demo"),
         "{out}"
     );
+    // A cooperative daemon: the store it restored into, which its user reads.
+    let store = home2.join("repos/demo.git");
+    assert!(
+        out.contains(&format!("Audit it: lonca-audit verify {}", store.display())),
+        "{out}"
+    );
     let o = run2(&["status", "--repo", "demo"]);
     assert!(!o.status.success());
     assert!(

@@ -58,7 +58,7 @@ fn verify(args: &[String]) -> ExitCode {
     let store = match Store::open(&dir) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("lonca-audit: {e}");
+            eprintln!("lonca-audit: {}", open_error(&dir, &e));
             return ExitCode::from(2);
         }
     };
@@ -117,12 +117,29 @@ fn verify(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Why `dir` did not open. Git calls a path it can not read "not a git
+/// repository"; a hardened store, the daemon's user's alone, is that case,
+/// so the real reason is named and the way that works there.
+fn open_error(dir: &std::path::Path, e: &impl std::fmt::Display) -> String {
+    match std::fs::read_dir(dir) {
+        Err(io) if io.kind() == std::io::ErrorKind::PermissionDenied => format!(
+            "cannot read {}: permission denied. A hardened daemon's store is readable by \
+             its user only: verify a backup bundle instead (`lonca backup`, then \
+             git init --bare x.git && git -C x.git fetch <bundle> '+refs/*:refs/*' && \
+             lonca-audit verify x.git)",
+            dir.display()
+        ),
+        _ => e.to_string(),
+    }
+}
+
 fn compare_cmd(args: &[String]) -> ExitCode {
     let [local, published] = args else {
         return usage();
     };
     let read = |p: &str| -> Result<Vec<lonca_core::oplog::SignedOp>, String> {
-        let s = Store::open(std::path::Path::new(p)).map_err(|e| e.to_string())?;
+        let p = std::path::Path::new(p);
+        let s = Store::open(p).map_err(|e| open_error(p, &e))?;
         OpLog::new(&s).read_all().map_err(|e| e.to_string())
     };
     let (l, p) = match (read(local), read(published)) {

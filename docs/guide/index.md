@@ -109,7 +109,8 @@ and auditable by every later release.
 
 ## Limitations
 
-- Not yet used on real projects.
+- Used on one real project so far: [imece](https://github.com/selcukgural/imece)
+  runs its agents on Lonca, by the same developer.
 - One daemon per machine, one sequencer per repository.
 - Symbol extraction covers thirteen languages, and Markdown, TOML, JSON
   and YAML files are split into sections; other files are leased whole. Signature changes are detected and must be declared, but their

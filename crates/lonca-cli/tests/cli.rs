@@ -6062,3 +6062,50 @@ fn a_human_names_the_checks_a_change_owes_when_approving() {
     let change = changes.find(|c| c["change"] == proposed["change"]).unwrap();
     assert_eq!(change["status"]["status"], "integrated", "{change}");
 }
+
+/// The active sessions `status` lists.
+fn active_sessions(e: &Env) -> Vec<serde_json::Value> {
+    let s = status_json(e);
+    let all = s["sessions"].as_array().unwrap().iter();
+    all.filter(|x| x["active"] == true).cloned().collect()
+}
+
+/// A workspace that can not be made starts no session: a session whose
+/// token nobody holds could be used and ended by no one (issue #223).
+#[test]
+fn session_start_into_a_full_directory_starts_nothing() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let r = &e.root;
+    let log = |e: &Env| parse(&e.run(r, &["log", "--repo", "demo", "--json"]));
+    let (before, entries) = (active_sessions(&e), log(&e).as_array().unwrap().len());
+    let why = fails(
+        &e,
+        r,
+        &session_args("**", &["--workspace", ws.to_str().unwrap()]),
+    );
+    assert!(why.contains("is not empty"), "{why}");
+    assert_eq!(active_sessions(&e), before);
+    assert_eq!(log(&e).as_array().unwrap().len(), entries);
+}
+
+/// What fails after the session started ends it again.
+#[test]
+fn session_start_ends_the_session_it_could_not_hand_over() {
+    let e = Env::new();
+    agent_workspace(&e);
+    let r = &e.root;
+    std::fs::write(r.join("plain"), "a file, not a directory\n").unwrap();
+    let before = active_sessions(&e);
+    let why = fails(&e, r, &session_args("**", &["--workspace", "plain/ws"]));
+    assert!(why.contains("was started and ended again"), "{why}");
+    assert_eq!(active_sessions(&e), before);
+    let log = parse(&e.run(r, &["log", "--repo", "demo", "--json"]));
+    let ops: Vec<&str> = log
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x["entry"]["op"]["op"].as_str())
+        .collect();
+    assert!(ops.ends_with(&["session.start", "session.end"]), "{ops:?}");
+}

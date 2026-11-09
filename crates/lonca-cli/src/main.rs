@@ -1487,6 +1487,11 @@ fn run(cmd: Cmd) -> Result<()> {
                 Some(_) => Some(Workspace::to_continue(&dir, &repo)?),
                 None => None,
             };
+            // Before the session starts: a refusal after it would leave a
+            // session nobody holds the token of (#223).
+            if continuing.is_none() {
+                Workspace::check_empty(&dir)?;
+            }
             let scratch = scratch_roots(&dir, &scratch)?;
             let mut c = human_client(&repo, &human)?;
             let session = lonca_core::canonical::random_id("ses");
@@ -1530,19 +1535,24 @@ fn run(cmd: Cmd) -> Result<()> {
                 bail!("session was not started: {}", r["decision"]["outcome"])
             };
             let (continued, old) = continuing.unzip();
-            let mut ws = match continued {
-                Some(ws) => ws,
-                None => {
-                    let mut ac = connect()?;
-                    ac.token = Some(token.to_string());
-                    Workspace::create(&mut ac, &dir, &repo, Some(session.clone()), None, !no_git)?
-                }
+            let handed = || -> Result<Workspace> {
+                let mut ws = match continued {
+                    Some(ws) => ws,
+                    None => {
+                        let mut ac = connect()?;
+                        ac.token = Some(token.to_string());
+                        let id = Some(session.clone());
+                        Workspace::create(&mut ac, &dir, &repo, id, None, !no_git)?
+                    }
+                };
+                // The token first: it is what the workspace runs on.
+                ws.write_token(token)?;
+                ws.meta.session = Some(session.clone());
+                ws.meta.scratch_roots = scratch.clone();
+                ws.save()?;
+                Ok(ws)
             };
-            // The token first: it is what the workspace runs on.
-            ws.write_token(token)?;
-            ws.meta.session = Some(session.clone());
-            ws.meta.scratch_roots = scratch.clone();
-            ws.save()?;
+            let mut ws = handed().map_err(|e| end_unheld(token, &repo, &session, e))?;
             let setup = match harness.as_deref().filter(|_| !no_setup) {
                 Some(h) => Some(
                     setup_harness(&mut ws, h, false)
@@ -2573,6 +2583,23 @@ fn lease_need_lines(report: &Value) -> Vec<String> {
         }
     };
     needs.iter().map(line).collect()
+}
+
+/// Ends a session this command started and could not hand to a workspace:
+/// nobody else holds its token, so nobody else could end it (#223).
+fn end_unheld(token: &str, repo: &str, session: &str, e: anyhow::Error) -> anyhow::Error {
+    let ended = connect().and_then(|mut c| {
+        c.token = Some(token.to_string());
+        let r = call(&mut c, "session.end", json!({ "files": null }))?;
+        ctx::denied(&r)
+    });
+    match ended {
+        Ok(_) => e.context(format!("session {session} was started and ended again")),
+        Err(end) => e.context(format!(
+            "session {session} was started and could not be ended ({end:#}); \
+             end it with `lonca session revoke {session} --repo {repo}`"
+        )),
+    }
 }
 
 /// What `status` says of the files no parser reads.

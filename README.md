@@ -17,10 +17,22 @@ Everything else is on the site: **<https://selcukgural.github.io/lonca/>**
 ([why and how it works](https://selcukgural.github.io/lonca/docs/guide),
 the guides, the protocol, the release notes).
 
-> Status: 0.2, the first release. Every phase of the design is implemented
-> and tested; formats are versioned, and a log written by any 0.x release
-> stays readable by every later one. Not yet used on real projects: see the
-> [scope and limitations](https://selcukgural.github.io/lonca/docs/guide#scope-of-0x).
+> Status: 0.2. Every phase of the design is implemented and tested; formats
+> are versioned, and a log written by any 0.x release stays readable by every
+> later one. 0.x is one machine: one developer with many agents, Claude Code
+> as the harness checked in every release
+> ([scope and limitations](https://selcukgural.github.io/lonca/docs/guide#scope-of-0x)).
+
+## In use
+
+[imece](https://github.com/selcukgural/imece), a terminal for many coding
+agents, runs its workers on Lonca: each worker is a Lonca session in its own
+workspace, its finished work is a proposal, and the person's approval sends
+it through the merge queue into trunk, which lives in Lonca's store. That
+use shaped much of 0.2: proving a session is observed
+([#190](https://github.com/selcukgural/lonca/issues/190)), checks chosen per
+change at approval ([#191](https://github.com/selcukgural/lonca/issues/191)),
+and the client crate harnesses depend on.
 
 ## Install
 

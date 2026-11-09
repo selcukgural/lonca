@@ -37,9 +37,12 @@
 5. Publish the draft (`gh release edit vX.Y.Z --draft=false`).
    `registries.yml` publishes the crates (when `PUBLISH_CRATES` is on).
 6. Homebrew: `gh workflow run update.yml --repo selcukgural/homebrew-lonca`
-   (it also runs every day); then `brew upgrade lonca` (or, on a machine
-   without the tap, `brew tap selcukgural/lonca` and `brew install lonca`)
-   gives the new version.
+   (it also runs every day). Then, on a machine that has the tap,
+   `brew update && brew upgrade selcukgural/lonca/lonca`, and
+   `lonca --version` says X.Y.Z. `brew update` is needed: brew refreshes a
+   tap's clone by itself only about once a day, and until then `brew info`
+   still shows the old version. On a machine without the tap,
+   `brew tap selcukgural/lonca` and `brew install lonca`.
 7. `curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh` installs
    the new version on a clean machine or account.
 

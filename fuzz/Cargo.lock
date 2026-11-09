@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-audit"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "lonca-core",
  "lonca-policy",
@@ -1905,7 +1905,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-client"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "libc",
  "lonca-core",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1931,7 +1931,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-daemon"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "hex",
@@ -1949,7 +1949,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-fuzz"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "lonca-audit",
@@ -1975,11 +1975,11 @@ dependencies = [
 
 [[package]]
 name = "lonca-net"
-version = "0.2.1"
+version = "0.2.2"
 
 [[package]]
 name = "lonca-policy"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cedar-policy",
  "ed25519-dalek",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-symbols"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aho-corasick",
  "diffy",
@@ -2021,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-verify"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "hex",
  "libc",

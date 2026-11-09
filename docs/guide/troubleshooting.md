@@ -7,23 +7,34 @@ reasons, and the reasons say what to do.
 ## `lonca doctor`
 
 ```text
-pass  mode: cooperative: the daemon runs as you
-pass  socket: /Users/ayse/.lonca/lonca.sock belongs to the daemon
-pass  daemon: version 0.2.1, protocol 1
-warn  hooks: no managed settings at /Library/Application Support/ClaudeCode/managed-settings.json
-      sessions count as unobserved until the hardened installer has run
-pass  sandbox: seatbelt
-pass  git: found
-pass  lsof: found
-pass  human: ayse
-pass  security events: none in the last 24 hours
-pass  log demo: 6 entries verify
-pass  human demo: ayse is enrolled
+Doctor summary (lonca 0.2.2):
+
+[✓] Mode: cooperative: the daemon runs as you
+[✓] Daemon
+    ✓ socket: /Users/ayse/.lonca/lonca.sock belongs to the daemon
+    ✓ daemon: version 0.2.2, protocol 1
+[!] Hooks
+    ! no managed settings at /Library/Application Support/ClaudeCode/managed-settings.json
+      → sessions count as unobserved until the hardened installer has run
+[✓] Sandbox: seatbelt
+[✓] Tools
+    ✓ git: found
+    ✓ lsof: found
+[✓] Human
+    ✓ human: ayse
+    ✓ security events: none in the last 24 hours
+[✓] Repository demo
+    ✓ log: 6 entries verify
+    ✓ human: ayse is enrolled
+
+! Doctor found issues in 1 category.
 ```
 
-Each line passes, warns or fails, and anything that does not pass says what
-to do on the next line. A warning leaves the exit code 0, a failure makes it
-1; `--json` gives `{"ok", "mode", "checks"}`. Nothing in it prompts: with a
+The checks are grouped, each group marked with its worst check (`✓`, `!`
+for a warning, `✗` for a failure), and anything that does not pass says
+what to do on the line under it (`→`). A warning leaves the exit code 0, a
+failure makes it 1; `--json` gives `{"ok", "mode", "checks"}`. Colour only on
+a terminal, never with `NO_COLOR` or `TERM=dumb`. Nothing in it prompts: with a
 Secure Enclave key and no live session it asks you to run `lonca human
 login` first.
 

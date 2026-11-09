@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.2 (2026-11-09)
+
 ### `lonca doctor` reads like `flutter doctor`
 
 The text form was one flat, colourless line per check. It now groups the
@@ -88,6 +90,18 @@ New pages: [Concepts](guide/concepts.md),
 [Reviewing agents' work](guide/reviewing.md),
 [Troubleshooting](guide/troubleshooting.md) and
 [Recovery](guide/recovery.md).
+
+### Live runs for this release
+
+Claude Code 2.1 (haiku), as `docs/release-checklist.md` asks: a session
+leased, proposed and integrated after approval, and `lonca diff` listed no
+generated file; two sessions at once on one file, on different symbols, both
+integrated; one that stopped without proposing was sent back by the stop
+hook, proposed, and left no unproposed work. `lonca-audit verify` passed on
+the log. **Not run: Codex 0.167 and OpenCode 2.2.** Their free models on
+Ollama's cloud are retired and the local one was not used. No harness
+profile has changed since 0.2.1; Codex last ran live before 0.2.0 (Codex
+0.165), with Claude Code on one file, and both integrated.
 
 ## 0.2.1 (2026-11-09)
 

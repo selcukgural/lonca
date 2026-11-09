@@ -68,6 +68,23 @@ fn every_target_has_a_binary() {
     }
 }
 
+/// CI runs every target: the list in `fuzz.yml`'s `plan` job is `TARGETS`,
+/// sorted.
+#[test]
+fn ci_runs_every_target() {
+    let workflow = fuzz_dir().join("../.github/workflows/fuzz.yml");
+    let text = std::fs::read_to_string(&workflow).unwrap();
+    let line = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("all=\""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("an all=\"...\" line in fuzz.yml");
+    let listed: Vec<&str> = line.split(' ').collect();
+    let mut targets: Vec<&str> = TARGETS.iter().map(|(n, _)| *n).collect();
+    targets.sort_unstable();
+    assert_eq!(listed, targets);
+}
+
 fn write(target: &str, name: &str, data: &[u8]) {
     let dir = fuzz_dir().join("seeds").join(target);
     std::fs::create_dir_all(&dir).unwrap();

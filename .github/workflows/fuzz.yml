@@ -25,23 +25,61 @@ on:
         description: Seconds per target
         default: "600"
         required: false
+      targets:
+        description: Targets to run, comma or space separated (empty for all)
+        default: ""
+        required: false
 
 permissions:
   contents: read
 
+# A run of some targets does not cancel a run of others on the same ref.
 concurrency:
-  group: fuzz-${{ github.ref }}
+  group: fuzz-${{ github.ref }}-${{ inputs.targets }}
   cancel-in-progress: true
 
 jobs:
+  # Every target, in one list: a new one is added here. A run on demand may
+  # ask for some of them; a name not in the list fails the run.
+  plan:
+    name: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.pick.outputs.targets }}
+    steps:
+      - id: pick
+        env:
+          ASKED: ${{ inputs.targets }}
+        run: |
+          set -f
+          all="entry hook merge parse policy replay request"
+          asked=$(printf '%s' "$ASKED" | tr ',\t' '  ')
+          for t in $asked; do
+            case " $all " in
+              *" $t "*) ;;
+              *) echo "::error::unknown fuzz target: $t (known: $all)"; exit 1 ;;
+            esac
+          done
+          picked=""
+          for t in $all; do
+            case " $asked " in *" $t "*) picked="$picked $t" ;; esac
+          done
+          if [ -z "$picked" ]; then picked=$all; fi
+          # shellcheck disable=SC2086 # one line per target, split on purpose
+          json=$(printf '%s\n' $picked | jq -R . | jq -cs .)
+          echo "targets=$json" >> "$GITHUB_OUTPUT"
+          echo "fuzzing: $picked"
+
   fuzz:
     name: fuzz ${{ matrix.target }}
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        target: [entry, hook, merge, parse, policy, replay, request]
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

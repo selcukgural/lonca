@@ -102,7 +102,8 @@ cd fuzz && cargo fuzz run -s none <target> corpus/<target> seeds/<target> -- -ma
   uploads what it finds encrypted to `fuzz/crash-recipient.txt`; the key is
   `~/.config/lonca/fuzz-crashes.age-key`.
 - A new target: a module with `check(&[u8])`, `TARGETS`, a `[[bin]]` and its
-  file in `fuzz/`, seeds in `write_seeds`, the `fuzz.yml` matrix.
+  file in `fuzz/`, seeds in `write_seeds`, the list in `fuzz.yml`'s `plan` job.
+  One target on demand: `gh workflow run fuzz.yml --ref main -f targets=parse`.
 
 ## CI
 

@@ -72,7 +72,8 @@ is fixed: the input is the exploit.
 
 `.github/workflows/fuzz.yml` runs every target every night on main (30
 minutes each), on demand (10 minutes each, or
-`gh workflow run fuzz.yml --ref main -f seconds=N`), which the release
+`gh workflow run fuzz.yml --ref main -f seconds=N`, and `-f targets=parse,merge`
+for some of them; an unknown name fails the run), which the release
 checklist does before tagging, and again on a pushed `v*` tag (10 minutes
 each), which must be green before the draft release is published. Pull
 requests do not run it. Each target keeps its corpus in the Actions cache,
@@ -93,5 +94,5 @@ age -d -i ~/.config/lonca/fuzz-crashes.age-key fuzz-<target>.tar.gz.age | tar xz
 
 A module in `crates/lonca-fuzz/src` with `pub fn check(data: &[u8])`, a line
 in `TARGETS`, a `[[bin]]` in `fuzz/Cargo.toml` with its two-line file in
-`fuzz/fuzz_targets/`, seeds in `write_seeds`, and the target in the matrix
-of `fuzz.yml`. `every_target_has_a_binary` checks the first three agree.
+`fuzz/fuzz_targets/`, seeds in `write_seeds`, and the target in the list
+of `fuzz.yml`'s `plan` job. `every_target_has_a_binary` checks the first three agree.

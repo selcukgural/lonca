@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.2.1 (2026-11-09)
+
+Its tests ran on Ubuntu, macOS and in the bubblewrap sandbox; as for
+0.2.0, the mutation run did not gate it (docs/decisions.md, "Mutation
+testing"), and its survivors are fixed in a later 0.2.x.
+
 ### Auditing a restore on a hardened install
 
 `lonca restore` ended with `Audit it: lonca-audit verify

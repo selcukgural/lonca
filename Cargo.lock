@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "lonca"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-audit"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "lonca-core",
  "lonca-policy",
@@ -2276,7 +2276,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-client"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "libc",
  "lonca-core",
@@ -2287,7 +2287,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -2304,7 +2304,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-daemon"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64",
  "hex",
@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-mutants"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
  "sha2",
@@ -2333,11 +2333,11 @@ dependencies = [
 
 [[package]]
 name = "lonca-net"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "lonca-policy"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cedar-policy",
  "ed25519-dalek",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-symbols"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aho-corasick",
  "diffy",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-verify"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "hex",
  "libc",

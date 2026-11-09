@@ -958,7 +958,9 @@ fn blocks<'t>(n: Node<'t>, block: &str) -> Vec<Node<'t>> {
 
 /// `text`, a name with scopes, as a name of ours: a `.` for each scope, and
 /// without a scope's type arguments, since a method of `Box<T>` belongs to
-/// `Box`. A `::` inside type arguments is no scope of the name.
+/// `Box`. A `::` inside type arguments is no scope of the name. Scopes do
+/// not overlap: a broken `a:::b` has one, read from the left, and a scope
+/// starts no earlier than the end of the one before it.
 fn dotted_scopes(text: &str, scope: &str) -> String {
     let mut name = String::new();
     let mut depth = 0u32;
@@ -967,7 +969,7 @@ fn dotted_scopes(text: &str, scope: &str) -> String {
         match c {
             '<' => depth += 1,
             '>' => depth = depth.saturating_sub(1),
-            _ if depth == 0 && text[at..].starts_with(scope) => {
+            _ if depth == 0 && at >= part && text[at..].starts_with(scope) => {
                 let whole = &text[part..at];
                 name.push_str(whole.split('<').next().unwrap_or(whole));
                 name.push('.');
@@ -1952,6 +1954,20 @@ fn find_descendant<'t>(n: Node<'t>, kind: &str) -> Option<Node<'t>> {
 mod tests {
     use super::*;
     use crate::engine::ENGINE_KEYS;
+
+    #[test]
+    fn scopes_of_a_name_do_not_overlap() {
+        assert_eq!(dotted_scopes("a::b", "::"), "a.b");
+        assert_eq!(dotted_scopes("Box<T>::new", "::"), "Box.new");
+        assert_eq!(dotted_scopes("a<b::c>::d", "::"), "a.d");
+        // Broken names the parser still hands over: one scope per `::`,
+        // read from the left, and never a slice that ends before it starts.
+        assert_eq!(dotted_scopes("a:::b", "::"), "a.:b");
+        assert_eq!(dotted_scopes("std::::Map", "::"), "std..Map");
+        assert_eq!(dotted_scopes("a::", "::"), "a.");
+        assert_eq!(dotted_scopes("::", "::"), ".");
+        assert_eq!(dotted_scopes(":::", "::"), ".:");
+    }
 
     /// A number generator for tests that hold a look-up to the plain walk it
     /// stands in for: the same cases on every run.

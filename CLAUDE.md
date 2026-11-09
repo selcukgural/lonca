@@ -98,7 +98,7 @@ cd fuzz && cargo fuzz run -s none <target> corpus/<target> seeds/<target> -- -ma
   only wraps them. `-s none` on the pinned stable: no nightly.
 - A fixed crash's input goes to `fuzz/regressions/<target>/`; `cargo test`
   runs every seed and regression. An unfixed one stays out of the repo, PRs
-  and issues. CI (`fuzz.yml`: nightly and on demand; not on PRs or tags)
+  and issues. CI (`fuzz.yml`: nightly, on demand and on a `v*` tag; not on PRs)
   uploads what it finds encrypted to `fuzz/crash-recipient.txt`; the key is
   `~/.config/lonca/fuzz-crashes.age-key`.
 - A new target: a module with `check(&[u8])`, `TARGETS`, a `[[bin]]` and its
@@ -115,7 +115,8 @@ run on pull requests; they block nothing. The toolchain is pinned in
 `rust-toolchain.toml`; Actions are GitHub's own plus four named ones
 (docs/decisions.md, "CI and the repository's own settings").
 A `v*` tag also runs `release.yml` (binaries, SHA256SUMS, SBOM,
-attestations, a *draft* release); publishing the draft runs
+attestations, a *draft* release) and `fuzz.yml`, green before the draft is
+published; publishing the draft runs
 `registries.yml` (crates.io). Steps: `docs/release-checklist.md`. The CLI's
 package is `lonca` (`-p lonca`, directory `crates/lonca-cli`); every crate
 shares the workspace version.

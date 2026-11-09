@@ -3529,9 +3529,13 @@ run them and what each holds: `docs/fuzzing.md`.
   reaches the network or files outside the copy.
 - **Not on pull requests**, a deviation from the issue, kept from "CI runs
   for a release": every night on main and on demand, which the release
-  checklist does before tagging. Not on a tag either:
-  the corpus lives in the Actions cache, and a release run restoring a cache
-  is what zizmor's `cache-poisoning` refuses.
+  checklist does before tagging. On a `v*` tag too (user, 2026-11-09:
+  every release runs the fuzzer, never skipped), green before the draft is
+  published. The corpus lives in the Actions cache, and a release run
+  restoring a cache is what zizmor's `cache-poisoning` refuses, so on a tag
+  the cache step is skipped (`if: github.ref_type != 'tag'`) and the
+  targets start from their seeds. zizmor does not read the `if:`; its
+  finding is ignored on that line, and the workflow publishes nothing.
 - **What it finds is not published.** The repository and its logs are
   public, and a crash input is an exploit until fixed. The log names the
   target and the kind (`crash`, `timeout`, `oom`); the input and output are

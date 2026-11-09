@@ -120,7 +120,7 @@ fn revert_change(
 ) -> Result<()> {
     let (base, files) = reverse_range(c, before, after)?;
     if files.is_empty() {
-        println!("nothing to undo: trunk no longer contains {what}");
+        outln!("nothing to undo: trunk no longer contains {what}");
         return Ok(());
     }
     let prep = call(
@@ -331,14 +331,14 @@ pub fn revert(
     let all: Vec<OpEntry> = ops(c, 0, None)?.into_iter().map(|o| o.entry).collect();
     let plan = plan_of(&all, actor, since);
     if plan.is_empty() {
-        println!("nothing to revert for {actor} since #{since}");
+        outln!("nothing to revert for {actor} since #{since}");
         return Ok(());
     }
     for (seq, what, _) in &plan {
-        println!("#{seq}: {what}");
+        outln!("#{seq}: {what}");
     }
     if !apply {
-        println!("(dry run; pass --apply to submit these compensating operations)");
+        outln!("(dry run; pass --apply to submit these compensating operations)");
         return Ok(());
     }
     // One refused step does not stop the others; the command still ends
@@ -353,7 +353,7 @@ pub fn revert(
             }
         };
         if let Err(e) = done {
-            println!("#{seq} ({what}) not undone: {e:#}");
+            outln!("#{seq} ({what}) not undone: {e:#}");
             first_failure.get_or_insert(e);
         }
     }

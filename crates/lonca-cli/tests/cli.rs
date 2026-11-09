@@ -436,6 +436,145 @@ fn advisor_sends_the_diff_and_prints_structured_advice() {
     assert!(request.contains("\"json_schema\""));
 }
 
+/// `lonca status | head`: a reader that stops early (#207). Its stdout is
+/// closed before the command writes, so every write meets a closed pipe.
+#[test]
+fn a_closed_stdout_ends_a_command_quietly() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    assert!(e.run(r, &["init", "demo"]).contains("allow"));
+    for args in [
+        &["status", "--repo", "demo"][..],
+        &["status", "--repo", "demo", "--json"],
+        &["log", "--repo", "demo"],
+    ] {
+        let mut child = e
+            .cmd(r, args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(child.stdout.take());
+        let out = child.wait_with_output().unwrap();
+        let err = text(&out.stderr);
+        assert!(!err.contains("panicked"), "lonca {args:?}: {err}");
+        assert!(out.status.success(), "lonca {args:?}: {err}");
+    }
+}
+
+/// The hook's answer is the decision. A harness that can not read it gets
+/// the fail-closed exit status, not a panic and not a silent success.
+#[test]
+fn a_hook_answer_no_one_reads_blocks_the_call() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let input = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/etc/hosts"},
+        "cwd": ws,
+    })
+    .to_string();
+    let mut child = e
+        .cmd(&ws, &["hook"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let err = text(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert!(err.contains("could not answer the harness"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+}
+
+/// An MCP client that hangs up ends the server quietly: no error, exit 0.
+#[test]
+fn an_mcp_client_that_hangs_up_ends_the_server_quietly() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let mut child = e
+        .cmd(&ws, &["mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let req = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18"}});
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{req}").unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    let err = text(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(
+        !err.contains("lonca:") && !err.contains("panicked"),
+        "{err}"
+    );
+}
+
+/// Output that can not be written for another reason than a closed pipe is
+/// not lost in silence: here stdout is a full disk. (`/dev/full` is Linux's,
+/// where CI and the mutants run; macOS has none, and Rust's stdout takes a
+/// bad descriptor for success.)
+#[cfg(target_os = "linux")]
+#[test]
+fn another_stdout_failure_is_reported() {
+    let e = Env::new();
+    let r = &e.root;
+    e.run(r, &["human", "keygen", "ayse"]);
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let out = e
+        .cmd(r, &["human", "whoami"])
+        .stdout(full)
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    let err = text(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{err}");
+    assert!(err.contains("lonca: writing to stdout:"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+}
+
+/// `status` for people: a lease shows the seconds it has left, and the
+/// proxy line only when a connection went untraced.
+#[test]
+fn status_shows_a_lease_with_the_seconds_it_has_left() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    e.run(&ws, &["lease", "acquire", "-i", "fix", "src/lib.rs#charge"]);
+    let json = status_json(&e);
+    assert_eq!(json["proxy_unattributed"], 0, "{json}");
+    let lease = &json["leases"][0];
+    let ttl = (lease["expires_ms"].as_i64().unwrap() - json["now_ms"].as_i64().unwrap()) / 1000;
+    assert!(ttl > 1, "{json}");
+    let out = e.run(&e.root, &["status", "--repo", "demo"]);
+    assert!(!out.contains("PROXY"), "{out}");
+    let line = out
+        .lines()
+        .find(|l| l.contains("\"fix\""))
+        .unwrap_or_else(|| panic!("{out}"));
+    let secs: i64 = line
+        .split_whitespace()
+        .find_map(|w| w.strip_suffix('s')?.parse().ok())
+        .unwrap_or_else(|| panic!("{line}"));
+    assert!(secs > 0 && secs <= ttl, "{secs}s of {ttl}s: {line}");
+}
+
 fn status_json(e: &Env) -> serde_json::Value {
     serde_json::from_str(&e.run(&e.root, &["status", "--repo", "demo", "--json"])).unwrap()
 }

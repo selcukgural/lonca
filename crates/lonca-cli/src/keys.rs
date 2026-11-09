@@ -86,7 +86,7 @@ fn install(name: &str, next: NextKey) -> Result<()> {
         if old.exists() {
             let to = dir.join(format!("{name}.{ext}.retired-{stamp}"));
             std::fs::rename(&old, &to)?;
-            println!("old key moved to {}", to.display());
+            outln!("old key moved to {}", to.display());
         }
     }
     let dest = if next.secure_enclave {
@@ -99,7 +99,7 @@ fn install(name: &str, next: NextKey) -> Result<()> {
     if !default.exists() {
         std::fs::write(default, name)?;
     }
-    println!(
+    outln!(
         "{name}: {} {} ({})",
         next.key.alg,
         next.key.public,
@@ -128,10 +128,10 @@ pub fn rotate(name: &str, repos: &[String], secure_enclave: bool) -> Result<()> 
     for repo in repos {
         let mut c = human_client(repo, name)?;
         if enrolled(&mut c, name)?.0.as_deref() == Some(next.key.public.as_str()) {
-            println!("{repo}: already uses the new key");
+            outln!("{repo}: already uses the new key");
             continue;
         }
-        print!("{repo}: ");
+        out!("{repo}: ");
         let op = Op::HumanRotate {
             human: name.into(),
             key: next.key.clone(),
@@ -147,7 +147,7 @@ pub fn rotate(name: &str, repos: &[String], secure_enclave: bool) -> Result<()> 
         );
     }
     install(name, next)?;
-    println!("your sessions ended; changes in flight were withdrawn.");
+    outln!("your sessions ended; changes in flight were withdrawn.");
     Ok(())
 }
 
@@ -161,10 +161,10 @@ pub fn recovery_key(name: &str, repos: &[String], out: &Path) -> Result<()> {
     for repo in repos {
         let mut c = human_client(repo, name)?;
         if enrolled(&mut c, name)?.1.as_deref() == Some(key.public.as_str()) {
-            println!("{repo}: already set");
+            outln!("{repo}: already set");
             continue;
         }
-        print!("{repo}: ");
+        out!("{repo}: ");
         let op = Op::HumanRecoveryKey {
             human: name.into(),
             key: key.clone(),
@@ -174,8 +174,8 @@ pub fn recovery_key(name: &str, repos: &[String], out: &Path) -> Result<()> {
     if !failed.is_empty() {
         bail!("recovery key not set in {}", failed.join(", "));
     }
-    println!("recovery key for {name}: {}", out.display());
-    println!(
+    outln!("recovery key for {name}: {}", out.display());
+    outln!(
         "move it off this machine now (a password manager or a USB stick). It replaces \
          your key once, without Touch ID; anything that can read it can do the same."
     );
@@ -213,10 +213,10 @@ pub fn recover(
         if c.token.is_some()
             && enrolled(&mut c, name)?.0.as_deref() == Some(next.key.public.as_str())
         {
-            println!("{repo}: already recovered");
+            outln!("{repo}: already recovered");
             continue;
         }
-        print!("{repo}: ");
+        out!("{repo}: ");
         let op = Op::HumanRecover {
             human: name.into(),
             key: next.key.clone(),
@@ -235,7 +235,7 @@ pub fn recover(
         );
     }
     install(name, next)?;
-    println!(
+    outln!(
         "recovered. The recovery key is used up: delete {} and set a new one with \
          `lonca human recovery-key`.",
         recovery_key.display()
@@ -270,10 +270,10 @@ pub fn daemon_rotate(name: &str, repos: &[String]) -> Result<()> {
         let mut c = human_client(repo, name)?;
         let st = call(&mut c, "status", json!({}))?;
         if st["daemon_key"].as_str() == Some(key.as_str()) {
-            println!("{repo}: already uses the new daemon key");
+            outln!("{repo}: already uses the new daemon key");
             continue;
         }
-        print!("{repo}: ");
+        out!("{repo}: ");
         let op = Op::DaemonRotate { key: key.clone() };
         allowed(repo, &submit_outcome(&mut c, name, repo, op)?, &mut failed);
     }
@@ -292,9 +292,9 @@ pub fn daemon_rotate(name: &str, repos: &[String]) -> Result<()> {
         }
     }
     if left.is_empty() {
-        println!("the daemon signs with {key} now; the old key is deleted.");
+        outln!("the daemon signs with {key} now; the old key is deleted.");
     } else {
-        println!(
+        outln!(
             "still on the old daemon key: {}. They keep working; rotate them (a human \
              enrolled there signs) to finish.",
             left.join(", ")
@@ -316,12 +316,12 @@ pub fn daemon_recover(name: &str, repos: &[String]) -> Result<()> {
     let mut failed = vec![];
     for repo in repos {
         let mut c = human_client(repo, name)?;
-        print!("{repo}: ");
+        out!("{repo}: ");
         let op = Op::DaemonRecover { key: key.clone() };
         match submit_outcome(&mut c, name, repo, op) {
             Ok(r) => allowed(repo, &r, &mut failed),
             Err(e) => {
-                println!("{e}");
+                outln!("{e}");
                 failed.push(repo.clone());
             }
         }
@@ -329,7 +329,7 @@ pub fn daemon_recover(name: &str, repos: &[String]) -> Result<()> {
     if !failed.is_empty() {
         bail!("not recovered: {}", failed.join(", "));
     }
-    println!(
+    outln!(
         "recovered onto daemon key {key}. Every session ended; start new ones. \
          Audit the repositories (`lonca-audit verify`) to see the switch."
     );

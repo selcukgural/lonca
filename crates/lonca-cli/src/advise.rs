@@ -420,15 +420,15 @@ pub fn advise(c: &mut Client, change: &str) -> Result<Value> {
 }
 
 pub fn print(advice: &Value) {
-    println!(
+    outln!(
         "AI advisory ({}) - informational only, not a decision",
         advice["model"].as_str().unwrap_or(MODEL)
     );
-    println!("untrusted: derived from what an agent wrote, which may try to mislead its reader");
-    println!("risk: {}", advice["risk"].as_str().unwrap_or("?"));
-    println!("\n{}\n", advice["summary"].as_str().unwrap_or(""));
+    outln!("untrusted: derived from what an agent wrote, which may try to mislead its reader");
+    outln!("risk: {}", advice["risk"].as_str().unwrap_or("?"));
+    outln!("\n{}\n", advice["summary"].as_str().unwrap_or(""));
     for f in advice["flags"].as_array().cloned().unwrap_or_default() {
-        println!(
+        outln!(
             "  [{}] {}: {}",
             f["severity"].as_str().unwrap_or(""),
             f["where"].as_str().unwrap_or(""),
@@ -440,9 +440,9 @@ pub fn print(advice: &Value) {
         .cloned()
         .unwrap_or_default();
     if !focus.is_empty() {
-        println!("\nreview focus:");
+        outln!("\nreview focus:");
         for x in focus {
-            println!("  - {}", x.as_str().unwrap_or(""));
+            outln!("  - {}", x.as_str().unwrap_or(""));
         }
     }
 }

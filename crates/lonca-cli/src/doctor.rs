@@ -402,9 +402,9 @@ fn humans_checks() -> Vec<Check> {
 
 fn print(checks: &[Check]) {
     for c in checks {
-        println!("{}  {}: {}", c.level.word(), c.name, c.detail);
+        outln!("{}  {}: {}", c.level.word(), c.name, c.detail);
         if let Some(hint) = &c.hint {
-            println!("      {hint}");
+            outln!("      {hint}");
         }
     }
 }

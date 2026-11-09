@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### A closed pipe no longer panics the CLI
+
+`lonca status | head`, `lonca log | grep -q ...` and the like ended in a
+panic (`failed printing to stdout: Broken pipe`). Now the command finishes,
+drops the output no one reads, and exits as it would have (0 on success).
+Another write error on stdout (a full disk) is reported and exits 3. The
+hook blocks the call (exit 2) when the harness can not read its answer,
+unless it runs with `--fail-open`. See `docs/decisions.md`, "A closed stdout
+ends a command quietly (#207)".
+
 ### A newer proposal replaces the pending one
 
 A workspace that proposed again while its first proposal waited for a

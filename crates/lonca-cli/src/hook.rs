@@ -12,7 +12,7 @@
 //! working for ever, with no one counting the rounds. Nothing is protected
 //! by a stop hook: it reminds, and a failure ends the turn.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
@@ -84,12 +84,19 @@ pub fn run(harness: &str, fail_open: bool) -> ExitCode {
     if ws.meta.session.is_none() {
         return ExitCode::SUCCESS;
     }
-    match handle(harness, &v, &ws) {
-        Ok(Some(out)) => {
-            println!("{out}");
-            ExitCode::SUCCESS
+    // The answer is the decision: one the harness can not read is handled
+    // as any other failure, closed unless `--fail-open`.
+    let answered = handle(harness, &v, &ws).and_then(|out| {
+        if let Some(out) = out {
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "{out}")
+                .and_then(|()| stdout.flush())
+                .map_err(|e| anyhow::anyhow!("could not answer the harness: {e}"))?;
         }
-        Ok(None) => ExitCode::SUCCESS,
+        Ok(())
+    });
+    match answered {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) if fail_open => {
             eprintln!("lonca: {e:#}");
             ExitCode::SUCCESS

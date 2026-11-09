@@ -166,6 +166,19 @@ pub fn call(c: &mut Client, method: &str, params: Value) -> Result<Value> {
     })
 }
 
+/// The whole id of the change `id` names: the id itself, or a prefix the
+/// daemon finds exactly one change for (`pending` and `log` show 12 letters).
+pub fn resolve_change(c: &mut Client, id: &str) -> Result<String> {
+    if id.len() == 32 {
+        return Ok(id.to_string());
+    }
+    let r = call(c, "change.resolve", serde_json::json!({"prefix": id}))?;
+    r["change"]
+        .as_str()
+        .map(str::to_string)
+        .context("change.resolve: no change in the answer")
+}
+
 /// One line of JSON on stdout, for runners.
 pub fn print_json(v: &Value) -> Result<()> {
     outln!("{}", serde_json::to_string(v)?);

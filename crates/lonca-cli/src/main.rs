@@ -198,6 +198,7 @@ enum Cmd {
     /// Facts of the local changes in this workspace; with a change id, the
     /// unified diff of that change as the daemon computes it.
     Diff {
+        /// A change id, or its first letters (at least 4) when they name one change.
         change: Option<String>,
         #[arg(long)]
         repo: Option<String>,
@@ -257,6 +258,7 @@ enum Cmd {
     /// Show a change (with --evidence, the checks of its last integration
     /// attempt and their logs).
     Change {
+        /// A change id, or its first letters (at least 4) when they name one change.
         change: String,
         #[arg(long)]
         repo: Option<String>,
@@ -438,6 +440,7 @@ enum Cmd {
     Mcp,
     /// AI advisory for a change: summary and risk flags (no authority).
     Advise {
+        /// A change id, or its first letters (at least 4) when they name one change.
         change: String,
         #[arg(long)]
         repo: Option<String>,
@@ -1757,6 +1760,7 @@ fn run(cmd: Cmd) -> Result<()> {
             json: as_json,
         } => {
             let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
+            let change = ctx::resolve_change(&mut c, &change)?;
             let d = call(&mut c, "change.diff", json!({"change": change}))?;
             if as_json {
                 return ctx::print_json(&d);
@@ -2055,6 +2059,7 @@ fn run(cmd: Cmd) -> Result<()> {
             evidence,
         } => {
             let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
+            let change = ctx::resolve_change(&mut c, &change)?;
             let rec = call(&mut c, "change.get", json!({"change": change}))?;
             if !evidence {
                 outln!("{}", serde_json::to_string_pretty(&rec)?);
@@ -2367,6 +2372,7 @@ fn run(cmd: Cmd) -> Result<()> {
             json: as_json,
         } => {
             let mut c = human_client(&repo_name(repo)?, &ctx::default_human()?)?;
+            let change = ctx::resolve_change(&mut c, &change)?;
             let advice = advise::advise(&mut c, &change)?;
             if as_json {
                 outln!("{}", serde_json::to_string_pretty(&advice)?);

@@ -785,6 +785,52 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
         )),
         "not_found"
     );
+    // `pending` shows 12 letters; they name the change.
+    let whole = change.as_str().unwrap();
+    for typed in [&whole[..12], &whole[..4], whole] {
+        let r = e.ok(
+            "change.resolve",
+            Some("demo"),
+            None,
+            json!({"prefix": typed}),
+        );
+        assert_eq!(r, json!({"change": whole}), "{typed}");
+    }
+    for typed in ["zyx", "ABCD", "abcd", ""] {
+        let r = e.call(
+            "change.resolve",
+            Some("demo"),
+            None,
+            json!({"prefix": typed}),
+        );
+        assert_eq!(code(r), "invalid", "{typed}");
+    }
+    let other = ChangeId::random().to_string();
+    let r = e.call(
+        "change.resolve",
+        Some("demo"),
+        None,
+        json!({"prefix": &other[..12]}),
+    );
+    assert_eq!(code(r), "not_found");
+    assert!(
+        e.anon(
+            "change.resolve",
+            None,
+            Some(&token),
+            json!({"prefix": &whole[..12]})
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        code(e.anon(
+            "change.resolve",
+            Some("other"),
+            Some(&token),
+            json!({"prefix": &whole[..12]})
+        )),
+        "forbidden"
+    );
     // An agent reads the diff of its own repository only.
     assert!(
         e.anon("change.diff", None, Some(&token), json!({"change": change}))

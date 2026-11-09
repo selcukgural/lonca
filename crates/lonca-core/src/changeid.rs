@@ -49,6 +49,20 @@ impl ChangeId {
     pub fn short(&self) -> String {
         self.to_reverse_hex()[..12].to_string()
     }
+
+    /// Whether this id starts with `prefix` (reverse hex, as people see it).
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        self.to_reverse_hex().starts_with(prefix)
+    }
+}
+
+/// The fewest letters a change id prefix may have.
+pub const MIN_PREFIX: usize = 4;
+
+/// Whether `s` can be the start of a change id a person typed: at least
+/// [`MIN_PREFIX`] and at most 32 letters, all of the reverse-hex alphabet.
+pub fn is_prefix(s: &str) -> bool {
+    (MIN_PREFIX..=32).contains(&s.len()) && s.bytes().all(|c| value(c).is_some())
 }
 
 fn value(c: u8) -> Option<u8> {
@@ -114,6 +128,22 @@ mod tests {
         assert_eq!(id.short(), "zyzzzzzzzzpo");
         assert_eq!(id.short(), hex[..12]);
         assert_eq!(format!("{id:?}"), format!("ChangeId({hex})"));
+    }
+
+    #[test]
+    fn prefixes() {
+        let id = ChangeId::from_reverse_hex("zyxwvutsrqponmlkzyxwvutsrqponmlk").unwrap();
+        assert!(id.starts_with("zyxw"));
+        assert!(id.starts_with(&id.to_reverse_hex()));
+        assert!(!id.starts_with("zyxk"));
+        assert!(!is_prefix("zyx"));
+        assert!(is_prefix("zyxw"));
+        assert!(is_prefix("kkkk"));
+        assert!(is_prefix(&id.to_reverse_hex()));
+        assert!(!is_prefix(&format!("{id}z")));
+        assert!(!is_prefix("zyxj"));
+        assert!(!is_prefix("zyx{"));
+        assert!(!is_prefix("ZYXW"));
     }
 
     #[test]

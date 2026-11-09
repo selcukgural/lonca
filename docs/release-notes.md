@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Short change ids work
+
+`lonca pending` and `lonca log` show the first 12 letters of a change id,
+but `lonca diff`, `lonca change` and `lonca advise` refused them
+("invalid change id"). They now take any 4 or more letters that name one
+change; when several changes start with them the answer lists those. The
+daemon has a new read method for it, `change.resolve`.
+
 ### `undo` and `revert` read the whole log
 
 The daemon answers `log` a page at a time (1000 entries), and `lonca undo`

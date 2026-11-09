@@ -199,6 +199,13 @@ pub struct TrunkDistance {
     pub base: GitId,
 }
 
+/// `change.resolve`: the whole id of the one change whose id starts with
+/// `prefix` (at least 4 letters).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChangeResolve {
+    pub prefix: String,
+}
+
 /// `change.diff`: the unified diff of a change, computed by the daemon
 /// in the store, with redaction applied and a size cap.
 #[derive(Clone, Debug, Serialize, Deserialize)]

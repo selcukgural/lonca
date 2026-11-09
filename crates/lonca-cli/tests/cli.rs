@@ -414,7 +414,7 @@ fn advisor_sends_the_diff_and_prints_structured_advice() {
 
     const REPLY: &str = r#"{"model":"claude-opus-5-5","stop_reason":"end_turn","content":[{"type":"text","text":"{\"summary\":\"Doubles charge.\",\"risk\":\"medium\",\"flags\":[{\"severity\":\"medium\",\"where\":\"lib.rs#charge\",\"issue\":\"Changes billing amounts.\"}],\"review_focus\":[\"callers of charge\"]}"}]}"#;
     let (port, server) = fake_claude(REPLY);
-    let mut c = e.cmd(r, &["advise", &change, "--repo", "demo"]);
+    let mut c = e.cmd(r, &["advise", &change[..4], "--repo", "demo"]);
     c.env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"))
         .env("ANTHROPIC_API_KEY", "test-key")
         .env("LONCA_ADVISOR_LEDGER", r.join("ledger.json"));
@@ -1666,17 +1666,24 @@ fn diff_and_evidence_of_a_change_through_the_cli() {
     let proposed: serde_json::Value = serde_json::from_str(&out).unwrap();
     let change = proposed["change"].as_str().unwrap().to_string();
     e.settle();
-    let diff = e.run(r, &["diff", &change, "--repo", "demo"]);
+    // The 12 letters `pending` and `log` show name the change too.
+    let short = &change[..12];
+    let diff = e.run(r, &["diff", short, "--repo", "demo"]);
     assert!(diff.contains("modified  +1 -1 src/lib.rs"), "{diff}");
     assert!(diff.contains("+    a * 2"), "{diff}");
     assert!(!diff.contains("[diff truncated]"), "{diff}");
-    let ev = e.run(r, &["change", &change, "--repo", "demo", "--evidence"]);
+    let ev = e.run(r, &["change", short, "--repo", "demo", "--evidence"]);
     assert!(ev.contains("tests: pass (exit 0,"), "{ev}");
     assert!(ev.contains("  checked"), "{ev}");
     assert!(!ev.contains("[log tail]"), "{ev}");
     let j: serde_json::Value =
         serde_json::from_str(&e.run(r, &["diff", &change, "--repo", "demo", "--json"])).unwrap();
     assert_eq!(j["files"][0]["status"], "modified");
+    let err = fails(&e, r, &["diff", &change[..3], "--repo", "demo"]);
+    assert!(err.contains("4 to 32 letters"), "{err}");
+    // A whole id goes to the daemon as it is.
+    let err = fails(&e, r, &["diff", &"z".repeat(32), "--repo", "demo"]);
+    assert!(err.contains("unknown change"), "{err}");
 }
 
 /// `lonca reject SEQ --reason …` declines a pending proposal; the worker

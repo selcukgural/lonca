@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### `undo` and `revert` read the whole log
+
+The daemon answers `log` a page at a time (1000 entries), and `lonca undo`
+and `lonca revert` read only the first page. On a longer log `revert`
+planned nothing after entry 999 and said "nothing to revert", and
+`undo` of a `policy.update` past entry 1000 put back the last policy of the
+first page instead of the one before it. Both now read every page.
+
+### More of the guide
+
+New pages: [Concepts](guide/concepts.md),
+[Reviewing agents' work](guide/reviewing.md),
+[Troubleshooting](guide/troubleshooting.md) and
+[Recovery](guide/recovery.md).
+
 ## 0.2.1 (2026-11-09)
 
 Its tests ran on Ubuntu, macOS and in the bubblewrap sandbox; as for

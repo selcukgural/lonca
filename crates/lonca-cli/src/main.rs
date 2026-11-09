@@ -937,10 +937,10 @@ fn repo_name(r: Option<String>) -> Result<String> {
 }
 
 /// Entries of `lonca log` one request asks for.
-const LOG_PAGE: u64 = lonca_daemon::service::LOG_PAGE;
+pub(crate) const LOG_PAGE: u64 = lonca_daemon::service::LOG_PAGE;
 
 /// Log entries from `from`, up to `limit`, one page of `page` at a time.
-fn log_pages(
+pub(crate) fn log_pages(
     from: u64,
     limit: Option<u64>,
     page: u64,

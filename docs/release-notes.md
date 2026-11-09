@@ -39,7 +39,10 @@ entries, whole logs as the auditor reads them, daemon requests, hook
 events, the symbol engine, the three-way merge, and repository
 configuration and policy. Every saved input runs under `cargo test`. A git
 id in a request or a log entry is now refused unless it is 40 lowercase
-hex digits, as Lonca writes them.
+hex digits, as Lonca writes them. A C or C++ file with a broken scoped name
+such as `a:::b` no longer makes the symbol engine panic: the request that
+read it got no answer, and the connection was dropped. Such a name now has
+one scope per `::`, read from the left.
 
 ### `lonca policy check`, and a guide to writing policies
 

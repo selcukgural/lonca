@@ -203,7 +203,9 @@ named checks: [Verification](verification.md).
   request is checked once per operation and once per file. A `forbid` rule
   denies; a `forbid` with `@escalate` turns the request into an approval
   request instead, and `@approvals("2")` asks for two humans. An evaluation
-  error denies.
+  error denies. What a rule can see, examples, and `lonca policy check`,
+  which shows what a new policy would have decided differently before it
+  is set: [Writing policies](policies.md).
 
 A repository starts from a [profile](profiles.md). The cooperative one
 allows what no rule forbids and ships rules such as: agents may not delete

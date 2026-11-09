@@ -11,7 +11,8 @@ lonca init demo --profile hardened
 
 On a hardened install a repository starts hardened. Everywhere else it starts
 cooperative. A profile is only where a repository starts: afterwards the policy
-is what the log says, and a human changes it with `lonca policy set`.
+is what the log says, and a human changes it with `lonca policy set`
+([Writing policies](policies.md)).
 
 | Setting | Cooperative | Hardened | What it protects against |
 |---|---|---|---|

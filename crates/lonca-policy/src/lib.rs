@@ -5,6 +5,7 @@
 //!   evidence, time, policy) to a decision.
 //! - [`chain::Chain`] combines both into the single-writer sequencer the daemon
 //!   runs; the auditor replays the same functions over a stored log.
+//! - [`whatif::compare`] decides a log again with another policy.
 
 #![forbid(unsafe_code)]
 // The trusted core: a panic in the single writer stops every repository,
@@ -21,6 +22,7 @@ pub mod human;
 pub mod refs;
 pub mod state;
 pub mod symbols;
+pub mod whatif;
 
 pub use chain::Chain;
 pub use config::{Config, PolicyBundle};

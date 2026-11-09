@@ -3427,6 +3427,40 @@ handler stays as it is and the CLI writes through `out!`/`outln!`
   any other hook failure: exit 2 and a message on stderr, or exit 0 under
   `--fail-open` (the stop hook).
 
+## Trying a policy before it is set (#13)
+
+`lonca policy check` decides every entry of the log again with a candidate
+policy and lists the decisions that would change
+(`lonca_policy::whatif::compare`). Guide: `docs/guide/policies.md`.
+
+- **In the CLI, not the daemon.** It reads the log with `log` pages and the
+  files in force with `status`, `tree` and `blobs`, and runs `decide()`
+  itself, as `lonca doctor` replays the log. No method, no protocol change,
+  and a long log replayed does not hold the daemon's lock. It needs a human
+  login because `policy show` does: the policy is the humans' to change.
+- **One entry at a time, on the real state.** Each entry is decided with
+  the candidate on the state the log had before it, and the log's own
+  decision is applied afterwards. Following the candidate's decisions
+  instead would be a different history, which `decide()` can not build: a
+  change denied early has no later integration to decide, and the merges
+  and evidence after it were computed for the history that happened. The
+  answer is "these requests would be treated differently", and the guide
+  says so.
+- **The whole decision is compared**, outcome and reasons, like the
+  auditor: a request denied by another rule, or escalated with a different
+  approval count, is a change a reviewer wants to see.
+- **Lockouts are warned of, not refused.** Cedar evaluates humans too, and
+  undoing a policy is a `policy.update`. A candidate that denies an
+  enrolled human `policy.update`, `unfreeze`, `approve`, `reject` or a key
+  operation (`WAYS_OUT`) can leave no way back, so the check names each one
+  it would deny, asked as `decide()` asks it now. Escalating one is fine.
+  `policy.update` itself does not refuse such a policy: that would be a
+  rule of `decide()` and a log format, and a repository may mean it (a
+  frozen archive). Not built: refusing it in `policy set`.
+- **Exit code 0** whatever the differences: the check informs a human,
+  and a script reads `--json`. A file that does not parse exits 3, as any
+  error that never reached the daemon.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

@@ -11,6 +11,7 @@ mod gitdir;
 mod hook;
 mod keys;
 mod mcp;
+mod policy;
 mod run;
 mod setup;
 mod sys;
@@ -752,12 +753,31 @@ enum LeaseCmd {
 
 #[derive(Subcommand)]
 enum PolicyCmd {
+    /// Print lonca.toml and policy.cedar as they are in force.
     Show {
         #[arg(long)]
         repo: Option<String>,
         #[arg(long = "as")]
         human: Option<String>,
     },
+    /// Decide every entry of the log again with these files and list the
+    /// decisions that would change. Writes nothing. A file left out is
+    /// taken from the policy in force. Each entry is decided on the state
+    /// the log really had: what a different decision would have led to is
+    /// not followed.
+    Check {
+        #[arg(long, required_unless_present = "policy")]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Sign and submit a new lonca.toml and policy.cedar.
     Set {
         #[arg(long)]
         config: PathBuf,
@@ -2227,15 +2247,20 @@ fn run(cmd: Cmd) -> Result<()> {
         Cmd::Policy(PolicyCmd::Show { repo, human }) => {
             let repo = repo_name(repo)?;
             let mut c = human_client(&repo, &human_name(human)?)?;
-            let s = call(&mut c, "status", json!({}))?;
-            let policy: GitId = serde_json::from_value(s["policy"].clone())?;
-            for f in workspace::fetch(&mut c, &policy, None)? {
-                use base64::Engine;
-                let text = base64::engine::general_purpose::STANDARD
-                    .decode(f.content_b64.unwrap_or_default())?;
-                outln!("==> {} <==\n{}", f.path, String::from_utf8_lossy(&text));
+            for (path, text) in policy::files(&mut c)? {
+                outln!("==> {path} <==\n{text}");
             }
             Ok(())
+        }
+        Cmd::Policy(PolicyCmd::Check {
+            config,
+            policy,
+            repo,
+            human,
+            json,
+        }) => {
+            let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
+            policy::check(&mut c, config, policy, json)
         }
         Cmd::Policy(PolicyCmd::Set {
             config,

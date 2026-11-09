@@ -4,8 +4,9 @@ What a runner (imece, a CI job, a script) installs and runs so that a
 worker's session is observed by Lonca and its changes go through the
 daemon. Leases, claims and the merge queue work the same for any agent
 that can reach `lonca mcp` or the `lonca` command; the hooks below add
-observation. The steps use Claude Code; "Other harnesses" lists what
-differs. The daemon's protocol is `docs/protocol.md`; this
+observation. The steps use Claude Code (the short version, with what each
+hook does for it: [Lonca with Claude Code](claude-code.md)); "Other
+harnesses" lists what differs. The daemon's protocol is `docs/protocol.md`; this
 page is the harness side.
 
 ## One worker, step by step

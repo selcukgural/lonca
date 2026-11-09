@@ -15,6 +15,7 @@ const sidebars = {
         { type: 'doc', id: 'guide/install', label: 'Install' },
         { type: 'doc', id: 'guide/quick-start', label: 'Quick start' },
         { type: 'doc', id: 'guide/concepts', label: 'Concepts' },
+        { type: 'doc', id: 'guide/claude-code', label: 'Lonca with Claude Code' },
       ],
     },
     {

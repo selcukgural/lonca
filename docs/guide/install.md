@@ -19,7 +19,7 @@ Enclave helper) in `~/.local/bin`, and adds that directory to your shell's
 
 | Setting | Meaning |
 |---|---|
-| `LONCA_VERSION=0.2.0` | a version instead of the latest |
+| `LONCA_VERSION=0.2.2` | a version instead of the latest |
 | `LONCA_INSTALL_DIR=DIR` | where the binaries go (default `~/.local/bin`) |
 | `LONCA_NO_MODIFY_PATH=1` | never touch a shell startup file |
 
@@ -72,9 +72,9 @@ the key or the binaries. Unpack the release archive for your machine and run
 the installer it carries, as root:
 
 ```sh
-mkdir lonca-0.2.0
-tar -xzf lonca-aarch64-apple-darwin.tar.gz -C lonca-0.2.0
-cd lonca-0.2.0
+mkdir lonca-0.2.2
+tar -xzf lonca-aarch64-apple-darwin.tar.gz -C lonca-0.2.2
+cd lonca-0.2.2
 sudo ./install-hardened.sh --bin .
 ```
 

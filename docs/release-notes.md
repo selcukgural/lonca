@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### `lonca doctor` reads like `flutter doctor`
+
+The text form was one flat, colourless line per check. It now groups the
+checks under headings (`[✓] Mode`, `[✗] Daemon`, `[!] Hooks`, `Tools`,
+`Human`, `Repository <repo>`), each marked with its worst check, says what
+to do under each problem, and ends with how many categories have issues.
+Colour only on a terminal, never with `NO_COLOR` or `TERM=dumb`. `--json`
+is unchanged; in text mode the summary line replaces `check(s) failed` on
+stderr, and the exit code is still 1 (#227).
+
 ### `session start` into a full directory starts nothing
 
 `lonca session start --workspace DIR` with a `DIR` that is not empty was

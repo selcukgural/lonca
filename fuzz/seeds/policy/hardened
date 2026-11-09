@@ -1,0 +1,249 @@
+# Lonca repository configuration. Lives on refs/lonca/policy.
+
+[sessions]
+max_ttl_minutes = 480
+# How many times in a row an agent that stops with work nobody proposed is
+# told so and sent back, for a harness with a stop event. A proposal starts
+# the count over. 0 only records it, for `status`.
+stop_rounds = 3
+# What a session, with the sessions made from it, may send the log in a
+# minute; a minute's worth may come at once. Past it a request is refused
+# with `rate_limited` and the log does not grow.
+ops_per_minute = 600
+
+[leases]
+max_ttl_minutes = 30
+max_items = 64
+# A proposal pins the lease items it needs until the change leaves the
+# queue. On integration the pinned items are released (true) or go back to
+# the TTL of their set (false).
+release_on_integrate = true
+# A session that has sent a heartbeat keeps its leases only while it goes
+# on: this long after the last one they are free. Sessions that never sent
+# one live by the TTL alone. Pinned items ignore this.
+heartbeat_timeout_ms = 300000
+# Past this long a set can not be renewed while another session wants it.
+max_hold_minutes = 120
+# When a set is freed, the oldest registered interest in it has this long to
+# acquire it before anyone else can.
+reservation_ms = 60000
+# From the moment an interest is registered, no other session can take a new
+# lease that conflicts with it for this long, so a wide change is not starved
+# by small ones. The interest stays in line after that, without this right.
+interest_block_ms = 600000
+# A file no parser reads is one lease, `<file>`, and one agent at a time
+# ("file"). With "optimistic" it needs no lease: the line merge at integration
+# decides, an overlap is `conflicted`, and verification runs on the result.
+unparsed_files = "file"
+# Several sessions may hold a symbol with the lease kind "shared", and the
+# merge joins their changes to it line by line; lines both changed are a
+# conflict. Only with verification.required and a build or test command:
+# the merged result is what verification runs on. See
+# docs/guide/verification.md, "Shared leases".
+shared = false
+
+[changes]
+max_files = 200
+max_file_bytes = 2097152
+
+[paths]
+# Changes here run code during build/test, define CI, or instruct and
+# configure the agents themselves: they always need a human approval, and
+# tainted sessions may not touch them at all. An agent reads CLAUDE.md after
+# its next sync, so a change to it is a prompt to every agent that follows.
+critical = [
+  ".github/**", ".gitlab-ci.yml", ".lonca/**", ".imece/**",
+  # Build and packaging.
+  "**/build.rs", "**/Cargo.toml", "**/Cargo.lock",
+  "**/package.json", "**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml",
+  "**/Makefile", "**/*.csproj", "**/Directory.Build.props", "**/Directory.Build.targets",
+  "**/global.json", "**/NuGet.config", "**/pyproject.toml", "**/setup.py",
+  "**/go.mod", "**/go.sum", "**/Gemfile", "**/Gemfile.lock", "**/pom.xml",
+  "**/build.gradle", "**/build.gradle.kts", "**/conftest.py",
+  # Agent instructions and settings.
+  "**/CLAUDE.md", "**/AGENTS.md", "**/GEMINI.md", "**/.cursorrules", "**/.windsurfrules",
+  "**/.mcp.json", ".claude/**", ".cursor/**", ".codex/**", ".gemini/**",
+  # Tooling that runs code on checkout, on build or in an editor.
+  ".cargo/config.toml", ".cargo/config", "rust-toolchain", "rust-toolchain.toml",
+  "**/.envrc", ".vscode/**", ".devcontainer/**", "**/Dockerfile",
+  "**/docker-compose.yml", "**/docker-compose.yaml", "**/compose.yml", "**/compose.yaml",
+  "**/.npmrc", "**/.yarnrc", "**/.yarnrc.yml", "**/.pnpmfile.cjs",
+  "**/.gitattributes", ".gitmodules",
+]
+# Reading these taints a session.
+untrusted = ["vendor/**", "third_party/**", "node_modules/**"]
+
+[verification]
+# Commands run by the verifier in a sandbox on the merged tree.
+# build = "cargo build --offline"
+# test = "cargo test --offline"
+# Also run for a change that alters a signature, or takes away a name
+# something else mentions.
+# on_signature_change = "cargo test --offline --workspace --all-features"
+# Named commands a change runs only when it owes them: a human names them
+# at approval (`lonca approve SEQ --also api`), or `checks_by_path` does for
+# a path the change touches. Same sandbox, environment and timeout as build
+# and test; a check a change owes must pass, even with required = false.
+# checks = { api = "cargo test --offline -p api" }
+checks = {}
+# checks_by_path = { "api/**" = ["api"] }
+checks_by_path = {}
+required = true
+require_sandbox = true
+timeout_seconds = 900
+retries = 0
+# The commands run with an empty environment plus PATH, HOME (a scratch
+# home), LANG and LONCA_VERIFY. Names listed here are copied from the
+# daemon's environment at run time; `env` sets fixed values. Names that
+# change what runs (LD_PRELOAD, DYLD_*, RUSTC_WRAPPER, NODE_OPTIONS,
+# PYTHONPATH, GIT_*, ...) are refused. See docs/guide/verification.md.
+# env_passthrough = ["HOME", "CARGO_HOME", "RUSTUP_HOME"]
+env_passthrough = []
+# env = { CARGO_NET_OFFLINE = "true" }
+env = {}
+# The commands read the system and the directories on PATH. Anything else
+# they need is named here, as an absolute path or ~/path of the daemon's
+# user. Lonca's stores stay closed. See docs/guide/verification.md.
+# read = ["~/.cargo/registry", "~/.cargo/bin", "~/.rustup"]
+read = []
+# The commands' PATH, as absolute directories; empty means the daemon's own.
+# path = ["/usr/bin", "/bin"]
+path = []
+# What each process of a command may use; 0 means no limit. A limit the
+# daemon runs under already is never raised. Processes and address space
+# hold on Linux only. See docs/guide/verification.md.
+limit_cpu_seconds = 0
+limit_address_bytes = 0
+limit_processes = 16384
+limit_file_bytes = 8589934592
+limit_open_files = 4096
+
+[observation]
+# Sessions that nothing observes are treated like tainted sessions.
+unobserved_is_tainted = true
+# Outbound connections through the Lonca proxy: "taint" lets them through
+# and marks the session tainted, "deny" refuses them.
+network = "deny"
+# Hosts that are part of the agent itself, such as its model's API
+# ("api.anthropic.com"). Connections to them are logged, pass even under
+# "deny", and do not taint the session. Exact names, no wildcards.
+agent_hosts = []
+# Let sandboxed commands reach loopback, private and link-local addresses.
+# Cloud metadata addresses (169.254.169.254, fd00:ec2::254, ...) stay closed.
+allow_private_network = false
+# Destination ports a connection through the proxy may go to.
+allow_ports = [80, 443]
+# Hosts that pass even under network = "deny", each saying whether it
+# taints: { host = "registry.npmjs.org", taint = false } for an exact name,
+# { host = "*.crates.io", taint = true } for every name below crates.io
+# (not crates.io itself).
+allow_hosts = []
+# Connections one session may hold open through the proxy at once, and the
+# bytes it may move through it while the daemon runs (both directions).
+max_connections = 16
+max_bytes = 1073741824
+# What a change to a critical path costs a session nobody fully observes:
+# "deny" refuses it, "escalate" makes it wait for a human like any other
+# change of that session. Applies while unobserved_is_tainted is on.
+unobserved_critical = "deny"
+
+[taint]
+# Which observed tool calls mark a session tainted (content from outside
+# entered it; tainted changes need human review, and `critical` below says
+# whether they may touch critical paths). Reads of untrusted paths and files
+# outside the workspace always taint.
+# Web fetches and searches.
+fetch = true
+# Shell commands that reach the network (curl, ssh, git fetch, ...).
+shell_network = true
+# MCP servers whose tools do not taint (by server name, as in
+# `mcp__<server>__<tool>`); every other server's tools do. Lonca's own
+# tools never taint.
+mcp_servers = []
+# Tools Lonca does not know could read anything, so they taint.
+unknown_tools = true
+# Tools, by the name the harness gives them, that do not.
+safe_tools = []
+# What a change to a critical path costs a tainted session: "deny" or
+# "escalate", as for an unobserved one. Separate, because a taint says more:
+# content from outside really did enter the session.
+critical = "deny"
+
+[approvals]
+# With fewer enrolled humans than a rule requires, require all of them.
+cap_to_enrolled_humans = true
+policy_updates = 1
+# Accept human signatures only from keys that prove presence (Secure
+# Enclave + Touch ID or password). File keys can be used by anything that
+# runs as the user, agents included. Recommended for hardened installs.
+require_presence = true
+
+[negotiation]
+max_rounds = 4
+
+[queue]
+# Changes at the head of the queue verified as one: the merged result of all
+# of them, with a failure bisected. 1 verifies each change on its own.
+batch_size = 1
+
+[quota]
+# Seconds of verification by the clock, as the log records them; 0 means no
+# limit. What a session may use, with the sessions made from it and those that
+# continue it, and what the repository may use in a day (UTC). Past either a
+# proposal is refused and what is queued is rejected unverified, with
+# `verification_quota:session` or `verification_quota:day`.
+session_seconds = 0
+day_seconds = 0
+
+[reverts]
+window_minutes = 5
+
+[integrity]
+# What to do when a ref changes behind the daemon's back: "restore" or "freeze".
+on_unmediated = "restore"
+
+# Harness profiles. Lonca knows claude-code, codex, gemini and opencode; a table
+# here adds another or replaces one (docs/guide/runners.md, "Any other harness").
+# `lonca harness show <name>` prints a built-in one to start from.
+# [harnesses.acme]
+ // Lonca policy, hardened. An agent may do what is listed here and nothing
+// else: an action nobody listed is refused, and that includes one a later
+// version of Lonca adds.
+// A forbid rule annotated with @escalate turns the request into a human
+// approval request instead of a denial; @approvals sets how many humans.
+//
+// Actions: file.add, file.modify, file.delete (one request per file) and
+// one request per operation named like the operation ("change.propose",
+// "lease.acquire", ...).
+
+permit(principal is Lonca::Human, action, resource);
+
+@id("agent-work")
+permit(principal is Lonca::Agent, action in [
+  Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete",
+  Lonca::Action::"change.propose", Lonca::Action::"change.withdraw",
+  Lonca::Action::"lease.acquire", Lonca::Action::"lease.release",
+  Lonca::Action::"lease.renew", Lonca::Action::"lease.interest",
+  Lonca::Action::"negotiate", Lonca::Action::"cap.attenuate",
+  Lonca::Action::"cap.revoke", Lonca::Action::"session.end"
+], resource);
+
+@id("migrations-no-agent-delete")
+forbid(principal is Lonca::Agent, action == Lonca::Action::"file.delete", resource)
+when { context.path like "migrations/*" };
+
+@id("auth-needs-two-humans")
+@escalate("auth")
+@approvals("2")
+forbid(principal is Lonca::Agent, action in [Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
+when { context.path like "auth/*" || context.path like "*/auth/*" };
+
+@id("revert-storm")
+@escalate("revert-storm")
+forbid(principal is Lonca::Agent, action == Lonca::Action::"change.propose", resource)
+when { context.recent_reverts >= 3 };
+
+@id("blast-radius")
+@escalate("blast-radius")
+forbid(principal is Lonca::Agent, action == Lonca::Action::"change.propose", resource)
+when { context.files > 50 || context.lines > 2000 };

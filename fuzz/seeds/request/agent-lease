@@ -1,0 +1,2 @@
+{"id":1,"method":"lease.acquire","repo":null,"token":"$AGENT","params":{"items":[{"symbol":"src/app.py#main","kind":"edit"}],"intent":"x","ttl_ms":60000}}
+{"id":1,"method":"lease.release","repo":null,"token":"$AGENT","params":{"set":"x"}}

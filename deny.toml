@@ -27,6 +27,9 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.9
+# libFuzzer's own licence, for the fuzzer of fuzz/ only (its own workspace,
+# checked with `--manifest-path fuzz/Cargo.toml`); nothing Lonca ships has it.
+exceptions = [{ allow = ["NCSA"], crate = "libfuzzer-sys" }]
 
 [bans]
 # Duplicate versions come from the ecosystem (windows-sys, syn); report them, don't fail.

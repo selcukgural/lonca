@@ -1,0 +1,3 @@
+{"id":1,"method":"negotiate","repo":null,"token":"$AGENT","params":{"to":"s2","msg":{"kind":"ask","symbols":["src/lib.rs#refund"]}}}
+{"id":1,"method":"whoami","repo":null,"token":"$AGENT","params":{}}
+{"id":1,"method":"session.end","repo":null,"token":"$AGENT","params":{}}

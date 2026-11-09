@@ -1,0 +1,101 @@
+# Fuzzing (#15, docs/fuzzing.md).
+#
+# Runs every night on main and on demand (run it from the Actions tab before
+# tagging, docs/release-checklist.md). Pull requests, merges to main and tags
+# do not run it; it is required by nothing. Not on a tag: a release run must
+# not restore a cache (zizmor's cache-poisoning), and the corpus is the cache.
+#
+# The repository is public, so what a target finds is not shown: the log
+# says which target found what kind of failure, and the input with the
+# fuzzer's output is uploaded encrypted to the key in fuzz/crash-recipient.txt
+# (`age -d -i <key> fuzz-<target>.tar.gz.age | tar xz`). Fix it, then keep the
+# input in fuzz/regressions/<target>/, which `cargo test` runs.
+name: fuzz
+
+on:
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds per target
+        default: "600"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [entry, hook, merge, parse, policy, replay, request]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The same compiler as every other build (rust-toolchain.toml): with
+      # `-s none` cargo-fuzz needs no nightly (docs/fuzzing.md).
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - name: cargo-fuzz and age
+        run: |
+          cargo install --locked cargo-fuzz@0.13.2
+          sudo apt-get install -y age
+      # What earlier runs found worth keeping, one corpus per target.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          TARGET: ${{ matrix.target }}
+          ASKED: ${{ inputs.seconds }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          case "$ASKED" in
+            '') if [ "$EVENT" = schedule ]; then secs=1800; else secs=600; fi ;;
+            *[!0-9]*) echo "::error::seconds must be a number"; exit 1 ;;
+            *) secs=$ASKED ;;
+          esac
+          cargo fetch --locked --manifest-path fuzz/Cargo.toml
+          cd fuzz
+          mkdir -p "corpus/$TARGET" "artifacts/$TARGET"
+          set +e
+          cargo fuzz run -s none "$TARGET" "corpus/$TARGET" "seeds/$TARGET" -- \
+            -max_total_time="$secs" -max_len=65536 -timeout=30 -rss_limit_mb=2048 \
+            > fuzz.log 2>&1
+          rc=$?
+          set -e
+          found=$(find "artifacts/$TARGET" -type f | head -n 1)
+          if [ "$rc" -eq 0 ]; then
+            grep -E '^Done [0-9]+ runs' fuzz.log || true
+            exit 0
+          fi
+          if [ -z "$found" ]; then
+            # No input: the build or the run itself failed, which tells nothing.
+            tail -n 60 fuzz.log
+            echo "::error::fuzzing $TARGET failed ($rc) without an input"
+            exit 1
+          fi
+          kind=$(basename "$found" | cut -d- -f1)
+          tar czf - "artifacts/$TARGET" fuzz.log | age -R crash-recipient.txt > "../fuzz-$TARGET.tar.gz.age"
+          echo "### fuzz $TARGET: $kind" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::$TARGET found a $kind; the input is in the encrypted artifact"
+          exit 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz-${{ matrix.target }}.tar.gz.age
+          if-no-files-found: ignore
+          retention-days: 14

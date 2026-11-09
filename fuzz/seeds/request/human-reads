@@ -1,0 +1,4 @@
+{"id":1,"method":"status","repo":"demo","token":"$HUMAN","params":{}}
+{"id":1,"method":"log","repo":"demo","token":"$HUMAN","params":{"limit":5}}
+{"id":1,"method":"tree","repo":"demo","token":"$HUMAN","params":{"commit":"$TRUNK"}}
+{"id":1,"method":"change.resolve","repo":"demo","token":"$HUMAN","params":{"prefix":"a"}}

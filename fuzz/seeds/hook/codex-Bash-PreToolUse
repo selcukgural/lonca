@@ -1,0 +1,1 @@
+{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"/tmp/lonca-fuzz-ws/src/lib.rs"},"workspace":"/tmp/lonca-fuzz-ws","harness":"codex"}

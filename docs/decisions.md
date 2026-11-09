@@ -1877,18 +1877,20 @@ tainted the session for good, closing every critical path to it.
   how the hook finds the workspace, what SessionStart injects, and what
   to do when a worker ends.
 
-## CI runs for a release
+## CI runs on every pull request
 
-Since 2026-11-08 the tests (`ci.yml`: Ubuntu, macOS and the bubblewrap
-`sandbox` job) run only when a `v*` tag is pushed, and on demand before
-tagging; the mutants only on demand (since 2026-11-09, "Mutation testing"). Pull requests and merges to main run neither, and the
-main ruleset requires no status check (since #60 it requires a pull request,
-see "CI and the repository's own settings"). Waiting for CI on every pull request cost more time than it saved.
-What this gives up: main can take a commit that fails to build or breaks a
-test, and that is seen only at the next release run or a local
-`cargo test --workspace`. A release is tagged only after `ci.yml`, run on
-demand on main, is green. `cargo-deny` and CodeQL still run on pull
-requests and block nothing.
+The tests (`ci.yml`: Ubuntu, macOS and the bubblewrap `sandbox` job) run on
+every pull request to main, every merge to main, a pushed `v*` tag, and on
+demand. A pull request is merged once that run is green; a newer push to the
+same pull request cancels its older run. The mutants alone run only on
+demand (since 2026-11-09, "Mutation testing"). The main ruleset requires a
+pull request but no status check (#60, "CI and the repository's own
+settings"), so the wait for green is the maintainer's, not GitHub's.
+`cargo-deny`, CodeQL and zizmor still run on pull requests and block nothing.
+
+History: from 2026-11-08 (#172) to 2026-11-09 the tests too ran only for a
+release. That went further than asked: the decision was to take the
+mutants, not the tests, off pull requests. It is reverted here.
 
 ## Mutation testing
 

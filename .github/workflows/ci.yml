@@ -1,13 +1,21 @@
-# The unit tests run only for a release: when a `v*` tag is pushed, and on
-# demand (run it from the Actions tab on main before tagging). Pull requests
-# and merges to main do not run them (docs/decisions.md, "CI runs for a
-# release").
+# The tests run on every pull request, on every merge to main, on a pushed
+# `v*` tag and on demand. Only the mutants run on demand alone
+# (docs/decisions.md, "CI runs on every pull request").
 name: ci
 
 on:
+  pull_request:
+    branches: [main]
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+
+# A new push to a pull request cancels its older run; main and tags keep
+# every run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

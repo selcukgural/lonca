@@ -390,6 +390,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("blobs", Cred::Read),
     ("change.get", Cred::Read),
     ("change.diff", Cred::Read),
+    ("change.resolve", Cred::Read),
     ("trunk.bundle", Cred::Read),
     ("trunk.distance", Cred::Read),
     ("human.prepare_change", Cred::Human),
@@ -536,6 +537,39 @@ pub struct ProxyVerdict {
     pub allow: bool,
     pub allow_private: bool,
     pub reason: String,
+}
+
+/// Most ids the answer to an ambiguous prefix names.
+const AMBIGUOUS_SHOWN: usize = 5;
+
+/// The one id among `ids` that starts with `prefix`; `not_found` for none,
+/// `invalid` naming the first few for more than one.
+fn resolve_prefix<'a>(ids: impl IntoIterator<Item = &'a ChangeId>, prefix: &str) -> Hr {
+    let found: Vec<&ChangeId> = ids.into_iter().filter(|c| c.starts_with(prefix)).collect();
+    match found.as_slice() {
+        [] => fail("not_found", format!("no change starts with {prefix}")),
+        [one] => Ok(json!({"change": one})),
+        many => {
+            let shown: Vec<String> = many
+                .iter()
+                .take(AMBIGUOUS_SHOWN)
+                .map(|c| c.to_string())
+                .collect();
+            let more = if many.len() > AMBIGUOUS_SHOWN {
+                ", ..."
+            } else {
+                ""
+            };
+            fail(
+                "invalid",
+                format!(
+                    "{} changes start with {prefix}: {}{more}; give more letters",
+                    many.len(),
+                    shown.join(", ")
+                ),
+            )
+        }
+    }
 }
 
 fn fail<T>(code: &str, msg: impl Into<String>) -> std::result::Result<T, (String, String)> {
@@ -1171,6 +1205,7 @@ impl Service {
             "blobs" => self.blobs(&auth, params(p)?),
             "change.get" => self.change_get(&auth, params(p)?),
             "change.diff" => self.change_diff(&auth, params(p)?),
+            "change.resolve" => self.change_resolve(&auth, params(p)?),
             "trunk.bundle" => self.trunk_bundle(&auth, params(p)?),
             "trunk.distance" => self.trunk_distance(&auth, params(p)?),
             "whoami" => self.whoami(&auth),
@@ -2139,6 +2174,24 @@ impl Service {
     /// The unified diff of a change between its base and its commit,
     /// computed by git in the store. Files whose blob on either side is
     /// redacted are left out and named. Capped at [`DIFF_CAP_BYTES`].
+    /// The one change whose id starts with what a person typed (`pending`
+    /// and `log` show 12 letters).
+    fn change_resolve(&self, auth: &Auth, p: ChangeResolve) -> Hr {
+        if !lonca_core::changeid::is_prefix(&p.prefix) {
+            return fail(
+                "invalid",
+                format!(
+                    "a change id prefix is {} to 32 letters k-z",
+                    lonca_core::changeid::MIN_PREFIX
+                ),
+            );
+        }
+        let name = auth.repo()?;
+        let mut inner = self.lock();
+        let r = Self::repo(&mut inner, &name)?;
+        resolve_prefix(r.chain.state.changes.keys(), &p.prefix)
+    }
+
     fn change_diff(&self, auth: &Auth, p: ChangeDiff) -> Hr {
         if let Some(f) = &p.format
             && f != "unified"
@@ -4315,6 +4368,51 @@ pub fn is_ancestor(store: &Store, ancestor: &GitId, commit: &GitId) -> Result<bo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_prefix_names_one_change_or_says_why_not() {
+        use super::{ChangeId, resolve_prefix};
+        let id = |s: &str| ChangeId::from_reverse_hex(s).unwrap();
+        let a = id("zzzzkkkkzzzzkkkkzzzzkkkkzzzzkkkk");
+        let b = id("zzzzykkkzzzzkkkkzzzzkkkkzzzzkkkk");
+        let ids = [a, b];
+        assert_eq!(
+            resolve_prefix(&ids, "zzzzk").unwrap(),
+            serde_json::json!({"change": a.to_string()})
+        );
+        assert_eq!(
+            resolve_prefix(&ids, &a.to_string()).unwrap()["change"],
+            a.to_string()
+        );
+        let (code, msg) = resolve_prefix(&ids, "zzzz").unwrap_err();
+        assert_eq!(code, "invalid");
+        assert_eq!(
+            msg,
+            format!("2 changes start with zzzz: {a}, {b}; give more letters")
+        );
+        let (code, msg) = resolve_prefix(&ids, "yyyy").unwrap_err();
+        assert_eq!(
+            (code.as_str(), msg.as_str()),
+            ("not_found", "no change starts with yyyy")
+        );
+        // Many: the first five are named, then "...".
+        let many: Vec<ChangeId> = ["k", "l", "m", "n", "o", "p"]
+            .iter()
+            .map(|c| id(&format!("kkkk{}", c.repeat(28))))
+            .collect();
+        let (_, msg) = resolve_prefix(&many, "kkkk").unwrap_err();
+        assert!(msg.starts_with("6 changes start with kkkk: "), "{msg}");
+        assert!(msg.ends_with(", ...; give more letters"), "{msg}");
+        assert!(
+            msg.contains("kkkkoooo") && !msg.contains("kkkkpppp"),
+            "{msg}"
+        );
+        let (_, msg) = resolve_prefix(&many[..5], "kkkk").unwrap_err();
+        assert!(
+            msg.ends_with("kkkkoooooooooooooooooooooooooooo; give more letters"),
+            "{msg}"
+        );
+    }
+
     use super::*;
 
     fn verified_key(i: usize) -> VerifiedKey {

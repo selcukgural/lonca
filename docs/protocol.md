@@ -562,6 +562,15 @@ entry (empty before one); `duration_ms` covers every attempt; `log` is the tail 
 (32 KiB at most, `log_truncated` when cut), null for a redacted or
 missing log. `not_found` for an unknown change.
 
+### `change.resolve`
+
+*read.* `{"prefix": string}`. The whole id of the one change whose id
+starts with `prefix`: `{"change": change id}`. `prefix` is 4 to 32 letters
+`k`–`z` (`invalid` otherwise); `not_found` when no change starts with it,
+`invalid` too when several do (the message names the first five). `pending`
+and `log` show 12 letters; the CLI's `diff`, `change` and `advise` resolve
+an id shorter than 32 letters with this.
+
 ### `change.diff`
 
 *read.* `{"change": change id, "format": "unified" | null}`.
@@ -1163,3 +1172,4 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `change.get`, the attestation kind `named`, and the reasons
   `unknown_check:<name>`, `invalid_checks` and `checks_not_a_change` (#191).
   The `lonca-client` crate (#192).
+  `change.resolve`.

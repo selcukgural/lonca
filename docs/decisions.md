@@ -1100,6 +1100,7 @@ A01/A07, zero trust: every request authenticated).
 | `blobs` | read | one page of file contents of a commit |
 | `change.get` | read | one change record, with the evidence of its last integration |
 | `change.diff` | read | the unified diff of a change, redaction applied |
+| `change.resolve` | read | the whole id of the one change a prefix names |
 | `trunk.bundle` | read | a Git bundle of trunk for a checkout, thin against what it has |
 | `trunk.distance` | read | how far a former trunk commit is behind |
 | `human.prepare_change` | human | builds a commit for a human change |

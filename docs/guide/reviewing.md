@@ -59,14 +59,16 @@ A proposal pending on a workspace is replaced when the agent proposes again
 
 ## Reading a change
 
-`pending` prints the first 12 letters of a change id; `diff` and `change`
-take the whole id, which `lonca pending --json` and `lonca status --json`
-give.
+`pending` prints the first 12 letters of a change id; `diff`, `change`
+and `advise` take them as they are (any 4 or more letters that name one
+change; when several start with them the answer lists those, give more
+letters). `lonca pending --json` and `lonca status --json` give the whole
+id.
 
 ```sh
-lonca diff kksuonzltktqystoounzkurnmrvyqxsx --repo demo      # the diff, computed by the daemon
-lonca change kksuonzltktqystoounzkurnmrvyqxsx --repo demo    # claim, facts, status, provenance
-lonca advise kksuonzltktqystoounzkurnmrvyqxsx --repo demo    # optional, see below
+lonca diff kksuonzltktq --repo demo      # the diff, computed by the daemon
+lonca change kksuonzltktq --repo demo    # claim, facts, status, provenance
+lonca advise kksuonzltktq --repo demo    # optional, see below
 ```
 
 - `diff` lists each file with the lines added and removed, then the unified

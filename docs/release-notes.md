@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Auditing a restore on a hardened install
+
+`lonca restore` ended with `Audit it: lonca-audit verify
+<home>/repos/demo.git`, a placeholder, and on a hardened install a store
+the developer can not read. Now it prints the store's real path (the
+daemon's `repo.restore` result has a new `path`), or on a hardened daemon
+how to verify the source it was restored from. `lonca-audit` names
+"permission denied" for a path it can not read instead of "does not appear
+to be a git repository", and points at verifying a backup bundle. The quick
+start says which store path is the cooperative one.
+
 ### A closed pipe no longer panics the CLI
 
 `lonca status | head`, `lonca log | grep -q ...` and the like ended in a

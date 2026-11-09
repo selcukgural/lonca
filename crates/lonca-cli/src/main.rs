@@ -892,8 +892,25 @@ fn restore(repo: &str, from: &str) -> Result<()> {
     } else {
         outln!("ready; sessions in the log continue only if their tokens survived.");
     }
-    outln!("Audit it: lonca-audit verify <home>/repos/{repo}.git");
+    let hardened = call(&mut c, "ping", json!({})).is_ok_and(|p| p["hardened"] == true);
+    outln!("{}", audit_hint(repo, r["path"].as_str(), &from, hardened));
     Ok(())
+}
+
+/// How to audit a restored repository. A hardened daemon's store is its
+/// user's alone, so there the source is verified, which holds the same log.
+fn audit_hint(repo: &str, store: Option<&str>, from: &str, hardened: bool) -> String {
+    if hardened {
+        return format!(
+            "Audit it: the store is readable by the daemon's user only, so verify what it was \
+             restored from: git init --bare x.git && git -C x.git fetch {} '+refs/*:refs/*' && \
+             lonca-audit verify x.git (or `lonca backup --repo {repo}` and verify that bundle \
+             the same way)",
+            setup::shell_quote(from)
+        );
+    }
+    let store = store.map_or_else(|| format!("<home>/repos/{repo}.git"), setup::shell_quote);
+    format!("Audit it: lonca-audit verify {store}")
 }
 
 /// A restore source as the daemon must see it: URLs (`https://`, `ssh://`,
@@ -2562,10 +2579,37 @@ fn pin_note(lease: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        claim_of, lease_items, lease_need_lines, log_pages, no_lease_lines, pin_note, source,
-        split_ids, status_text, unparsed_note,
+        audit_hint, claim_of, lease_items, lease_need_lines, log_pages, no_lease_lines, pin_note,
+        source, split_ids, status_text, unparsed_note,
     };
     use lonca_core::ops::LeaseKind;
+
+    #[test]
+    fn a_restore_points_at_an_audit_its_reader_can_run() {
+        assert_eq!(
+            audit_hint(
+                "demo",
+                Some("/home/a/.lonca/repos/demo.git"),
+                "/b/x.bundle",
+                false
+            ),
+            "Audit it: lonca-audit verify /home/a/.lonca/repos/demo.git"
+        );
+        // A daemon from before `path`.
+        assert_eq!(
+            audit_hint("demo", None, "/b/x.bundle", false),
+            "Audit it: lonca-audit verify <home>/repos/demo.git"
+        );
+        let h = audit_hint(
+            "demo",
+            Some("/var/lib/lonca/repos/demo.git"),
+            "/b/my x.bundle",
+            true,
+        );
+        assert!(!h.contains("/var/lib/lonca"), "{h}");
+        assert!(h.contains("fetch '/b/my x.bundle' '+refs/*:refs/*'"), "{h}");
+        assert!(h.contains("lonca backup --repo demo"), "{h}");
+    }
 
     #[test]
     fn status_text_says_what_is_there_and_nothing_that_is_not() {

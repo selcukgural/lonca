@@ -240,7 +240,7 @@ fn check_target(ws: &Workspace, path: &str) -> Result<()> {
 }
 
 /// One argument as a POSIX shell reads it.
-fn shell_quote(s: &str) -> String {
+pub(crate) fn shell_quote(s: &str) -> String {
     let plain = |c: char| c.is_ascii_alphanumeric() || "-_./=:,@%+".contains(c);
     if !s.is_empty() && s.chars().all(plain) {
         return s.to_string();

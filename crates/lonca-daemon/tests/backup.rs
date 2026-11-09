@@ -233,6 +233,11 @@ fn a_restore_on_the_same_key_continues_the_repository_and_audits() {
     let mut o = Other::open(&e, "home2", true);
     let r = o.restore("demo", &bundle).unwrap();
     assert_eq!(r["foreign"], json!(false));
+    assert_eq!(
+        r["path"],
+        json!(o.home.join("repos/demo.git")),
+        "where to audit it"
+    );
     assert_eq!(r["seq"], json!(before["next_seq"].as_u64().unwrap() - 1));
     assert_eq!(r["head_hash"], before["head_hash"]);
     let after = o.ok("status", Some("demo"), json!({}));

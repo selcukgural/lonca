@@ -2497,6 +2497,7 @@ impl Service {
             "head_hash": r.chain.state.head_hash,
             "daemon_key": r.chain.state.daemon_key,
             "foreign": foreign,
+            "path": path,
         });
         if foreign {
             inner.foreign.insert(p.repo, r);

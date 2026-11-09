@@ -325,10 +325,11 @@ from a backup bundle, a bare store or a remote Lonca pushed to; `from`
 follows the rules of `import_from` above. Result:
 
 ```json
-{"repo": string, "seq": integer, "head_hash": hex, "daemon_key": hex, "foreign": boolean}
+{"repo": string, "seq": integer, "head_hash": hex, "daemon_key": hex, "foreign": boolean, "path": string}
 ```
 
-`foreign: true` means the log is on another daemon's key and waits for
+`path` is the new store (from 0.2.1), where `lonca-audit verify` reads it;
+on a hardened daemon only the daemon's user can. `foreign: true` means the log is on another daemon's key and waits for
 `daemon.recover`. Errors: `conflict` (exists), `invalid` (no log, or a
 backup of another name), `integrity` (the log does not verify), `git`.
 

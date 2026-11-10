@@ -31,7 +31,7 @@ fn grammar(name: &str) -> Option<Language> {
         "cpp" => tree_sitter_cpp::LANGUAGE.into(),
         "ruby" => lonca_tree_sitter_ruby::LANGUAGE.into(),
         "php" => tree_sitter_php::LANGUAGE_PHP.into(),
-        "swift" => tree_sitter_swift::LANGUAGE.into(),
+        "swift" => lonca_tree_sitter_swift::LANGUAGE.into(),
         _ => return None,
     })
 }

@@ -877,6 +877,25 @@ a table entry, not an enum.
   The other grammars' scanners were read for the same mistake (C#, C++ and
   Python assert, unreachably). When upstream releases a fixed version, going back
   is a grammar update like any other: a new engine if its output differs.
+- **Swift's grammar is our own copy too** (`crates/lonca-tree-sitter-swift`,
+  2026-11-10), by the rule below ("Grammars are not chased": a read or write
+  past a buffer is copied with the smallest fix). tree-sitter-swift 0.7.4, the
+  last on crates.io, read past a string when a file ended in a compiler
+  directive (`#if`, `#elseif`, `#else`, `#endif`): the scanner compared the end
+  of input, a 0, with the 0 that ends the directive's name and took it for
+  another matching character. AddressSanitizer reports a global-buffer-overflow
+  in `find_possible_compiler_directive`; without it the read is the first byte
+  of the next string in the binary, which stops the loop, so we found no build
+  in which it faults. It is still a read past a buffer on any file an agent
+  proposes, in the daemon and in the auditor. Upstream fixed it in `0c5444e`
+  (2026-10-10) and has not released it; the copy is 0.7.4 with that change
+  alone, not upstream's later commits to `switch` cases. The byte read never
+  changed the result (a directive that had matched in full stayed the match
+  whatever the byte was), so every file parses the same and this is no new
+  engine. The fuzzer runs without a sanitizer (`-s none`) and could not see
+  it; a regression input of a file ending in a directive is in
+  `fuzz/regressions/parse/`. Going back to tree-sitter-swift when 0.7.5 is
+  released is a grammar update like any other.
 - **`strict_until` says what a parse error means.** For a language that shipped
   before the table it meant the file is wrong, and verification failed it, up to
   engine 17 (`strict_until = 17`); from there on, and for the seven of engine 10
@@ -973,6 +992,7 @@ request has to show.
 | Crate | In the build | crates.io | Upstream tag | Upstream past the tag |
 | --- | --- | --- | --- | --- |
 | `lonca-tree-sitter-ruby` | 0.2.2 (our copy) | 0.23.1 (2024-11-11) | v0.23.1 | commits: 4; changed: src/scanner.c |
+| `lonca-tree-sitter-swift` | 0.2.2 (our copy) | 0.7.4 (2026-10-04) | 0.7.4 | commits: 7; changed: grammar.js, src/scanner.c |
 | `tree-sitter` | 0.27.1 | 0.27.2 (2026-11-07) | v0.27.2 | - |
 | `tree-sitter-c` | 0.24.2 | 0.24.2 (2026-04-22) | v0.24.2 | nothing |
 | `tree-sitter-c-sharp` | 0.23.5 | 0.23.5 (2026-04-14) | v0.23.5 | commits: 5; changed: grammar.js, src/scanner.c |
@@ -984,7 +1004,6 @@ request has to show.
 | `tree-sitter-php` | 0.25.1 | 0.25.1 (2026-10-06) | v0.25.1 | nothing |
 | `tree-sitter-python` | 0.25.0 | 0.25.0 (2025-09-11) | v0.25.0 | commits: 1; changed: grammar.js |
 | `tree-sitter-rust` | 0.24.2 | 0.24.2 (2026-03-27) | v0.24.2 | nothing |
-| `tree-sitter-swift` | 0.7.4 | 0.7.4 (2026-10-04) | 0.7.4 | commits: 7; changed: grammar.js, src/scanner.c |
 | `tree-sitter-typescript` | 0.23.2 | 0.23.2 (2024-11-11) | v0.23.2 | commits: 5, none to the grammar |
 
 - **What a grammar update's pull request shows.** Dependabot proposes the
@@ -1035,7 +1054,9 @@ request has to show.
   - C++: 41 commits since 0.23.4 of November 2024 (modules, deducing `this`,
     reflection, expansion statements), releases asked for since 2025-11.
   - Swift: three fixes since 0.7.4 (2026-10-04), in the scanner and in
-    `switch` cases; the author releases every few months.
+    `switch` cases; the author releases every few months. The scanner's fix
+    is a read past a string, and our copy has it (above); the two to
+    `switch` cases wait for the release.
   - Python: one commit, a supertype and no syntax. Ruby: our copy has what
     upstream's unreleased commit fixes.
   - Rust, TypeScript, Go, Java, Kotlin and C have gaps in the corpus list

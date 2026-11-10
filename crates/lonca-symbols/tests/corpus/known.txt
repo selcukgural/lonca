@@ -223,7 +223,7 @@ php: tree-sitter-php 0.25.1
   8.5-closures-in-constant-expressions.php: Filters, Filters.UPPER, Filters.apply
   8.5-pipe-operator.php: slug
 
-swift: tree-sitter-swift 0.7.4
+swift: lonca-tree-sitter-swift (tree-sitter-swift 0.7.4 with a scanner fix)
   5.5-actors.swift: Counter, Counter.value, Counter.next, Counter.name
   5.5-async-await.swift: load, fetch
   5.7-if-let-shorthand.swift: length

@@ -52,6 +52,19 @@ blocks, Java 25's module imports, Kotlin's guard conditions and C++23's
 deducing `this`. None of this is refused (engine 17, above), and only the
 definition with such syntax in it loses its symbol (engine 18, above).
 
+### Ruby's and Swift's grammars: two scanner faults fixed in our own copies
+
+Two grammar scanners could be made to misbehave by a file an agent
+proposes, and both are fixed upstream but not released. tree-sitter-ruby
+0.23.1 aborted the process on a heredoc word longer than 255 characters,
+which took the daemon down. tree-sitter-swift 0.7.4 read past a string when
+a file ended in `#if`, `#elseif`, `#else` or `#endif`; no build we tried
+faulted on it, but a read past a buffer is not left in the daemon. Lonca
+now builds both from copies with that one fault fixed and nothing else
+(`lonca-tree-sitter-ruby`, `lonca-tree-sitter-swift`, two new crates), so
+every file parses as before and no engine changes. When upstream releases,
+Lonca goes back to the released grammar (docs/decisions.md).
+
 ### Presence on Linux: FIDO security keys
 
 A human's key can now live on a FIDO security key, so a hardened repository

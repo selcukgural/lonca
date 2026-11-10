@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -79,6 +80,37 @@ impl Verifier {
             sandbox: Sandbox::detect(),
             scratch,
         }
+    }
+
+    /// Ends what the verifications of a daemon that stopped in the middle of
+    /// them left running, and takes their directories away, which only their
+    /// run would have. Under Seatbelt or with no sandbox a command outlives
+    /// the daemon, and with nothing timing it; under bubblewrap it went with
+    /// it. With no sandbox nothing tells its processes, so only the directory
+    /// goes. Returns how many it found.
+    ///
+    /// It ends whatever runs in those sandboxes, so it is only for a daemon
+    /// that knows it is the one on this directory, before it verifies.
+    pub fn clear_left_over(&self) -> usize {
+        let Ok(entries) = fs::read_dir(&self.scratch) else {
+            return 0;
+        };
+        let mut found = 0;
+        for entry in entries.flatten() {
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            if !is_dir || !entry.file_name().as_bytes().starts_with(b"verify-") {
+                continue;
+            }
+            found += 1;
+            let dir = entry.path();
+            if let Some(mark) = jail::mark_of(self.sandbox, "verify", &dir) {
+                sweep::end_what_is_left(&mark);
+            }
+            if let Err(e) = process::remove_tree(&dir) {
+                eprintln!("lonca: verify: removing {}: {e}", dir.display());
+            }
+        }
+        found
     }
 
     /// What the grammars make of every file the change touched. It passes: a
@@ -156,6 +188,7 @@ impl Verifier {
             .prefix("verify-")
             .tempdir_in(&self.scratch)?;
         let root = work.path().canonicalize()?;
+        let _gone = Gone(&root);
         materialize(store, files, &root.join("tree"))?;
         let mut failed = false;
         for (kind, name, cmd) in steps {
@@ -247,10 +280,14 @@ impl Verifier {
         let tree = root.join("tree");
         let home = root.join("home");
         let tmp = root.join("tmp");
+        let shm = root.join("shm");
         let _ = fs::create_dir_all(&home);
         let _ = fs::create_dir_all(&tmp);
+        let _ = fs::create_dir_all(&shm);
         let mut jail = self.jail(&tree, vec![home.clone(), tmp.clone()], cfg);
         jail.mark = jail::mark_of(self.sandbox, "verify", root);
+        jail.tmp = Some(tmp.clone());
+        jail.shm = Some(shm);
         let argv: [OsString; 3] = ["/bin/sh".into(), "-c".into(), cmd.into()];
         let mut command = jail.command(self.sandbox, &argv).unwrap_or_else(|| {
             let mut c = Command::new("/bin/sh");
@@ -290,6 +327,14 @@ impl Verifier {
             passed.join(" ")
         );
         let mut details = BTreeMap::new();
+        let room = (cfg.keep_free_bytes > 0).then_some(process::Room {
+            dir: &self.scratch,
+            keep: cfg.keep_free_bytes,
+        });
+        if room.as_ref().is_some_and(process::Room::is_short) {
+            details.insert("error".into(), "disk_space".into());
+            return (CheckResult::Error, details, header + &short(cfg));
+        }
         let running = match process::start(command, cfg) {
             Ok(r) => r,
             Err(e) => {
@@ -297,11 +342,16 @@ impl Verifier {
                 return (CheckResult::Error, details, header);
             }
         };
-        let ended = process::watch(running, timeout, jail.mark.as_deref());
-        let log = format!("{header}{}", String::from_utf8_lossy(&ended.output));
+        let ended = process::watch(running, timeout, room.as_ref(), jail.mark.as_deref());
+        let mut log = format!("{header}{}", String::from_utf8_lossy(&ended.output));
         let left = ended.left.is_some();
         details.extend(ended.left);
         let result = match ended.status {
+            None if ended.out_of_room => {
+                details.insert("error".into(), "disk_space".into());
+                log += &short(cfg);
+                CheckResult::Error
+            }
             None => {
                 details.insert("error".into(), "timeout".into());
                 CheckResult::Error
@@ -319,6 +369,24 @@ impl Verifier {
         };
         (result, details, log)
     }
+}
+
+/// Removes a run's directory when the run ends, however it ends, before its
+/// `TempDir` tries and fails on what a command closed.
+struct Gone<'a>(&'a Path);
+
+impl Drop for Gone<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = process::remove_tree(self.0) {
+            eprintln!("lonca: verify: removing {}: {e}", self.0.display());
+        }
+    }
+}
+
+/// The log's last line for a command the disk stopped, or kept from starting.
+fn short(cfg: &Verification) -> String {
+    let keep = cfg.keep_free_bytes;
+    format!("\nlonca verify: stopped: less than {keep} bytes free on the disk (keep_free_bytes)\n")
 }
 
 /// What a command that ended comes to. What is still running can change the
@@ -461,6 +529,8 @@ mod tests {
 
     use super::*;
     use lonca_core::FileEntry;
+    #[cfg(target_os = "macos")]
+    use std::os::unix::process::CommandExt;
 
     fn setup(files: &[(&str, &str)]) -> (tempfile::TempDir, Store, FileMap, GitId) {
         let dir = tempfile::tempdir().unwrap();
@@ -850,8 +920,8 @@ mod tests {
         assert!(log.contains("File too large"), "{log}");
     }
 
-    /// Never on a developer's Mac: there the limit does not exist.
-    #[cfg(target_os = "linux")]
+    /// The limit counts the account, so on a Mac 512 is below what the
+    /// person at it runs already, and the bomb forks next to nothing.
     #[test]
     fn a_fork_bomb_stays_inside_its_limits() {
         let (dir, store, files, tree) = setup(&[("a", "")]);
@@ -865,6 +935,181 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(15), "{:?}", r[0]);
         let log = log_of(&store, &r[0]);
         assert!(log.contains("fork"), "nothing was refused: {log}");
+    }
+
+    /// macOS has the limit now, and the account keeps its share of it. On
+    /// Linux `linux_limits_processes_and_address_space_too` reads it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_limits_processes_and_leaves_the_account_its_share() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let mut c = cfg(None, Some("ulimit -u"));
+        c.limit_processes = 2000;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert!(log_of(&store, &r[0]).ends_with("\n2000\n"), "{:?}", r[0]);
+        c.limit_processes = Verification::default().limit_processes;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        let log = log_of(&store, &r[0]);
+        let got: u64 = log.lines().last().unwrap().parse().expect(&log);
+        let most = std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "kern.maxprocperuid"])
+            .output()
+            .unwrap();
+        let most: u64 = String::from_utf8_lossy(&most.stdout)
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(got <= most - process::KEEP_PROCESSES, "{log}");
+        assert!(got > 0, "{log}");
+    }
+
+    #[test]
+    fn a_command_does_not_start_on_a_disk_with_no_room() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier {
+            sandbox: Sandbox::None,
+            scratch: dir.path().join("scratch"),
+        };
+        let ran = dir.path().join("ran");
+        let mut c = cfg(None, Some(&format!("touch '{}'", ran.display())));
+        c.keep_free_bytes = u64::MAX;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Error, "{:?}", r[0]);
+        assert_eq!(r[0].details["error"], "disk_space");
+        assert!(log_of(&store, &r[0]).ends_with("(keep_free_bytes)\n"));
+        assert!(!ran.exists(), "it ran");
+        // Not watched, it runs.
+        c.keep_free_bytes = 0;
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        assert!(ran.exists());
+    }
+
+    /// The command writes until the disk is 16 MiB further down, and then
+    /// sleeps: only the watch can end it before its timeout.
+    #[test]
+    fn a_command_that_fills_the_disk_is_stopped() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        fs::create_dir_all(&v.scratch).unwrap();
+        let free = process::free_bytes(&v.scratch).unwrap();
+        let cmd = "echo started; i=0; while [ $i -lt 64 ]; do \
+                   dd if=/dev/zero of=f$i bs=1048576 count=4 2>/dev/null; sync; \
+                   i=$((i+1)); done; sleep 60";
+        let mut c = cfg(None, Some(cmd));
+        c.keep_free_bytes = free - (16 << 20);
+        c.timeout_seconds = 60;
+        let started = Instant::now();
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(30), "{:?}", r[0]);
+        assert_eq!(r[0].result, CheckResult::Error, "{:?}", r[0]);
+        assert_eq!(r[0].details["error"], "disk_space", "{:?}", r[0]);
+        assert!(!r[0].details.contains_key("exit"), "{:?}", r[0]);
+        let log = log_of(&store, &r[0]);
+        assert!(
+            log.contains("\nstarted\n"),
+            "the watch stopped it, not the start: {log}"
+        );
+    }
+
+    /// When memory runs out the command goes first, and its `/tmp` is on
+    /// disk, where the watch sees it, and goes with the run.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_puts_the_command_first_for_the_oom_killer_and_tmp_on_disk() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let cmd = "cat /proc/self/oom_score_adj; echo x > /tmp/probe; ls \"$TMPDIR\"";
+        let r = v.run(&store, &files, &tree, &cfg(None, Some(cmd))).unwrap();
+        assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+        let log = log_of(&store, &r[0]);
+        let lines: Vec<&str> = log.lines().skip(1).collect();
+        assert_eq!(lines.first(), Some(&"1000"), "{log}");
+        if v.sandbox != Sandbox::Bubblewrap {
+            let _ = fs::remove_file("/tmp/probe");
+            return;
+        }
+        assert_eq!(lines.get(1), Some(&"probe"), "{log}");
+        // Shared memory is on disk as well, it still works, and nothing
+        // else of `/dev` takes a write.
+        let cmd = "stat -f -c %T /tmp /dev/shm; touch /dev/shm/s && echo shm; \
+                   touch /dev/x 2>/dev/null || echo closed; echo y > /dev/null && echo null";
+        let r = v.run(&store, &files, &tree, &cfg(None, Some(cmd))).unwrap();
+        let log = log_of(&store, &r[0]);
+        let lines: Vec<&str> = log.lines().skip(1).collect();
+        assert_eq!(lines.len(), 5, "{log}");
+        assert!(lines[..2].iter().all(|l| *l != "tmpfs"), "{log}");
+        assert_eq!(lines[2..], ["shm", "closed", "null"], "{log}");
+    }
+
+    #[test]
+    fn what_an_earlier_daemon_left_is_cleared_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = dir.path().canonicalize().unwrap().join("scratch");
+        let left = scratch.join("verify-left");
+        fs::create_dir_all(left.join("tree/deep")).unwrap();
+        fs::write(left.join("tree/deep/file"), "x").unwrap();
+        let bundle = scratch.join("demo-b1.bundle");
+        fs::write(&bundle, "").unwrap();
+        let other = scratch.join("other");
+        fs::create_dir(&other).unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, scratch.join("verify-link")).unwrap();
+        // A run that closed what it wrote goes too.
+        let closed = scratch.join("verify-closed");
+        fs::create_dir_all(closed.join("tree/d")).unwrap();
+        fs::write(closed.join("tree/d/f"), "x").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let none = fs::Permissions::from_mode(0o000);
+            fs::set_permissions(closed.join("tree/d"), none).unwrap();
+        }
+        let v = Verifier::new(scratch.clone());
+        // On a Mac, something of that run is still going, out of its group.
+        #[cfg(target_os = "macos")]
+        let mut running = {
+            let jail = Jail {
+                workspace: left.clone(),
+                mark: jail::mark_of(Sandbox::Seatbelt, "verify", &left),
+                ..Default::default()
+            };
+            let argv = [
+                "/bin/sh".into(),
+                "-c".into(),
+                "touch ready; exec /bin/sleep 30".into(),
+            ];
+            let mut c = jail.command(Sandbox::Seatbelt, &argv).unwrap();
+            let child = c.process_group(0).spawn().unwrap();
+            let started = Instant::now();
+            while !left.join("ready").exists() && started.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(left.join("ready").exists(), "the sandbox never started");
+            child
+        };
+        assert_eq!(v.clear_left_over(), 2);
+        assert!(!left.exists() && !closed.exists());
+        assert!(bundle.exists() && other.exists() && elsewhere.exists());
+        let link = fs::symlink_metadata(scratch.join("verify-link"));
+        assert!(link.is_ok(), "a link is not followed");
+        #[cfg(target_os = "macos")]
+        {
+            let started = Instant::now();
+            let status = loop {
+                if let Some(status) = running.try_wait().unwrap() {
+                    break Some(status);
+                }
+                if started.elapsed() > Duration::from_secs(5) {
+                    let _ = running.kill();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            };
+            assert_eq!(status.and_then(|s| s.signal()), Some(libc::SIGKILL));
+        }
+        assert_eq!(Verifier::new(dir.path().join("none")).clear_left_over(), 0);
     }
 
     #[test]

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### A verification leaves the machine its share
+
+A build or test command could fill the disk the stores are on, fork up to the account's limit on
+macOS, and outlive a daemon that died. Now, **in existing repositories too, since a `lonca.toml`
+without the key takes the default**:
+
+- `keep_free_bytes` (1 GiB): a command is stopped once the disk of the daemon's stores has less
+  free, looked at every 20 ms, and does not start below it; the check is an error with
+  `error = disk_space`. Under bubblewrap the command's `/tmp` and `/dev/shm` are on that disk, no
+  longer in memory, and the rest of `/dev` is read-only. A run's directory is removed whatever
+  the command did to its permissions.
+- `limit_processes` holds on macOS too, and on both systems the account keeps 256 processes of
+  the most it may have, so a command that forks without end leaves room for the person at the
+  machine and for the daemon.
+- On Linux the command's processes are the first the kernel ends when memory runs out.
+- A daemon that starts, and holds the lock on its home, ends what the verifications of an
+  earlier one left running in their sandboxes, and removes their directories.
+
+Memory as a whole is still not bounded, so a command can keep the machine busy until
+`timeout_seconds`.
+
+See `docs/guide/verification.md`, "Limits", and `docs/decisions.md`, "What a command may take of
+the machine".
+
 ### Symbol engine 18: new syntax costs one definition, not the file
 
 Leases per symbol are what lets several agents work on one file. Until now

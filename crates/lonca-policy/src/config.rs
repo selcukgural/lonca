@@ -128,13 +128,18 @@ read = []
 # path = ["/usr/bin", "/bin"]
 path = []
 # What each process of a command may use; 0 means no limit. A limit the
-# daemon runs under already is never raised. Processes and address space
-# hold on Linux only. See docs/guide/verification.md.
+# daemon runs under already is never raised, and the account keeps 256
+# processes of its own. Address space holds on Linux only. See
+# docs/guide/verification.md.
 limit_cpu_seconds = 0
 limit_address_bytes = 0
 limit_processes = 16384
 limit_file_bytes = 8589934592
 limit_open_files = 4096
+# A command is stopped, as an error, once the disk of the daemon's stores
+# has less than this free (a look every 20 ms, not a quota); 0 means it is
+# not watched.
+keep_free_bytes = 1073741824
 
 [observation]
 # Sessions that nothing observes are treated like tainted sessions.
@@ -466,12 +471,18 @@ pub struct Verification {
     /// `RLIMIT_AS`, Linux only. Off by default: runtimes reserve far more
     /// than they use.
     pub limit_address_bytes: u64,
-    /// `RLIMIT_NPROC`, Linux only: it counts the account, not the command.
+    /// `RLIMIT_NPROC`: it counts the account, not the command, and never
+    /// leaves the account fewer than 256 to start.
     pub limit_processes: u64,
     /// `RLIMIT_FSIZE`.
     pub limit_file_bytes: u64,
     /// `RLIMIT_NOFILE`.
     pub limit_open_files: u64,
+    /// What a command is to leave free on the disk it writes to, which holds
+    /// the daemon's stores and their logs; it is stopped, as an error, when a
+    /// look (every 20 ms) finds less. Unlike the `limit_` keys this holds the
+    /// command as a whole. 0: not watched.
+    pub keep_free_bytes: u64,
 }
 
 impl Verification {
@@ -868,6 +879,7 @@ impl Default for Verification {
             limit_processes: 16384,
             limit_file_bytes: 8 << 30,
             limit_open_files: 4096,
+            keep_free_bytes: 1 << 30,
         }
     }
 }

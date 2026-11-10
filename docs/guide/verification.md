@@ -144,8 +144,14 @@ leaves running ends with it, whichever way it ends, as far as this reaches:
   command's own. This is one more reason for `require_sandbox`.
 
 If the daemon itself is killed, a command under bubblewrap goes with it. Under
-Seatbelt or with no sandbox it runs on to its own end, with nothing timing it;
-the change is verified again when the daemon is back.
+Seatbelt or with no sandbox it runs on, with nothing timing it, until the
+daemon starts again: then, before it verifies anything, the daemon ends what
+an earlier run left in its sandboxes and removes their directories, and the
+change is verified again. Only the daemon that holds the lock on its home
+(`daemon.lock`) does this: a second daemon on the same home says so and
+leaves them. The hardened install's launchd job restarts the
+daemon on its own. With no sandbox nothing tells which processes were the
+command's, so only the directories go.
 
 The log keeps the last 64 KiB of stdout and stderr, as they were written. If
 the command itself is killed by a signal, the evidence has `exit = signal` and
@@ -158,46 +164,56 @@ limit that ends a compiler reads as the build's own failure, so look in the log.
 ```toml
 limit_cpu_seconds = 0           # RLIMIT_CPU
 limit_address_bytes = 0         # RLIMIT_AS, Linux only
-limit_processes = 16384         # RLIMIT_NPROC, Linux only
+limit_processes = 16384         # RLIMIT_NPROC
 limit_file_bytes = 8589934592   # RLIMIT_FSIZE
 limit_open_files = 4096         # RLIMIT_NOFILE
+keep_free_bytes = 1073741824    # free space the disk keeps
 ```
 
 `0` means no limit. A limit the daemon runs under already is never raised.
 
 - CPU time, address space, file size and open files hold for each process, not
-  for a command as a whole. The only limit on the whole is `timeout_seconds`.
+  for a command as a whole. What holds the whole is `timeout_seconds` and
+  `keep_free_bytes`.
 - `limit_cpu_seconds` adds up all the threads of a process, so a test run on 32
   cores uses an hour of it in two minutes. That is why it is off. Past it Linux
   kills a process. macOS sends `SIGXCPU`, which ends it unless it handles that,
   and then only `timeout_seconds` does.
 - `limit_file_bytes`: past it the writer gets `SIGXFSZ`, which ends it. One that
   ignores the signal gets `EFBIG`, "File too large", from the write.
-- `limit_processes` counts every process and thread of the account, not of the
-  command, so set it above what the daemon's user runs anyway. A fork past it
-  fails with `EAGAIN`; root is not held to it. It is not applied on macOS, where
-  the daemon usually shares the account of the person at the machine.
+- `limit_processes` counts every process of the account (on Linux every
+  thread), not of the command, so set it above what the daemon's user runs
+  anyway. Whatever it says, the account keeps 256 processes of the most it
+  may have: its own limit, and on macOS `kern.maxprocperuid` too. So a command
+  that forks without end can not take the last of them from the person at the
+  machine, or from the daemon. A fork past it fails with `EAGAIN`; root is not
+  held to it.
+- `keep_free_bytes`: the disk the command writes to, the one of the daemon's
+  stores and their logs, should keep this much free. The verifier looks at it
+  every 20 ms while the command runs; below it the command is stopped and the
+  check is an error with `error = disk_space`, and a command does not start on
+  a disk that is below it already. It holds the command as a whole, all its
+  files together, and its `/tmp` and `/dev/shm`: under bubblewrap those are
+  directories of the run on that disk, not memory, and the rest of `/dev` is
+  read-only. It is a look, not a quota: a command that preallocates large
+  files in parallel (`fallocate`) can take more than the margin between two
+  looks. With no sandbox a command can write anywhere, and only that disk is
+  watched. A run's directory is removed when it ends, also what the command
+  closed with `chmod` or, on macOS, `chflags`.
 - `limit_address_bytes` is off because runtimes reserve far more than they use:
   the JVM, Go and Node fail under any figure that stops anything. macOS refuses
   every figure below what a process maps at its start, so it is not applied
   there.
+- **Memory** as a whole has no limit. On Linux the command's processes are
+  the first the kernel ends when memory runs out (`oom_score_adj` 1000), so the
+  daemon is not the one that goes. On macOS the system compresses and swaps
+  instead.
 
-What these limits do not cover yet, so a command can still starve the machine
-the daemon runs on until `timeout_seconds` ends it:
-
-- **Disk:** `limit_file_bytes` holds for each file, and nothing bounds how many
-  files a command writes in the verifier's scratch directory, which sits beside
-  the stores.
-- **Processes on macOS:** with no `limit_processes` there, a command can fork
-  up to the account's own limit.
-- **Memory:** nothing bounds a command's memory as a whole, and on Linux
-  bubblewrap's `/tmp` is memory charged to no process, so the kernel's
-  out-of-memory killer may pick the daemon.
-
+So a command can still keep the machine busy until `timeout_seconds` ends it:
+a fork bomb runs up to its limit, and memory fills up to what the system gives.
 Run verification only for build and test commands you would run yourself.
 A tainted session can not touch build scripts, CI or lockfiles, but a
-repository's own tests are code like any other. Total disk, memory and process
-bounds are planned for a 0.x release.
+repository's own tests are code like any other.
 
 ## Quota
 

@@ -224,11 +224,15 @@ It does not catch:
 
 ### Verification
 
-- **Limits hold per process.** A command's total disk in the scratch
-  directory, its memory and, on macOS, its number of processes are bounded
-  only by `timeout_seconds`, so a hostile test can starve the machine until
-  then ([Verification](../guide/verification.md#limits)). Run verification
-  only for build and test commands you would run yourself.
+- **Limits hold per process, and the machine keeps a share.** A command is
+  stopped when the disk of the stores falls below `keep_free_bytes`, a look
+  every 20 ms that a burst of preallocation can outrun; the account keeps 256
+  processes whatever a command forks; on Linux the kernel ends the command
+  before the daemon when memory runs out. Memory as a whole and the processes
+  up to that share are bounded only by `timeout_seconds`, so a hostile test
+  can still keep the machine busy until then
+  ([Verification](../guide/verification.md#limits)). Run verification only
+  for build and test commands you would run yourself.
 - **Tests are code.** A tainted session can not touch build scripts, CI or
   lockfiles, but a repository's own tests run as written, without network.
 

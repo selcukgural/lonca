@@ -1029,6 +1029,18 @@ fn session_or_bootstrap(human: Option<&str>) -> Result<Client> {
 
 /// Scratch roots as the daemon records them: absolute, normalized, and
 /// neither inside the workspace nor containing it. Created if missing.
+/// A lock on the daemon's home, `None` while another process has it.
+fn home_held(root: &Path) -> Option<std::fs::File> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join("daemon.lock"))
+        .ok()?;
+    file.try_lock().ok()?;
+    Some(file)
+}
+
 fn scratch_roots(workspace: &Path, dirs: &[PathBuf]) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for d in dirs {
@@ -1261,6 +1273,24 @@ fn run(cmd: Cmd) -> Result<()> {
                 },
             };
             let listener = lonca_daemon::server::bind_with(&home.socket(), &access)?;
+            // What an earlier daemon left is not another's still running only
+            // while this one holds the home: a second daemon may serve
+            // another socket. Held until the daemon ends.
+            let _home = home_held(&home.root);
+            match &_home {
+                Some(_) => {
+                    let left = svc.clear_left_over_verifications();
+                    if left > 0 {
+                        eprintln!(
+                            "lonca daemon: ended what {left} verification(s) of an earlier run left"
+                        );
+                    }
+                }
+                None => eprintln!(
+                    "lonca daemon: another daemon holds {}; what verifications left is not cleared",
+                    home.root.display()
+                ),
+            }
             svc.spawn_worker();
             if let Some(l) = proxy_listener {
                 let s = svc.clone();

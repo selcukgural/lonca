@@ -2891,14 +2891,71 @@ queue, and what it is held to, stands like this:
 - **Memory stays off by default.** `RLIMIT_AS` counts what is reserved, and the
   JVM, Go and Node reserve far more than they use. So the design's memory limit
   is a key a repository can set on Linux, not a default.
-- **`limit_processes` and `limit_address_bytes` hold on Linux only.** On macOS
-  the first counts every process of the person at the machine, and the second
-  is refused below what a process maps at its start, which fails every spawn.
-  16384 leaves room for a busy desktop account.
+- **`limit_address_bytes` holds on Linux only.** macOS refuses it below what a
+  process maps at its start, which fails every spawn. `limit_processes` was
+  Linux only too, until it learned to leave the account its share: see "What
+  a command may take of the machine".
 - **`path` is in the policy, empty by default**, and the hardened profile leaves
   it so: what a build needs on `PATH` differs by machine, and a wrong value only
   makes it fail. What must not depend on `PATH`, `/bin/sh` and the sandbox's
   own program, is absolute already.
+
+## What a command may take of the machine
+
+What #59 left open: a command bounded per process and by time could still
+fill the disk the stores are on, fork up to the account's limit on macOS, and
+fill memory the kernel charges to no process, and it outlived a daemon that
+died. None of it needs a log format: evidence is recorded, not recomputed.
+
+- **The disk is to keep `keep_free_bytes` free**, 1 GiB by default. A limit
+  on what a command writes would need its files counted, a walk of its tree
+  every look; the free space of the disk is one system call, and it is what
+  the stores and their log need. The verifier looks at every turn of its watch
+  (20 ms) and stops the command below it, as an error `disk_space`, and does
+  not start one below it. The disk of the scratch directory is asked, the
+  one the command writes: it is beside the stores. A disk that can not be
+  asked counts as full. A machine already low on space fails its checks as
+  errors until it is not; 0 turns it off. It is a look, not a quota: parallel
+  preallocation (`fallocate`, `F_PREALLOCATE`) can take more than 1 GiB
+  between two looks. A quota would need the file system's own, per user or
+  per project, which a plain install does not set up.
+- **Under bubblewrap `/tmp` and `/dev/shm` are the run's directories**, not
+  memory file systems: what is written there counts against the disk and goes
+  with the run. The rest of `/dev`, a memory file system too, is read-only;
+  POSIX semaphores and shared memory live in `/dev/shm` and keep working.
+  `lonca run` keeps its `tmpfs` and `/dev`, since that sandbox's definition
+  is what a human signed.
+- **A run's directory goes whatever the command did to it.** Removal first
+  gives every directory back its owner's `rwx` and, on macOS, clears the
+  flags an owner may set (`uchg`): a directory left behind would keep its
+  disk space from every later run.
+- **The account keeps 256 processes**: `RLIMIT_NPROC` is set to the policy's
+  figure, but never above the most the account may have, less 256. That
+  figure is the limit in force, and on macOS `kern.maxprocperuid` as well,
+  which holds an account whatever its limit says. The limit counts the
+  account, so this is the one way to leave room for the person at the
+  machine, and for the daemon, whatever the command forks; that is why it now
+  holds on macOS too. A count of the account at the start would add the
+  command's share to it, but it would also count whatever the person starts
+  meanwhile against the command.
+- **On Linux the command goes first when memory runs out**: its processes
+  start with `oom_score_adj` 1000, which any process may raise for itself.
+  That is not a limit: a cgroup would be one, and needs a delegated
+  hierarchy a plain install does not have. It is what keeps the kernel from
+  picking the daemon. macOS compresses and swaps rather than kill, and has no
+  such setting for a process to give itself.
+- **A daemon that starts ends what an earlier one left.** Under Seatbelt or
+  with no sandbox a command outlives the daemon, and, being a session of its
+  own, also launchd's kill of the job's group. Before it verifies, a daemon
+  that holds the lock on its home (`daemon.lock`) sweeps the sandbox of each
+  `verify-*` directory left in its scratch directory, by the mark the name
+  gives, and removes it. The socket is not enough to know no other daemon
+  runs on the home, since `LONCA_SOCKET` can put a second one elsewhere; one
+  that does not get the lock starts as before and leaves the directories. With no sandbox nothing tells the
+  processes, so only the directories go. A guardian process that outlives the
+  daemon to end the command was not taken: it is one more program to keep
+  out of the command's reach, for the time between a death and a restart,
+  which launchd keeps short for the hardened install.
 
 ## What verification may cost (#59)
 

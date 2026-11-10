@@ -479,6 +479,9 @@ fn plan(
         relay,
         loopback: a.loopback,
         mark: mark_of(sandbox, "run", run),
+        // The sandbox a human signed: its `/tmp` and `/dev` stay as they were.
+        tmp: None,
+        shm: None,
     };
     Ok(Plan {
         sandbox,

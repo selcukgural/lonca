@@ -1082,6 +1082,9 @@ mod tests {
             put(&mut plain, b"ssh-ed25519");
             put(&mut plain, &[7u8; 32]);
             assert_eq!(sk::parse_public_blob(&plain), None);
+            // Another type of key in the shape of a security key.
+            put(&mut plain, b"ssh:lonca");
+            assert_eq!(sk::parse_public_blob(&plain), None);
             let mut curve = vec![];
             put(&mut curve, b"sk-ecdsa-sha2-nistp256@openssh.com");
             put(&mut curve, b"nistp384");

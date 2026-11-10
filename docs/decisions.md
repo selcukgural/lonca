@@ -3965,6 +3965,17 @@ acceptance tests (`docs/acceptance.md`, `acceptance/`) close that gap.
 - **Found on the way:** `lonca-audit` had no `--version`, so a script could
   not check that the auditor it runs is the release it installed; it has
   one now (`lonca-audit X.Y.Z`, as `lonca --version`).
+- **Found by the first release run:** on the static Linux archives
+  `lonca-audit verify` replayed every recorded decision as a denial
+  ("recursion limit reached"), on 0.2.0 to 0.2.2 too. Cedar fails an
+  evaluation when less than 100 KiB of stack seem left, and musl reports a
+  main thread's stack as only what is mapped so far; the daemon decides on
+  worker threads, the auditor and the CLI on the main one. So a Cedar
+  outcome depended on the thread and the libc, which `decide()` may not:
+  every evaluation now runs on a 4 MiB stack of its own (`stacker::grow`,
+  the crate Cedar already uses), whoever calls it. A test evaluates on a
+  96 KiB thread. The glibc and macOS builds `ci.yml` runs could not show
+  it; only the shipped archives did.
 
 ## Open questions (carried from the design)
 

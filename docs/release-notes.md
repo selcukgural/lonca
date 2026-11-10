@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### `lonca-audit` on Linux verifies again
+
+On the Linux archives of 0.2.0 to 0.2.2, `lonca-audit verify` reported a
+`FINDING ... replay gives Deny ["policy_error:... recursion limit reached"]`
+for every decision in the log and failed, on logs that were fine. The
+daemon's decisions were right; the auditor's replay of them was not: on the
+static (musl) build, Cedar believed the main thread's stack nearly full and
+failed every evaluation. Each policy evaluation now runs on a stack of its
+own, so it gives the same outcome on every platform. Run `lonca-audit
+verify` again with 0.2.3 on a log that failed. The macOS archives and
+`cargo install` builds on glibc Linux were not affected.
+
 ### Acceptance tests gate every release
 
 Every release is now checked, before its draft exists, by acceptance tests

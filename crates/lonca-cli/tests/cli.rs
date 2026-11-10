@@ -4765,6 +4765,55 @@ fn symbols_give_the_definition_of_a_type() {
     assert!(listed.lines().any(|l| l == "f"), "{listed}");
 }
 
+/// In a file the grammar could not read all of, `symbols` marks what the
+/// error is in, for the tool and the command; the rest has no mark.
+#[test]
+fn symbols_mark_what_a_syntax_error_is_in() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let src = "pub struct S;\n\nimpl S {\n    pub fn good() {}\n\n    pub fn bad() {\n        let x = ;\n    }\n}\n\npub fn f() {}\n";
+    std::fs::write(ws.join("src/broken.rs"), src).unwrap();
+    let clean = "pub fn f() {}\n";
+    std::fs::write(ws.join("src/clean.rs"), clean).unwrap();
+    let mut mcp = Mcp::start(&e, &ws);
+
+    let (is_error, reply) = mcp.tool("symbols", json!({"path": "src/broken.rs"}));
+    assert!(!is_error, "{reply}");
+    assert_eq!(reply["syntax_error"], true, "{reply}");
+    let unread = |id: &str| {
+        let id = format!("src/broken.rs#{id}");
+        let list = reply["symbols"].as_array().unwrap().iter();
+        let mut found = list.filter(|s| s["id"] == id.as_str());
+        let sym = found.next().unwrap_or_else(|| panic!("{id}: {reply}"));
+        sym.get("unread").cloned()
+    };
+    assert_eq!(unread("impl:S"), Some(json!(true)));
+    assert_eq!(unread("S.bad"), Some(json!(true)));
+    assert_eq!(unread("S.good"), None);
+    assert_eq!(unread("S"), None);
+    assert_eq!(unread("f"), None);
+
+    let (is_error, reply) = mcp.tool("symbols", json!({"path": "src/clean.rs"}));
+    assert!(!is_error, "{reply}");
+    assert_eq!(reply["syntax_error"], false, "{reply}");
+    let marked = reply["symbols"].as_array().unwrap();
+    assert!(marked.iter().all(|s| s.get("unread").is_none()), "{reply}");
+
+    let listed = e.run(&ws, &["symbols", "src/broken.rs"]);
+    let line = |l: &str| listed.lines().any(|x| x == l);
+    assert!(line("S  (definition: S.<def>)"), "{listed}");
+    assert!(
+        line("impl:S  (partly read, definition: S.<def>)"),
+        "{listed}"
+    );
+    assert!(line("  S.bad  (not read)"), "{listed}");
+    assert!(line("  S.good"), "{listed}");
+    assert!(line("f"), "{listed}");
+    assert!(listed.contains("needs src/broken.rs#<file>"), "{listed}");
+    let listed = e.run(&ws, &["symbols", "src/clean.rs"]);
+    assert!(!listed.contains("read"), "{listed}");
+}
+
 #[test]
 fn mcp_tells_an_agent_what_another_one_asked_with_the_answer_of_any_tool() {
     let e = Env::new();

@@ -912,7 +912,108 @@ a table entry, not an enum.
     C# 11 to 14; Go generic methods; Java 25's module imports and flexible
     constructor bodies; three in Kotlin 2.1 and 2.2; four in C23; seven in
     C++20 to 26. Nothing was found in TSX, JavaScript, Ruby, PHP and Swift.
-    Closing them is the grammar round (#248).
+    Closing them is the grammar round (#248; "Grammar updates" below).
+
+## Grammar updates (#248)
+
+A grammar update is the only way a language's new syntax reaches the symbols,
+and nobody watched the grammars: an update happened when someone thought of
+it. It is a routine now, with a table that a script writes and steps a pull
+request has to show.
+
+- **Where every grammar stands is one command.** `.github/scripts/grammars.sh`
+  prints, for the library and each of the thirteen grammar crates (fourteen
+  grammars: TypeScript's crate has TSX too), the version in `Cargo.lock`, the
+  newest on crates.io, the newest tag upstream and what upstream has past that
+  tag. It reads crates.io and the GitHub API and sends nothing of this
+  repository. The table of 2026-11-10:
+
+| Crate | In the build | crates.io | Upstream tag | Upstream past the tag |
+| --- | --- | --- | --- | --- |
+| `lonca-tree-sitter-ruby` | 0.2.2 (our copy) | 0.23.1 (2024-11-11) | v0.23.1 | commits: 4; changed: src/scanner.c |
+| `tree-sitter` | 0.27.1 | 0.27.2 (2026-11-07) | v0.27.2 | - |
+| `tree-sitter-c` | 0.24.2 | 0.24.2 (2026-04-22) | v0.24.2 | nothing |
+| `tree-sitter-c-sharp` | 0.23.5 | 0.23.5 (2026-04-14) | v0.23.5 | commits: 5; changed: grammar.js, src/scanner.c |
+| `tree-sitter-cpp` | 0.23.4 | 0.23.4 (2024-11-11) | v0.23.4 | commits: 41; changed: grammar.js |
+| `tree-sitter-go` | 0.25.0 | 0.25.0 (2025-08-29) | v0.25.0 | commits: 2, none to the grammar |
+| `tree-sitter-java` | 0.23.5 | 0.23.5 (2024-12-21) | v0.23.5 | commits: 6, none to the grammar |
+| `tree-sitter-javascript` | 0.25.0 | 0.25.0 (2025-09-01) | v0.25.0 | commits: 2, none to the grammar |
+| `tree-sitter-kotlin-ng` | 1.1.0 | 1.1.0 (2025-01-09) | v1.1.0 | commits: 1, none to the grammar |
+| `tree-sitter-php` | 0.25.1 | 0.25.1 (2026-10-06) | v0.25.1 | nothing |
+| `tree-sitter-python` | 0.25.0 | 0.25.0 (2025-09-11) | v0.25.0 | commits: 1; changed: grammar.js |
+| `tree-sitter-rust` | 0.24.2 | 0.24.2 (2026-03-27) | v0.24.2 | nothing |
+| `tree-sitter-swift` | 0.7.4 | 0.7.4 (2026-10-04) | 0.7.4 | commits: 7; changed: grammar.js, src/scanner.c |
+| `tree-sitter-typescript` | 0.23.2 | 0.23.2 (2024-11-11) | v0.23.2 | commits: 5, none to the grammar |
+
+- **What a grammar update's pull request shows.** Dependabot proposes the
+  bump (weekly, a week after the release); a person may do it sooner. Before
+  it merges, the pull request says:
+  1. The corpus diff: `LONCA_CORPUS=write cargo test -p lonca-symbols --test
+     corpus`, then `git diff` of `known.txt` and of the table in
+     `docs/guide/languages.md`. Every line that moved is named: a gap closed,
+     a gap opened, a symbol that changed.
+  2. The pinned engines: `cargo test -p lonca-symbols --test engine` and the
+     golden logs (`cargo test --workspace`) pass with no snapshot edited.
+  3. The `parse` fuzz target on the new grammar, five minutes locally or
+     `gh workflow run fuzz.yml --ref <branch> -f targets=parse,merge`.
+  4. The grammar's scanner, if it has one and it changed: read for what
+     Ruby's did (a length kept in fewer bytes than it can have, an `assert`
+     on input).
+  5. Whether it is a new engine, by the rule below.
+  6. The release notes, and the table above written again by the script.
+- **A grammar that reads differently is a new engine, and the old engines
+  keep the old grammar.** The build has one copy of each grammar crate, so
+  every engine reads with it. An update where nothing of steps 1 and 2 moves
+  is no new engine and merges as a dependency update. One where the corpus
+  list moves is not safe even with the pinned engines green: facts are
+  recomputed by the auditor, `unread_files` among them, so an old entry about
+  a file the old grammar could not read would be recomputed with one that
+  can, and no longer equal what was signed. Such an update needs both
+  grammars in the build, the old one for the engines up to its last and the
+  new one from the new engine on (`lang::grammar` takes the engine). Two
+  versions of one grammar crate both define its C symbols and do not link, so
+  the newer one comes in as a copy in the workspace with its symbols renamed,
+  as Ruby's copy is kept. Until that is built for a grammar, its update
+  waits. A gap that opens (the new grammar stops reading something) is never
+  accepted without the same.
+- **When upstream is ahead of crates.io: wait, unless one of two things
+  holds.** A git dependency is refused (`deny.toml`) and a `[patch]` does not
+  reach `cargo install lonca`, so the only other way is a copy in the
+  workspace, published with it; a copy is 15 to 32 MB of generated C in the
+  repository and ours to keep up from then on.
+  - A fix for a fault a file can cause (an abort, a read or write past a
+    buffer) that upstream has not released: copy at once with the smallest
+    fix, as for Ruby. If no file read before reads differently, it is no new
+    engine.
+  - Syntax of a released language version that upstream reads and has not
+    released for six months, with a request for a release unanswered: copy
+    the upstream commit, as a new engine by the rule above.
+  - A copy goes back to the crate with the first release that has what the
+    copy has, as a grammar update like any other.
+- **The first round (2026-11-10) updated nothing, and closed none of the 29
+  gaps of the corpus list:** every grammar crate is at its newest release.
+  What stands behind, and why:
+  - `tree-sitter` 0.27.1, with 0.27.2 three days old: left to Dependabot's
+    week. Tried here: the pinned engines and the corpus list do not move.
+  - C#: upstream has C# 14 (extension blocks, compound assignment operators,
+    slice subpatterns) since 2026-06-02 and no release; a release was asked
+    for on 2026-10-09 (tree-sitter-c-sharp issue 443). Five months: wait,
+    and a copy from 2026-12-02 if nothing comes. It changes the tree of code
+    that reads today too (a bare `..` in a list pattern becomes a node), so
+    it is a new engine either way.
+  - C++: 41 commits since 0.23.4 of November 2024 (modules, deducing `this`,
+    reflection, expansion statements), releases asked for since 2025-11. It
+    meets the six months already. It is the first that needs two grammars in
+    the build, so it waits for that work, not for upstream.
+  - Swift: three fixes since 0.7.4 (2026-10-04), in the scanner and in
+    `switch` cases; the author releases every few months. Wait.
+  - Python: one commit, a supertype and no syntax. Ruby: our copy has what
+    upstream's unreleased commit fixes.
+  - Rust, TypeScript, Go, Java, Kotlin and C have gaps in the corpus list
+    that upstream does not read either; nothing to take. Kotlin's grammar
+    (`tree-sitter-kotlin-ng`) has had no grammar change since January 2025.
+  - What upstream's unreleased C# and C++ would close was read from their
+    grammar sources, not measured: they were not built here.
 
 ## Harness profiles
 

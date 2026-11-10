@@ -1,0 +1,235 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#E.One"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#<file>"
+        ],
+        "import_only_files": [],
+        "lines_added": 5,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        },
+        "unread_files": [
+          "src/sample.cs"
+        ]
+      },
+      "syntax_errors": [
+        "src/sample.cs"
+      ]
+    }
+  },
+  "merge": {
+    "conflicts": [
+      "src/sample.cs#<file>"
+    ],
+    "text": "static class E\n{\n    public static int One() => 10;\n\n    public static int Two() => 2;\n}\n"
+  },
+  "path": "src/sample.cs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "E.One",
+              "own": "",
+              "signature": "public static int One()",
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                50
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "E.Two",
+              "own": "",
+              "signature": "public static int Two()",
+              "skipped": false,
+              "span": [
+                56,
+                56,
+                85
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "E",
+          "own": "class_declaration(modifier(static\u001f)class\u001fE\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "static class E",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            87
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "E.One",
+              "own": "",
+              "signature": "public static int One()",
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                51
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "E.Two",
+              "own": "",
+              "signature": "public static int Two()",
+              "skipped": false,
+              "span": [
+                57,
+                57,
+                86
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "E",
+          "own": "class_declaration(modifier(static\u001f)class\u001fE\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "static class E",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            88
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "E.One",
+              "own": "",
+              "signature": "public static int One()",
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                50
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "E.Two",
+              "own": "",
+              "signature": "public static int Two()",
+              "skipped": false,
+              "span": [
+                56,
+                56,
+                85
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "E.extension",
+              "own": "",
+              "signature": "extension(string s)",
+              "skipped": false,
+              "span": [
+                91,
+                91,
+                159
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "E",
+          "own": "class_declaration(modifier(static\u001f)class\u001fE\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "static class E",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            161
+          ]
+        }
+      ]
+    }
+  }
+}

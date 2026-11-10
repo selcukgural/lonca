@@ -2459,9 +2459,17 @@ fn run(cmd: Cmd) -> Result<()> {
             let lang =
                 lonca_symbols::Lang::detect(&p).context("no symbol support for this file type")?;
             let parsed = lonca_symbols::parse(lang, &text);
-            fn walk(s: &[lonca_symbols::Sym], depth: usize) {
+            fn walk(p: &lonca_symbols::Parsed, s: &[lonca_symbols::Sym], depth: usize) {
                 for x in s {
                     let mut tags = Vec::new();
+                    if !p.reads_whole(x) {
+                        let unread = if x.container {
+                            "partly read"
+                        } else {
+                            "not read"
+                        };
+                        tags.push(unread.to_string());
+                    }
                     if x.is_test {
                         let test = if x.skipped { "test, skipped" } else { "test" };
                         tags.push(test.to_string());
@@ -2475,13 +2483,13 @@ fn run(cmd: Cmd) -> Result<()> {
                         format!("  ({})", tags.join(", "))
                     };
                     outln!("{}{}{}", "  ".repeat(depth), x.name, tags);
-                    walk(&x.children, depth + 1);
+                    walk(p, &x.children, depth + 1);
                 }
             }
-            walk(&parsed.syms, 0);
+            walk(&parsed, &parsed.syms, 0);
             if parsed.has_error {
                 outln!(
-                    "(the grammar could not read all of the file: a syntax error, or syntax newer than the grammar)"
+                    "(the grammar could not read all of the file: a syntax error, or syntax newer than the grammar. A symbol with no mark was read and is leased as usual; a change to anything else of the file needs {p}#<file>)"
                 );
             }
             Ok(())

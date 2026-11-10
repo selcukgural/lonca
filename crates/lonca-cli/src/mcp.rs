@@ -81,7 +81,7 @@ fn tool_list() -> Value {
     };
     json!([
         {"name": "status", "description": "Repository state: trunk, queue, all active leases (who holds what and why), your session and your changes.", "inputSchema": s(json!({}), &[])},
-        {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method). `def` of a type is its own text (fields, header): lease it to leave the methods to others. Symbols that share a name have a key, path#Type.method(int): the name alone holds all of them.", "inputSchema": s(json!({"path": path}), &["path"])},
+        {"name": "symbols", "description": "List the symbols of a workspace file with the ids to use for leases and claims (path#Type.method). `def` of a type is its own text (fields, header): lease it to leave the methods to others. Symbols that share a name have a key, path#Type.method(int): the name alone holds all of them. In a file with `syntax_error`, a symbol with `unread` has syntax the grammar could not read: lease the others as usual; a change to an unread symbol, or to anything outside the symbols, needs path#<file>.", "inputSchema": s(json!({"path": path}), &["path"])},
         {"name": "lease_acquire", "description": "Lease symbols before editing them. All or nothing; never waits. kind: edit (change a body), insert (add members to a type or file; give `names` in items to reserve what you add), rename (rename/delete). A file you create needs edit on path#<file>, so nobody else creates it meanwhile. Give items for a set of mixed kinds, or symbols with one kind. To widen what you hold, acquire a second set. A denial has `details`: for each symbol, who holds it or waits for it, their intent, and when it ends (or the change it is pinned to).", "inputSchema": s(json!({"items": items("Symbols with a kind each, for a set of mixed kinds"), "symbols": symbols, "kind": kind, "intent": lease_intent, "ttl_minutes": ttl}), &["intent"])},
         {"name": "lease_needed", "description": "The leases your local changes need, computed by Lonca: for each symbol the kind needed and whether you hold it, it is free, or who holds it. `acquire` lists the free ones as items for lease_acquire. A file under `no_lease` needs none: the merge decides.", "inputSchema": s(json!({}), &[])},
         {"name": "lease_interest", "description": "Say you are waiting for symbols another session holds. It holds nothing and never waits: go on with other work. For a while nobody can take a new lease that conflicts with it, so a wide change is not starved by small ones. When they are freed you get a short reservation (see `events`) and only you can acquire them; the oldest interest goes first. Refused (`lease_free`) for what nobody holds: acquire that.", "inputSchema": s(json!({"items": items("The symbols you are waiting for, with a kind each"), "symbols": symbols, "kind": kind, "intent": lease_intent}), &["intent"])},
@@ -449,13 +449,24 @@ impl Server {
                 })?;
                 let parsed = lonca_symbols::parse(lang, &text);
                 let mut out = Vec::new();
-                fn walk(path: &str, s: &[lonca_symbols::Sym], out: &mut Vec<Value>) {
+                fn walk(
+                    path: &str,
+                    p: &lonca_symbols::Parsed,
+                    s: &[lonca_symbols::Sym],
+                    out: &mut Vec<Value>,
+                ) {
                     for x in s {
-                        out.push(json!({"id": format!("{path}#{}", x.name), "container": x.container, "test": x.is_test, "def": x.def_of.as_ref().map(|t| format!("{path}#{t}.{}", lonca_symbols::DEF))}));
-                        walk(path, &x.children, out);
+                        let mut sym = json!({"id": format!("{path}#{}", x.name), "container": x.container, "test": x.is_test, "def": x.def_of.as_ref().map(|t| format!("{path}#{t}.{}", lonca_symbols::DEF))});
+                        // Only in a file with a syntax error, and only on
+                        // what the error is in.
+                        if !p.reads_whole(x) {
+                            sym["unread"] = json!(true);
+                        }
+                        out.push(sym);
+                        walk(path, p, &x.children, out);
                     }
                 }
-                walk(path, &parsed.syms, &mut out);
+                walk(path, &parsed, &parsed.syms, &mut out);
                 Ok(
                     json!({"symbols": out, "file": format!("{path}#<file>"), "module": format!("{path}#<module>"), "syntax_error": parsed.has_error}),
                 )

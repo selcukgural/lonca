@@ -1,0 +1,304 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#A.m"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [
+          "src/sample.py#A.m"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#<module>",
+          "src/sample.py#A.<def>",
+          "src/sample.py#g"
+        ],
+        "import_only_files": [],
+        "lines_added": 6,
+        "lines_removed": 6,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [
+      "src/sample.py#<file>"
+    ],
+    "text": "a = 1\n\n\ndef f():\n    return 1\n\n\nprint(a)\n\n\ndef g():\n    return 2\n\n\nclass A:\n    x = g()\n\n    def m(this):\n        return 1\n\n    def n(self):\n        return 2\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module(expression_statement(assignment(a\u001f=\u001f1\u001f))expression_statement(call(print\u001fargument_list((\u001fa\u001f)\u001f))))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "def f():",
+          "skipped": false,
+          "span": [
+            8,
+            8,
+            29
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "g",
+          "own": "",
+          "signature": "def g():",
+          "skipped": false,
+          "span": [
+            43,
+            43,
+            64
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "A.m",
+              "own": "",
+              "signature": "def m(self):",
+              "skipped": false,
+              "span": [
+                93,
+                93,
+                122
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "A.n",
+              "own": "",
+              "signature": "def n(self):",
+              "skipped": false,
+              "span": [
+                128,
+                128,
+                157
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "A",
+          "own": "class_definition(class\u001fA\u001f:\u001fblock(expression_statement(assignment(x\u001f=\u001fcall(g\u001fargument_list((\u001f)\u001f))))))",
+          "signature": "class A:",
+          "skipped": false,
+          "span": [
+            67,
+            67,
+            157
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module(expression_statement(assignment(a\u001f=\u001f1\u001f))expression_statement(call(print\u001fargument_list((\u001fa\u001f)\u001f))))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "def f():",
+          "skipped": false,
+          "span": [
+            8,
+            8,
+            29
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "g",
+          "own": "",
+          "signature": "def g():",
+          "skipped": false,
+          "span": [
+            43,
+            43,
+            64
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "A.m",
+              "own": "",
+              "signature": "def m(this):",
+              "skipped": false,
+              "span": [
+                93,
+                93,
+                122
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "A.n",
+              "own": "",
+              "signature": "def n(self):",
+              "skipped": false,
+              "span": [
+                128,
+                128,
+                157
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "A",
+          "own": "class_definition(class\u001fA\u001f:\u001fblock(expression_statement(assignment(x\u001f=\u001fcall(g\u001fargument_list((\u001f)\u001f))))))",
+          "signature": "class A:",
+          "skipped": false,
+          "span": [
+            67,
+            67,
+            157
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module(expression_statement(assignment(a\u001f=\u001f1\u001f))expression_statement(call(print\u001fargument_list((\u001fa\u001f)\u001f))))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "def f():",
+          "skipped": false,
+          "span": [
+            19,
+            19,
+            40
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "g",
+          "own": "",
+          "signature": "def g():",
+          "skipped": false,
+          "span": [
+            43,
+            43,
+            64
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "A.m",
+              "own": "",
+              "signature": "def m(self):",
+              "skipped": false,
+              "span": [
+                80,
+                80,
+                109
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "A.n",
+              "own": "",
+              "signature": "def n(self):",
+              "skipped": false,
+              "span": [
+                128,
+                128,
+                157
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "A",
+          "own": "class_definition(class\u001fA\u001f:\u001fblock(expression_statement(assignment(x\u001f=\u001fcall(g\u001fargument_list((\u001f)\u001f))))))",
+          "signature": "class A:",
+          "skipped": false,
+          "span": [
+            67,
+            67,
+            157
+          ]
+        }
+      ]
+    }
+  }
+}

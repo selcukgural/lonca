@@ -8,8 +8,8 @@ use lonca_core::{FileEntry, FileMap, FileMode, GitId, Result};
 #[cfg(test)]
 use crate::engine::ENGINE_KEYS;
 use crate::engine::{
-    ENGINE_EXACT, ENGINE_LINE_EDITS, ENGINE_PLACES, ENGINE_RENAMES, ENGINE_SECTIONS,
-    ENGINE_SIGNATURES, ENGINE_UNPARSED, reads_bytes, reads_size,
+    ENGINE_EXACT, ENGINE_LINE_EDITS, ENGINE_PARTIAL, ENGINE_PLACES, ENGINE_RENAMES,
+    ENGINE_SECTIONS, ENGINE_SIGNATURES, ENGINE_UNPARSED, reads_bytes, reads_size,
 };
 use crate::extract::{
     MAX_COMPARED, Parsed, Sym, align, best_pairs, likeness, moved, parse_at, parse_together,
@@ -174,6 +174,14 @@ pub fn analyze(
                 if pn.has_error {
                     syntax_errors.push(path.clone());
                 }
+                if engine >= ENGINE_PARTIAL
+                    && pb.has_error
+                    && pn.has_error
+                    && let Some((rb, rn)) = read_alike((&pb, old), (&pn, newt))
+                {
+                    compare_file(engine, path, (&rb, old), (&rn, newt), &mut f);
+                    continue;
+                }
                 if pb.has_error || pn.has_error {
                     f.edits.push(sym_id(path, FILE));
                     // A file that read until now takes a person's word: what
@@ -307,6 +315,30 @@ fn compare_sections(path: &str, format: Format, old: &str, new: &str, f: &mut Fa
     let gone = bs.iter().filter(|b| !in_new.contains_key(&b.name));
     f.deletes.extend(gone.map(|b| sym_id(path, &b.name)));
     f.edits.len() + f.adds.len() + f.deletes.len() > before
+}
+
+/// Two versions of a file the grammar could not read all of, as the symbols
+/// it did read, when nothing else of the file changed: what was not read and
+/// the code outside those symbols stand in both as the same lines. `None`
+/// when they do not, and the file is then compared whole.
+fn read_alike((pb, old): (&Parsed, &str), (pn, new): (&Parsed, &str)) -> Option<(Parsed, Parsed)> {
+    let (b, n) = (pb.read_parts(old)?, pn.read_parts(new)?);
+    if b.rest != n.rest {
+        return None;
+    }
+    // The imports and the code outside symbols are in `rest`, which is the
+    // same, so only the symbols are left to compare.
+    let of = |syms, errors: &Vec<(usize, usize)>| Parsed {
+        syms,
+        imports: vec![],
+        has_error: true,
+        errors: errors.clone(),
+        residual: String::new(),
+        residual_exact: String::new(),
+        spots: vec![],
+        js_tests: vec![],
+    };
+    Some((of(b.syms, &pb.errors), of(n.syms, &pn.errors)))
 }
 
 fn compare_file(
@@ -516,7 +548,7 @@ fn diff_level(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{ENGINE_BUDGET, ENGINE_LIMITS, MAX_READ};
+    use crate::engine::{ENGINE_BUDGET, ENGINE_LIMITS, ENGINE_PARTIAL, MAX_READ};
     use crate::lang::past_budget;
 
     /// `text`, filled to `len` bytes with a comment.
@@ -549,6 +581,106 @@ mod tests {
         let texts: Vec<&str> = [old, new].into_iter().flatten().collect();
         let (b, n) = (one_file(path, old), one_file(path, new));
         analyze(engine, &b, &n, &read_of(&texts)).unwrap()
+    }
+
+    /// C# 14's extension block, which the grammar does not read, beside a
+    /// class it does.
+    const PARTLY: &str = "public static class Sequences\n{\n    extension<T>(IEnumerable<T> source)\n    {\n        public int Length() => source.Count();\n    }\n}\n\npublic class Meter\n{\n    public int Value;\n    public int Read() => Value;\n    public int Twice() => Value * 2;\n}\n";
+
+    fn partly(engine: u32, new: &str) -> Facts {
+        let a = analysis(engine, "a.cs", Some(PARTLY), Some(new));
+        assert_eq!(a.syntax_errors, ["a.cs"], "{new}");
+        a.facts
+    }
+
+    #[test]
+    fn a_partly_read_file_keeps_the_symbols_the_error_is_not_in() {
+        let new = PARTLY.replace("Read() => Value;", "Read() => Value + 1;");
+        let f = partly(ENGINE_PARTIAL, &new);
+        assert_eq!(f.edits, ["a.cs#Meter.Read"]);
+        assert!(f.unparsed_files.is_empty() && f.unread_files.is_empty());
+        // Before, the whole file was the change.
+        let f = partly(ENGINE_PARTIAL - 1, &new);
+        assert_eq!(f.edits, ["a.cs#<file>"]);
+        assert_eq!(f.unparsed_files, ["a.cs"]);
+    }
+
+    #[test]
+    fn a_member_beside_the_error_is_a_symbol_too() {
+        let new = PARTLY.replace("source.Count();", "source.Count() + 0;");
+        assert_eq!(
+            partly(ENGINE_PARTIAL, &new).edits,
+            ["a.cs#Sequences.Length"]
+        );
+    }
+
+    #[test]
+    fn a_change_of_what_was_not_read_is_a_change_of_the_file() {
+        for new in [
+            PARTLY.replace(
+                "extension<T>(IEnumerable<T> source)",
+                "extension<T>(IList<T> source)",
+            ),
+            // Indentation is kept: it means something in some languages.
+            PARTLY.replace("    extension<T>", "  extension<T>"),
+            // Code outside every symbol is not vouched for either.
+            format!("using System;\n{PARTLY}"),
+        ] {
+            let f = partly(ENGINE_PARTIAL, &new);
+            assert_eq!(f.edits, ["a.cs#<file>"], "{new}");
+            assert_eq!(f.unparsed_files, ["a.cs"], "{new}");
+        }
+    }
+
+    #[test]
+    fn a_partly_read_file_reports_adds_deletes_signatures_and_order() {
+        let twice = "    public int Twice() => Value * 2;\n";
+        let read = "    public int Read() => Value;\n";
+        let added = PARTLY.replace(
+            twice,
+            &format!("{twice}    public int Thrice() => Value * 3;\n"),
+        );
+        let f = partly(ENGINE_PARTIAL, &added);
+        assert_eq!(
+            (f.adds, f.edits),
+            (vec!["a.cs#Meter.Thrice".to_string()], vec![])
+        );
+        let f = partly(ENGINE_PARTIAL, &PARTLY.replace(twice, ""));
+        assert_eq!(
+            (f.deletes, f.edits),
+            (vec!["a.cs#Meter.Twice".to_string()], vec![])
+        );
+        let f = partly(ENGINE_PARTIAL, &PARTLY.replace("Twice()", "Twice(int by)"));
+        assert_eq!(f.signature_changes, ["a.cs#Meter.Twice"], "{f:?}");
+        let swapped = PARTLY.replace(&format!("{read}{twice}"), &format!("{twice}{read}"));
+        let f = partly(ENGINE_PARTIAL, &swapped);
+        assert!(
+            !f.edits.is_empty() && !f.edits.contains(&"a.cs#<file>".to_string()),
+            "{f:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_that_stops_or_starts_being_read_is_compared_whole() {
+        let whole = PARTLY.replace("    extension<T>(IEnumerable<T> source)\n    {\n        public int Length() => source.Count();\n    }\n", "");
+        let a = analysis(ENGINE_PARTIAL, "a.cs", Some(&whole), Some(PARTLY));
+        assert_eq!(a.facts.edits, ["a.cs#<file>"]);
+        assert_eq!(a.facts.unread_files, ["a.cs"]);
+        let a = analysis(ENGINE_PARTIAL, "a.cs", Some(PARTLY), Some(&whole));
+        assert_eq!(a.facts.edits, ["a.cs#<file>"]);
+        assert!(a.syntax_errors.is_empty());
+    }
+
+    #[test]
+    fn a_test_deleted_from_a_partly_read_file_shows() {
+        let old = "unsafe extern \"C\" {\n    pub safe fn abs(x: i32) -> i32;\n}\n\n#[test]\nfn one() {}\n\n#[test]\nfn two() {}\n";
+        let new = old.replace("#[test]\nfn two() {}\n", "");
+        let a = analysis(ENGINE_PARTIAL, "a.rs", Some(old), Some(&new));
+        assert_eq!(a.syntax_errors, ["a.rs"]);
+        assert_eq!(a.facts.tests.deleted, 1);
+        assert_eq!(a.facts.deletes, ["a.rs#two"]);
+        let a = analysis(ENGINE_PARTIAL - 1, "a.rs", Some(old), Some(&new));
+        assert_eq!(a.facts.tests.deleted, 0);
     }
 
     const CODE: &str = "fn a() { 1 }\n\n\n\n\nfn b() { 2 }\n";

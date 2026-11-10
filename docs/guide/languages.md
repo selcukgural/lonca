@@ -6,6 +6,27 @@ changes to different symbols of one file. The symbols come from tree-sitter
 grammars, one for each language in the [table below](#what-each-grammar-reads).
 Markdown, TOML, JSON and YAML files are split into sections, and any other
 file is one symbol, `path#<file>` ([Concepts](concepts.md#symbols-and-leases)).
+The [first table](#where-leases-are-per-symbol) says which is which.
+
+## Where leases are per symbol
+
+| Files | A lease is on | Example |
+|---|---|---|
+| Rust, Python, TypeScript, TSX, JavaScript, C#, Go, Java, Kotlin, C, C++, Ruby, PHP, Swift | a function, method, type or field | `src/billing.rs#Client.charge` |
+| Markdown, TOML, JSON, YAML | a section | `README.md#Install.Linux` |
+| anything else | the file | `logo.svg#<file>` |
+
+The fourteen languages are the whole list: a language that is not in it is
+leased by file, and two agents then can not work on one file of it at the
+same time. If you need one, [open an
+issue](https://github.com/selcukgural/lonca/issues); a language is added
+when somebody asks for it, and so is a newer grammar.
+
+In those fourteen, a lease on a method holds that method and nothing else:
+another agent can lease and change the method next to it, and the two
+changes merge. This also holds in a file with syntax its grammar can not
+read, for every definition the unread part is not in
+([below](#a-file-the-grammar-can-not-read)).
 
 A grammar is part of the `lonca` you installed, and it is older than its
 language: languages get new syntax every year, and a grammar learns it some
@@ -15,9 +36,30 @@ language may be something the grammar in your build can not read.
 
 ## A file the grammar can not read
 
-Valid code is never refused because the grammar is behind. From symbol
-engine 17, a file with something its grammar can not read counts as a file
-with no grammar, in every language:
+Valid code is never refused because the grammar is behind, and from symbol
+engine 18 it does not cost the file its symbols either. A grammar that meets
+something it can not read goes on reading after it, so only the definition
+with that syntax in it is lost:
+
+```csharp
+public static class Sequences
+{
+    extension<T>(IEnumerable<T> source)   // C# 14: not read
+    {
+        public int Length() => source.Count();   // read: Sequences.Length
+    }
+}
+
+public class Meter
+{
+    public int Read() => Value;           // read: Meter.Read
+}
+```
+
+`lonca symbols` (and the `symbols` tool of an agent) lists such a file with
+`not read` on a definition the unread syntax is in and `partly read` on a
+type that has one; everything without a mark is leased and changed as in
+any other file.
 
 - **The change is not refused.** The syntax check lets the file through
   and names it in `details.unread` ([Daemon protocol](../protocol.md#log)).
@@ -25,12 +67,23 @@ with no grammar, in every language:
   unreadable, or adds an unreadable one, waits with the reason
   `unread_file:<path>` ([Reviewing agents' work](reviewing.md)). Lonca can
   not tell new syntax from a mistake, so somebody looks.
-- **The file is then one symbol.** As long as it stays unreadable it is
-  leased whole (`path#<file>`), its facts are about its lines, and it
-  merges by lines. A test deleted from it does not show in the facts.
-- **The rest of the repository is as before.** Only that file loses its
-  symbols, and it gets them back when the syntax goes or a release of
-  Lonca brings a grammar that reads it.
+- **What was read keeps its lease.** A change that stays inside
+  definitions the grammar read needs leases on those and no more, and its
+  facts name them: an edit, an added or deleted method, a new signature, a
+  deleted test.
+- **Everything else of the file is one piece.** A change to the unread
+  part, to a definition it is in, or to the code outside definitions
+  (imports too) is a change of the file and needs `path#<file>`, the lease on
+  the whole file: nobody gets it while somebody else holds a symbol of the
+  file. Lonca vouches only for what the
+  grammar read from start to end; where it stopped, a boundary may be
+  wrong, so nothing there is leased by itself.
+- **The file merges by its lines.** Two changes to different definitions
+  merge as long as their lines do not touch; the check that a merge kept
+  every symbol is not made for such a file.
+- **The rest of the repository is as before,** and the file is whole again
+  when the syntax goes or a release of Lonca brings a grammar that reads
+  it.
 
 Because Lonca no longer stops a syntax error itself, set `build` and `test`
 in `[verification]`: your own compiler knows your language's version

@@ -1,0 +1,233 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.py#Ledger.empty"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#Ledger.total"
+        ],
+        "import_only_files": [],
+        "lines_added": 4,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#Ledger.<def>",
+          "src/sample.py#Ledger.reset"
+        ],
+        "import_only_files": [],
+        "lines_added": 4,
+        "lines_removed": 3,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [
+          "src/sample.py#Ledger.<def>"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "@frozen\nclass Ledger(Base):\n    limit = 2\n\n    def total(self):\n        return 2\n\n    def reset(self):\n        return 3\n\n    def empty(self):\n        return True\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "def total(self):",
+              "skipped": false,
+              "span": [
+                33,
+                33,
+                66
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.reset",
+              "own": "",
+              "signature": "def reset(self):",
+              "skipped": false,
+              "span": [
+                72,
+                72,
+                105
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_definition(class\u001fLedger\u001f:\u001fblock(expression_statement(assignment(limit\u001f=\u001f1\u001f))))",
+          "signature": "class Ledger:",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            105
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "def total(self):",
+              "skipped": false,
+              "span": [
+                33,
+                33,
+                66
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.reset",
+              "own": "",
+              "signature": "def reset(self):",
+              "skipped": false,
+              "span": [
+                72,
+                72,
+                105
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.empty",
+              "own": "",
+              "signature": "def empty(self):",
+              "skipped": false,
+              "span": [
+                111,
+                111,
+                147
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "class_definition(class\u001fLedger\u001f:\u001fblock(expression_statement(assignment(limit\u001f=\u001f1\u001f))))",
+          "signature": "class Ledger:",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            147
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "def total(self):",
+              "skipped": false,
+              "span": [
+                47,
+                47,
+                80
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.reset",
+              "own": "",
+              "signature": "def reset(self):",
+              "skipped": false,
+              "span": [
+                86,
+                86,
+                119
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "decorated_definition(decorator(@\u001ffrozen\u001f)class_definition(class\u001fLedger\u001fargument_list((\u001fBase\u001f)\u001f):\u001fblock(expression_statement(assignment(limit\u001f=\u001f2\u001f)))))",
+          "signature": "class Ledger(Base):",
+          "skipped": false,
+          "span": [
+            0,
+            8,
+            119
+          ]
+        }
+      ]
+    }
+  }
+}

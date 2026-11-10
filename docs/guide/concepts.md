@@ -108,8 +108,9 @@ Lonca parses source files with tree-sitter and names their **symbols**:
 `src/billing.rs#Client.charge`. Markdown, TOML, JSON and YAML files are split
 into sections (`README.md#Install.Linux`); a file no parser reads is one
 symbol, `path#<file>`. `lonca symbols <file>` lists the ids, and
-[Languages](languages.md) says which languages are read and what of their
-newest syntax is not yet.
+[Languages](languages.md) says which languages are leased by symbol, what
+of their newest syntax is not read yet, and what a file with such syntax
+keeps.
 
 Before an agent changes a symbol, it **leases** it:
 

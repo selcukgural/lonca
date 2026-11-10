@@ -160,6 +160,12 @@ unknown method: `unknown_method`, whatever the token.
   parse error in Rust, Python, TypeScript, JavaScript, C# or Go failed the
   `syntax` check instead. The error may be syntax newer than the grammar, so
   `syntax_errors` in an answer is a note, not a refusal.
+  From symbol engine 18 a file with a parse error on both sides of a change
+  keeps the symbols the error is not in: when the rest of the file (what was
+  not read, the definitions it is in, the code outside definitions) has the
+  same lines on both sides, the facts name those symbols as for any file and
+  `unparsed_files` does not list it. Otherwise it is an edit of `path#<file>`
+  as before.
 - **`affected`** and **`affected_more`** in facts, from log format 18: symbols
   of the base that mention by name what the change gives a new signature, renames
   or deletes, at most 1000, and how many more there were. A guess, not a call

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use lonca_core::ops::Facts;
 use lonca_core::{FileEntry, FileMap, FileMode, GitId};
-use lonca_symbols::engine::{ENGINE_CURRENT, ENGINE_LENIENT};
+use lonca_symbols::engine::{ENGINE_CURRENT, ENGINE_LENIENT, ENGINE_PARTIAL};
 use lonca_symbols::merge::merge_text_at;
 use lonca_symbols::{Lang, analyze, parse};
 
@@ -200,7 +200,12 @@ fn what_a_grammar_can_not_read_is_a_file_with_no_grammar() {
         merged.contains("a = 10") && merged.contains("c = 30"),
         "{merged}"
     );
+    // What the error is not in keeps its name; up to engine 17 the file had
+    // none left.
     let f = facts(ENGINE_CURRENT, path, unread, &o);
+    assert_eq!(f.edits, ["a.kt#a"]);
+    assert!(f.unparsed_files.is_empty());
+    let f = facts(ENGINE_PARTIAL - 1, path, unread, &o);
     assert_eq!(f.edits, ["a.kt#<file>"]);
     assert_eq!(f.unparsed_files, ["a.kt"]);
     let (one, other) = (

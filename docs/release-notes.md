@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Symbol engine 18: new syntax costs one definition, not the file
+
+Leases per symbol are what lets several agents work on one file. Until now
+one piece of syntax the grammar did not know took that away for the whole
+file: it was leased whole and merged by its lines. From engine 18 a file
+with a parse error keeps every definition the error is not in. A change
+inside those needs their leases only, and its facts name them (edits, added
+and deleted methods, signature changes, deleted tests). A change to the
+unread part, to a definition it is in, or to code outside definitions is
+still a change of the file and needs `path#<file>`.
+
+`lonca symbols` marks what was not read, and the `symbols` tool has
+`unread: true` on it. The file still merges by its lines. With
+`[leases] unparsed_files = "optimistic"`, a change inside read symbols of
+such a file now needs their leases. Entries of older engines are recomputed
+as they were written.
+
+[Languages](guide/languages.md) now starts with the list of what is leased
+by symbol: fourteen languages, and sections of Markdown, TOML, JSON and
+YAML. Another language, or a newer grammar, is added when somebody asks.
+
 ### Symbol engine 17: new syntax is not refused
 
 A grammar is older than its language. Lonca's C# grammar, for one, does not
@@ -28,8 +49,8 @@ through ([#247](https://github.com/selcukgural/lonca/issues/247)). The table
 on it is written by a test from 210 small samples, so it can not drift from
 the build: 29 of them are not read today, among them C# 14's extension
 blocks, Java 25's module imports, Kotlin's guard conditions and C++23's
-deducing `this`. None of this is refused (engine 17, above); such a file
-merges by its lines until a release brings a newer grammar.
+deducing `this`. None of this is refused (engine 17, above), and only the
+definition with such syntax in it loses its symbol (engine 18, above).
 
 ### Presence on Linux: FIDO security keys
 

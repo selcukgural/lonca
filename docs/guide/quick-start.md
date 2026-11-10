@@ -2,6 +2,14 @@
 
 Cooperative mode, on one machine. [Install](install.md) first.
 
+![A terminal recording: two agents lease different methods of one file, a lease that is held and a write outside a session's paths are refused, a human approves both changes, they merge, and lonca-audit verifies the log](../../website/static/img/lonca-demo.gif)
+
+The recording is the steps below with two agents on one file, made from the
+released binaries by
+[docs/demo/demo.sh](https://github.com/selcukgural/lonca/blob/main/docs/demo/demo.sh);
+run it to see the same on your machine (it uses a home of its own,
+`/tmp/lonca-demo`).
+
 ## A repository and an agent's session
 
 ```sh

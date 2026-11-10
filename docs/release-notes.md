@@ -29,6 +29,16 @@ with a physical key has not been exercised by the project yet: see
 [threat model](security/threat-model.md#humans-and-approvals) for what a
 security key does and does not show.
 
+### A recording of two agents on one file
+
+The README, the home page and the [quick start](guide/quick-start.md) show a
+terminal recording: two agents lease different methods of one file, a lease
+that is held and a write outside a session's paths are refused, a human
+approves, both changes merge and `lonca-audit` verifies the log. It is
+recorded from the released binaries by
+[docs/demo/demo.sh](https://github.com/selcukgural/lonca/blob/main/docs/demo/demo.sh),
+which anyone can run: it uses a home of its own and nothing in it is canned.
+
 ### The site names the release, and a page for Claude Code
 
 The site said nothing of which release it described, and the install guide's

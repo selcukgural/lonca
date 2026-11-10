@@ -25,6 +25,19 @@ Everything else is on the site: **<https://selcukgural.github.io/lonca/>**.
 > developer with many agents
 > ([scope](https://selcukgural.github.io/lonca/docs/guide#scope-of-0x)).
 
+## See it
+
+Two agents on one file: each leases its own method, a lease that is held and
+a write outside a session's paths are refused, a human approves, both
+changes merge, and the auditor replays the log.
+
+<p align="center">
+  <img src="https://selcukgural.github.io/lonca/img/lonca-demo.gif" alt="A terminal recording: two agents lease different methods of one file, a lease that is held and a write outside a session's paths are refused, a human approves both changes, they merge, and lonca-audit verifies the log" width="100%">
+</p>
+
+Every line is what the released binaries print; the script is
+[docs/demo/demo.sh](docs/demo/demo.sh), and it runs in a home of its own.
+
 ## Works with Claude Code
 
 Claude Code is the harness Lonca is built and checked against, live, before

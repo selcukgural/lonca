@@ -200,6 +200,7 @@ lonca approve 17 --repo demo
 lonca-audit verify ~/.lonca/repos/demo.git`;
 
 const other = `brew tap selcukgural/lonca                    # Homebrew (macOS, Linux)
+brew trust --formula selcukgural/lonca/lonca  # Homebrew 7 and newer
 brew install lonca
 cargo install --locked lonca lonca-audit      # crates.io, Rust 1.90+`;
 

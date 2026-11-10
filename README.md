@@ -54,7 +54,9 @@ macOS (arm64, x86_64) and Linux (x86_64, arm64):
 
 ```sh
 curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh   # ~/.local/bin
-brew tap selcukgural/lonca && brew install lonca                 # or Homebrew
+brew tap selcukgural/lonca                                       # or Homebrew,
+brew trust --formula selcukgural/lonca/lonca                     # (Homebrew 7+)
+brew install lonca
 cargo install --locked lonca lonca-audit                         # or crates.io, Rust 1.90+
 ```
 

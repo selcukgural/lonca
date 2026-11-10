@@ -3316,7 +3316,10 @@ release (roadmap M2).
   is easily shortened to a plain `brew install lonca`, which without the
   tap finds no formula. That form needs homebrew-core, whose notability
   bar (stars, forks, watchers, a formula built from source) is far above
-  this repository today.
+  this repository today. Homebrew 7 loads a formula from a tap that is not
+  its own only after `brew trust --formula selcukgural/lonca/lonca`
+  (found 2026-11-10 with imece's tap, a copy of this one); the docs show
+  that step between the two. The tap's own test in CI passed without it.
 - **`install.sh`** (served by the site, `website/static/install.sh`) picks
   the archive for the machine, checks it against `SHA256SUMS` and installs
   the binaries in `~/.local/bin`, over HTTPS only.

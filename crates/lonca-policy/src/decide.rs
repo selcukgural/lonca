@@ -212,6 +212,9 @@ fn check_lease_request(
         let keyed = ctx.format >= FORMAT_KEYED && name == keyed::DIR;
         if keyed {
             check_key_item(s, item, path, ctx, v);
+        } else if ctx.format >= FORMAT_KEYED && ctx.policy.keyed.get(path).is_some() {
+            // A keyed directory has one container, and it is not a file.
+            v.deny(format!("key_container:{}", keyed::container(path)));
         } else if !s.scope.paths.iter().any(|p| path_matches(p, path)) {
             v.deny(format!("scope_path:{path}"));
         }

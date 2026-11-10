@@ -178,7 +178,8 @@ directly in the directory have keys.
   ```
 
   Two sessions can not reserve one key. `lonca lease needed` and `preview`
-  list the key a new file needs.
+  list the key a new file needs, and `lonca status` (the `status` tool) lists
+  the keyed directories, for agents that have no `lonca.toml`.
 - **At proposal.** A file an agent adds there needs its key reserved by its
   session (`key_not_reserved:db/migration#12`), its name must have a key
   (`key_unreadable:<path>`), and no other file may have it: in the change's

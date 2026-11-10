@@ -146,7 +146,8 @@ pub const FORMAT_SECURITY_KEYS: u32 = 28;
 /// The first format with keyed directories (#261): an `insert` lease on a
 /// `dir#<dir>` reserves keys, a proposal's added files there need theirs, a
 /// proposal pins the key leases of the directories it adds files to, and
-/// facts may name `taken_keys`. Before it, a `<dir>` lease was one on any
+/// facts may name `taken_keys`; a keyed directory's path takes no other
+/// symbol than its `<dir>`. Before it, a `<dir>` lease was one on any
 /// container. Older entries replay as they were.
 pub const FORMAT_KEYED: u32 = 29;
 

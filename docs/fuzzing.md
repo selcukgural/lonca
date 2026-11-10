@@ -54,6 +54,11 @@ are C, built without it either way). Panics, overflow checks, hangs and
 memory blowups are found without it. `-max_len=65536 -timeout=30
 -rss_limit_mb=2048` are what CI uses.
 
+`fuzz/` is a workspace of its own with its own `Cargo.lock`, which
+`fuzz.yml` builds `--locked`. A dependency added to the crates must reach it
+in the same pull request (`cd fuzz && cargo update --workspace`); `ci.yml`
+checks that it did, since `fuzz.yml` does not run on pull requests.
+
 A failure writes the input to `fuzz/artifacts/<target>/`. To see it fail
 again: `cargo fuzz run -s none <target> fuzz/artifacts/<target>/<file>`.
 

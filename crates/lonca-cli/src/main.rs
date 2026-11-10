@@ -2582,6 +2582,10 @@ fn status_text(s: &Value) -> String {
     let q = s["queue"].as_array().map(|a| a.len()).unwrap_or(0);
     let _ = writeln!(t, "queue  {q} change(s)");
     let _ = writeln!(t, "{}", unparsed_note(s));
+    for (dir, container) in s["keyed"].as_object().into_iter().flatten() {
+        let container = container.as_str().unwrap_or_default();
+        let _ = writeln!(t, "keyed directory {dir}: reserve a key on {container}");
+    }
     let now = s["now_ms"].as_i64().unwrap_or(0);
     let _ = writeln!(t, "sessions:");
     for x in s["sessions"]

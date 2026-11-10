@@ -36,6 +36,10 @@ jobs:
       - name: Rust toolchain
         run: rustup toolchain install
       - run: cargo fmt --all --check
+      # fuzz/ has a lock of its own, used only by fuzz.yml, which does not
+      # run on pull requests: a new dependency must reach it here.
+      - name: fuzz/Cargo.lock is current
+        run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml >/dev/null
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       # What a user does, end to end, with the binaries `cargo test` just

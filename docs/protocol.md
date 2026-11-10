@@ -194,7 +194,9 @@ unknown method: `unknown_method`, whatever the token.
   or text), and `lease.acquire` resolves each `next` there to the number
   after the highest key on trunk or reserved, answering `"keys":
   {"dir#<dir>": [key]}`. Anything else on a `<dir>` is `not_keyed:<dir>`,
-  `key_required:<symbol>` or `invalid_key:<dir>#<key>`. A file a proposal adds
+  `key_required:<symbol>` or `invalid_key:<dir>#<key>`, and any other symbol
+  of a keyed directory's path is `key_container:<dir>#<dir>`; `status` lists
+  the keyed directories as `"keyed": {"dir": "dir#<dir>"}`. A file a proposal adds
   there needs its key reserved (`key_not_reserved:<dir>#<key>`), a name the
   pattern reads (`key_unreadable:<path>`), and a key no other file has
   (`key_taken:<dir>#<key>`; facts carry `taken_keys` for the proposal's own

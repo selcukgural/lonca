@@ -1,0 +1,302 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.swift#AddInit",
+          "src/sample.swift#log(_ code: Int)"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.swift"
+        ],
+        "signature_changes": [
+          "src/sample.swift#AddInit",
+          "src/sample.swift#log(_ code: Int)"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.swift#show",
+          "src/sample.swift#stringify"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.swift"
+        ],
+        "signature_changes": [
+          "src/sample.swift#stringify"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "@freestanding(expression)\nmacro stringify<T>(_ value: T, _ label: String) -> (T, String) = #externalMacro(module: \"Macros\", type: \"StringifyMacro\")\n\n@attached(member)\nmacro AddInit() = #externalMacro(module: \"MoreMacros\", type: \"AddInitMacro\")\n\n@freestanding(expression)\nmacro log(_ text: String) = #externalMacro(module: \"Macros\", type: \"LogText\")\n\n@freestanding(expression)\nmacro log(_ code: Int) = #externalMacro(module: \"Macros\", type: \"LogNumber\")\n\nfunc show() -> String {\n    return #stringify(1 + 2, \"sum\").1\n}\n"
+  },
+  "path": "src/sample.swift",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "stringify",
+          "own": "",
+          "signature": "@freestanding(expression) macro stringify<T>(_ value: T) -> (T, String) = #externalMacro(module: \"Macros\", type: \"StringifyMacro\")",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            130
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "AddInit",
+          "own": "",
+          "signature": "@attached(member) macro AddInit() = #externalMacro(module: \"Macros\", type: \"AddInitMacro\")",
+          "skipped": false,
+          "span": [
+            132,
+            132,
+            222
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "log(_ text: String)",
+          "own": "",
+          "signature": "@freestanding(expression) macro log(_ text: String) = #externalMacro(module: \"Macros\", type: \"LogText\")",
+          "skipped": false,
+          "span": [
+            224,
+            224,
+            327
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "log(_ code: Int)",
+          "own": "",
+          "signature": "@freestanding(expression) macro log(_ code: Int) = #externalMacro(module: \"Macros\", type: \"LogCode\")",
+          "skipped": false,
+          "span": [
+            329,
+            329,
+            429
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "show",
+          "own": "",
+          "signature": "func show() -> String",
+          "skipped": false,
+          "span": [
+            431,
+            431,
+            487
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "stringify",
+          "own": "",
+          "signature": "@freestanding(expression) macro stringify<T>(_ value: T) -> (T, String) = #externalMacro(module: \"Macros\", type: \"StringifyMacro\")",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            130
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "AddInit",
+          "own": "",
+          "signature": "@attached(member) macro AddInit() = #externalMacro(module: \"MoreMacros\", type: \"AddInitMacro\")",
+          "skipped": false,
+          "span": [
+            132,
+            132,
+            226
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "log(_ text: String)",
+          "own": "",
+          "signature": "@freestanding(expression) macro log(_ text: String) = #externalMacro(module: \"Macros\", type: \"LogText\")",
+          "skipped": false,
+          "span": [
+            228,
+            228,
+            331
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "log(_ code: Int)",
+          "own": "",
+          "signature": "@freestanding(expression) macro log(_ code: Int) = #externalMacro(module: \"Macros\", type: \"LogNumber\")",
+          "skipped": false,
+          "span": [
+            333,
+            333,
+            435
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "show",
+          "own": "",
+          "signature": "func show() -> String",
+          "skipped": false,
+          "span": [
+            437,
+            437,
+            493
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "stringify",
+          "own": "",
+          "signature": "@freestanding(expression) macro stringify<T>(_ value: T, _ label: String) -> (T, String) = #externalMacro(module: \"Macros\", type: \"StringifyMacro\")",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            147
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "AddInit",
+          "own": "",
+          "signature": "@attached(member) macro AddInit() = #externalMacro(module: \"Macros\", type: \"AddInitMacro\")",
+          "skipped": false,
+          "span": [
+            149,
+            149,
+            239
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "log(_ text: String)",
+          "own": "",
+          "signature": "@freestanding(expression) macro log(_ text: String) = #externalMacro(module: \"Macros\", type: \"LogText\")",
+          "skipped": false,
+          "span": [
+            241,
+            241,
+            344
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "log(_ code: Int)",
+          "own": "",
+          "signature": "@freestanding(expression) macro log(_ code: Int) = #externalMacro(module: \"Macros\", type: \"LogCode\")",
+          "skipped": false,
+          "span": [
+            346,
+            346,
+            446
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "show",
+          "own": "",
+          "signature": "func show() -> String",
+          "skipped": false,
+          "span": [
+            448,
+            448,
+            511
+          ]
+        }
+      ]
+    }
+  }
+}

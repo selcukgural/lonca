@@ -1,0 +1,221 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.kt#<file>"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.kt"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        },
+        "unparsed_files": [
+          "src/sample.kt"
+        ]
+      },
+      "syntax_errors": [
+        "src/sample.kt"
+      ]
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.kt#<file>"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.kt"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        },
+        "unparsed_files": [
+          "src/sample.kt"
+        ]
+      },
+      "syntax_errors": [
+        "src/sample.kt"
+      ]
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "sealed interface Animal\ndata class Cat(val hungry: Boolean) : Animal\ndata class Dog(val name: String) : Animal\n\nfun feed(animal: Animal): String = when (animal) {\n    is Dog -> \"dog\"\n    is Cat if animal.hungry -> \"feed\"\n    else -> \"later\"\n}\n\nfun greet(name: String): String {\n    return \"hi $name\"\n}\n"
+  },
+  "path": "src/sample.kt",
+  "symbols": {
+    "base": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(ERROR(fun\u001ffeed\u001ffunction_value_parameters((\u001fparameter(animal\u001f:\u001fuser_type(Animal\u001f)))\u001f):\u001fuser_type(String\u001f)=\u001fwhen\u001fwhen_subject((\u001fanimal\u001f)\u001f){\u001fwhen_entry(type_test(is\u001fuser_type(Dog\u001f))->\u001f\"dog\"\u001f)type_test(is\u001fuser_type(Cat\u001f))if\u001f animal.hungry -> \"feed\"\n    else -> \"wait\"\n}\n\nfun greet(name: String): String {\n    return \"hello \u001f$\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Animal",
+          "own": "",
+          "signature": "sealed interface Animal",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            23
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Cat",
+          "own": "",
+          "signature": "data class Cat(val hungry: Boolean) : Animal",
+          "skipped": false,
+          "span": [
+            24,
+            24,
+            68
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Dog",
+          "own": "",
+          "signature": "data class Dog(val name: String) : Animal",
+          "skipped": false,
+          "span": [
+            69,
+            69,
+            110
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(ERROR(fun\u001ffeed\u001ffunction_value_parameters((\u001fparameter(animal\u001f:\u001fuser_type(Animal\u001f)))\u001f):\u001fuser_type(String\u001f)=\u001fwhen\u001fwhen_subject((\u001fanimal\u001f)\u001f){\u001fwhen_entry(type_test(is\u001fuser_type(Dog\u001f))->\u001f\"dog\"\u001f)type_test(is\u001fuser_type(Cat\u001f))if\u001f animal.hungry -> \"feed\"\n    else -> \"wait\"\n}\n\nfun greet(name: String): String {\n    return \"hi \u001f$\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Animal",
+          "own": "",
+          "signature": "sealed interface Animal",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            23
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Cat",
+          "own": "",
+          "signature": "data class Cat(val hungry: Boolean) : Animal",
+          "skipped": false,
+          "span": [
+            24,
+            24,
+            68
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Dog",
+          "own": "",
+          "signature": "data class Dog(val name: String) : Animal",
+          "skipped": false,
+          "span": [
+            69,
+            69,
+            110
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file(ERROR(fun\u001ffeed\u001ffunction_value_parameters((\u001fparameter(animal\u001f:\u001fuser_type(Animal\u001f)))\u001f):\u001fuser_type(String\u001f)=\u001fwhen\u001fwhen_subject((\u001fanimal\u001f)\u001f){\u001fwhen_entry(type_test(is\u001fuser_type(Dog\u001f))->\u001f\"dog\"\u001f)type_test(is\u001fuser_type(Cat\u001f))if\u001f animal.hungry -> \"feed\"\n    else -> \"later\"\n}\n\nfun greet(name: String): String {\n    return \"hello \u001f$\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Animal",
+          "own": "",
+          "signature": "sealed interface Animal",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            23
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Cat",
+          "own": "",
+          "signature": "data class Cat(val hungry: Boolean) : Animal",
+          "skipped": false,
+          "span": [
+            24,
+            24,
+            68
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Dog",
+          "own": "",
+          "signature": "data class Dog(val name: String) : Animal",
+          "skipped": false,
+          "span": [
+            69,
+            69,
+            110
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -26,7 +26,7 @@ python: tree-sitter-python 0.25.0
   3.11-except-star.py: run
   3.12-fstring-nesting.py: render
   3.12-type-parameters.py: Stack, Stack.push, first
-  3.12-type-statement.py: swap
+  3.12-type-statement.py: Pair, swap
   3.13-type-parameter-defaults.py: error at line 1
   3.14-except-without-parentheses.py: parse
   3.14-template-strings.py: greet
@@ -166,7 +166,7 @@ cpp: tree-sitter-cpp 0.23.4
   17-if-with-initializer.cpp: find
   17-nested-namespaces.cpp: rate, tax
   17-structured-bindings.cpp: total
-  20-concepts.cpp: add, twice
+  20-concepts.cpp: Addable, add, twice
   20-consteval.cpp: square, area, get_area
   20-coroutines.cpp: Promise, Promise.get_return_object, Promise.initial_suspend, Promise.final_suspend, Promise.return_void, Promise.unhandled_exception, Task, Task.promise_type, Promise.get_return_object~2, run
   20-designated-initializers.cpp: Options, Options.retries, Options.verbose, defaults
@@ -230,7 +230,7 @@ swift: lonca-tree-sitter-swift (tree-sitter-swift 0.7.4 with a scanner fix)
   5.7-opaque-and-existential-types.swift: Shape, Shape.area, total
   5.7-regex-literals.swift: isVersion
   5.9-if-and-switch-expressions.swift: label
-  5.9-macros.swift: show
+  5.9-macros.swift: stringify, show
   5.9-ownership-modifiers.swift: Token, Token.id, Token.finish, use
   5.9-parameter-packs.swift: count
   6.0-sending-parameters.swift: Box, Box.value, hand, shared

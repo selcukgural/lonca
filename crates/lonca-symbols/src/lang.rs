@@ -125,6 +125,12 @@ pub(crate) struct Wrapper {
     /// Or its first child of one of these kinds.
     #[serde(default)]
     pub children: Vec<String>,
+    /// Only a node without this field: C++'s `struct A { struct B {}; };`
+    /// holds a type, `struct B *next;` a field of one.
+    pub without: Option<String>,
+    /// The first engine this wrapper holds in.
+    #[serde(default)]
+    pub since: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -597,7 +603,10 @@ mod tests {
     }
 
     fn fields_of(r: &Rules) -> BTreeSet<&str> {
-        let wrappers = r.wrappers.iter().flat_map(|w| &w.field);
+        let wrappers = r
+            .wrappers
+            .iter()
+            .flat_map(|w| w.field.iter().chain(&w.without));
         let mut out: BTreeSet<&str> = wrappers.map(String::as_str).collect();
         if let Some(i) = &r.import_calls {
             out.extend([i.field.as_str(), i.receiver.as_str()]);

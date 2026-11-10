@@ -1,0 +1,234 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#Name.<def>"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [
+          "src/sample.py#Name.<def>"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.py#Id"
+        ],
+        "affected": [
+          "src/sample.py#swap"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#Pair.<def>"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [
+          "src/sample.py#Pair.<def>"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "type Pair[T] = list[T]\ntype Name = str | bytes\ntype Id = int\n\n\ndef swap[T](p: Pair[T]) -> Pair[T]:\n    return (p[1], p[0])\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Pair",
+          "own": "",
+          "signature": "type Pair[T] = tuple[T, T]",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            26
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Name",
+          "own": "",
+          "signature": "type Name = str",
+          "skipped": false,
+          "span": [
+            27,
+            27,
+            42
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "swap",
+          "own": "",
+          "signature": "def swap[T](p: Pair[T]) -> Pair[T]:",
+          "skipped": false,
+          "span": [
+            45,
+            45,
+            104
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Pair",
+          "own": "",
+          "signature": "type Pair[T] = tuple[T, T]",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            26
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Name",
+          "own": "",
+          "signature": "type Name = str | bytes",
+          "skipped": false,
+          "span": [
+            27,
+            27,
+            50
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "swap",
+          "own": "",
+          "signature": "def swap[T](p: Pair[T]) -> Pair[T]:",
+          "skipped": false,
+          "span": [
+            53,
+            53,
+            112
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Pair",
+          "own": "",
+          "signature": "type Pair[T] = list[T]",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            22
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Name",
+          "own": "",
+          "signature": "type Name = str",
+          "skipped": false,
+          "span": [
+            23,
+            23,
+            38
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Id",
+          "own": "",
+          "signature": "type Id = int",
+          "skipped": false,
+          "span": [
+            39,
+            39,
+            52
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "swap",
+          "own": "",
+          "signature": "def swap[T](p: Pair[T]) -> Pair[T]:",
+          "skipped": false,
+          "span": [
+            55,
+            55,
+            114
+          ]
+        }
+      ]
+    }
+  }
+}

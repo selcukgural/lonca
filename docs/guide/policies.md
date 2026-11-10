@@ -191,6 +191,16 @@ forbid(principal is Lonca::Agent, action == Lonca::Action::"file.delete", resour
 when { context.observation == "unobserved" };
 ```
 
+Agents add migrations but never delete or rewrite one that exists (the
+directory's keys are in `[paths.keyed]`, see
+[Keyed directories](concepts.md#keyed-directories)):
+
+```cedar
+@id("migrations-stay")
+forbid(principal is Lonca::Agent, action in [Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
+when { context.path like "db/migration/*" };
+```
+
 Deleted tests are refused instead of escalated (Lonca escalates them on
 its own):
 

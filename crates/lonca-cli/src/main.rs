@@ -716,7 +716,9 @@ enum LeaseCmd {
         kind: String,
         /// With --kind insert: a name the insert reserves, bare (`throttle`,
         /// not `Client.throttle`); repeat for more. Additions under it must
-        /// be one of them. Another insert reserving one of them waits.
+        /// be one of them. Another insert reserving one of them waits. On a
+        /// keyed directory's `dir#<dir>`: a key (`12`), or `next` for the
+        /// next free number.
         #[arg(long = "name", value_name = "NAME")]
         names: Vec<String>,
         /// What you are doing and why; others read it
@@ -1958,6 +1960,12 @@ fn run(cmd: Cmd) -> Result<()> {
                         && r["decision"]["outcome"] == "allow"
                     {
                         outln!("lease set {set}");
+                        let keys = r["keys"].as_object().into_iter().flatten();
+                        for (container, got) in keys {
+                            let got = got.as_array().into_iter().flatten();
+                            let got: Vec<&str> = got.filter_map(Value::as_str).collect();
+                            outln!("keys {container}: {}", got.join(", "));
+                        }
                     }
                     (r, as_json)
                 }

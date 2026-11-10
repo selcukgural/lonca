@@ -360,6 +360,11 @@ pub struct Facts {
     /// How many more there were than `affected` holds.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub affected_more: u32,
+    /// Keys, as `dir#key`, that a file this change adds to a keyed
+    /// directory shares with another file of its tree (`paths.keyed`).
+    /// Computed with the policy in force, from format 29.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub taken_keys: Vec<String>,
 }
 
 fn is_zero(n: &u32) -> bool {

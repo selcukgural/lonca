@@ -4,8 +4,8 @@
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_REPLACES,
-    FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, SignedOp, verify_chain,
+    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_KEYED,
+    FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, SignedOp, verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -9077,4 +9077,322 @@ fn a_security_key_exists_from_format_28() {
     c.format = old;
     let d = decide(&chain.state, &ayse, &freeze, Some(&sig), &c);
     assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
+}
+
+// ------------------------------------------------- keyed directories (#261)
+
+const MIGRATIONS: &str = "db/migration";
+const KEYS: &str = "db/migration#<dir>";
+
+fn keyed_policy() -> PolicyBundle {
+    let config = format!(
+        "{DEFAULT_CONFIG}\n[paths.keyed]\n\"{MIGRATIONS}\" = '^V(\\d+)__'\n\
+         \"docs/adr\" = {{ pattern = '^([a-z]+)-', compare = \"text\" }}\n"
+    );
+    PolicyBundle::parse(&config, DEFAULT_POLICY).unwrap()
+}
+
+/// Two sessions on `db/**`, observed.
+fn keyed_harness() -> H {
+    let mut h = H::with_policy(keyed_policy());
+    for s in ["a", "b"] {
+        h.start_observed(s, &["db/**", "docs/**", "src/**"]);
+    }
+    h
+}
+
+/// `session` leases the new file and reserves `key`, writes the file and
+/// proposes it.
+fn add_migration(h: &mut H, session: &str, set: &str, key: &str, name: &str) -> Decision {
+    let path = format!("{MIGRATIONS}/{name}");
+    let file = format!("{path}#<file>");
+    let items = vec![
+        named_item(&file, LeaseKind::Edit, &[]),
+        named_item(KEYS, LeaseKind::Insert, &[key]),
+    ];
+    let lease = Op::LeaseAcquire {
+        set: set.into(),
+        items,
+        intent: "a migration".into(),
+        ttl_ms: 10 * MIN,
+    };
+    assert!(h.agent(session, lease).is_allow());
+    h.wrote(session, &path);
+    h.propose(session, ChangeId::random(), new_file(&path))
+}
+
+#[test]
+fn a_key_is_reserved_like_a_name_and_two_reservations_of_one_key_conflict() {
+    let mut h = keyed_harness();
+    assert!(insert_named(&mut h, "a", "la", KEYS, &["12"]).is_allow());
+    let d = insert_named(&mut h, "b", "lb", KEYS, &["12"]);
+    assert!(denied_with(&d, "lease_held:"), "{d:?}");
+    assert!(insert_named(&mut h, "b", "lb", KEYS, &["13"]).is_allow());
+    h.assert_replay();
+}
+
+#[test]
+fn a_key_lease_is_an_insert_with_keys_of_a_keyed_directory() {
+    let mut h = keyed_harness();
+    let d = insert_named(&mut h, "a", "l1", "db/other#<dir>", &["1"]);
+    assert!(denied_with(&d, "not_keyed:db/other"), "{d:?}");
+    let d = insert_named(&mut h, "a", "l2", KEYS, &[]);
+    assert!(denied_with(&d, &format!("key_required:{KEYS}")), "{d:?}");
+    let d = h.lease("a", "l3", &[(KEYS, LeaseKind::Edit)]);
+    assert!(denied_with(&d, &format!("key_required:{KEYS}")), "{d:?}");
+    for bad in ["012", "x", "next"] {
+        let d = insert_named(&mut h, "a", "l4", KEYS, &[bad]);
+        assert!(
+            denied_with(&d, &format!("invalid_key:{MIGRATIONS}#{bad}")),
+            "{bad}: {d:?}"
+        );
+    }
+    // Text keys are as written.
+    let d = insert_named(&mut h, "a", "l5", "docs/adr#<dir>", &["cedar"]);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn a_key_lease_needs_a_scope_that_reaches_the_directory() {
+    let mut h = H::with_policy(keyed_policy());
+    h.start_observed("a", &["src/**"]);
+    h.start_observed("b", &["db/migration/V12__a.sql"]);
+    h.start_observed("c", &["db/migration/**"]);
+    h.start_observed("d", &["db/migration/old/**"]);
+    let d = insert_named(&mut h, "a", "la", KEYS, &["1"]);
+    assert!(
+        denied_with(&d, &format!("scope_path:{MIGRATIONS}")),
+        "{d:?}"
+    );
+    assert!(insert_named(&mut h, "b", "lb", KEYS, &["2"]).is_allow());
+    assert!(insert_named(&mut h, "c", "lc", KEYS, &["3"]).is_allow());
+    let d = insert_named(&mut h, "d", "ld", KEYS, &["4"]);
+    assert!(
+        denied_with(&d, &format!("scope_path:{MIGRATIONS}")),
+        "{d:?}"
+    );
+    h.assert_replay();
+}
+
+#[test]
+fn a_new_file_in_a_keyed_directory_needs_its_key() {
+    let mut h = keyed_harness();
+    let path = format!("{MIGRATIONS}/V12__add_users.sql");
+    let file = format!("{path}#<file>");
+    assert!(
+        h.lease("a", "la", &[(file.as_str(), LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.wrote("a", &path);
+    let d = h.propose("a", ChangeId::random(), new_file(&path));
+    assert!(
+        denied_with(&d, &format!("key_not_reserved:{MIGRATIONS}#12")),
+        "{d:?}"
+    );
+    // Another key reserved is not this one; `012` is `12`.
+    assert!(insert_named(&mut h, "a", "lk", KEYS, &["13"]).is_allow());
+    let d = h.propose("a", ChangeId::random(), new_file(&path));
+    assert!(denied_with(&d, "key_not_reserved:"), "{d:?}");
+    assert!(insert_named(&mut h, "a", "lk2", KEYS, &["12"]).is_allow());
+    let zero = format!("{MIGRATIONS}/V012__add_users.sql");
+    h.wrote("a", &zero);
+    let lease = format!("{zero}#<file>");
+    assert!(
+        h.lease("a", "lz", &[(lease.as_str(), LeaseKind::Edit)])
+            .is_allow()
+    );
+    let d = h.propose("a", ChangeId::random(), new_file(&zero));
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
+}
+
+#[test]
+fn a_name_the_pattern_does_not_read_is_refused_in_a_keyed_directory() {
+    let mut h = keyed_harness();
+    for (k, (path, refused)) in [
+        (format!("{MIGRATIONS}/add_users.sql"), true),
+        (format!("{MIGRATIONS}/V12_add_users.sql"), true),
+        (format!("{MIGRATIONS}/old/add_users.sql"), false),
+        ("db/add_users.sql".to_string(), false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let file = format!("{path}#<file>");
+        let set = format!("l{k}");
+        assert!(
+            h.lease("a", &set, &[(file.as_str(), LeaseKind::Edit)])
+                .is_allow()
+        );
+        h.wrote("a", &path);
+        let d = h.propose("a", ChangeId::random(), new_file(&path));
+        let reason = format!("key_unreadable:{path}");
+        assert_eq!(denied_with(&d, &reason), refused, "{path}: {d:?}");
+        assert_eq!(d.is_allow(), !refused, "{path}: {d:?}");
+    }
+    h.assert_replay();
+}
+
+#[test]
+fn a_key_another_file_has_is_taken() {
+    let mut h = keyed_harness();
+    // In the proposal's own tree: the facts name it.
+    let path = format!("{MIGRATIONS}/V12__b.sql");
+    let file = format!("{path}#<file>");
+    let items = vec![
+        named_item(&file, LeaseKind::Edit, &[]),
+        named_item(KEYS, LeaseKind::Insert, &["12"]),
+    ];
+    let lease = Op::LeaseAcquire {
+        set: "la".into(),
+        items,
+        intent: "a migration".into(),
+        ttl_ms: 10 * MIN,
+    };
+    assert!(h.agent("a", lease).is_allow());
+    h.wrote("a", &path);
+    let facts = Facts {
+        taken_keys: vec![format!("{MIGRATIONS}#12")],
+        ..new_file(&path)
+    };
+    let d = h.propose("a", ChangeId::random(), facts);
+    assert!(
+        denied_with(&d, &format!("key_taken:{MIGRATIONS}#12")),
+        "{d:?}"
+    );
+    h.assert_replay();
+}
+
+/// What trunk got after the base: a file of another session's change with
+/// the same key, under another name.
+#[test]
+fn a_key_trunk_got_since_the_base_is_taken() {
+    let mut h = keyed_harness();
+    let old_base = h.chain.state.trunk.clone().unwrap();
+    let first = add_migration(&mut h, "a", "la", "12", "V12__a.sql");
+    assert!(first.is_allow(), "{first:?}");
+    let change = h.chain.state.queue[0];
+    assert!(integrate(&mut h, change, Some(gid('n')), &[]).is_allow());
+    // b reserves 12 now that a's lease is gone, from the old base.
+    let path = format!("{MIGRATIONS}/V012__b.sql");
+    let file = format!("{path}#<file>");
+    let items = vec![
+        named_item(&file, LeaseKind::Edit, &[]),
+        named_item(KEYS, LeaseKind::Insert, &["12"]),
+    ];
+    let lease = Op::LeaseAcquire {
+        set: "lb".into(),
+        items,
+        intent: "another migration".into(),
+        ttl_ms: 10 * MIN,
+    };
+    assert!(h.agent("b", lease).is_allow());
+    h.wrote("b", &path);
+    let facts = new_file(&path);
+    let stale = Op::ChangePropose {
+        change: ChangeId::random(),
+        commit: gid('c'),
+        base: old_base,
+        claim: claim_of(&facts),
+    };
+    let d = h.agent_facts("b", stale, Some(facts));
+    assert!(
+        denied_with(&d, &format!("key_taken:{MIGRATIONS}#12")),
+        "{d:?}"
+    );
+    // Another key from the same base is free.
+    let d = add_migration(&mut h, "b", "lc", "13", "V13__c.sql");
+    assert!(!denied_with(&d, "key_taken"), "{d:?}");
+    h.assert_replay();
+}
+
+/// The key goes with the change: it stays reserved after the set's time
+/// while the change waits, and integration releases it.
+#[test]
+fn a_proposal_pins_its_keys_and_integration_releases_them() {
+    let mut h = keyed_harness();
+    let d = add_migration(&mut h, "a", "la", "12", "V12__a.sql");
+    assert!(d.is_allow(), "{d:?}");
+    let change = h.chain.state.queue[0];
+    h.now += 11 * MIN;
+    let d = insert_named(&mut h, "b", "lb", KEYS, &["12"]);
+    assert!(denied_with(&d, "lease_held:"), "{d:?}");
+    assert!(integrate(&mut h, change, Some(gid('n')), &[]).is_allow());
+    assert!(
+        !held(&h, "a").iter().any(|s| s == KEYS),
+        "{:?}",
+        held(&h, "a")
+    );
+    h.assert_replay();
+}
+
+/// A key lease in another directory than the new file's is not pinned.
+#[test]
+fn only_the_keys_of_the_directories_a_change_adds_to_are_pinned() {
+    let mut h = keyed_harness();
+    assert!(insert_named(&mut h, "a", "ladr", "docs/adr#<dir>", &["cedar"]).is_allow());
+    let d = add_migration(&mut h, "a", "la", "12", "V12__a.sql");
+    assert!(d.is_allow(), "{d:?}");
+    h.now += 11 * MIN;
+    let held = held(&h, "a");
+    assert!(held.iter().any(|s| s == KEYS), "{held:?}");
+    assert!(!held.iter().any(|s| s == "docs/adr#<dir>"), "{held:?}");
+    h.assert_replay();
+}
+
+/// Before format 29 a `<dir>` was a container like any other, and a file
+/// in a keyed directory needed no key: older entries replay as they were.
+#[test]
+fn keys_are_asked_from_format_29() {
+    let mut h = keyed_harness();
+    let path = format!("{MIGRATIONS}/add_users.sql");
+    let file = format!("{path}#<file>");
+    assert!(
+        h.lease("a", "la", &[(file.as_str(), LeaseKind::Edit)])
+            .is_allow()
+    );
+    h.wrote("a", &path);
+    let facts = new_file(&path);
+    let decided = |h: &H, format: u32, op: &Op, facts: Option<&Facts>| {
+        decide(
+            &h.chain.state,
+            &Actor::Agent {
+                name: h.chain.state.sessions["a"].agent.clone(),
+                session: "a".into(),
+            },
+            op,
+            None,
+            &Ctx {
+                format,
+                time_ms: h.now,
+                policy: &h.policy,
+                facts,
+                evidence: &[],
+                symbols_engine: Some(0),
+            },
+        )
+    };
+    let base = h.chain.state.trunk.clone().unwrap();
+    let propose = Op::ChangePropose {
+        change: ChangeId::random(),
+        commit: gid('c'),
+        base,
+        claim: claim_of(&facts),
+    };
+    let d = decided(&h, FORMAT_CURRENT, &propose, Some(&facts));
+    assert!(denied_with(&d, "key_unreadable:"), "{d:?}");
+    let d = decided(&h, FORMAT_KEYED - 1, &propose, Some(&facts));
+    assert!(!denied_with(&d, "key_"), "{d:?}");
+    let lease = Op::LeaseAcquire {
+        set: "lx".into(),
+        items: vec![named_item("db/other#<dir>", LeaseKind::Edit, &[])],
+        intent: "x".into(),
+        ttl_ms: MIN,
+    };
+    let d = decided(&h, FORMAT_CURRENT, &lease, None);
+    assert!(denied_with(&d, "not_keyed:"), "{d:?}");
+    let d = decided(&h, FORMAT_KEYED - 1, &lease, None);
+    assert!(d.is_allow(), "{d:?}");
+    h.assert_replay();
 }

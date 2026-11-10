@@ -14,8 +14,9 @@
 
 use std::collections::BTreeSet;
 
+use lonca_core::keyed;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_LEASE_INTENT,
+    FORMAT_AFFECTED, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_KEYED, FORMAT_LEASE_INTENT,
     FORMAT_LEASE_LIVENESS, FORMAT_LEGACY, FORMAT_REPLACES, FORMAT_SECURITY_KEYS,
     FORMAT_SESSION_HARNESS,
 };
@@ -208,7 +209,10 @@ fn check_lease_request(
             v.deny(format!("invalid_symbol:{}", item.symbol));
             continue;
         }
-        if !s.scope.paths.iter().any(|p| path_matches(p, path)) {
+        let keyed = ctx.format >= FORMAT_KEYED && name == keyed::DIR;
+        if keyed {
+            check_key_item(s, item, path, ctx, v);
+        } else if !s.scope.paths.iter().any(|p| path_matches(p, path)) {
             v.deny(format!("scope_path:{path}"));
         }
         if let Some(pats) = &s.scope.symbols {
@@ -224,6 +228,80 @@ fn check_lease_request(
             if !ok {
                 v.deny(format!("scope_symbol:{}", item.symbol));
             }
+        }
+    }
+}
+
+/// An item on a keyed directory's `dir#<dir>`: an `insert` that reserves
+/// keys of a directory the policy names, written as the directory writes
+/// them, by a session that may add files there. Anything else on a `<dir>`
+/// is refused: deny by default.
+fn check_key_item(s: &Session, item: &LeaseItem, dir: &str, ctx: &Ctx, v: &mut Verdict) {
+    let Some(d) = ctx.policy.keyed.get(dir) else {
+        v.deny(format!("not_keyed:{dir}"));
+        return;
+    };
+    if item.kind != LeaseKind::Insert || item.names.is_empty() {
+        v.deny(format!("key_required:{}", item.symbol));
+    }
+    for n in item.names.iter().filter(|n| !d.valid_key(n)) {
+        v.deny(format!("invalid_key:{dir}#{n}"));
+    }
+    // A file of the directory: `dir/**` and any pattern above it, or one
+    // file directly in it.
+    let probe = format!("{dir}/{}", keyed::DIR);
+    let in_dir = |p: &String| {
+        path_matches(p, &probe)
+            || p.strip_prefix(dir)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|name| !name.is_empty() && !name.contains('/'))
+    };
+    if !s.scope.paths.iter().any(in_dir) {
+        v.deny(format!("scope_path:{dir}"));
+    }
+}
+
+/// What a session's proposal adds to keyed directories must have its key
+/// reserved by the session, and no other file may have that key: in the
+/// proposal's own tree (`taken_keys` in its facts) or among the files trunk
+/// gained since its base. A name the pattern does not read is refused.
+fn check_keys(
+    state: &State,
+    mine: &[&LeaseItem],
+    base: &lonca_core::GitId,
+    ctx: &Ctx,
+    v: &mut Verdict,
+) {
+    let Some(f) = ctx.facts else {
+        return;
+    };
+    let dirs = &ctx.policy.keyed;
+    for t in &f.taken_keys {
+        v.deny(format!("key_taken:{t}"));
+    }
+    for path in &f.added_files {
+        let Some((d, name)) = dirs.of(path) else {
+            continue;
+        };
+        let Some(key) = d.key_of(name) else {
+            v.deny(format!("key_unreadable:{path}"));
+            continue;
+        };
+        let container = d.container();
+        let reserved = mine.iter().any(|i| {
+            i.kind == LeaseKind::Insert && i.symbol == container && i.names.contains(&key)
+        });
+        if !reserved {
+            v.deny(format!("key_not_reserved:{}#{key}", d.dir));
+        }
+        let same = |p: &str| {
+            p != path.as_str()
+                && dirs
+                    .of(p)
+                    .is_some_and(|(o, n)| o.dir == d.dir && o.key_of(n).as_ref() == Some(&key))
+        };
+        if state.created_since_where(base, same) {
+            v.deny(format!("key_taken:{}#{key}", d.dir));
         }
     }
 }
@@ -1528,6 +1606,9 @@ fn propose(
                         v.deny(format!("created_since_base:{p}"));
                     }
                 }
+            }
+            if ctx.format >= FORMAT_KEYED {
+                check_keys(state, &mine, base, ctx, v);
             }
 
             let unobserved =

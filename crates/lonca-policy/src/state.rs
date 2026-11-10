@@ -8,8 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::ChangeId;
 use lonca_core::GitId;
+use lonca_core::keyed;
 use lonca_core::oplog::{
-    FORMAT_GIVE_BACK, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS,
+    FORMAT_GIVE_BACK, FORMAT_KEYED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS,
     FORMAT_REPLACES, FORMAT_SYMBOL_KEYS, GENESIS_PREV, OpEntry, SignedOp,
 };
 use lonca_core::ops::{
@@ -1215,12 +1216,27 @@ impl State {
     ) {
         let needs = facts.map(|f| symbols::lease_needs(f, format));
         let needs = needs.unwrap_or_default();
+        // The keys of a keyed directory go with a change that adds files to
+        // it. Which of its files have a key is the policy's: the whole item
+        // is pinned.
+        let added_to = |i: &LeaseItem| {
+            let dir = i.symbol.strip_suffix(keyed::DIR)?.strip_suffix('#')?;
+            let files = facts.map(|f| f.added_files.iter()).into_iter().flatten();
+            let mut parents = files.filter_map(|p| p.rsplit_once('/').map(|(d, _)| d));
+            Some(parents.any(|d| d == dir))
+        };
+        let keys = |i: &LeaseItem| {
+            format >= FORMAT_KEYED
+                && i.kind == lonca_core::ops::LeaseKind::Insert
+                && added_to(i) == Some(true)
+        };
         let pinned: Vec<(String, Vec<LeaseItem>)> = self
             .active_leases(now_ms)
             .filter(|l| l.holder == session)
             .map(|l| {
                 let items = l.items.iter().copied();
-                let items = items.filter(|i| needs.iter().any(|n| self.covers_need(n, i, None)));
+                let items =
+                    items.filter(|i| keys(i) || needs.iter().any(|n| self.covers_need(n, i, None)));
                 (l.lease.set.clone(), items.cloned().collect())
             })
             .collect();
@@ -2037,11 +2053,14 @@ impl State {
     /// adds it would be merged with that file as if from nothing. Any trunk
     /// when `base` was never trunk.
     pub fn created_since(&self, base: &GitId, path: &str) -> bool {
+        self.created_since_where(base, |p| p == path)
+    }
+
+    /// An integration since `base` created a file whose path `pick` takes.
+    pub fn created_since_where(&self, base: &GitId, pick: impl Fn(&str) -> bool) -> bool {
         let at = self.trunk_line.iter().rposition(|t| t == base);
         let later = |line: &usize| at.is_none_or(|at| *line > at);
-        self.created
-            .iter()
-            .any(|(line, p)| p == path && later(line))
+        self.created.iter().any(|(line, p)| later(line) && pick(p))
     }
 
     /// How many integrations trunk has had since `base` was trunk; `None`

@@ -1050,7 +1050,8 @@ mod tests {
             }
             assert!(!proves_presence("ed25519"));
             assert!(!proves_presence("rsa"));
-            assert_eq!((FORMAT_SECURITY_KEYS, FORMAT_CURRENT), (28, 28));
+            assert_eq!(FORMAT_SECURITY_KEYS, 28);
+            const { assert!(FORMAT_CURRENT >= FORMAT_SECURITY_KEYS) };
         }
 
         #[test]

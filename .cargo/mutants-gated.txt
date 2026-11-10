@@ -18,6 +18,7 @@ crates/lonca-core/src/canonical.rs
 crates/lonca-core/src/changeid.rs
 crates/lonca-core/src/keys.rs
 crates/lonca-core/src/paths.rs
+crates/lonca-core/src/keyed.rs
 crates/lonca-audit/src/
 crates/lonca-symbols/src/merge.rs
 crates/lonca-symbols/src/integrate.rs

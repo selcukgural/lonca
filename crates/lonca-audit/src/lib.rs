@@ -26,14 +26,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
+use lonca_core::keyed::KeyedDirs;
+use lonca_core::oplog::{FORMAT_KEYED, OpLog, SignedOp, verify_chain};
 use lonca_core::ops::Op;
 use lonca_core::{ChangeId, GitId, Result, Store};
 use lonca_policy::config::{CONFIG_FILE, Config, POLICY_FILE, PolicyBundle};
 use lonca_policy::decide::{Ctx, decide};
 use lonca_policy::state::State;
 use lonca_symbols::engine;
-use lonca_symbols::integrate::{facts_of, integrate_joining};
+use lonca_symbols::integrate::{facts_keyed, integrate_joining};
 use serde::Serialize;
 
 pub const TRUNK_REF: &str = "refs/heads/main";
@@ -277,13 +278,22 @@ fn check_other_refs(store: &Store, state: &State, all: bool, rep: &mut Report) {
 fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp, rep: &mut Report) {
     let e = &op.entry;
     let engine = e.engine().unwrap_or(engine::ENGINE_CURRENT);
+    // `PolicyBundle::parse` compiled these when the policy came in.
+    let keyed = config.paths.keyed_dirs().unwrap_or_default();
+    let none = KeyedDirs::default();
+    // Facts name taken keys from format 29 on.
+    let facts_keys = if e.format >= FORMAT_KEYED {
+        &keyed
+    } else {
+        &none
+    };
     match &e.op {
         Op::ChangePropose { base, commit, .. } => {
             if !store.has_object(commit) || !store.has_object(base) {
                 rep.skip(e.seq, "facts", "proposal objects not present");
                 return;
             }
-            match facts_of(store, engine, base, commit) {
+            match facts_keyed(store, engine, base, commit, facts_keys) {
                 Ok(a) if Some(&a.facts) == e.facts.as_ref() => {}
                 Ok(a) => rep.find(
                     Some(e.seq),
@@ -315,6 +325,7 @@ fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp,
                 trunk_before,
                 &rec.commit,
                 &may_join,
+                &keyed,
             ) {
                 Ok(i) => {
                     if &i.merged != merged || &i.conflicts != conflicts {
@@ -347,7 +358,15 @@ fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp,
                 }
                 let joins = state.joins(*change, members.get(..k).unwrap_or_default(), config);
                 let may_join = |s: &str| joins.allows(s);
-                match integrate_joining(store, engine, &rec.base, &trunk, &rec.commit, &may_join) {
+                match integrate_joining(
+                    store,
+                    engine,
+                    &rec.base,
+                    &trunk,
+                    &rec.commit,
+                    &may_join,
+                    &keyed,
+                ) {
                     Ok(i) if i.merged.as_ref() == Some(commit) => {}
                     Ok(i) => {
                         let found = format!("recorded {commit:?}, recomputed {:?}", i.merged);

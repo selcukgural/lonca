@@ -17,6 +17,7 @@ ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
 gix = { version = "0.90.0", optional = true, default-features = false, features = ["max-performance", "revision", "index", "sha1"] }
 hex = "0.4.3"
+regex = { version = "1.13.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
@@ -27,8 +28,11 @@ zeroize = "1.9.1"
 # The Git object store and the log kept in it. Without it: the operation
 # types, ids, canonical encoding, keys and chain verification, for a client
 # of the daemon (lonca-client).
-default = ["store"]
+default = ["store", "keyed"]
 store = ["dep:gix"]
+# Keyed directories (#261): reading a file's key from its name, with a
+# regular expression. lonca-client goes without it.
+keyed = ["dep:regex"]
 
 [dev-dependencies]
 tempfile = "3.27.0"

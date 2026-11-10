@@ -15,13 +15,17 @@ name: release
 # (`gh attestation verify lonca-<target>.tar.gz --repo selcukgural/lonca`).
 # The notes are the version's section of docs/release-notes.md (`## X.Y.Z`).
 #
+# Before the draft, the acceptance tests (docs/acceptance.md) run on the
+# archives themselves, one job per target a runner can execute; the draft
+# is made only when every one passed.
+#
 # The release stays a draft: ci.yml runs on the same tag, and a maintainer
 # publishes the draft once it is green. Publishing starts
 # registries.yml (crates.io); the Homebrew tap and install.sh read the
 # latest published release.
 #
-# Run by hand (workflow_dispatch) it only builds, so the four builds can be
-# tried before a tag.
+# Run by hand (workflow_dispatch) it only builds and runs the acceptance
+# tests, so the four builds can be tried before a tag.
 #
 # The builds run third-party code (crates' build scripts) and see no
 # credential; only the draft job may write the release or mint the token the
@@ -155,9 +159,44 @@ jobs:
           path: dist/lonca-sbom.cdx.tar.gz
           if-no-files-found: error
 
+  # The acceptance tests on the unpacked archive, as a user would install
+  # it. The x86_64 macOS build is made on Apple silicon, which may not run
+  # it; it is the same code as the arm64 one.
+  acceptance:
+    name: acceptance (${{ matrix.target }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: lonca-${{ matrix.target }}
+          path: dist
+      - name: Unpack
+        run: |
+          mkdir unpacked
+          tar -xzf "dist/lonca-$TARGET.tar.gz" -C unpacked
+      - name: Acceptance tests
+        run: acceptance/run.sh --bin unpacked
+
   draft:
     if: github.ref_type == 'tag'
-    needs: [build, sbom]
+    needs: [build, sbom, acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: release

@@ -9,14 +9,20 @@
    not gate a release (docs/decisions.md, "Mutation testing"). A fuzz failure's
    input is encrypted (docs/fuzzing.md): fix it before the release.
 3. Try the four builds: `gh workflow run release.yml --ref main` (builds
-   only, drafts nothing).
-4. Review `docs/security/owasp.md`: every row still true, every gap still has
+   and runs the acceptance tests on the archives, drafts nothing).
+4. Acceptance (docs/acceptance.md): the criteria still say what this
+   release does, "Not covered yet" is still true, and
+   `acceptance/run.sh` passes on a release build on your machine
+   (`cargo build --release -p lonca -p lonca-audit`). The acceptance tests
+   are never skipped: a failing one is fixed before the release, or its
+   criterion changed in a pull request that says why.
+5. Review `docs/security/owasp.md`: every row still true, every gap still has
    an open issue.
-5. Grammars: `.github/scripts/grammars.sh`. A grammar with a newer release
+6. Grammars: `.github/scripts/grammars.sh`. A grammar with a newer release
    is updated in a pull request of its own before the release, with what
    docs/decisions.md ("Grammar updates") asks of it; one that stays behind
    has its reason there, and the table there is today's.
-6. MSRV: `cargo +<rust-version> check --workspace --all-targets --locked`
+7. MSRV: `cargo +<rust-version> check --workspace --all-targets --locked`
    with the workspace's `rust-version`; raise it if a dependency asks more.
 
 ## Releasing
@@ -30,8 +36,10 @@
    push origin vX.Y.Z`. `release.yml` drafts the release; `ci.yml` and
    `fuzz.yml` run on the tag.
 3. `ci.yml` and `fuzz.yml` green on the tag (a fuzz failure is fixed and
-   released as a new patch version; a tag is never moved), and the draft
-   has four archives, `SHA256SUMS` and `lonca-sbom.cdx.tar.gz`: check one
+   released as a new patch version; a tag is never moved). The draft
+   exists only if `release.yml`'s acceptance jobs passed on the archives;
+   one that failed is fixed and released as a new patch version too. The
+   draft has four archives, `SHA256SUMS` and `lonca-sbom.cdx.tar.gz`: check one
    archive with `gh attestation verify lonca-aarch64-apple-darwin.tar.gz
    --repo selcukgural/lonca`.
 4. crates.io. A crate that is not on crates.io yet is published by hand
@@ -55,7 +63,8 @@
 7. `curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh` installs
    the new version on a clean machine or account.
 
-What CI can not check, because it needs model access, follows.
+What CI can not check, because it needs model access, follows: the
+manual criteria M01 and M02 of docs/acceptance.md.
 
 ## A live run per harness
 

@@ -104,3 +104,20 @@ fn a_store_it_can_not_read_is_named_permission_denied() {
     let out = audit(&["verify", dir.path().join("none").to_str().unwrap()]);
     assert!(!text(&out.stderr).contains("permission denied"));
 }
+
+#[test]
+fn version_is_the_workspace_version_and_anything_else_is_usage() {
+    for flag in ["--version", "-V"] {
+        let out = audit(&[flag]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert_eq!(
+            text(&out.stdout),
+            format!("lonca-audit {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+    for args in [&["--version", "x"][..], &[][..], &["--versions"][..]] {
+        let out = audit(args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert!(text(&out.stderr).contains("lonca-audit --version"));
+    }
+}

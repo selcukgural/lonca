@@ -3,6 +3,7 @@
 //! ```text
 //! lonca-audit verify <git-dir> [--shallow] [--no-refs] [--json] [--freeze-flag <file>]
 //! lonca-audit compare <local-git-dir> <published-git-dir>
+//! lonca-audit --version
 //! ```
 //!
 //! Exit status: 0 when clean, 1 when findings exist, 2 on usage or I/O errors.
@@ -20,7 +21,7 @@ use lonca_core::oplog::OpLog;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  lonca-audit verify <git-dir> [--shallow] [--no-refs] [--all-refs] [--json] [--freeze-flag <file>]\n  lonca-audit compare <local-git-dir> <published-git-dir>"
+        "usage:\n  lonca-audit verify <git-dir> [--shallow] [--no-refs] [--all-refs] [--json] [--freeze-flag <file>]\n  lonca-audit compare <local-git-dir> <published-git-dir>\n  lonca-audit --version"
     );
     ExitCode::from(2)
 }
@@ -30,6 +31,12 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("verify") => verify(&args[1..]),
         Some("compare") => compare_cmd(&args[1..]),
+        // The same answer as `lonca --version`, so a script can check that
+        // the auditor it runs is the release it installed.
+        Some("--version" | "-V") if args.len() == 1 => {
+            println!("lonca-audit {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
         _ => usage(),
     }
 }

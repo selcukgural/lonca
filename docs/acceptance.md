@@ -99,6 +99,9 @@ last column.
 | A24 | `--harness claude-code` writes `.mcp.json` (`lonca mcp`) and `.claude/settings.local.json` (`lonca hook` on session start, before and after a tool) | `08-harness` |
 | A25 | The hook gives the agent Lonca's rules at session start and denies a write outside the workspace | `08-harness` |
 | A26 | `lonca mcp` answers `initialize` with the version and lists the agent's tools; `lonca rules` prints the rules | `08-harness` |
+| A27 | In a keyed directory (`[paths.keyed]`), `--name next` reserves the next free key and says which; another agent can not reserve that key | `09-keyed` |
+| A28 | A new file in a keyed directory without its key reserved is refused, naming the key; with it, it lands | `09-keyed` |
+| A29 | A key a file on trunk already has is refused (`key_taken`); a person's change and an agent's that would land one key: the second is conflicted on the key, and the log audits | `09-keyed` |
 
 ## Manual criteria
 

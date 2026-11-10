@@ -12,6 +12,8 @@
 pub mod canonical;
 pub mod changeid;
 pub mod error;
+#[cfg(feature = "keyed")]
+pub mod keyed;
 pub mod keys;
 pub mod objects;
 pub mod oplog;

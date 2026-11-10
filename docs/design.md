@@ -279,6 +279,7 @@ Agent'lar dosya değil **sembol** (fonksiyon, sınıf, metod) düzeyinde kiralam
 |---|---|---|
 | `edit` | Bir sembolün gövdesi | Tek sahip |
 | `insert` | Bir kapsayıcıya (dosya, sınıf) yeni üye ekleme | Çok sahip olabilir. Eklenecek üye adları ayrılabilir (`names`); adları kesişen iki `insert` çakışır, ayrılmış adların dışında ekleme reddedilir. Eklemeler deterministik sırayla (kuyruk sırası; aynı yerde en son entegre edilen komşusuna en yakın) birleştirilir. Yeni dosya, yolunun `path#<file>` sembolünde `edit` ister: aynı yolu iki agent oluşturamaz. |
+| `insert` (anahtarlı dizin) | Anahtarlı bir dizine (`[paths.keyed]`: Flyway, Django, golang-migrate göçleri, numaralı ADR'ler) dosya ekleme | `dir#<dir>` üzerinde `insert`, `names` içinde dosya adından okunan anahtar (`V12__a.sql` için `12`; `next` bir sonraki boş sayı). Aynı anahtarı iki oturum ayıramaz. Eklenen dosyanın anahtarı oturumca ayrılmış olmalı, adı desene uymalı ve anahtar başka bir dosyada olmamalı (öneri anında); birleşmiş ağaçta iki dosya aynı anahtarı taşırsa değişiklik `conflicted` olur (entegrasyonda, auditor yeniden hesaplar). Desen politikada veridir, araca özgü kod yoktur. |
 | `imports` | Dosya başındaki import/using bloğuna ekleme | Kiralama gerekmez; küme olarak birleştirilir. Silme `edit` gerektirir. |
 | `rename` / `delete` | Sembol ve bilinen referansları | Geniş kapsam; politika onayı gerektirebilir |
 

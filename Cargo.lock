@@ -2297,6 +2297,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gix",
  "hex",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

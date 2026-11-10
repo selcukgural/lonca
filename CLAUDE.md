@@ -96,7 +96,7 @@ cargo mutants -p lonca-policy -j 4          # one crate
   (ignored), `caught.txt` the rest; `diff/` has each mutant as a patch.
 - The gated files (`.cargo/mutants-gated.txt`: `decide.rs`, `chain.rs`,
   `state.rs`, `human.rs`, `oplog.rs`, `canonical.rs`, `changeid.rs`,
-  `keys.rs`, `paths.rs`, the auditor, the merge) may have no missed and no
+  `keys.rs`, `paths.rs`, `keyed.rs`, the auditor, the merge) may have no missed and no
   timed-out mutant. A survivor there is fixed with a test, or listed in
   `exclude_re` with a written reason why it is equivalent and added to
   `.cargo/mutants-gated-exclusions.txt`

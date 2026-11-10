@@ -188,7 +188,18 @@ unknown method: `unknown_method`, whatever the token.
   ones `invalid_names`; adding a name another session reserved is
   `name_reserved:<symbol>:<session>`. A file a change adds needs `edit` (or
   `rename`) on its `path#<file>`, and one trunk created after the change's base
-  is `created_since_base:<path>` (sync first). A lease detail of a free
+  is `created_since_base:<path>` (sync first). A keyed directory
+  (`[paths.keyed]`, log format 29) is the container `dir#<dir>`: an
+  `insert` on it reserves keys in `names` (numbers without a leading zero,
+  or text), and `lease.acquire` resolves each `next` there to the number
+  after the highest key on trunk or reserved, answering `"keys":
+  {"dir#<dir>": [key]}`. Anything else on a `<dir>` is `not_keyed:<dir>`,
+  `key_required:<symbol>` or `invalid_key:<dir>#<key>`. A file a proposal adds
+  there needs its key reserved (`key_not_reserved:<dir>#<key>`), a name the
+  pattern reads (`key_unreadable:<path>`), and a key no other file has
+  (`key_taken:<dir>#<key>`; facts carry `taken_keys` for the proposal's own
+  tree); an integration that would leave two files with one key is
+  conflicted on `<dir>#<key>`. A lease detail of a free
   `insert` carries the `names` to reserve. Markdown, TOML, JSON and YAML files
   have sections as symbols (`README.md#Install.Linux`,
   `Cargo.toml#dependencies.serde`); adding to the end of a Markdown section

@@ -11,6 +11,7 @@
 
 use std::collections::BTreeSet;
 
+use lonca_core::keyed::KeyedDirs;
 use lonca_core::store::CommitSpec;
 use lonca_core::{FileMap, GitId, Result, Store};
 
@@ -34,10 +35,12 @@ pub fn integrate(
     trunk: &GitId,
     change: &GitId,
 ) -> Result<Integration> {
-    integrate_joining(store, engine, base, trunk, change, &no_joins)
+    let none = KeyedDirs::default();
+    integrate_joining(store, engine, base, trunk, change, &no_joins, &none)
 }
 
-/// [`integrate`], joining by lines the symbols `joins` names.
+/// [`integrate`], joining by lines the symbols `joins` names, under the
+/// keyed directories of the policy in force.
 pub fn integrate_joining(
     store: &Store,
     engine: u32,
@@ -45,6 +48,7 @@ pub fn integrate_joining(
     trunk: &GitId,
     change: &GitId,
     joins: Joins,
+    keyed: &KeyedDirs,
 ) -> Result<Integration> {
     engine::check(engine)?;
     let base_files = store.commit_files(base)?;
@@ -65,6 +69,18 @@ pub fn integrate_joining(
     // directory, which no tree can hold: that is their conflict, and without
     // this no entry could record it, so the queue would stop here.
     let clashes = file_and_directory(&r.files);
+    if !clashes.is_empty() {
+        return Ok(Integration {
+            merged: None,
+            conflicts: clashes,
+            files: ours,
+            touched: vec![],
+        });
+    }
+    // Two files with one key in a keyed directory: each change was fine,
+    // the two together are not, whatever the checks run. Only what this
+    // change brings: a clash trunk already had stops nobody.
+    let clashes = new_key_clashes(keyed, &ours, &r.files);
     if !clashes.is_empty() {
         return Ok(Integration {
             merged: None,
@@ -98,6 +114,17 @@ pub fn integrate_joining(
     })
 }
 
+/// The keys, as `dir#key`, that two files of `after` share in a keyed
+/// directory and no two files of `before` did.
+pub fn new_key_clashes(keyed: &KeyedDirs, before: &FileMap, after: &FileMap) -> Vec<String> {
+    if keyed.is_empty() {
+        return vec![];
+    }
+    let had = keyed.clashes(before.keys().map(String::as_str));
+    let now = keyed.clashes(after.keys().map(String::as_str));
+    now.difference(&had).cloned().collect()
+}
+
 /// Files that other files stand under, as conflicts.
 fn file_and_directory(files: &FileMap) -> Vec<String> {
     let parents = files.keys().flat_map(|path| {
@@ -114,4 +141,21 @@ pub fn facts_of(store: &Store, engine: u32, base: &GitId, commit: &GitId) -> Res
     let b = store.commit_files(base)?;
     let n = store.commit_files(commit)?;
     analyze(engine, &b, &n, &|id| store.read_blob(id))
+}
+
+/// [`facts_of`], with the keys its added files share with another file of
+/// its tree under the keyed directories of the policy in force.
+pub fn facts_keyed(
+    store: &Store,
+    engine: u32,
+    base: &GitId,
+    commit: &GitId,
+    keyed: &KeyedDirs,
+) -> Result<Analysis> {
+    let mut a = facts_of(store, engine, base, commit)?;
+    if !keyed.is_empty() && !a.facts.added_files.is_empty() {
+        let n = store.commit_files(commit)?;
+        a.facts.taken_keys = keyed.taken(&a.facts.added_files, n.keys().map(String::as_str));
+    }
+    Ok(a)
 }

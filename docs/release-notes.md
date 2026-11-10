@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Keyed directories: two agents can not take one migration version
+
+Flyway's `V12__add_users.sql`, Django's `0012_add_users.py` and the like get
+their meaning from a key in their name, and Git saw two files with one key
+as two unrelated paths ([#261](https://github.com/selcukgural/lonca/issues/261)).
+Name such directories in `lonca.toml`:
+
+```toml
+[paths.keyed]
+"db/migration" = '^V(\d+)__'
+```
+
+An agent reserves the key before adding the file, with an `insert` lease on
+the directory (`lonca lease acquire 'db/migration#<dir>' --kind insert
+--name next` takes the next free number and says which). A new file there
+without its key reserved, with a key another file has, or with a name the
+pattern does not read is refused, and two changes that would land one key
+are `conflicted` at integration, naming it, whatever the checks run.
+[Concepts](guide/concepts.md#keyed-directories) has the details. Log format
+29; an older `lonca` refuses a log that has reached it.
+
 ### `lonca-audit` on Linux verifies again
 
 On the Linux archives of 0.2.0 to 0.2.2, `lonca-audit verify` reported a

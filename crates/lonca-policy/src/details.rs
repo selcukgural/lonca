@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lonca_core::ChangeId;
+use lonca_core::keyed::KeyedDirs;
 use lonca_core::oplog::FORMAT_CURRENT;
 use lonca_core::ops::{Facts, LeaseItem, LeaseKind};
 use serde::Serialize;
@@ -189,6 +190,55 @@ pub fn lease_report(
             out.push(Detail {
                 names,
                 ..Detail::free(FREE, &need.symbol, kind)
+            });
+        }
+        out.extend(blockers);
+    }
+    out
+}
+
+/// The keys the files a change adds to keyed directories need: per file an
+/// `insert` on its directory's `dir#<dir>` with its key in `names`, and
+/// where it stands, as [`lease_report`] says it of symbols.
+pub fn key_report(
+    state: &State,
+    session: &str,
+    facts: &Facts,
+    keyed: &KeyedDirs,
+    now_ms: i64,
+) -> Vec<Detail> {
+    let mine: Vec<LeaseItem> = state
+        .active_leases(now_ms)
+        .filter(|l| l.holder == session)
+        .flat_map(|l| l.items.into_iter().cloned())
+        .collect();
+    let mut out = Vec::new();
+    for path in &facts.added_files {
+        let Some((d, name)) = keyed.of(path) else {
+            continue;
+        };
+        let Some(key) = d.key_of(name) else {
+            continue;
+        };
+        let item = LeaseItem {
+            symbol: d.container(),
+            kind: LeaseKind::Insert,
+            names: vec![key.clone()],
+        };
+        let held = |i: &LeaseItem| {
+            i.kind == LeaseKind::Insert && i.symbol == item.symbol && i.names.contains(&key)
+        };
+        if mine.iter().any(held) {
+            out.push(Detail::free(HELD_BY_YOU, &item.symbol, LeaseKind::Insert));
+            continue;
+        }
+        let wanted = std::slice::from_ref(&item);
+        let mut blockers = lease_held(state, session, wanted, now_ms);
+        blockers.extend(lease_wanted(state, session, wanted, now_ms));
+        if blockers.is_empty() {
+            out.push(Detail {
+                names: item.names.clone(),
+                ..Detail::free(FREE, &item.symbol, LeaseKind::Insert)
             });
         }
         out.extend(blockers);

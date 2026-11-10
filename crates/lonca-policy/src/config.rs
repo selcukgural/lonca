@@ -10,6 +10,7 @@ use cedar_policy::{
     RestrictedExpression,
 };
 use lonca_core::canonical::sha256_hex;
+use lonca_core::keyed::{Compare, KeyedDirs};
 use lonca_core::ops::Actor;
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +91,15 @@ critical = [
 ]
 # Reading these taints a session.
 untrusted = ["vendor/**", "third_party/**", "node_modules/**"]
+
+# Keyed directories: a file's key comes from its name (a migration's
+# version), and no two files there may have one. An agent reserves a key
+# with an insert lease on "dir#<dir>". See docs/guide/concepts.md, "Keyed
+# directories".
+# [paths.keyed]
+# "db/migration" = '^V(\d+)__'                          # Flyway
+# "app/migrations" = '^(\d+)_'                          # Django
+# "docs/adr" = { pattern = '^([a-z-]+)\.md$', compare = "text" }
 
 [verification]
 # Commands run by the verifier in a sandbox on the merged tree.
@@ -433,6 +443,48 @@ pub struct Changes {
 pub struct Paths {
     pub critical: Vec<String>,
     pub untrusted: Vec<String>,
+    /// Keyed directories (#261): a directory, and the pattern that reads a
+    /// file's key from its name. Two files there may not have one key.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub keyed: BTreeMap<String, KeyedSpec>,
+}
+
+/// One `paths.keyed` entry: the pattern alone, keys compared as numbers, or
+/// `{ pattern = "...", compare = "text" }`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum KeyedSpec {
+    Pattern(String),
+    Full(KeyedFull),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyedFull {
+    pub pattern: String,
+    #[serde(default)]
+    pub compare: Compare,
+}
+
+impl KeyedSpec {
+    fn parts(&self) -> (&str, Compare) {
+        match self {
+            Self::Pattern(p) => (p, Compare::Number),
+            Self::Full(f) => (&f.pattern, f.compare),
+        }
+    }
+}
+
+impl Paths {
+    /// The keyed directories, compiled. `PolicyBundle::parse` refuses a
+    /// policy whose entries do not compile, so a parsed one always does.
+    pub fn keyed_dirs(&self) -> Result<KeyedDirs, String> {
+        let entries = self.keyed.iter().map(|(dir, spec)| {
+            let (pattern, compare) = spec.parts();
+            (dir.as_str(), pattern, compare)
+        });
+        KeyedDirs::new(entries)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -854,6 +906,7 @@ impl Default for Paths {
                 "**/setup.py",
             ]),
             untrusted: s(&["vendor/**", "third_party/**", "node_modules/**"]),
+            keyed: BTreeMap::new(),
         }
     }
 }
@@ -981,6 +1034,8 @@ pub enum CedarOutcome {
 
 pub struct PolicyBundle {
     pub config: Config,
+    /// `config.paths.keyed`, compiled.
+    pub keyed: KeyedDirs,
     pub cedar: PolicySet,
     pub digest: String,
     pub config_text: String,
@@ -1019,6 +1074,10 @@ impl PolicyBundle {
                 return Err(format!("{CONFIG_FILE}: bad path pattern {p:?}"));
             }
         }
+        let keyed = config
+            .paths
+            .keyed_dirs()
+            .map_err(|e| format!("{CONFIG_FILE}: {e}"))?;
         if config.sessions.ops_per_minute == 0 {
             return Err(format!(
                 "{CONFIG_FILE}: sessions.ops_per_minute must be positive"
@@ -1164,6 +1223,7 @@ impl PolicyBundle {
         let digest = sha256_hex(format!("{config_text}\0{policy_text}").as_bytes());
         Ok(Self {
             config,
+            keyed,
             cedar,
             digest,
             config_text: config_text.to_string(),
@@ -1755,6 +1815,33 @@ mod tests {
             .join()
             .unwrap();
         assert_eq!(outcome, CedarOutcome::Allow);
+    }
+
+    #[test]
+    fn keyed_directories_are_read_and_a_bad_one_refuses_the_policy() {
+        let with =
+            |keyed: &str| PolicyBundle::parse(&format!("[paths.keyed]\n{keyed}\n"), DEFAULT_POLICY);
+        let b = with("\"db/migration\" = '^V(\\d+)__'\n\"docs/adr\" = { pattern = '^([a-z]+)-', compare = \"text\" }").unwrap();
+        let m = b.keyed.get("db/migration").unwrap();
+        assert_eq!(m.compare, Compare::Number);
+        assert_eq!(m.key_of("V012__x.sql").as_deref(), Some("12"));
+        assert_eq!(b.keyed.get("docs/adr").unwrap().compare, Compare::Text);
+        assert_eq!(b.config.paths.keyed.len(), 2);
+        assert!(b.config.paths.critical.contains(&".github/**".to_string()));
+        let full = with("\"m\" = { pattern = '^(\\d+)' }").unwrap();
+        assert_eq!(full.keyed.get("m").unwrap().compare, Compare::Number);
+        for bad in [
+            "\"m\" = '^\\d+'",
+            "\"m\" = '^(\\d+'",
+            "\"m/\" = '^(\\d+)'",
+            "\"m\" = { pattern = '^(\\d+)', compare = \"words\" }",
+            "\"m\" = { pattern = '^(\\d+)', comprae = \"text\" }",
+            "\"m\" = 12",
+        ] {
+            let e = with(bad).err().unwrap_or_else(|| panic!("{bad} parsed"));
+            assert!(e.starts_with(CONFIG_FILE), "{bad}: {e}");
+        }
+        assert!(PolicyBundle::default_bundle().keyed.is_empty());
     }
 
     #[test]

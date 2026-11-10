@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use lonca_core::canonical::{digest_of, random_id};
+use lonca_core::keyed;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OPLOG_REF, OpLog, SignedOp};
 use lonca_core::ops::{
@@ -26,7 +27,7 @@ use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
 use lonca_policy::state::{ChangeRecord, ChangeStatus, Joins, State};
 use lonca_policy::{details, refs};
 use lonca_symbols::engine::ENGINE_CURRENT;
-use lonca_symbols::integrate::{facts_of, integrate_joining};
+use lonca_symbols::integrate::{facts_keyed, integrate_joining};
 use lonca_verify::{Sandbox, Verifier};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -2351,7 +2352,8 @@ impl Service {
                 max,
             )
             .or_fail()?;
-        let a = facts_of(&r.store, ENGINE_CURRENT, &p.base, &commit).or_fail()?;
+        let keyed = &r.policy().or_fail()?.keyed;
+        let a = facts_keyed(&r.store, ENGINE_CURRENT, &p.base, &commit, keyed).or_fail()?;
         let f = &a.facts;
         let claim = Claim {
             intent: p.intent,
@@ -2676,8 +2678,9 @@ impl Service {
                 ..
             } => {
                 r.check_proposal(commit, base, *change).or_fail()?;
+                let keyed = &r.policy().or_fail()?.keyed;
                 sub.facts = Some(
-                    facts_of(&r.store, ENGINE_CURRENT, base, commit)
+                    facts_keyed(&r.store, ENGINE_CURRENT, base, commit, keyed)
                         .or_fail()?
                         .facts,
                 );
@@ -2889,18 +2892,96 @@ impl Service {
         let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
         Self::reconcile(r, now)?;
+        let mut items = p.items;
+        let keys = Self::next_keys(r, &mut items, now)?;
         let op = Op::LeaseAcquire {
             set: set.clone(),
-            items: p.items.clone(),
+            items: items.clone(),
             intent: p.intent,
             ttl_ms: p.ttl_ms,
         };
         let signed = r.submit(Submission::new(actor, op), now).or_fail()?;
         let mut out = logged(&signed);
         out["set"] = json!(set);
-        let details = Self::lease_details(r, &session, &p.items, now);
+        if !keys.is_empty() {
+            out["keys"] = json!(keys);
+        }
+        let details = Self::lease_details(r, &session, &items, now);
         out["advice"] = json!(details::advice(&details));
         out["details"] = json!(details);
+        Ok(out)
+    }
+
+    /// `next` among the names of an insert on a keyed directory's
+    /// `dir#<dir>`: the number after the highest key a file of trunk has
+    /// there or a lease holds, each `next` one more. Resolved here, so the
+    /// log records the number and `decide` stays pure. Returns what each
+    /// container got.
+    fn next_keys(
+        r: &mut RepoHandle,
+        items: &mut [LeaseItem],
+        now: i64,
+    ) -> std::result::Result<BTreeMap<String, Vec<String>>, (String, String)> {
+        let wants = |i: &LeaseItem| i.names.iter().any(|n| n == keyed::NEXT);
+        if !items.iter().any(wants) {
+            return Ok(BTreeMap::new());
+        }
+        let policy = r.policy().or_fail()?;
+        let trunk = match &r.chain.state.trunk {
+            Some(t) => r.store.commit_files(t).or_fail()?,
+            None => FileMap::new(),
+        };
+        let state = &r.chain.state;
+        let mut out = BTreeMap::new();
+        for item in items.iter_mut().filter(|i| wants(i)) {
+            let Some(dir) = item
+                .symbol
+                .strip_suffix(keyed::DIR)
+                .and_then(|d| d.strip_suffix('#'))
+            else {
+                return fail(
+                    "invalid",
+                    format!("`{}` is a key: only for dir#<dir>", keyed::NEXT),
+                );
+            };
+            let held: Vec<String> = state
+                .active_leases(now)
+                .flat_map(|l| l.items)
+                .filter(|i| i.symbol == item.symbol)
+                .flat_map(|i| i.names.iter().cloned())
+                .collect();
+            let mut taken: Vec<String> = held;
+            taken.extend(item.names.iter().filter(|n| *n != keyed::NEXT).cloned());
+            let mut names = Vec::new();
+            for n in &item.names {
+                if n != keyed::NEXT {
+                    names.push(n.clone());
+                    continue;
+                }
+                let tree = trunk.keys().map(String::as_str);
+                let reserved = taken.iter().map(String::as_str);
+                let Some(key) = policy.keyed.next_key(dir, tree, reserved) else {
+                    return fail(
+                        "invalid",
+                        format!(
+                            "`{}`: {dir} is not a keyed directory whose keys are numbers",
+                            keyed::NEXT
+                        ),
+                    );
+                };
+                taken.push(key.clone());
+                names.push(key);
+            }
+            let got: Vec<String> = names
+                .iter()
+                .filter(|n| !item.names.contains(n))
+                .cloned()
+                .collect();
+            out.entry(item.symbol.clone())
+                .or_insert_with(Vec::new)
+                .extend(got);
+            item.names = names;
+        }
         Ok(out)
     }
 
@@ -3016,7 +3097,8 @@ impl Service {
                 max,
             )
             .or_fail()?;
-        let analysis = facts_of(&r.store, ENGINE_CURRENT, &p.base, &commit).or_fail()?;
+        let keyed = &r.policy().or_fail()?.keyed;
+        let analysis = facts_keyed(&r.store, ENGINE_CURRENT, &p.base, &commit, keyed).or_fail()?;
         let seq = r.chain.state.next_seq;
         r.store
             .ref_cas(&format!("refs/lonca/changes/{change}/{seq}"), &commit, None)
@@ -3060,9 +3142,20 @@ impl Service {
         out["commit"] = json!(commit);
         out["facts"] = json!(analysis.facts);
         out["syntax_errors"] = json!(analysis.syntax_errors);
-        let unparsed = r.policy().or_fail()?.config.leases.unparsed_files;
-        let missing =
-            details::lease_missing(&r.chain.state, &session, &analysis.facts, unparsed, now);
+        let policy = r.policy().or_fail()?;
+        let unparsed = policy.config.leases.unparsed_files;
+        let state = &r.chain.state;
+        let mut missing = details::lease_missing(state, &session, &analysis.facts, unparsed, now);
+        let keys = details::key_report(state, &session, &analysis.facts, &policy.keyed, now);
+        let keys = keys.into_iter().filter(|d| d.code != details::HELD_BY_YOU);
+        missing.extend(keys.map(|d| details::Detail {
+            code: if d.code == details::FREE {
+                details::LEASE_MISSING
+            } else {
+                d.code
+            },
+            ..d
+        }));
         out["advice"] = json!(details::advice(&missing));
         out["details"] = json!(missing);
         Ok(out)
@@ -3088,10 +3181,18 @@ impl Service {
                 max,
             )
             .or_fail()?;
-        let a = facts_of(&r.store, ENGINE_CURRENT, &p.base, &commit).or_fail()?;
+        let keyed = &r.policy().or_fail()?.keyed;
+        let a = facts_keyed(&r.store, ENGINE_CURRENT, &p.base, &commit, keyed).or_fail()?;
         let session = actor.session().expect("agent");
         let unparsed = r.policy().or_fail()?.config.leases.unparsed_files;
-        let leases = details::lease_report(&r.chain.state, session, &a.facts, unparsed, now);
+        let mut leases = details::lease_report(&r.chain.state, session, &a.facts, unparsed, now);
+        leases.extend(details::key_report(
+            &r.chain.state,
+            session,
+            &a.facts,
+            keyed,
+            now,
+        ));
         let no_lease = match unparsed {
             UnparsedFiles::Optimistic => a.facts.unparsed_files.clone(),
             UnparsedFiles::File => Vec::new(),
@@ -3971,7 +4072,7 @@ impl Service {
     /// the changes ahead of it that wait for that.
     fn process_batch(&self, repo: &str) -> Result<Option<SignedOp>> {
         let mut running = self.running();
-        let (store, jobs, reaches, trunk, vcfg, joins) = {
+        let (store, jobs, reaches, trunk, vcfg, joins, (keyed, digest)) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
                 return Ok(None);
@@ -4016,7 +4117,8 @@ impl Service {
             if jobs.len() >= 2 {
                 running.hold(jobs.iter().map(|j| j.0));
             }
-            (r.store.clone(), jobs, reaches, trunk, vcfg, joins)
+            let keyed = (policy.keyed.clone(), policy.digest.clone());
+            (r.store.clone(), jobs, reaches, trunk, vcfg, joins, keyed)
         };
         // At most the policy's size, so never two under the default.
         if jobs.len() < 2 {
@@ -4027,7 +4129,15 @@ impl Service {
         let mut tip = trunk.clone();
         for ((change, commit, base), joins) in jobs.iter().zip(&joins) {
             let may_join = |s: &str| joins.allows(s);
-            let i = integrate_joining(&store, ENGINE_CURRENT, base, &tip, commit, &may_join);
+            let i = integrate_joining(
+                &store,
+                ENGINE_CURRENT,
+                base,
+                &tip,
+                commit,
+                &may_join,
+                &keyed,
+            );
             let Some((merged, i)) = i.ok().and_then(|i| Some((i.merged.clone()?, i))) else {
                 break;
             };
@@ -4051,7 +4161,7 @@ impl Service {
             {
                 let merged = prefix.iter().map(|p| (p.0, p.1.clone())).collect();
                 let joins = &joins[..length];
-                return self.log_batch(repo, trunk, merged, (&jobs, joins), evidence);
+                return self.log_batch(repo, trunk, merged, (&jobs, joins), &digest, evidence);
             }
             length /= 2;
         }
@@ -4064,10 +4174,16 @@ impl Service {
         trunk: GitId,
         merged: Vec<(ChangeId, GitId)>,
         (jobs, joins): (&[(ChangeId, GitId, GitId)], &[Joins]),
+        digest: &str,
         evidence: Vec<Attestation>,
     ) -> Result<Option<SignedOp>> {
         let mut inner = self.lock();
         let r = inner.repos.get_mut(repo).expect("exists");
+        // The merge read the keyed directories of the policy it started
+        // under; the auditor reads those of the policy at the entry.
+        if r.policy()?.digest != digest {
+            return Ok(None);
+        }
         let config = r.policy()?.config.clone();
         let state = &r.chain.state;
         let still = jobs.iter().take(merged.len()).zip(&state.queue);
@@ -4103,7 +4219,7 @@ impl Service {
     /// The change at the head of the queue, alone.
     fn process_head(&self, repo: &str) -> Result<Option<SignedOp>> {
         let mut running = self.running();
-        let (store, change, commit, base, trunk, vcfg, reuse, past, joins) = {
+        let (store, change, commit, base, trunk, vcfg, reuse, past, joins, (keyed, digest)) = {
             let mut inner = self.lock();
             let Some(r) = inner.repos.get_mut(repo).filter(|r| r.initialized()) else {
                 return Ok(None);
@@ -4138,10 +4254,19 @@ impl Service {
                 reuse,
                 past,
                 joins,
+                (policy.keyed.clone(), policy.digest.clone()),
             )
         };
         let may_join = |s: &str| joins.allows(s);
-        let integ = integrate_joining(&store, ENGINE_CURRENT, &base, &trunk, &commit, &may_join)?;
+        let integ = integrate_joining(
+            &store,
+            ENGINE_CURRENT,
+            &base,
+            &trunk,
+            &commit,
+            &may_join,
+            &keyed,
+        )?;
         let mut evidence = Vec::new();
         if let Some(m) = integ.merged.as_ref().filter(|_| !past) {
             let changed = (&integ.files, integ.touched.as_slice());
@@ -4158,7 +4283,7 @@ impl Service {
         // The auditor reads what may be joined from the policy in force at
         // the entry: one that changed under the run merges again.
         let config = &r.policy()?.config;
-        if r.chain.state.joins(change, &[], config) != joins {
+        if r.chain.state.joins(change, &[], config) != joins || r.policy()?.digest != digest {
             drop(inner);
             return self.process_head(repo);
         }

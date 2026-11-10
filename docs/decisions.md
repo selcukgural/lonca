@@ -2271,7 +2271,8 @@ Passing tests do not show that they would catch a flipped `>=` or a
 - **The gate on the trust model's files (#35).** `.cargo/mutants-gated.txt`
   lists the files that hold the trust model: `decide.rs`, `chain.rs`,
   `state.rs` and `human.rs` of `lonca-policy`; `oplog.rs`, `canonical.rs`,
-  `changeid.rs`, `keys.rs` and `paths.rs` of `lonca-core`; all of
+  `changeid.rs`, `keys.rs`, `paths.rs` and `keyed.rs` (keyed directories,
+  #261) of `lonca-core`; all of
   `lonca-audit`; `merge.rs` and `integrate.rs` of `lonca-symbols`. They are the
   only files `mutants.yml` mutates. A timeout counts as caught, but in a
   gated file it fails: it is a
@@ -3976,6 +3977,58 @@ acceptance tests (`docs/acceptance.md`, `acceptance/`) close that gap.
   the crate Cedar already uses), whoever calls it. A test evaluates on a
   96 KiB thread. The glibc and macOS builds `ci.yml` runs could not show
   it; only the shipped archives did.
+
+## Keyed directories (#261)
+
+A user running Claude Code and Codex side by side found that, past ordinary
+text conflicts, the only collision left was two agents taking one Flyway
+version: `V12__a.sql` and `V12__b.sql` are two paths to Git and to the
+merge, and both landed unless a check happened to run the migrations.
+
+- **Data, not tools.** `[paths.keyed]` in `lonca.toml` names a directory
+  and a pattern that reads a key from a file name; there is no Flyway or
+  Django arm. The pattern is a `regex` crate expression, which compiles to
+  automata and never backtracks: linear in the name, the same answer on
+  every machine, bounded (200 characters, a 1 MiB automaton, 64
+  directories, exactly one group). Matching is on the file name, and only
+  a file directly in the directory has a key.
+- **Numbers by default.** Every tool named in the issue numbers its files,
+  and `12` and `012` are one migration to them, so keys compare as numbers
+  unless `compare = "text"`. A lease writes a number without a leading zero,
+  so two reservations of one key are one string and `names_meet` needs no
+  change.
+- **A key is a reserved name.** The directory is a container, `dir#<dir>`,
+  and an `insert` on it reserves keys in `names` as an insert on a type
+  reserves member names; conflicts, interests, reservations and pins work
+  as they do for names. Anything else on a `<dir>` is refused (deny by
+  default): another kind, no keys, a directory the policy does not name, a
+  key the directory would not write.
+- **`next` is the daemon's.** `decide()` can not read trunk's tree, so the
+  daemon resolves `next` before deciding: one past the highest key on trunk
+  and in every live reservation, written into the operation. The log
+  records the number, and the replay decides the same.
+- **Checked twice.** At proposal (format 29): every file an agent adds to a
+  keyed directory needs its key reserved by its session, a name the pattern
+  reads, and a key no other file has. "Other file" is the proposal's own
+  tree, which the facts report as `taken_keys` (computed with the policy in
+  force, and recomputed by the auditor with the policy at the entry), and
+  the files trunk created since its base, from the state. At integration,
+  for every change, a person's too: a merged tree with two files of one key
+  that the trunk before it did not have is a conflict on `dir#key`, beside
+  the file/directory clash. Only new clashes count, so a repository that
+  already has two `V1` files is not stopped.
+- **Pins without the policy.** `State::apply` has no policy, so it can not
+  read keys; a proposal pins every key item of its session on a directory
+  it adds files to. A key reserved and not used goes with the change too,
+  and integration releases it.
+- **Renames and deletes stay with the rules.** A rename adds a file, whose
+  key is reserved like any other; keeping agents from deleting or rewriting
+  migrations is a `policy.cedar` rule (the guide has one), not a built-in
+  (decided with the user, 2026-11-10).
+- **A run that started under another policy is done again.** The merge
+  reads the keyed directories of the policy it began under, and the auditor
+  those of the policy at the entry: the daemon logs an integration only if
+  the policy's digest is the same when it does.
 
 ## Open questions (carried from the design)
 

@@ -57,7 +57,7 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// pending changes of its workspace; version 27 lets a recovery key sign a
 /// `daemon.recover` (`recover`); version 28 accepts human keys on FIDO
 /// security keys (`sk-p256`, `sk-ed25519`).
-pub const FORMAT_CURRENT: u32 = 28;
+pub const FORMAT_CURRENT: u32 = 29;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -143,6 +143,12 @@ pub const FORMAT_RECOVERY_DAEMON: u32 = 27;
 /// (`sk-p256`, `sk-ed25519`), whose signatures prove presence. No new
 /// field: before it, such a key is `invalid_key`, as it always was.
 pub const FORMAT_SECURITY_KEYS: u32 = 28;
+/// The first format with keyed directories (#261): an `insert` lease on a
+/// `dir#<dir>` reserves keys, a proposal's added files there need theirs, a
+/// proposal pins the key leases of the directories it adds files to, and
+/// facts may name `taken_keys`. Before it, a `<dir>` lease was one on any
+/// container. Older entries replay as they were.
+pub const FORMAT_KEYED: u32 = 29;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

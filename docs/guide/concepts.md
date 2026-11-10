@@ -143,6 +143,59 @@ lonca lease acquire 'src/billing.rs#Client.charge' -i "rate limiting"
 Twenty agents can change twenty functions of one file at once: different
 symbols never conflict, at lease time or at merge time.
 
+### Keyed directories
+
+Some files get their meaning from a key in their name, and the key must be
+unique in their directory: a Flyway migration `V12__add_users.sql`, a Django
+one `0012_add_users.py`, golang-migrate's `000012_add_users.up.sql`, a
+numbered decision record. Two such files with different names and one key
+conflict in meaning, and Git sees two unrelated paths. `lonca.toml` names
+these directories and how to read the key from a file name:
+
+```toml
+[paths.keyed]
+"db/migration" = '^V(\d+)__'                             # Flyway
+"app/migrations" = '^(\d+)_'                             # Django
+"docs/adr" = { pattern = '^([a-z-]+)\.md$', compare = "text" }
+```
+
+The pattern is a regular expression on the file name alone (not the path)
+whose one group is the key; it never backtracks, so it reads every name in
+time linear in its length. Keys compare as numbers by default (`12` and
+`012` are one key); `compare = "text"` takes them as written. Only files
+directly in the directory have keys.
+
+- **Reserve the key.** An agent that adds such a file reserves its key with
+  an `insert` lease on the directory, `db/migration#<dir>`, with the key in
+  `names`, beside the `edit` on the new file's `path#<file>`. `next` asks
+  for the number after the highest key on trunk or reserved by anyone, and
+  the answer says which (`keys`):
+
+  ```sh
+  lonca lease acquire 'db/migration#<dir>' --kind insert --name next -i "users table"
+  # lease set lse_…
+  # keys db/migration#<dir>: 13
+  ```
+
+  Two sessions can not reserve one key. `lonca lease needed` and `preview`
+  list the key a new file needs.
+- **At proposal.** A file an agent adds there needs its key reserved by its
+  session (`key_not_reserved:db/migration#12`), its name must have a key
+  (`key_unreadable:<path>`), and no other file may have it: in the change's
+  own tree, or among what trunk got since its base
+  (`key_taken:db/migration#12`). The key leases go with the change until it
+  leaves the queue.
+- **At integration.** The merged tree is checked again, for everyone's
+  changes, a person's too: a change that would leave two files with one key
+  is `conflicted` and names the key (`db/migration#12`), whatever the
+  verification commands do. A clash trunk already had stops nobody. The
+  auditor recomputes it.
+
+Renaming and deleting existing files there are what they are elsewhere: a
+rename adds a file, whose key is reserved as any other's, and a rule in
+`policy.cedar` keeps agents from deleting them
+([an example](policies.md#examples)).
+
 ## Proposals and changes
 
 An agent (or a human) **proposes** the local changes of its workspace with a

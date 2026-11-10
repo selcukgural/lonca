@@ -53,7 +53,7 @@ jobs:
           ASKED: ${{ inputs.targets }}
         run: |
           set -f
-          all="entry hook merge parse policy replay request"
+          all="entry hook merge parse policy replay request signature"
           asked=$(printf '%s' "$ASKED" | tr ',\t' '  ')
           for t in $asked; do
             case " $all " in

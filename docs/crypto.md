@@ -12,6 +12,7 @@ changes this file in the same pull request. The [threat model](security/threat-m
 | Daemon signature on every log entry | Ed25519, `verify_strict` | `ed25519-dalek` 3 | `crates/lonca-core/src/keys.rs`, `oplog.rs` |
 | Human signatures, file keys (development) | Ed25519, `verify_strict` | `ed25519-dalek` 3 | `keys.rs`, `crates/lonca-policy/src/human.rs` |
 | Human signatures, Secure Enclave keys | ECDSA P-256 with SHA-256 | Security framework (`lonca-se`), `p256` 0.14 to verify | `packaging/macos/lonca-se`, `human.rs` |
+| Human signatures, FIDO security keys | ECDSA P-256 with SHA-256 or Ed25519 (`verify_strict`), in OpenSSH's SSHSIG form over SHA-512 or SHA-256 of the message | the device and `ssh-keygen` to sign; `p256`, `ed25519-dalek`, `sha2` to verify | `human.rs` (`sk`) |
 | Log entry digests, hash chain | SHA-256 over canonical JSON | `sha2` 0.11 | `crates/lonca-core/src/canonical.rs`, `oplog.rs` |
 | Session tokens at rest | SHA-256 of the token | `sha2` | `crates/lonca-daemon/src/home.rs` (`Tokens`) |
 | Tokens, nonces, ids, new keys | 32 (tokens, keys) or 8 to 16 bytes from the OS | `getrandom` 0.4 | `canonical.rs` (`random_bytes`) |
@@ -42,6 +43,7 @@ Notes:
 | Key of a rotation in progress | `<home>/daemon.next.key`, mode 0600 | the daemon's user | `daemon.rotate` | becomes `daemon.key` once every repository has switched; the old secret is deleted |
 | Human file key | `~/.config/lonca/humans/<name>.key` (`$LONCA_HUMANS`), mode 0600 | the developer's account | `lonca human keygen` | `lonca human rotate` (`human.rotate`) |
 | Human Secure Enclave key | `<humans>/<name>.se`: a key blob only the Secure Enclave of that Mac can use; every signature needs Touch ID or the password | nobody: the private key never leaves the enclave | `lonca human keygen --secure-enclave` | `human.rotate`; a lost key: the recovery key (`human.recover`; on a lost Mac, with the daemon key gone too, a `daemon.recover` it signs: [Recovery](guide/recovery.md#a-lost-mac)) |
+| Human security key | `<humans>/<name>.sk`: the handle of a credential on a FIDO security key, made for the application `ssh:lonca`; every signature needs a touch | nobody: the private key never leaves the device, and the handle signs nothing without it | `lonca human keygen --security-key` | `human.rotate`; a lost device: the recovery key (`human.recover`) |
 | Recovery key | `--out` path, then off the machine (password manager, USB stick) | whoever holds the copy | `lonca human recovery-key` | spent by `lonca human recover` (`human.recover`, or `daemon.recover` with `recover` on a lost Mac); set a new one after |
 | Agent session tokens | given once to the harness (session file in the workspace, MCP), stored in `<home>/tokens.json` only as SHA-256 | the agent's process; the daemon keeps no copy | `session.start` | end, revocation (cascades), expiry (#53) |
 | Human session tokens | `<humans>/<name>.session`, mode 0600 | the developer's account | `lonca human login` (presence) | expiry, `lonca human logout` |

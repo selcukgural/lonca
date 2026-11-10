@@ -1952,6 +1952,7 @@ name = "lonca-fuzz"
 version = "0.2.2"
 dependencies = [
  "base64",
+ "hex",
  "lonca-audit",
  "lonca-client",
  "lonca-core",
@@ -1988,6 +1989,7 @@ dependencies = [
  "p256",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "toml",
 ]

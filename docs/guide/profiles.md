@@ -39,15 +39,27 @@ and what it only detects is the [threat model](../security/threat-model.md).
 ## Presence
 
 A hardened repository accepts human signatures only from a key that proves
-presence, which today is a Secure Enclave key:
+presence: a Secure Enclave key on a Mac, or a FIDO security key anywhere
+OpenSSH can use one (Linux included):
 
 ```sh
-lonca human keygen --secure-enclave <name>
+lonca human keygen <name> --secure-enclave   # Touch ID or the password
+lonca human keygen <name> --security-key     # a touch on the key
 ```
+
+A security key signs through `ssh-keygen` (OpenSSH 8.2 or later, built with
+FIDO support; `LONCA_SSH_KEYGEN` names another one, such as Homebrew's on a
+Mac). `--security-key` makes an ECDSA credential, which every FIDO and U2F
+key has; `--security-key ed25519` asks for Ed25519, on FIDO2 keys that have
+it. The file `<name>.sk` next to your other keys is the credential's handle:
+it signs nothing without the device. The key only blinks, so `lonca` prints
+what the touch is for on the line before; a key made with OpenSSH's
+`no-touch-required` signs nothing here. `lonca doctor` says under
+`presence` what your key proves and what this machine could use.
 
 `lonca init` refuses a file key here, because the repository's first entry would
 lock that key out of everything after it, the policy update that could undo it
-included. On a machine with no such key, Linux for now, say so:
+included. On a machine with neither kind of key, say so:
 
 ```sh
 lonca init demo --without-presence

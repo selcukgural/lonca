@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use lonca_core::keys::KeyPair;
-use lonca_core::ops::{HumanSignature, Op};
+use lonca_core::ops::{HumanKey, HumanSignature, Op};
 use lonca_daemon::Client;
 use lonca_daemon::service::HUMAN_SESSION_DEFAULT_MS;
 use serde::{Deserialize, Serialize};
@@ -195,21 +195,6 @@ pub fn default_human() -> Result<String> {
         .with_context(|| "no human identity; run `lonca human keygen <name>` or set LONCA_HUMAN")
 }
 
-pub fn human_key_path(name: &str) -> PathBuf {
-    humans_dir().join(format!("{name}.key"))
-}
-
-pub fn human_key(name: &str) -> Result<KeyPair> {
-    let p = human_key_path(name);
-    KeyPair::load(&p, crate::sys::current_uid())
-        .map_err(|e| anyhow!("human key {}: {e}", p.display()))
-}
-
-/// Secure Enclave key blob of a human, if they use one.
-pub fn se_key_path(name: &str) -> PathBuf {
-    humans_dir().join(format!("{name}.se"))
-}
-
 /// The `lonca-se` helper: `$LONCA_SE`, else next to this executable.
 pub fn se_helper() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os("LONCA_SE") {
@@ -244,10 +229,6 @@ fn run_helper(args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-pub fn se_keygen(name: &str) -> Result<String> {
-    se_keygen_at(&se_key_path(name))
-}
-
 /// Creates a Secure Enclave key whose blob is stored at `p`.
 pub fn se_keygen_at(p: &Path) -> Result<String> {
     std::fs::create_dir_all(humans_dir())?;
@@ -258,20 +239,269 @@ pub fn se_public_at(p: &Path) -> Result<String> {
     run_helper(&["public", &p.to_string_lossy()], None)
 }
 
-/// The public key a human signs with.
-pub fn human_public(name: &str) -> Result<lonca_core::ops::HumanKey> {
-    let se = se_key_path(name);
-    if se.exists() {
-        let public = se_public_at(&se)?;
-        return Ok(lonca_core::ops::HumanKey {
-            alg: "p256-se".into(),
-            public,
-        });
+/// Where a human's key lives, which is how it signs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeyKind {
+    /// A file: anything running as the human can sign.
+    File,
+    /// The Secure Enclave, through `lonca-se`: Touch ID or the password.
+    SecureEnclave,
+    /// A FIDO security key, through `ssh-keygen`: a touch.
+    SecurityKey,
+}
+
+impl KeyKind {
+    /// In the order a human's key is looked for.
+    pub const ALL: [KeyKind; 3] = [KeyKind::SecureEnclave, KeyKind::SecurityKey, KeyKind::File];
+
+    /// The extension of the key's file in the humans directory.
+    pub fn ext(self) -> &'static str {
+        match self {
+            KeyKind::File => "key",
+            KeyKind::SecureEnclave => "se",
+            KeyKind::SecurityKey => "sk",
+        }
     }
-    Ok(lonca_core::ops::HumanKey {
-        alg: "ed25519".into(),
-        public: human_key(name)?.public_hex(),
+
+    /// Whether signing asks the person for something.
+    pub fn prompts(self) -> bool {
+        self != KeyKind::File
+    }
+
+    /// The flag that asks for this kind of key.
+    pub fn flag(self) -> &'static str {
+        match self {
+            KeyKind::File => "neither flag",
+            KeyKind::SecureEnclave => "--secure-enclave",
+            KeyKind::SecurityKey => "--security-key",
+        }
+    }
+}
+
+/// The file of a human's key of one kind.
+pub fn key_path(name: &str, kind: KeyKind) -> PathBuf {
+    humans_dir().join(format!("{name}.{}", kind.ext()))
+}
+
+/// The kind of key a human has here, if any.
+pub fn key_kind(name: &str) -> Option<KeyKind> {
+    KeyKind::ALL
+        .into_iter()
+        .find(|k| key_path(name, *k).exists())
+}
+
+/// The type of security key `ssh-keygen` makes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub enum SkType {
+    /// ECDSA P-256: every FIDO and U2F key has it.
+    Ecdsa,
+    /// Ed25519: FIDO2 keys with newer firmware.
+    Ed25519,
+}
+
+/// The key a keygen, a rotation or a recovery makes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NewKey {
+    File,
+    SecureEnclave,
+    SecurityKey(SkType),
+}
+
+impl NewKey {
+    /// From `--secure-enclave` and `--security-key[=type]`.
+    pub fn from_flags(secure_enclave: bool, security_key: Option<SkType>) -> NewKey {
+        match (secure_enclave, security_key) {
+            (true, _) => NewKey::SecureEnclave,
+            (false, Some(ty)) => NewKey::SecurityKey(ty),
+            (false, None) => NewKey::File,
+        }
+    }
+
+    pub fn kind(self) -> KeyKind {
+        match self {
+            NewKey::File => KeyKind::File,
+            NewKey::SecureEnclave => KeyKind::SecureEnclave,
+            NewKey::SecurityKey(_) => KeyKind::SecurityKey,
+        }
+    }
+
+    /// The key at `path`, made now unless an earlier run made it.
+    pub fn at(self, path: &Path, name: &str) -> Result<HumanKey> {
+        if !path.exists() {
+            match self {
+                NewKey::SecureEnclave => {
+                    se_keygen_at(path)?;
+                }
+                NewKey::SecurityKey(ty) => return sk_keygen_at(path, ty, name),
+                NewKey::File => {
+                    KeyPair::load_or_create(path, crate::sys::current_uid())?;
+                }
+            }
+        }
+        public_at(path, self.kind())
+    }
+}
+
+/// `ssh-keygen`: `$LONCA_SSH_KEYGEN`, else the one on the PATH.
+fn ssh_keygen() -> std::ffi::OsString {
+    std::env::var_os("LONCA_SSH_KEYGEN").unwrap_or_else(|| "ssh-keygen".into())
+}
+
+/// Whether there is an `ssh-keygen` to run.
+pub fn ssh_keygen_found() -> bool {
+    let program = PathBuf::from(ssh_keygen());
+    if program.components().count() > 1 {
+        return program.is_file();
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(&program).is_file()))
+}
+
+fn ssh_keygen_failed(e: &std::io::Error) -> anyhow::Error {
+    anyhow!(
+        "ssh-keygen could not be run ({e}): a security key signs through OpenSSH 8.2 or \
+         later; install it or set LONCA_SSH_KEYGEN"
+    )
+}
+
+/// Makes a security key credential for Lonca; its handle (useless
+/// without the device) is stored at `p`. The person touches the key.
+pub fn sk_keygen_at(p: &Path, ty: SkType, name: &str) -> Result<HumanKey> {
+    std::fs::create_dir_all(humans_dir())?;
+    let ty = match ty {
+        SkType::Ecdsa => "ecdsa-sk",
+        SkType::Ed25519 => "ed25519-sk",
+    };
+    eprintln!("making a key on your security key: touch it when it blinks");
+    let application = format!("application={}", lonca_policy::human::sk::APPLICATION);
+    let status = std::process::Command::new(ssh_keygen())
+        .args(["-q", "-t", ty, "-O", &application, "-N", "", "-C"])
+        .arg(format!("lonca:{name}"))
+        .arg("-f")
+        .arg(p)
+        .status()
+        .map_err(|e| ssh_keygen_failed(&e))?;
+    if !status.success() {
+        bail!(
+            "ssh-keygen made no key: is a security key plugged in, and is this OpenSSH \
+             built with FIDO support?"
+        );
+    }
+    // The handle file holds the public key too.
+    let mut public = p.as_os_str().to_owned();
+    public.push(".pub");
+    let _ = std::fs::remove_file(public);
+    sk_public_at(p)
+}
+
+/// The public key of the security key credential stored at `p`.
+pub fn sk_public_at(p: &Path) -> Result<HumanKey> {
+    let out = std::process::Command::new(ssh_keygen())
+        .arg("-y")
+        .arg("-f")
+        .arg(p)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| ssh_keygen_failed(&e))?;
+    if !out.status.success() {
+        bail!(
+            "ssh-keygen -y {}: {}",
+            p.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    sk_public(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The human key in an OpenSSH public key line.
+fn sk_public(line: &str) -> Result<HumanKey> {
+    use base64::Engine;
+    use lonca_policy::human::sk;
+    let blob = line.split_whitespace().nth(1).unwrap_or_default();
+    let blob = base64::engine::general_purpose::STANDARD.decode(blob);
+    let Some((kind, public)) = blob.ok().and_then(|b| sk::parse_public_blob(&b)) else {
+        bail!(
+            "not a security key made for Lonca (ssh-keygen -t ecdsa-sk -O application={})",
+            sk::APPLICATION
+        );
+    };
+    Ok(HumanKey {
+        alg: kind.alg().into(),
+        public: hex::encode(public),
     })
+}
+
+/// Signs `msg` with the security key whose handle is at `p`. `what` is
+/// shown first: the device itself shows nothing, so the terminal says
+/// what the touch is for.
+fn sk_sign(p: &Path, msg: &[u8], what: &str) -> Result<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+    eprintln!("{what}\ntouch your security key to sign");
+    let mut child = std::process::Command::new(ssh_keygen())
+        .args(["-Y", "sign", "-n", lonca_policy::human::sk::NAMESPACE, "-f"])
+        .arg(p)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| ssh_keygen_failed(&e))?;
+    child.stdin.take().expect("piped").write_all(msg)?;
+    let out = child.wait_with_output()?;
+    if !out.status.success() {
+        bail!("ssh-keygen did not sign: no touch, or the security key is not plugged in");
+    }
+    sk_signature(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The signature inside the armor `ssh-keygen -Y sign` prints, in hex.
+fn sk_signature(armored: &str) -> Result<String> {
+    use base64::Engine;
+    let mut lines = armored.lines().map(str::trim).filter(|l| !l.is_empty());
+    if lines.next() != Some("-----BEGIN SSH SIGNATURE-----") {
+        bail!("ssh-keygen printed no signature");
+    }
+    let body: String = lines
+        .take_while(|l| *l != "-----END SSH SIGNATURE-----")
+        .collect();
+    let blob = base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .context("ssh-keygen printed no signature")?;
+    Ok(hex::encode(blob))
+}
+
+/// The public key stored at `path`, a key of `kind`.
+pub fn public_at(path: &Path, kind: KeyKind) -> Result<HumanKey> {
+    Ok(match kind {
+        KeyKind::SecureEnclave => HumanKey {
+            alg: "p256-se".into(),
+            public: se_public_at(path)?,
+        },
+        KeyKind::SecurityKey => sk_public_at(path)?,
+        KeyKind::File => HumanKey {
+            alg: "ed25519".into(),
+            public: KeyPair::load(path, crate::sys::current_uid())
+                .map_err(|e| anyhow!("human key {}: {e}", path.display()))?
+                .public_hex(),
+        },
+    })
+}
+
+/// The public key a human signs with.
+pub fn human_public(name: &str) -> Result<HumanKey> {
+    let kind = key_kind(name).unwrap_or(KeyKind::File);
+    public_at(&key_path(name, kind), kind)
+}
+
+/// Signs `msg` with the key at `path`. A key that proves presence asks
+/// for it, saying `what` it is for; a file key signs.
+fn sign_with(path: &Path, kind: KeyKind, msg: &[u8], what: &str) -> Result<String> {
+    match kind {
+        KeyKind::SecureEnclave => run_helper(&["sign", &path.to_string_lossy(), what], Some(msg)),
+        KeyKind::SecurityKey => sk_sign(path, msg, what),
+        KeyKind::File => Ok(KeyPair::load(path, crate::sys::current_uid())
+            .map_err(|e| anyhow!("human key {}: {e}", path.display()))?
+            .sign_hex(msg)),
+    }
 }
 
 /// What the Touch ID prompt says: generated from the operation being signed.
@@ -345,30 +575,17 @@ fn short_key(k: &str) -> &str {
 }
 
 pub fn sign(human: &str, repo: &str, op: &Op) -> Result<HumanSignature> {
-    let se = se_key_path(human);
-    if se.exists() {
-        let nonce = lonca_core::canonical::nonce();
-        let issued_ms = now_ms();
-        let msg = lonca_policy::human::intent_bytes(repo, op, &nonce, issued_ms);
-        let sig = run_helper(
-            &["sign", &se.to_string_lossy(), &describe(repo, op)],
-            Some(&msg),
-        )?;
-        return Ok(HumanSignature {
-            human: human.to_string(),
-            nonce,
-            issued_ms,
-            sig,
-        });
-    }
-    let key = human_key(human)?;
-    Ok(lonca_policy::human::sign_ed25519(
-        &key,
-        human,
-        repo,
-        op,
-        now_ms(),
-    ))
+    let kind = key_kind(human).unwrap_or(KeyKind::File);
+    let nonce = lonca_core::canonical::nonce();
+    let issued_ms = now_ms();
+    let msg = lonca_policy::human::intent_bytes(repo, op, &nonce, issued_ms);
+    let sig = sign_with(&key_path(human, kind), kind, &msg, &describe(repo, op))?;
+    Ok(HumanSignature {
+        human: human.to_string(),
+        nonce,
+        issued_ms,
+        sig,
+    })
 }
 
 // ---------------------------------------------------------------- human sessions
@@ -458,58 +675,35 @@ pub fn describe_login(human: &str, repo: Option<&str>, ttl_ms: i64) -> String {
 }
 
 /// The keys a human may sign in with: the current one, and the one a
-/// rotation or recovery left waiting (`<name>.next.se|key`) when it was
+/// rotation or recovery left waiting (`<name>.next.<ext>`) when it was
 /// interrupted after some repositories had already taken it.
-fn login_keys(human: &str) -> Vec<(PathBuf, bool)> {
-    let dir = humans_dir();
-    [
-        (se_key_path(human), true),
-        (human_key_path(human), false),
-        (dir.join(format!("{human}.next.se")), true),
-        (dir.join(format!("{human}.next.key")), false),
-    ]
-    .into_iter()
-    .filter(|(p, _)| p.exists())
-    .collect()
+fn login_keys(human: &str) -> Vec<(PathBuf, KeyKind)> {
+    let next = format!("{human}.next");
+    [human, next.as_str()]
+        .into_iter()
+        .flat_map(|name| KeyKind::ALL.map(|k| (key_path(name, k), k)))
+        .filter(|(p, _)| p.exists())
+        .collect()
 }
 
-/// Signs a login intent with the key at `path`: the Secure Enclave
-/// helper (presence) or a file key.
+/// Signs a login intent with the key at `path`.
 fn sign_login_with(
     path: &Path,
-    secure_enclave: bool,
+    kind: KeyKind,
     human: &str,
     repo: Option<&str>,
     ttl_ms: i64,
 ) -> Result<HumanSignature> {
-    if secure_enclave {
-        let nonce = lonca_core::canonical::nonce();
-        let issued_ms = now_ms();
-        let msg = lonca_policy::human::login_bytes(repo, human, ttl_ms, &nonce, issued_ms);
-        let sig = run_helper(
-            &[
-                "sign",
-                &path.to_string_lossy(),
-                &describe_login(human, repo, ttl_ms),
-            ],
-            Some(&msg),
-        )?;
-        return Ok(HumanSignature {
-            human: human.to_string(),
-            nonce,
-            issued_ms,
-            sig,
-        });
-    }
-    let key = KeyPair::load(path, crate::sys::current_uid())
-        .map_err(|e| anyhow!("human key {}: {e}", path.display()))?;
-    Ok(lonca_policy::human::sign_login_ed25519(
-        &key,
-        human,
-        repo,
-        ttl_ms,
-        now_ms(),
-    ))
+    let nonce = lonca_core::canonical::nonce();
+    let issued_ms = now_ms();
+    let msg = lonca_policy::human::login_bytes(repo, human, ttl_ms, &nonce, issued_ms);
+    let sig = sign_with(path, kind, &msg, &describe_login(human, repo, ttl_ms))?;
+    Ok(HumanSignature {
+        human: human.to_string(),
+        nonce,
+        issued_ms,
+        sig,
+    })
 }
 
 /// Opens a human session on the daemon (against `c.repo` when set) and
@@ -527,8 +721,8 @@ pub fn login(c: &mut Client, human: &str, ttl_ms: i64) -> Result<Session> {
     c.token = None;
     let mut last = None;
     let mut r = Value::Null;
-    for (path, se) in keys {
-        let sig = sign_login_with(&path, se, human, repo.as_deref(), ttl_ms)?;
+    for (path, kind) in keys {
+        let sig = sign_login_with(&path, kind, human, repo.as_deref(), ttl_ms)?;
         match call(c, "human.login", json!({"sig": sig, "ttl_ms": ttl_ms})) {
             Ok(v) => {
                 r = v;

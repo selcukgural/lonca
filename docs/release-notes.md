@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Presence on Linux: FIDO security keys
+
+A human's key can now live on a FIDO security key, so a hardened repository
+no longer needs `--without-presence` on Linux
+([#17](https://github.com/selcukgural/lonca/issues/17)):
+
+```sh
+lonca human keygen ayse --security-key      # touch the key when it blinks
+lonca human rotate --repo demo --security-key
+```
+
+The key signs through OpenSSH (`ssh-keygen`, 8.2 or later with FIDO
+support); Lonca itself only verifies, and carries no USB or FIDO code.
+Every signature needs a touch, and one the device made without a touch is
+refused. `lonca doctor` has a `presence` line: what your key proves and what
+the machine could use. Two new kinds of human key, `sk-p256` and
+`sk-ed25519`, and log format 28; `human.enroll` now checks the form of a
+key as a rotation does. Older logs replay as they were, and an older
+`lonca` refuses a log that has reached format 28.
+
+The verifier agrees with OpenSSH 10.5's own (`ssh-keygen -Y verify`) and the
+command line is tested against a software stand-in for the device. Signing
+with a physical key has not been exercised by the project yet: see
+[Profiles](guide/profiles.md#presence) and the
+[threat model](security/threat-model.md#humans-and-approvals) for what a
+security key does and does not show.
+
 ### The site names the release, and a page for Claude Code
 
 The site said nothing of which release it described, and the install guide's

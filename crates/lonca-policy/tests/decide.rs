@@ -5,7 +5,7 @@ use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_REPLACES,
-    FORMAT_SYMBOL_KEYS, SignedOp, verify_chain,
+    FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, SignedOp, verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -8705,4 +8705,376 @@ fn before_the_format_a_newer_proposal_leaves_the_pending_one() {
     let mut got = replaced(&now);
     got.sort();
     assert_eq!(got, both, "{now:?}");
+}
+
+/// A software key standing in for a FIDO security key: what it signs is
+/// what the device signs, with the flags the test asks for.
+struct SoftSk {
+    kind: lonca_policy::human::sk::Kind,
+    seed: [u8; 32],
+}
+
+impl SoftSk {
+    fn p256(seed: u8) -> Self {
+        SoftSk {
+            kind: lonca_policy::human::sk::Kind::P256,
+            seed: [seed; 32],
+        }
+    }
+
+    fn ed25519(seed: u8) -> Self {
+        SoftSk {
+            kind: lonca_policy::human::sk::Kind::Ed25519,
+            seed: [seed; 32],
+        }
+    }
+
+    fn public(&self) -> Vec<u8> {
+        use lonca_policy::human::sk::Kind;
+        match self.kind {
+            Kind::P256 => p256::ecdsa::SigningKey::from_slice(&self.seed)
+                .unwrap()
+                .verifying_key()
+                .to_sec1_point(false)
+                .as_bytes()
+                .to_vec(),
+            Kind::Ed25519 => ed25519_dalek::SigningKey::from_bytes(&self.seed)
+                .verifying_key()
+                .to_bytes()
+                .to_vec(),
+        }
+    }
+
+    fn key(&self) -> HumanKey {
+        HumanKey {
+            alg: self.kind.alg().into(),
+            public: hex::encode(self.public()),
+        }
+    }
+
+    /// The signature of `name` on `op`, as `ssh-keygen -Y sign` makes it.
+    fn sign(&self, name: &str, repo: &str, op: &Op, issued_ms: i64, flags: u8) -> HumanSignature {
+        use lonca_policy::human::sk::{self, Assertion, Hash, Kind};
+        let nonce = nonce();
+        let msg = intent_bytes(repo, op, &nonce, issued_ms);
+        let data = sk::signed_data(&msg, Hash::Sha512, flags, 3);
+        let signature: [u8; 64] = match self.kind {
+            Kind::P256 => {
+                use p256::ecdsa::signature::Signer;
+                let key = p256::ecdsa::SigningKey::from_slice(&self.seed).unwrap();
+                let sig: p256::ecdsa::Signature = key.sign(&data);
+                sig.to_bytes()[..].try_into().unwrap()
+            }
+            Kind::Ed25519 => {
+                use ed25519_dalek::Signer;
+                ed25519_dalek::SigningKey::from_bytes(&self.seed)
+                    .sign(&data)
+                    .to_bytes()
+            }
+        };
+        let a = Assertion {
+            hash: Hash::Sha512,
+            flags,
+            counter: 3,
+            signature,
+        };
+        HumanSignature {
+            human: name.into(),
+            nonce,
+            issued_ms,
+            sig: hex::encode(sk::encode(self.kind, &self.public(), &a)),
+        }
+    }
+}
+
+impl H {
+    /// Submits `op` as `name`, signed with a security key.
+    fn human_sk(&mut self, key: &SoftSk, name: &str, op: Op, flags: u8) -> Decision {
+        let sig = key.sign(name, REPO, &op, self.now + 1, flags);
+        let mut sub = Submission::new(Actor::Human { name: name.into() }, op);
+        sub.human = Some(sig);
+        self.submit(sub)
+    }
+}
+
+fn require_presence() -> PolicyBundle {
+    PolicyBundle::parse(
+        &DEFAULT_CONFIG.replace("require_presence = false", "require_presence = true"),
+        DEFAULT_POLICY,
+    )
+    .unwrap()
+}
+
+impl H {
+    /// A repository that requires presence and begins with a security key.
+    fn with_security_key(ayse: &SoftSk) -> Self {
+        let mut h = H {
+            chain: Chain::new(KeyPair::generate()),
+            policy: Arc::new(require_presence()),
+            humans: vec![],
+            now: T0,
+            log: vec![],
+            engine: 0,
+        };
+        let op = Op::RepoInit {
+            repo: REPO.into(),
+            daemon_key: h.chain.public_key(),
+            human: "ayse".into(),
+            human_key: ayse.key(),
+            policy: gid('a'),
+            trunk: gid('b'),
+        };
+        let d = h.human_sk(ayse, "ayse", op, 0x01);
+        assert!(d.is_allow(), "{d:?}");
+        h
+    }
+}
+
+/// Log format 28: a human key on a FIDO security key. Its signature
+/// proves presence when the device says the person touched it.
+#[test]
+fn a_security_key_signs_with_a_touch() {
+    let ayse = SoftSk::p256(13);
+    let mut h = H::with_security_key(&ayse);
+    let (cem, deniz) = (SoftSk::p256(11), SoftSk::ed25519(12));
+    for (name, sk) in [("cem", &cem), ("deniz", &deniz)] {
+        let enroll = Op::HumanEnroll {
+            human: name.into(),
+            key: sk.key(),
+        };
+        let d = h.human_sk(&ayse, "ayse", enroll, 0x01);
+        assert!(d.is_allow(), "{name}: {d:?}");
+        assert_eq!(h.chain.state.humans[name], sk.key());
+    }
+    let file = KeyPair::generate();
+    let enroll = Op::HumanEnroll {
+        human: "bora".into(),
+        key: file_key(&file),
+    };
+    assert!(h.human_sk(&ayse, "ayse", enroll, 0x01).is_allow());
+    h.use_key("bora", file);
+
+    let freeze = |reason: &str| Op::Freeze {
+        reason: reason.into(),
+    };
+    let unfreeze = || Op::Unfreeze { reason: "x".into() };
+    // A file key is refused, a touch is accepted, for both kinds of key.
+    let d = h.human("bora", freeze("file"));
+    assert_eq!(d.reasons, ["presence_required"], "{d:?}");
+    for (name, sk) in [("cem", &cem), ("deniz", &deniz)] {
+        let d = h.human_sk(sk, name, freeze(name), 0x01);
+        assert!(d.is_allow(), "{name}: {d:?}");
+        // Touched, and verified with a PIN.
+        let d = h.human_sk(sk, name, unfreeze(), 0x05);
+        assert!(d.is_allow(), "{name}: {d:?}");
+        // The device signed without a touch: no signature at all.
+        for flags in [0x00, 0x04] {
+            let d = h.human_sk(sk, name, freeze("untouched"), flags);
+            assert_eq!(d.reasons, ["bad_human_signature"], "{name} {flags}: {d:?}");
+        }
+    }
+    // One human's key does not sign for another, nor one kind as another.
+    let d = h.human_sk(&cem, "deniz", freeze("x"), 0x01);
+    assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
+    let d = h.human_sk(&SoftSk::ed25519(11), "cem", freeze("x"), 0x01);
+    assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
+    // A signature is for one operation.
+    let sig = cem.sign("cem", REPO, &freeze("a"), h.now + 1, 0x01);
+    let mut sub = Submission::new(Actor::Human { name: "cem".into() }, freeze("b"));
+    sub.human = Some(sig);
+    let d = h.submit(sub);
+    assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
+
+    // Bora can not move to a security key by himself: the rotation is
+    // signed by the key he has.
+    let his = SoftSk::ed25519(15);
+    let rotate = |name: &str, sk: &SoftSk| Op::HumanRotate {
+        human: name.into(),
+        key: sk.key(),
+    };
+    let d = h.human("bora", rotate("bora", &his));
+    assert_eq!(d.reasons, ["presence_required"], "{d:?}");
+    // Ayse moves to another device; the old one signs nothing after.
+    let hers = SoftSk::ed25519(14);
+    let d = h.human_sk(&ayse, "ayse", rotate("ayse", &hers), 0x01);
+    assert!(d.is_allow(), "{d:?}");
+    let d = h.human_sk(&ayse, "ayse", freeze("old"), 0x01);
+    assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
+    assert!(h.human_sk(&hers, "ayse", freeze("hers"), 0x01).is_allow());
+    assert!(h.human_sk(&hers, "ayse", unfreeze(), 0x01).is_allow());
+    // A security key somebody has, or had, is nobody's next key.
+    for taken in [&deniz, &ayse] {
+        let d = h.human_sk(&hers, "ayse", rotate("ayse", taken), 0x01);
+        assert_eq!(d.reasons, ["key_reused"], "{d:?}");
+    }
+    h.assert_replay();
+}
+
+/// From format 28 an enrolled key has the form its kind uses; earlier
+/// entries replay with the check they were written under.
+#[test]
+fn a_new_key_has_the_form_of_its_kind() {
+    let mut h = H::new();
+    let point = SoftSk::p256(21).public();
+    let compressed = p256::ecdsa::SigningKey::from_slice(&[21; 32])
+        .unwrap()
+        .verifying_key()
+        .to_sec1_point(true)
+        .as_bytes()
+        .to_vec();
+    let ed = SoftSk::ed25519(22).public();
+    let key = |alg: &str, public: String| HumanKey {
+        alg: alg.into(),
+        public,
+    };
+    let bad = [
+        ("sk-p256", hex::encode(&compressed)),
+        ("sk-p256", hex::encode(&ed)),
+        ("sk-p256", hex::encode(&point).to_ascii_uppercase()),
+        ("sk-ed25519", hex::encode(&point)),
+        ("sk-ed25519", hex::encode(&ed[..31])),
+        ("sk-rsa", hex::encode(&ed)),
+        ("ed25519", hex::encode(&ed[..31])),
+        ("ed25519", hex::encode(&ed).to_ascii_uppercase()),
+        ("p256-se", hex::encode(&ed)),
+        ("ed25519", "zz".to_string()),
+    ];
+    for (alg, public) in &bad {
+        let enroll = Op::HumanEnroll {
+            human: "cem".into(),
+            key: key(alg, public.clone()),
+        };
+        let d = h.human("ayse", enroll);
+        assert_eq!(d.reasons, ["invalid_key"], "{alg} {public}: {d:?}");
+        let rotate = Op::HumanRotate {
+            human: "ayse".into(),
+            key: key(alg, public.clone()),
+        };
+        let d = h.human("ayse", rotate);
+        assert_eq!(d.reasons, ["invalid_key"], "{alg} {public}: {d:?}");
+    }
+    let good = [
+        ("sk-p256", hex::encode(&point)),
+        ("sk-ed25519", hex::encode(&ed)),
+        ("p256-se", hex::encode(&compressed)),
+    ];
+    for (i, (alg, public)) in good.iter().enumerate() {
+        let enroll = Op::HumanEnroll {
+            human: format!("h{i}"),
+            key: key(alg, public.clone()),
+        };
+        let d = h.human("ayse", enroll);
+        assert!(d.is_allow(), "{alg}: {d:?}");
+    }
+    h.assert_replay();
+
+    // What the same enrolments were before format 28.
+    let s = State::replay(&h.log[..1]);
+    let bundle = PolicyBundle::default_bundle();
+    let ayse = Actor::Human {
+        name: "ayse".into(),
+    };
+    let at = |format: u32, op: &Op| {
+        let sig = h.sign("ayse", op);
+        let ctx = Ctx {
+            format,
+            time_ms: h.now + 1,
+            policy: &bundle,
+            facts: None,
+            evidence: &[],
+            symbols_engine: None,
+        };
+        decide(&s, &ayse, op, Some(&sig), &ctx)
+    };
+    let enroll = |alg: &str, public: &str| Op::HumanEnroll {
+        human: "cem".into(),
+        key: key(alg, public.to_string()),
+    };
+    let rotate = |alg: &str, public: &str| Op::HumanRotate {
+        human: "ayse".into(),
+        key: key(alg, public.to_string()),
+    };
+    let (old, new) = (FORMAT_SECURITY_KEYS - 1, FORMAT_SECURITY_KEYS);
+    for (alg, public) in &good[..2] {
+        for op in [enroll(alg, public), rotate(alg, public)] {
+            assert_eq!(at(old, &op).reasons, ["invalid_key"], "{alg} {op:?}");
+            assert!(at(new, &op).is_allow(), "{alg} {op:?}");
+            assert!(at(new + 1, &op).is_allow(), "{alg} {op:?}");
+        }
+    }
+    // An enrolment checked the kind and that the key was hex, no more.
+    let short = hex::encode(&ed[..31]);
+    let upper = hex::encode(&ed).to_ascii_uppercase();
+    for (alg, public) in [
+        ("ed25519", &short),
+        ("ed25519", &upper),
+        ("p256-se", &short),
+    ] {
+        assert!(at(old, &enroll(alg, public)).is_allow(), "{alg} {public}");
+        assert_eq!(at(new, &enroll(alg, public)).reasons, ["invalid_key"]);
+        assert_eq!(at(new + 1, &enroll(alg, public)).reasons, ["invalid_key"]);
+        // A rotation was always strict.
+        assert_eq!(at(old, &rotate(alg, public)).reasons, ["invalid_key"]);
+    }
+    for format in [old, new] {
+        assert_eq!(
+            at(format, &enroll("ed25519", "zz")).reasons,
+            ["invalid_key"]
+        );
+        assert_eq!(at(format, &enroll("rsa", &short)).reasons, ["invalid_key"]);
+    }
+}
+
+/// A repository can begin with a security key, from format 28; and a key
+/// of that kind signs nothing in an entry of an earlier format.
+#[test]
+fn a_security_key_exists_from_format_28() {
+    let sk = SoftSk::p256(31);
+    let daemon = KeyPair::generate();
+    let init = Op::RepoInit {
+        repo: REPO.into(),
+        daemon_key: daemon.public_hex(),
+        human: "ayse".into(),
+        human_key: sk.key(),
+        policy: gid('a'),
+        trunk: gid('b'),
+    };
+    let bundle = require_presence();
+    let ayse = Actor::Human {
+        name: "ayse".into(),
+    };
+    let ctx = |format: u32| Ctx {
+        format,
+        time_ms: T0 + 1,
+        policy: &bundle,
+        facts: None,
+        evidence: &[],
+        symbols_engine: None,
+    };
+    let (old, new) = (FORMAT_SECURITY_KEYS - 1, FORMAT_SECURITY_KEYS);
+    let empty = State::new();
+    let sig = sk.sign("ayse", REPO, &init, T0 + 1, 0x01);
+    assert!(decide(&empty, &ayse, &init, Some(&sig), &ctx(new)).is_allow());
+    let d = decide(&empty, &ayse, &init, Some(&sig), &ctx(old));
+    assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
+    let untouched = sk.sign("ayse", REPO, &init, T0 + 1, 0x00);
+    let d = decide(&empty, &ayse, &init, Some(&untouched), &ctx(new));
+    assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
+
+    // In a repository that has the key: the same at every later entry.
+    let mut chain = Chain::new(daemon);
+    let mut sub = Submission::new(ayse.clone(), init);
+    sub.human = Some(sig);
+    let genesis = chain.prepare(sub, T0 + 1, &Arc::new(require_presence()));
+    assert!(genesis.entry.decision.is_allow(), "{genesis:?}");
+    assert_eq!(genesis.entry.format, FORMAT_CURRENT);
+    chain.commit(&genesis);
+    let freeze = Op::Freeze { reason: "x".into() };
+    let sig = sk.sign("ayse", REPO, &freeze, T0 + 2, 0x01);
+    let mut c = ctx(new);
+    c.time_ms = T0 + 2;
+    assert!(decide(&chain.state, &ayse, &freeze, Some(&sig), &c).is_allow());
+    c.format = old;
+    let d = decide(&chain.state, &ayse, &freeze, Some(&sig), &c);
+    assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
 }

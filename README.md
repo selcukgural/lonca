@@ -67,7 +67,7 @@ and uninstall: [Install](https://selcukgural.github.io/lonca/docs/guide/install)
 
 ```sh
 lonca daemon &                       # the gatekeeper (~/.lonca)
-lonca human keygen ayse              # or: --secure-enclave
+lonca human keygen ayse              # or: --secure-enclave, --security-key
 lonca init demo --import ~/src/myproject
 lonca session start --repo demo --agent claude --paths 'src/**' \
       --task T-142 --ttl 2h --workspace ~/ws/claude-1 --harness claude-code

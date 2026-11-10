@@ -199,8 +199,19 @@ unknown method: `unknown_method`, whatever the token.
   "lonca-human-login-v1", "repo": string | null, "human", "ttl_ms",
   "nonce", "issued_ms"}`. Canonical JSON: keys sorted, no whitespace,
   UTF-8. Ed25519 signatures are 64 bytes hex; Secure Enclave (`p256-se`)
-  signatures are DER-encoded ECDSA P-256 over SHA-256, hex. A signature
-  is good for ten minutes, with one minute of clock skew.
+  signatures are DER-encoded ECDSA P-256 over SHA-256, hex. A security
+  key's signature (`sk-p256`, `sk-ed25519`) is the hex of the SSHSIG blob
+  `ssh-keygen -Y sign -n lonca` prints inside its armor (OpenSSH's
+  PROTOCOL.sshsig and PROTOCOL.u2f): version 1, the enrolled key with the
+  application `ssh:lonca`, namespace `lonca`, an empty reserved field,
+  `sha512` or `sha256`, and a signature whose flags have "user present"
+  set; any other blob, or a byte more, is `bad_human_signature`. A
+  signature is good for ten minutes, with one minute of clock skew.
+- **human key**: `{"alg", "public": lowercase hex}`. `ed25519`: a file
+  key, 32 bytes. `p256-se`: a Secure Enclave key, a SEC1 point. `sk-p256`:
+  a FIDO security key, the 65-byte uncompressed SEC1 point. `sk-ed25519`:
+  a FIDO security key, 32 bytes. The last three prove presence; the two
+  `sk-` kinds exist from log format 28.
 - **op**: an operation object, `{"op": "<kind>", …fields}`. The kinds
   and their fields are the operation log's and are listed under
   `log`.
@@ -287,7 +298,7 @@ daemon key (foreign, waiting for `daemon.recover`) are not listed.
 *bootstrap.*
 
 ```json
-{"repo": string, "human": string, "human_key": {"alg": "ed25519" | "p256-se", "public": hex},
+{"repo": string, "human": string, "human_key": human key,
  "import_from": string | null, "branch": string | null,
  "profile": "cooperative" | "hardened" | null, "without_presence": boolean}
 ```
@@ -477,7 +488,7 @@ Operation kinds (`op.op`) and their fields:
 | kind | fields |
 |---|---|
 | `repo.init` | `repo`, `daemon_key`, `human`, `human_key`, `policy`, `trunk` |
-| `human.enroll` / `human.rotate` / `human.recovery_key` / `human.recover` | `human`, `key` |
+| `human.enroll` / `human.rotate` / `human.recovery_key` / `human.recover` | `human`, `key` (a human key) |
 | `human.revoke` | `human`, `reason` |
 | `daemon.rotate` | `key` |
 | `daemon.recover` | `key`, `recover`: `{"human", "key": human key}` or absent. With it, the human's recovery key signs, and the entry also replaces that human's key (log format 27) |
@@ -1180,4 +1191,6 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `change.get`, the attestation kind `named`, and the reasons
   `unknown_check:<name>`, `invalid_checks` and `checks_not_a_change` (#191).
   The `lonca-client` crate (#192).
-  `change.resolve`; `recover` on `daemon.recover` (log format 27).
+  `change.resolve`; `recover` on `daemon.recover` (log format 27); the
+  human key kinds `sk-p256` and `sk-ed25519` and their signatures (log
+  format 28).

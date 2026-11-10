@@ -35,8 +35,8 @@ for a warning, `✗` for a failure), and anything that does not pass says
 what to do on the line under it (`→`). A warning leaves the exit code 0, a
 failure makes it 1; `--json` gives `{"ok", "mode", "checks"}`. Colour only on
 a terminal, never with `NO_COLOR` or `TERM=dumb`. Nothing in it prompts: with a
-Secure Enclave key and no live session it asks you to run `lonca human
-login` first.
+Secure Enclave key or a security key and no live session it asks you to run
+`lonca human login` first.
 
 | Check | Not passing | What to do |
 |---|---|---|
@@ -55,7 +55,8 @@ login` first.
 | `security events` | a freeze, an integrity alarm, a write behind the daemon's back, a failed reconcile in the last day | Read the daemon's `security.log` and `lonca log` for the entries. |
 | `log <repo>` | does not verify, or ends before the daemon's head | Run `lonca-audit verify` on the store or a pushed copy, and freeze the repository until you know why. |
 | `human <repo>` | not enrolled | An enrolled human runs `lonca human enroll`. |
-| `human <repo>` | a file key where the repository requires presence | `lonca human rotate --secure-enclave --repo <repo>`. |
+| `human <repo>` | a file key where the repository requires presence | `lonca human rotate --secure-enclave --repo <repo>` (Mac) or `--security-key` (a FIDO security key). |
+| `presence` | the key is in hardware and the program that signs with it is missing | Put `lonca-se` next to `lonca` (Secure Enclave), or install OpenSSH 8.2 or later (security key). With a file key the line only says what this machine could use. |
 | `settings <repo>` | below the hardened profile, on a hardened install | A human changes them with `lonca policy set` ([Profiles](profiles.md)). |
 | `frozen <repo>` | frozen | Find out why (`lonca log`), then `lonca unfreeze "<reason>"`. |
 
@@ -103,7 +104,7 @@ caused them:
 
 | Reason | What to do |
 |---|---|
-| `presence_required` | The repository accepts only keys that prove presence: `lonca human rotate --secure-enclave`. |
+| `presence_required` | The repository accepts only keys that prove presence: `lonca human rotate --secure-enclave` (Mac) or `--security-key` (a FIDO security key). |
 | `not_enrolled`, `unknown_human` | That key is not enrolled in this repository. |
 | `stale_human_signature` | The signature is older than 10 minutes or more than a minute ahead: check the clock. |
 | `bad_human_signature`, `bad_nonce`, `nonce_reused` | The request was refused as signed. Run the command again; if it repeats, report it. |
@@ -175,7 +176,7 @@ start a new session. A session started without `--harness` stays
 `unobserved` on any machine
 ([Running agents](runners.md#observation-levels)).
 
-### Touch ID on every command
+### Touch ID, or a touch, on every command
 
 Each command opened a session of its own because none was live. `lonca human
 login --ttl 8h` opens one for the day (at most 24 hours).
@@ -183,9 +184,20 @@ login --ttl 8h` opens one for the day (at most 24 hours).
 ### `lonca init` refuses a file key
 
 A hardened repository requires presence, and a file key would lock itself
-out of everything after the first entry. Use `lonca human keygen
---secure-enclave <name>`, or on a machine without one,
-`lonca init <repo> --without-presence` ([Profiles](profiles.md#presence)).
+out of everything after the first entry. Use `lonca human keygen <name>
+--secure-enclave` (Mac) or `--security-key` (a FIDO security key), or with
+neither, `lonca init <repo> --without-presence`
+([Profiles](profiles.md#presence)).
+
+### A security key does not sign
+
+`ssh-keygen could not be run`: a security key signs through OpenSSH 8.2 or
+later; install it, or name one with `LONCA_SSH_KEYGEN` (the `ssh-keygen` of
+macOS has no FIDO support built in; Homebrew's has). `ssh-keygen did not
+sign`: the key was not touched in time or is not plugged in. A denial
+`bad_human_signature` with a key that was touched: the key was made with
+`no-touch-required`, or for another application than `ssh:lonca`; make one
+with `lonca human keygen --security-key`.
 
 ### The daemon will not start
 

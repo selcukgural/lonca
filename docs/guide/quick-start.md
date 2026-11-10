@@ -38,7 +38,7 @@ lonca sync                                   # after integration
 
 Humans review and operate. Every human command signs in by itself when it
 needs to (`lonca human login` does it up front, `--ttl 8h` for a longer
-session); a file key never prompts, a Secure Enclave key prompts once per
+session); a file key never prompts, a Secure Enclave key or a security key prompts once per
 session:
 
 ```sh

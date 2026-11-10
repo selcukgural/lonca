@@ -40,6 +40,9 @@ impl Env {
             .env_remove("LONCA_HUMAN")
             .env_remove("LONCA_WORKSPACE")
             .env_remove("LONCA_SE")
+            .env_remove("LONCA_SSH_KEYGEN")
+            .env_remove("FAKE_SSH_KEYGEN_ARGS")
+            .env_remove("FAKE_SSH_KEYGEN_FLAGS")
             .env_remove("LONCA_TEST_DAEMON_UID")
             .env_remove("LONCA_ADVISOR_DAILY_CALLS")
             .env_remove("ANTHROPIC_API_KEY")
@@ -853,6 +856,265 @@ fn secure_enclave_keys_through_a_fake_helper() {
     assert!(
         out.starts_with(&format!("bora: p256-se {public}\n")),
         "{out}"
+    );
+}
+
+/// A stand-in for `ssh-keygen` with a security key plugged in and a
+/// finger on it: a script that runs this test binary again, as
+/// [`fake_ssh_keygen_process`]. The "device" is a software key whose seed
+/// is the key file.
+#[cfg(unix)]
+fn fake_ssh_keygen(e: &Env) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let p = e.root.join("fake-ssh-keygen");
+    let script = format!(
+        "#!/bin/sh\n\
+         out=\"$0.out.$$\"\n\
+         FAKE_SSH_KEYGEN_ARGS=\"$(printf '%s\\n' \"$@\")\" FAKE_SSH_KEYGEN_OUT=\"$out\" \
+         '{}' --exact fake_ssh_keygen_process >/dev/null 2>&1 || {{ rm -f \"$out\"; exit 1; }}\n\
+         cat \"$out\" 2>/dev/null; rm -f \"$out\"\n",
+        std::env::current_exe().unwrap().display()
+    );
+    std::fs::write(&p, script).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
+/// Not a test of its own: what the script of [`fake_ssh_keygen`] runs.
+/// `-t` makes a key, `-y` prints its public key, `-Y sign` signs stdin
+/// with the flags of `FAKE_SSH_KEYGEN_FLAGS` (default: user present).
+#[test]
+fn fake_ssh_keygen_process() {
+    use base64::Engine;
+    use lonca_policy::human::sk::{self, Assertion, Hash, Kind};
+    let Ok(args) = std::env::var("FAKE_SSH_KEYGEN_ARGS") else {
+        return;
+    };
+    let args: Vec<&str> = args.lines().collect();
+    let after = |flag: &str| {
+        let at = args.iter().position(|a| *a == flag);
+        at.and_then(|i| args.get(i + 1)).copied()
+    };
+    let path = PathBuf::from(after("-f").expect("-f"));
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let out = std::env::var("FAKE_SSH_KEYGEN_OUT").unwrap();
+
+    if let Some(ty) = after("-t") {
+        assert!(args.contains(&"application=ssh:lonca"), "{args:?}");
+        assert_eq!(after("-N"), Some(""), "no passphrase on the handle");
+        assert!(!path.exists());
+        let seed = lonca_core::keys::KeyPair::generate().public_hex();
+        std::fs::write(&path, format!("{ty} {seed}")).unwrap();
+        let mut public = path.clone().into_os_string();
+        public.push(".pub");
+        std::fs::write(public, "left behind by ssh-keygen").unwrap();
+        return;
+    }
+
+    let file = std::fs::read_to_string(&path).unwrap();
+    let (ty, seed) = file.split_once(' ').unwrap();
+    let seed: [u8; 32] = hex::decode(seed).unwrap().try_into().unwrap();
+    type Sign = Box<dyn Fn(&[u8]) -> [u8; 64]>;
+    let (kind, name, public, sign): (Kind, &str, Vec<u8>, Sign) = match ty {
+        "ecdsa-sk" => {
+            use p256::ecdsa::signature::Signer;
+            let key = p256::ecdsa::SigningKey::from_slice(&seed).unwrap();
+            let public = key.verifying_key().to_sec1_point(false).as_bytes().to_vec();
+            let sign = move |data: &[u8]| {
+                let sig: p256::ecdsa::Signature = key.sign(data);
+                <[u8; 64]>::try_from(&sig.to_bytes()[..]).unwrap()
+            };
+            (
+                Kind::P256,
+                "sk-ecdsa-sha2-nistp256@openssh.com",
+                public,
+                Box::new(sign),
+            )
+        }
+        "ed25519-sk" => {
+            use ed25519_dalek::Signer;
+            let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+            let public = key.verifying_key().to_bytes().to_vec();
+            (
+                Kind::Ed25519,
+                "sk-ssh-ed25519@openssh.com",
+                public,
+                Box::new(move |data: &[u8]| key.sign(data).to_bytes()),
+            )
+        }
+        other => panic!("key type {other}"),
+    };
+
+    if args.contains(&"-y") {
+        let blob = b64.encode(sk::public_blob(kind, &public));
+        std::fs::write(out, format!("{name} {blob} lonca:test\n")).unwrap();
+        return;
+    }
+
+    assert_eq!((after("-Y"), after("-n")), (Some("sign"), Some("lonca")));
+    let mut msg = vec![];
+    std::io::Read::read_to_end(&mut std::io::stdin(), &mut msg).unwrap();
+    let flags = std::env::var("FAKE_SSH_KEYGEN_FLAGS").map_or(1, |f| f.parse().unwrap());
+    let (hash, counter) = (Hash::Sha512, 7);
+    let a = Assertion {
+        hash,
+        flags,
+        counter,
+        signature: sign(&sk::signed_data(&msg, hash, flags, counter)),
+    };
+    let body = b64.encode(sk::encode(kind, &public, &a));
+    let lines: Vec<&str> = body
+        .as_bytes()
+        .chunks(70)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+    let armored = format!(
+        "-----BEGIN SSH SIGNATURE-----\n{}\n-----END SSH SIGNATURE-----\n",
+        lines.join("\n")
+    );
+    std::fs::write(out, armored).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn security_keys_through_a_fake_ssh_keygen() {
+    let e = Env::new();
+    let r = &e.root;
+    let keygen = fake_ssh_keygen(&e);
+    let cmd = |args: &[&str]| {
+        let mut c = e.cmd(r, args);
+        c.env("LONCA_SSH_KEYGEN", &keygen);
+        c
+    };
+    let run_sk = |args: &[&str]| {
+        let out = cmd(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "lonca {args:?}\nstdout: {}\nstderr: {}",
+            text(&out.stdout),
+            text(&out.stderr)
+        );
+        text(&out.stdout)
+    };
+    let whoami = || -> serde_json::Value {
+        serde_json::from_str(&run_sk(&["human", "whoami", "--json"])).unwrap()
+    };
+
+    // A new identity on a security key: the default type is ECDSA.
+    let out = run_sk(&["human", "keygen", "ayse", "--security-key"]);
+    let me = whoami();
+    assert_eq!(me["alg"], "sk-p256");
+    let public = me["public"].as_str().unwrap().to_string();
+    assert_eq!(public.len(), 130, "an uncompressed point: {public}");
+    assert!(
+        out.starts_with(&format!("ayse: sk-p256 {public} (")),
+        "{out}"
+    );
+    assert!(out.contains("a touch of this security key"), "{out}");
+    assert!(r.join("humans/ayse.sk").exists());
+    assert!(!r.join("humans/ayse.sk.pub").exists());
+    assert!(!r.join("humans/ayse.key").exists());
+    // The device makes a key once: a second keygen would orphan the first.
+    let again = cmd(&["human", "keygen", "ayse", "--security-key"])
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    assert!(
+        text(&again.stderr).contains("already exists"),
+        "{}",
+        text(&again.stderr)
+    );
+    let both = cmd(&["human", "keygen", "x", "--security-key", "--secure-enclave"])
+        .output()
+        .unwrap();
+    assert!(!both.status.success());
+
+    // It proves presence: a hardened repository takes it as it is, where
+    // a file key needs --without-presence.
+    let out = run_sk(&["init", "demo", "--profile", "hardened"]);
+    assert!(out.contains("allow"), "{out}");
+    let st: serde_json::Value =
+        serde_json::from_str(&run_sk(&["status", "--repo", "demo", "--json"])).unwrap();
+    assert_eq!(st["humans"]["ayse"]["alg"], "sk-p256");
+    assert_eq!(st["humans"]["ayse"]["public"], public);
+    // Every operation is signed with a touch; the terminal says for what.
+    let out = cmd(&["freeze", "hold on", "--repo", "demo"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains("allow"), "{}", text(&out.stdout));
+    let said = text(&out.stderr);
+    assert!(
+        said.contains("Lonca (demo): freeze") && said.contains("touch your security key"),
+        "{said}"
+    );
+    // A signature the device made without a touch is not one.
+    let untouched = cmd(&["unfreeze", "go on", "--repo", "demo"])
+        .env("FAKE_SSH_KEYGEN_FLAGS", "0")
+        .output()
+        .unwrap();
+    let all = text(&untouched.stdout) + &text(&untouched.stderr);
+    assert!(all.contains("bad_human_signature"), "{all}");
+    assert!(run_sk(&["unfreeze", "go on", "--repo", "demo"]).contains("allow"));
+
+    let doctor = cmd(&["doctor", "--json"]).output().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    let presence = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "presence")
+        .unwrap_or_else(|| panic!("no presence check: {report}"));
+    assert_eq!(presence["level"], "pass", "{presence}");
+    assert!(
+        presence["detail"]
+            .as_str()
+            .unwrap()
+            .contains("security key"),
+        "{presence}"
+    );
+
+    // Rotated to an Ed25519 credential; the old handle is moved aside.
+    let out = run_sk(&[
+        "human",
+        "rotate",
+        "--repo",
+        "demo",
+        "--security-key",
+        "ed25519",
+    ]);
+    assert!(out.contains("allow"), "{out}");
+    let me = whoami();
+    assert_eq!(me["alg"], "sk-ed25519");
+    assert_ne!(me["public"], public);
+    assert_eq!(me["public"].as_str().unwrap().len(), 64);
+    let st: serde_json::Value =
+        serde_json::from_str(&run_sk(&["status", "--repo", "demo", "--json"])).unwrap();
+    assert_eq!(st["humans"]["ayse"]["alg"], "sk-ed25519");
+    assert_eq!(st["humans"]["ayse"]["public"], me["public"]);
+    let names: Vec<String> = std::fs::read_dir(r.join("humans"))
+        .unwrap()
+        .map(|f| f.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(names.contains(&"ayse.sk".to_string()), "{names:?}");
+    assert!(
+        names.iter().any(|n| n.starts_with("ayse.sk.retired-")),
+        "{names:?}"
+    );
+    assert!(!names.iter().any(|n| n.contains(".next.")), "{names:?}");
+    assert!(run_sk(&["freeze", "again", "--repo", "demo"]).contains("allow"));
+
+    // Without an ssh-keygen there is no way to sign.
+    let none = e
+        .cmd(r, &["unfreeze", "x", "--repo", "demo"])
+        .env("LONCA_SSH_KEYGEN", r.join("no-such-ssh-keygen"))
+        .output()
+        .unwrap();
+    assert!(!none.status.success());
+    assert!(
+        text(&none.stderr).contains("ssh-keygen could not be run"),
+        "{}",
+        text(&none.stderr)
     );
 }
 

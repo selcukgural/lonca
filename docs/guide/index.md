@@ -81,7 +81,9 @@ randomness in them.
   [profile](profiles.md).
 - **Humans** sign their operations. With `--secure-enclave` the key lives
   in the Mac's Secure Enclave and every signature needs Touch ID or the
-  password, so an agent running as you can not approve on your behalf. See
+  password; with `--security-key` it lives on a FIDO security key and
+  every signature needs a touch. Either way an agent running as you can
+  not approve on your behalf. See
   [Working as a human](humans.md).
 
 Each of these is explained on its own in [Concepts](concepts.md).
@@ -126,6 +128,9 @@ and auditable by every later release.
   yet purged from Git history.
 - Creating a Secure Enclave key needs an interactive session; it could not
   be exercised in automated tests (the signature format is tested).
+- Security keys are checked against OpenSSH's own verifier (`ssh-keygen -Y
+  verify`) and with a software stand-in for the device; signing with a
+  physical key through `lonca` has not been exercised by the project yet.
 - The advisor has been tested against a fake API only.
 
 The design (in Turkish) is

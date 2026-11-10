@@ -97,7 +97,125 @@ fn golden_repo() -> Env {
     named_checks(&mut e);
     replaces(&mut e);
     lost_mac(&mut e);
+    security_keys(&mut e);
     e
+}
+
+/// A software key standing in for a FIDO security key: it signs what the
+/// device signs, in the form `ssh-keygen -Y sign` gives it.
+enum SoftSk {
+    P256(p256::ecdsa::SigningKey),
+    Ed25519(ed25519_dalek::SigningKey),
+}
+
+impl SoftSk {
+    fn kind(&self) -> lonca_policy::human::sk::Kind {
+        use lonca_policy::human::sk::Kind;
+        match self {
+            SoftSk::P256(_) => Kind::P256,
+            SoftSk::Ed25519(_) => Kind::Ed25519,
+        }
+    }
+
+    fn public(&self) -> Vec<u8> {
+        match self {
+            SoftSk::P256(k) => k.verifying_key().to_sec1_point(false).as_bytes().to_vec(),
+            SoftSk::Ed25519(k) => k.verifying_key().to_bytes().to_vec(),
+        }
+    }
+
+    fn key(&self) -> HumanKey {
+        HumanKey {
+            alg: self.kind().alg().into(),
+            public: hex::encode(self.public()),
+        }
+    }
+
+    /// The signature blob over `msg`, in hex; `flags` is what the device
+    /// says of the person (1: touched).
+    fn sign(&self, msg: &[u8], flags: u8) -> String {
+        use lonca_policy::human::sk::{self, Assertion, Hash};
+        let (hash, counter) = (Hash::Sha512, 5);
+        let data = sk::signed_data(msg, hash, flags, counter);
+        let signature: [u8; 64] = match self {
+            SoftSk::P256(k) => {
+                use p256::ecdsa::signature::Signer;
+                let sig: p256::ecdsa::Signature = k.sign(&data);
+                sig.to_bytes()[..].try_into().unwrap()
+            }
+            SoftSk::Ed25519(k) => {
+                use ed25519_dalek::Signer;
+                k.sign(&data).to_bytes()
+            }
+        };
+        let a = Assertion {
+            hash,
+            flags,
+            counter,
+            signature,
+        };
+        hex::encode(sk::encode(self.kind(), &self.public(), &a))
+    }
+}
+
+/// From format 28: two humans with keys on security keys, one of each
+/// kind. Each signs in and signs operations with a touch; a signature
+/// made without one is denied, and that denial is in the log too.
+fn security_keys(e: &mut Env) {
+    use lonca_core::ops::HumanSignature;
+    use lonca_policy::human::{intent_bytes, login_bytes};
+    let allowed = |r: Value| assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let seed =
+        |k: &KeyPair| -> [u8; 32] { hex::decode(k.public_hex()).unwrap().try_into().unwrap() };
+    let humans = [
+        (
+            "cem",
+            SoftSk::P256(p256::ecdsa::SigningKey::from_slice(&seed(&KeyPair::generate())).unwrap()),
+        ),
+        (
+            "deniz",
+            SoftSk::Ed25519(ed25519_dalek::SigningKey::from_bytes(&seed(
+                &KeyPair::generate(),
+            ))),
+        ),
+    ];
+    for (name, sk) in &humans {
+        allowed(e.human(Op::HumanEnroll {
+            human: (*name).into(),
+            key: sk.key(),
+        }));
+        let signature = |sig: String, nonce: String, issued_ms: i64| HumanSignature {
+            human: (*name).into(),
+            nonce,
+            issued_ms,
+            sig,
+        };
+        let (nonce, now, ttl) = (lonca_core::canonical::nonce(), e.now(), 3_600_000);
+        let login = sk.sign(&login_bytes(None, name, ttl, &nonce, now), 1);
+        let login = json!({"sig": signature(login, nonce, now), "ttl_ms": ttl});
+        let session = e.anon("human.login", None, None, login).unwrap()["token"]
+            .as_str()
+            .expect("token")
+            .to_string();
+        let submit = |e: &mut Env, op: Op, flags: u8| {
+            let (nonce, now) = (lonca_core::canonical::nonce(), e.now());
+            let sig = sk.sign(&intent_bytes("demo", &op, &nonce, now), flags);
+            let body = json!({"op": op, "sig": signature(sig, nonce, now)});
+            e.anon("human.submit", Some("demo"), Some(&session), body)
+                .unwrap()
+        };
+        let freeze = || Op::Freeze {
+            reason: format!("{name} touched"),
+        };
+        let r = submit(e, freeze(), 0);
+        assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+        assert_eq!(r["decision"]["reasons"], json!(["bad_human_signature"]));
+        allowed(submit(e, freeze(), 1));
+        let unfreeze = Op::Unfreeze {
+            reason: "golden".into(),
+        };
+        allowed(submit(e, unfreeze, 1));
+    }
 }
 
 /// From format 27: ayse sets a recovery key, then the daemon key and her
@@ -1411,6 +1529,35 @@ fn golden_v27_log_still_verifies_replays_and_audits() {
             .iter()
             .any(|o| o.entry.actor.label() == "human:ayse")
     );
+}
+
+/// Human keys on security keys: both kinds enrolled, each signs with a
+/// touch, and a signature without one is a recorded denial.
+#[test]
+fn golden_v28_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v28.bundle",
+        "283eb54d53a598fee642d9da8415160cfa2757afb5069f3b147005efe3265c91",
+        28,
+    );
+    let s = lonca_policy::state::State::replay(&ops);
+    for (name, alg) in [("cem", "sk-p256"), ("deniz", "sk-ed25519")] {
+        assert_eq!(s.humans[name].alg, alg);
+        assert!(lonca_policy::human::valid_key(&s.humans[name], 28));
+        let label = format!("human:{name}");
+        let theirs: Vec<_> = ops
+            .iter()
+            .filter(|o| o.entry.actor.label() == label)
+            .map(|o| (o.entry.op.kind().as_str(), o.entry.decision.reasons.clone()))
+            .collect();
+        let denied = vec!["bad_human_signature".to_string()];
+        assert_eq!(
+            theirs,
+            [("freeze", denied), ("freeze", vec![]), ("unfreeze", vec![])],
+            "{name}"
+        );
+    }
+    assert!(s.frozen.is_none());
 }
 
 #[test]

@@ -25,7 +25,6 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use lonca_core::keys::KeyPair;
 use lonca_core::ops::{Claim, Continuation, HumanKey, LeaseItem, LeaseKind, Op, OpKind, Scope};
 use lonca_core::{ChangeId, GitId};
 use lonca_daemon::Client;
@@ -104,7 +103,7 @@ enum Cmd {
         #[arg(long, conflicts_with = "notify_command")]
         no_notify: bool,
     },
-    /// Human identities: file keys or Secure Enclave keys.
+    /// Human identities: file keys, Secure Enclave keys or security keys.
     #[command(subcommand)]
     Human(HumanCmd),
     /// The daemon's signing key: rotate it, or recover repositories whose
@@ -460,6 +459,12 @@ enum HumanCmd {
         /// Secure Enclave key: every signature needs Touch ID or the password.
         #[arg(long)]
         secure_enclave: bool,
+        /// A key on a FIDO security key, through ssh-keygen (OpenSSH 8.2
+        /// or later): every signature needs a touch. `ecdsa` works on
+        /// every key, `ed25519` on FIDO2 keys with newer firmware.
+        #[arg(long, value_name = "TYPE", num_args = 0..=1, default_missing_value = "ecdsa",
+              conflicts_with = "secure_enclave")]
+        security_key: Option<ctx::SkType>,
     },
     /// Print the default identity and public key.
     Whoami {
@@ -489,7 +494,7 @@ enum HumanCmd {
     /// Enroll another human (signed by you).
     Enroll {
         name: String,
-        /// `ed25519` or `p256-se`.
+        /// `ed25519`, `p256-se`, `sk-p256` or `sk-ed25519`.
         #[arg(long)]
         alg: String,
         /// Public key (hex), as printed by their `lonca human whoami`.
@@ -511,6 +516,10 @@ enum HumanCmd {
         /// The new key is a Secure Enclave key.
         #[arg(long)]
         secure_enclave: bool,
+        /// The new key is on a FIDO security key (`ecdsa` or `ed25519`).
+        #[arg(long, value_name = "TYPE", num_args = 0..=1, default_missing_value = "ecdsa",
+              conflicts_with = "secure_enclave")]
+        security_key: Option<ctx::SkType>,
         #[arg(long = "as")]
         human: Option<String>,
     },
@@ -546,6 +555,10 @@ enum HumanCmd {
         /// The new key is a Secure Enclave key.
         #[arg(long)]
         secure_enclave: bool,
+        /// The new key is on a FIDO security key (`ecdsa` or `ed25519`).
+        #[arg(long, value_name = "TYPE", num_args = 0..=1, default_missing_value = "ecdsa",
+              conflicts_with = "secure_enclave")]
+        security_key: Option<ctx::SkType>,
         /// The human to recover (on a new machine there is no default).
         #[arg(long = "as")]
         human: Option<String>,
@@ -1270,27 +1283,39 @@ fn run(cmd: Cmd) -> Result<()> {
         Cmd::Human(HumanCmd::Keygen {
             name,
             secure_enclave,
+            security_key,
         }) => {
             if !lonca_policy::decide::valid_token(&name, 64) {
                 bail!("human names: letters, digits, '.', '_', '-'");
             }
-            if secure_enclave {
-                if ctx::se_key_path(&name).exists() {
-                    bail!("{} already exists", ctx::se_key_path(&name).display());
-                }
-                let public = ctx::se_keygen(&name)?;
-                std::fs::write(ctx::humans_dir().join("default"), &name)?;
-                outln!("{name}: p256-se {public}");
-                outln!("every signature will ask for Touch ID or your password.");
-                return Ok(());
+            let new = ctx::NewKey::from_flags(secure_enclave, security_key);
+            let p = ctx::key_path(&name, new.kind());
+            // A file key is read again; a key in hardware is made once.
+            if new.kind().prompts() && p.exists() {
+                bail!("{} already exists", p.display());
             }
-            let p = ctx::human_key_path(&name);
-            let k = KeyPair::load_or_create(&p, sys::current_uid())?;
+            let k = new.at(&p, &name)?;
             std::fs::write(ctx::humans_dir().join("default"), &name)?;
-            outln!("{name}: ed25519 {} ({})", k.public_hex(), p.display());
-            outln!(
-                "note: file keys have no user presence; anything running as you can sign with them."
-            );
+            match new.kind() {
+                ctx::KeyKind::SecureEnclave => {
+                    outln!("{name}: {} {}", k.alg, k.public);
+                    outln!("every signature will ask for Touch ID or your password.");
+                }
+                ctx::KeyKind::SecurityKey => {
+                    outln!("{name}: {} {} ({})", k.alg, k.public, p.display());
+                    outln!(
+                        "every signature will ask for a touch of this security key. The file \
+                         is its handle: it signs nothing without the device."
+                    );
+                }
+                ctx::KeyKind::File => {
+                    outln!("{name}: {} {} ({})", k.alg, k.public, p.display());
+                    outln!(
+                        "note: file keys have no user presence; anything running as you can \
+                         sign with them."
+                    );
+                }
+            }
             Ok(())
         }
         Cmd::Human(HumanCmd::Whoami { json: as_json }) => {
@@ -1376,8 +1401,13 @@ fn run(cmd: Cmd) -> Result<()> {
         Cmd::Human(HumanCmd::Rotate {
             repo,
             secure_enclave,
+            security_key,
             human,
-        }) => keys::rotate(&keys::name(human)?, &repo, secure_enclave),
+        }) => keys::rotate(
+            &keys::name(human)?,
+            &repo,
+            ctx::NewKey::from_flags(secure_enclave, security_key),
+        ),
         Cmd::Human(HumanCmd::Revoke {
             name,
             repo,
@@ -1404,12 +1434,13 @@ fn run(cmd: Cmd) -> Result<()> {
             repo,
             recovery_key,
             secure_enclave,
+            security_key,
             human,
         }) => keys::recover(
             &keys::name(human)?,
             &repo,
             &ctx::absolute(&recovery_key)?,
-            secure_enclave,
+            ctx::NewKey::from_flags(secure_enclave, security_key),
         ),
         Cmd::DaemonKey(DaemonKeyCmd::Rotate { repo, human }) => {
             keys::daemon_rotate(&keys::name(human)?, &repo)

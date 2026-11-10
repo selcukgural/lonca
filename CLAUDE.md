@@ -41,6 +41,12 @@ cargo deny check                # advisories, licenses, crates.io only (deny.tom
   update or a new sample: `LONCA_CORPUS=write cargo test -p lonca-symbols
   --test corpus`, then read the diff. A sample has one new thing and a
   definition in it.
+- A grammar update follows docs/decisions.md, "Grammar updates":
+  `.github/scripts/grammars.sh` prints where each grammar stands (crates.io,
+  upstream); the pull request shows the corpus diff, the pinned engines, the
+  `parse` fuzz target and whether it is a new engine. Grammars are not
+  chased: no copy or update ahead of a release and no new language until
+  somebody asks (decided 2026-11-10).
 - `lonca-client` is what harnesses depend on: protocol types, socket
   client, daemon checks, session file. It must not pull in the store or
   the policy (`cargo tree -p lonca-client -e normal` has no gix, no

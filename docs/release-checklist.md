@@ -12,7 +12,11 @@
    only, drafts nothing).
 4. Review `docs/security/owasp.md`: every row still true, every gap still has
    an open issue.
-5. MSRV: `cargo +<rust-version> check --workspace --all-targets --locked`
+5. Grammars: `.github/scripts/grammars.sh`. A grammar with a newer release
+   is updated in a pull request of its own before the release, with what
+   docs/decisions.md ("Grammar updates") asks of it; one that stays behind
+   has its reason there, and the table there is today's.
+6. MSRV: `cargo +<rust-version> check --workspace --all-targets --locked`
    with the workspace's `rust-version`; raise it if a dependency asks more.
 
 ## Releasing

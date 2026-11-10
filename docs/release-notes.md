@@ -21,6 +21,13 @@ limits leave open: a command's total disk in the scratch directory, its
 memory as a whole and, on macOS, its number of processes. Bounds for these
 are planned.
 
+### Homebrew 7 asks to trust the tap
+
+Homebrew 7 refuses a formula from a tap that is not its own until it is
+trusted. The README, the [install guide](guide/install.md#homebrew) and the
+site now put `brew trust --formula selcukgural/lonca/lonca` between
+`brew tap` and `brew install`; an older Homebrew needs no such step.
+
 ## 0.2.2 (2026-11-09)
 
 ### `lonca doctor` reads like `flutter doctor`

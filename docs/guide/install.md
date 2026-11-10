@@ -30,8 +30,15 @@ Read it before you run it:
 
 ```sh
 brew tap selcukgural/lonca
+brew trust --formula selcukgural/lonca/lonca
 brew install lonca
 ```
+
+The middle line is for Homebrew 7 and newer, which loads a formula from a
+tap that is not its own only once you have said you trust it; without it
+`brew install` stops with `Refusing to load formula
+selcukgural/lonca/lonca from untrusted tap`. An older Homebrew has no
+`brew trust` and does not need it: leave the line out.
 
 After the tap, the short name works for everything else too: `brew upgrade
 lonca`, `brew uninstall lonca`. Without it a plain `brew install lonca`

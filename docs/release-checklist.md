@@ -46,7 +46,8 @@
    `lonca --version` says X.Y.Z. `brew update` is needed: brew refreshes a
    tap's clone by itself only about once a day, and until then `brew info`
    still shows the old version. On a machine without the tap,
-   `brew tap selcukgural/lonca` and `brew install lonca`.
+   `brew tap selcukgural/lonca`, `brew trust --formula
+   selcukgural/lonca/lonca` (Homebrew 7 and newer) and `brew install lonca`.
 7. `curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh` installs
    the new version on a clean machine or account.
 

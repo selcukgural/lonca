@@ -1,0 +1,29 @@
+[package]
+name = "lonca-tree-sitter-ruby"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT"
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+description = "The tree-sitter Ruby grammar 0.23.1 with its heredoc serialization fixed, as Lonca's symbol engine reads it"
+keywords = ["tree-sitter", "ruby", "parsing"]
+categories = ["parsing"]
+build = "build.rs"
+include = ["build.rs", "src/**", "queries/*", "grammar.js", "tree-sitter.json", "LICENSE", "README.md"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1.9"
+
+[build-dependencies]
+cc = "1.8.0"
+
+[dev-dependencies]
+tree-sitter = "0.27.1"
+
+[lints]
+workspace = true

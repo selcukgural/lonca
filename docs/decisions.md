@@ -795,6 +795,26 @@ a table entry, not an enum.
   Loading them at run time (WebAssembly, never native code from a policy) needs a
   design for pinning them, because a grammar's hash would become part of the
   engine. Until then `[leases] unparsed_files` covers every language with none.
+- **Ruby's grammar is our own copy** (`crates/lonca-tree-sitter-ruby`, 2026-11-10).
+  The fuzzer's `parse` target found that tree-sitter-ruby 0.23.1, the last on
+  crates.io, aborts the process on a heredoc word longer than 255 characters:
+  its scanner saved the length in one byte and asserted when reading the state
+  back, and `cc` builds C with assertions on. A state of exactly 1025 bytes also
+  wrote one byte past tree-sitter's buffer and failed tree-sitter's own
+  assertion. Any Ruby file an agent proposed took the daemon down, and any entry
+  carrying one the auditor. Upstream fixed both (`ad907a69`, March 2026) and has
+  not released it, a `[patch]` does not reach `cargo install lonca`, and a git
+  dependency is refused (`deny.toml`), so the grammar is copied into the
+  workspace and published with it. The fix is its own, smaller than upstream's:
+  a long word is written as a 0 (no heredoc word is empty) and its length in two
+  bytes, the bound counts every byte, and the reader stops at the end of the
+  state instead of asserting. Every state the old scanner saved and read back
+  correctly is saved in the same bytes and dropped at the same size, so every
+  file it parsed parses the same, and this is no new engine: it applies to every
+  engine version, since the old engines' output on these files was an abort.
+  The other grammars' scanners were read for the same mistake (C#, C++ and
+  Python assert, unreachably). When upstream releases a fixed version, going back
+  is a grammar update like any other: a new engine if its output differs.
 - **`strict` says what a parse error means.** For a language that shipped before
   the table it means the file is wrong, and verification fails it. For the seven
   of engine 10 it is `false`: the error may be the grammar's, as with Kotlin's on a

@@ -3,7 +3,7 @@
 //! recover`: replacing the daemon's key.
 //!
 //! A rotation or recovery is prepared as a "next" key next to the current
-//! one (`<name>.next.key` or `<name>.next.se`). It replaces the current key
+//! one (`<name>.next.key`, `.next.se` or `.next.sk`). It replaces the current key
 //! only after every listed repository has accepted it, so an interrupted
 //! run never leaves a key that no repository knows. Rerunning the command
 //! skips repositories that already use the next key.
@@ -16,7 +16,7 @@ use lonca_core::ops::{HumanKey, Op, Recovery};
 use lonca_daemon::Client;
 use serde_json::json;
 
-use crate::ctx::{self, call};
+use crate::ctx::{self, KeyKind, NewKey, call};
 use crate::sys::current_uid;
 use crate::{human_client, human_client_any, print_decision, submit_outcome};
 
@@ -34,66 +34,43 @@ pub fn name(h: Option<String>) -> Result<String> {
 
 struct NextKey {
     path: PathBuf,
-    secure_enclave: bool,
+    kind: KeyKind,
     key: HumanKey,
 }
 
-fn next_key(name: &str, secure_enclave: bool) -> Result<NextKey> {
-    let dir = ctx::humans_dir();
-    let se = dir.join(format!("{name}.next.se"));
-    let file = dir.join(format!("{name}.next.key"));
-    let (path, other) = if secure_enclave {
-        (se, file)
-    } else {
-        (file, se)
-    };
-    if other.exists() {
+fn next_key(name: &str, new: NewKey) -> Result<NextKey> {
+    let kind = new.kind();
+    let next = format!("{name}.next");
+    let other = KeyKind::ALL
+        .into_iter()
+        .filter(|k| *k != kind)
+        .map(|k| (ctx::key_path(&next, k), k))
+        .find(|(p, _)| p.exists());
+    if let Some((other, was)) = other {
         bail!(
-            "an unfinished key change for {name} uses {}; rerun {} --secure-enclave, or delete it",
+            "an unfinished key change for {name} uses {}; rerun with {}, or delete it",
             other.display(),
-            if secure_enclave { "without" } else { "with" }
+            was.flag()
         );
     }
-    let key = if secure_enclave {
-        if !path.exists() {
-            ctx::se_keygen_at(&path)?;
-        }
-        HumanKey {
-            alg: "p256-se".into(),
-            public: ctx::se_public_at(&path)?,
-        }
-    } else {
-        HumanKey {
-            alg: "ed25519".into(),
-            public: KeyPair::load_or_create(&path, current_uid())?.public_hex(),
-        }
-    };
-    Ok(NextKey {
-        path,
-        secure_enclave,
-        key,
-    })
+    let path = ctx::key_path(&next, kind);
+    let key = new.at(&path, name)?;
+    Ok(NextKey { path, kind, key })
 }
 
 /// Moves the current key files aside and the next key into their place.
 fn install(name: &str, next: NextKey) -> Result<()> {
     let stamp = ctx::now_ms();
     let dir = ctx::humans_dir();
-    for (old, ext) in [
-        (ctx::se_key_path(name), "se"),
-        (ctx::human_key_path(name), "key"),
-    ] {
+    for kind in KeyKind::ALL {
+        let old = ctx::key_path(name, kind);
         if old.exists() {
-            let to = dir.join(format!("{name}.{ext}.retired-{stamp}"));
+            let to = dir.join(format!("{name}.{}.retired-{stamp}", kind.ext()));
             std::fs::rename(&old, &to)?;
             outln!("old key moved to {}", to.display());
         }
     }
-    let dest = if next.secure_enclave {
-        ctx::se_key_path(name)
-    } else {
-        ctx::human_key_path(name)
-    };
+    let dest = ctx::key_path(name, next.kind);
     std::fs::rename(&next.path, &dest)?;
     let default = dir.join("default");
     if !default.exists() {
@@ -122,8 +99,8 @@ fn allowed(repo: &str, r: &serde_json::Value, failed: &mut Vec<String>) {
     }
 }
 
-pub fn rotate(name: &str, repos: &[String], secure_enclave: bool) -> Result<()> {
-    let next = next_key(name, secure_enclave)?;
+pub fn rotate(name: &str, repos: &[String], new: NewKey) -> Result<()> {
+    let next = next_key(name, new)?;
     let mut failed = vec![];
     for repo in repos {
         let mut c = human_client(repo, name)?;
@@ -177,17 +154,13 @@ pub fn recovery_key(name: &str, repos: &[String], out: &Path) -> Result<()> {
     outln!("recovery key for {name}: {}", out.display());
     outln!(
         "move it off this machine now (a password manager or a USB stick). It replaces \
-         your key once, without Touch ID; anything that can read it can do the same."
+         your key once, without Touch ID or a touch; anything that can read it can do \
+         the same."
     );
     Ok(())
 }
 
-pub fn recover(
-    name: &str,
-    repos: &[String],
-    recovery_key: &Path,
-    secure_enclave: bool,
-) -> Result<()> {
+pub fn recover(name: &str, repos: &[String], recovery_key: &Path, new: NewKey) -> Result<()> {
     let (rk, open) = KeyPair::load_carried(recovery_key, current_uid())
         .map_err(|e| anyhow::anyhow!("recovery key {}: {e}", recovery_key.display()))?;
     if open {
@@ -197,7 +170,7 @@ pub fn recover(
             recovery_key.display()
         );
     }
-    let next = next_key(name, secure_enclave)?;
+    let next = next_key(name, new)?;
     let mut failed = vec![];
     let mut moved = vec![];
     for repo in repos {

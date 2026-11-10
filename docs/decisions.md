@@ -143,6 +143,11 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   recovery key, it also replaces that human's key (see "Daemon keys", "A
   lost Mac"). Left out of the encoding when absent, so earlier recoveries
   keep their bytes; one that has it needs format 27.
+- **Version 28** adds no field: a human key may be of the kinds `sk-p256`
+  and `sk-ed25519` (see "Human keys", "Security keys (#17)"), and
+  `human.enroll` checks the form of the key as the other key operations
+  do. Before it such a key is `invalid_key` and signs nothing, and an
+  enrolment keeps its looser check, so older entries replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -922,8 +927,8 @@ request them, and a policy can escalate them like any other operation.
   (primary or recovery), and the key operations check that it is a
   well-formed key of its algorithm (lowercase hex, a valid Ed25519 or
   P-256 point), so a rotation can not lock a human out. `human.enroll`
-  keeps its older, looser check: tightening it could change the replay of
-  existing logs.
+  kept its older, looser check until log format 28, which tightened it
+  for new entries only; entries before it replay under the loose check.
 - **Escalated key operations are checked again on release.** A policy may
   send a key operation to approval. The approval that releases it denies
   the release if the operation would now revoke the last human, or if its
@@ -933,10 +938,67 @@ request them, and a policy can escalate them like any other operation.
   the only way back in when the key that would unfreeze is lost.
 - **CLI.** `lonca human rotate|recover --repo a,b` takes every repository
   the human is enrolled in, because the local key is shared between them.
-  The new key waits next to the current one (`<name>.next.key|se`) and is
+  The new key waits next to the current one (`<name>.next.key|se|sk`) and is
   installed only after every repository accepted it; a rerun skips the
   repositories that already use it. The old key file is kept as
   `<name>.key.retired-<ms>`.
+
+### Security keys (#17)
+
+Design §5.4 asks for a FIDO2 security key where there is no Secure
+Enclave. Decided 2026-11-10:
+
+- **OpenSSH is the helper.** `ssh-keygen -t ecdsa-sk|ed25519-sk -O
+  application=ssh:lonca` makes the credential and `ssh-keygen -Y sign -n
+  lonca` signs, with a touch each time. Lonca links no USB, HID or FIDO
+  library: the core and the gatekeeper stay free of device code, the
+  program that talks to the device is one the distribution already ships
+  and patches, and a key works wherever OpenSSH's does. The alternative, a
+  helper of our own on libfido2, would be a second implementation of what
+  `ssh-keygen` does, with its own packaging on every distribution.
+- **Lonca only verifies**, in pure Rust in `human.rs` (`sk`): the SSHSIG
+  blob (PROTOCOL.sshsig) and the signature a security key makes
+  (PROTOCOL.u2f). The human key is the raw public key (`sk-p256`: the
+  65-byte uncompressed point; `sk-ed25519`: 32 bytes); the signature is the
+  blob in hex. Everything in the blob is checked and nothing is skipped:
+  version 1, the enrolled key and no other, the application `ssh:lonca`,
+  the namespace `lonca`, an empty reserved field, `sha512` or `sha256`,
+  minimal `mpint`s, no byte after the end. So a signature has one
+  encoding, which the fuzz target `signature` holds the reader to.
+- **Presence is the device's "user present" flag**, which is part of what
+  it signs. A signature without it is `bad_human_signature` whether or not
+  the repository requires presence: a key made with OpenSSH's
+  `no-touch-required` is not a way to sign here. `ssh-keygen -Y verify`
+  accepts such a signature; this is the one place Lonca is stricter than
+  OpenSSH, and the test `openssh_agrees` pins both answers.
+- **The application is Lonca's own** (`ssh:lonca`), so a key made for
+  logins does not sign Lonca operations, nor the other way round. One
+  namespace serves operations and logins: what is signed names its own
+  purpose, as with the other kinds of key.
+- **A kind of key is what the enrolling human says it is.** The log does
+  not check an attestation that a key lives in hardware, for `sk-*` as for
+  `p256-se`. `human::ALGS` is the one list of kinds: name, whether its
+  signatures prove presence, first log format, the form of its public key
+  and its verifier. `decide()`, the daemon's `repo.prepare_init` and
+  `lonca doctor` ask it; a new kind is a row there and a log format.
+- **The key shows nothing.** Touch ID names the operation; a security key
+  blinks. `lonca` prints what the touch is for before it asks. A process
+  running as the human can start a signature of its own and hope for the
+  touch (threat model, "Humans and approvals"); the signature it gets is
+  for one operation, logged, with a nonce.
+- **CLI.** `lonca human keygen|rotate|recover --security-key[=ecdsa|ed25519]`;
+  the handle is `<humans>/<name>.sk`, with no passphrase: it signs nothing
+  without the device, and a passphrase prompt on every signature would
+  train the hand that the touch is meant to slow. `LONCA_SSH_KEYGEN` names
+  the program. `lonca doctor` reports under `presence` what the human's
+  key proves and what the machine could use.
+- **How it was verified.** The project has no security key yet. The tests
+  build blobs field by field from the two OpenSSH documents, pin two
+  signatures byte for byte, and where `ssh-keygen` is installed ask it
+  (`-Y verify`, OpenSSH 10.5 at the time) to accept what the verifier
+  accepts. The CLI is tested end to end against a software stand-in for
+  `ssh-keygen`. `LONCA_SK_CHECK=<dir>` runs the verifier over a key and a
+  signature made by a physical device; that run is still owed.
 
 ## Daemon keys
 

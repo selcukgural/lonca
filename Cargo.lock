@@ -2245,6 +2245,8 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "ed25519-dalek",
+ "hex",
  "ignore",
  "libc",
  "lonca-audit",
@@ -2254,6 +2256,7 @@ dependencies = [
  "lonca-policy",
  "lonca-symbols",
  "lonca-verify",
+ "p256",
  "rustix",
  "serde",
  "serde_json",
@@ -2307,6 +2310,7 @@ name = "lonca-daemon"
 version = "0.2.2"
 dependencies = [
  "base64",
+ "ed25519-dalek",
  "hex",
  "libc",
  "lonca-audit",
@@ -2316,6 +2320,7 @@ dependencies = [
  "lonca-policy",
  "lonca-symbols",
  "lonca-verify",
+ "p256",
  "serde",
  "serde_json",
  "tempfile",
@@ -2327,12 +2332,15 @@ name = "lonca-fuzz"
 version = "0.2.2"
 dependencies = [
  "base64",
+ "ed25519-dalek",
+ "hex",
  "lonca-audit",
  "lonca-client",
  "lonca-core",
  "lonca-daemon",
  "lonca-policy",
  "lonca-symbols",
+ "p256",
  "serde",
  "serde_json",
  "tempfile",
@@ -2357,6 +2365,7 @@ version = "0.2.2"
 name = "lonca-policy"
 version = "0.2.2"
 dependencies = [
+ "base64",
  "cedar-policy",
  "ed25519-dalek",
  "hex",
@@ -2364,6 +2373,7 @@ dependencies = [
  "p256",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "toml",

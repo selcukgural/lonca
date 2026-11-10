@@ -42,8 +42,11 @@ answer incidents; agents can do none of that.
   `~/.config/lonca/humans`. Anything running as you can sign with it, agents
   included.
 - A **Secure Enclave key** (`--secure-enclave`, macOS) never leaves the
-  Mac, and every signature needs Touch ID or the password. A repository
-  with `approvals.require_presence = true` accepts only such keys.
+  Mac, and every signature needs Touch ID or the password.
+- A **security key** (`--security-key`, a FIDO key through OpenSSH, on
+  Linux too) never leaves the device, and every signature needs a touch.
+  A repository with `approvals.require_presence = true` accepts only these
+  two kinds of key ([Profiles](profiles.md#presence)).
 - A **human session** (`lonca human login`, one hour by default) lets reads
   and prepared operations go without signing each time; every human command
   opens one by itself when it needs it.

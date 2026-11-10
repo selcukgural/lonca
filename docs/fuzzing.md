@@ -24,6 +24,7 @@ what it checks does not hold.
 | `parse` | a file kind (each language of `languages.toml`, the section formats, plain text), an engine version, two versions of a file | symbols stand inside the file on character boundaries, sections add up to the file, facts come out |
 | `merge` | file kind, engine, base, ours and theirs | the same answer twice; a conflict names something; under the current engine, sides that parse never merge into a file that does not |
 | `policy` | `lonca.toml` and `policy.cedar` | what loads loads the same again; `lonca policy check` (every entry decided again, lockouts) works on it |
+| `signature` | a kind of security key and a signature blob (`ssh-keygen -Y sign`) | what reads is written back byte for byte (one signature, one form); nothing verifies that does not read or that was signed without a touch; the same for an OpenSSH public key |
 
 In `request`, `$HUMAN`, `$AGENT`, `$AGENT2`, `$WS` and `$TRUNK` stand for
 the template's tokens, the agents' workspace and trunk, so the fuzzer gets

@@ -86,6 +86,10 @@ fn ci_runs_every_target() {
 }
 
 fn write(target: &str, name: &str, data: &[u8]) {
+    // `LONCA_SEEDS_ONLY=<target>` leaves the seeds of the others as they are.
+    if std::env::var("LONCA_SEEDS_ONLY").is_ok_and(|only| only != target) {
+        return;
+    }
     let dir = fuzz_dir().join("seeds").join(target);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(name), data).unwrap();
@@ -106,9 +110,90 @@ fn header(ext: &str, engine: u32) -> Option<Vec<u8>> {
     Some(vec![u8::try_from(path).ok()?, u8::try_from(e).ok()?])
 }
 
+/// Signatures by the software keys whose public halves the `signature`
+/// target has enrolled: touched (with either hash), touched with a PIN,
+/// and untouched; and each public key as OpenSSH writes it.
+fn signature_seeds() {
+    use lonca_fuzz::signature::{MESSAGE, PUBLIC};
+    use lonca_policy::human::sk::{self, Assertion, Hash, Kind};
+    for (c, (kind, public_hex)) in PUBLIC.into_iter().enumerate() {
+        let sign = |data: &[u8]| -> ([u8; 64], Vec<u8>) {
+            match kind {
+                Kind::P256 => {
+                    use p256::ecdsa::signature::Signer;
+                    let key = p256::ecdsa::SigningKey::from_slice(&[7; 32]).unwrap();
+                    let sig: p256::ecdsa::Signature = key.sign(data);
+                    let public = key.verifying_key().to_sec1_point(false);
+                    (
+                        sig.to_bytes()[..].try_into().unwrap(),
+                        public.as_bytes().to_vec(),
+                    )
+                }
+                Kind::Ed25519 => {
+                    use ed25519_dalek::Signer;
+                    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+                    (
+                        key.sign(data).to_bytes(),
+                        key.verifying_key().to_bytes().to_vec(),
+                    )
+                }
+            }
+        };
+        let c = u8::try_from(c).unwrap();
+        let name = kind.alg();
+        for (what, hash, flags) in [
+            ("touch", Hash::Sha512, 1),
+            ("touch-sha256", Hash::Sha256, 1),
+            ("touch-pin", Hash::Sha512, 5),
+            ("untouched", Hash::Sha512, 0),
+        ] {
+            let (signature, public) = sign(&sk::signed_data(MESSAGE, hash, flags, 9));
+            assert_eq!(hex::encode(&public), public_hex, "{name}");
+            let a = Assertion {
+                hash,
+                flags,
+                counter: 9,
+                signature,
+            };
+            let mut data = vec![c];
+            data.extend(sk::encode(kind, &public, &a));
+            write("signature", &format!("{name}-{what}"), &data);
+        }
+        let mut data = vec![c];
+        data.extend(sk::public_blob(kind, &hex::decode(public_hex).unwrap()));
+        write("signature", &format!("{name}-public"), &data);
+    }
+}
+
+/// The seeds of `signature` do what their names say.
+#[test]
+fn signature_seeds_verify_when_touched() {
+    use lonca_fuzz::signature::{MESSAGE, PUBLIC};
+    use lonca_policy::human::sk;
+    for (c, (kind, public)) in PUBLIC.into_iter().enumerate() {
+        let name = kind.alg();
+        let verifies = |what: &str| {
+            let path = fuzz_dir().join(format!("seeds/signature/{name}-{what}"));
+            let data = std::fs::read(path).unwrap();
+            assert_eq!(usize::from(data[0]), c);
+            let sig = hex::encode(&data[1..]);
+            match kind {
+                sk::Kind::P256 => sk::verify_p256(public, MESSAGE, &sig),
+                sk::Kind::Ed25519 => sk::verify_ed25519(public, MESSAGE, &sig),
+            }
+        };
+        for what in ["touch", "touch-sha256", "touch-pin"] {
+            assert!(verifies(what), "{name}-{what}");
+        }
+        assert!(!verifies("untouched"), "{name}");
+        assert!(!verifies("public"), "{name}");
+    }
+}
+
 #[test]
 #[ignore = "writes fuzz/seeds; run by hand"]
 fn write_seeds() {
+    signature_seeds();
     let t = template::get();
 
     for (i, op) in t.log.iter().enumerate() {

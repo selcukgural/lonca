@@ -55,8 +55,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// `unhooked` observation, which taints a session; version 25 adds named
 /// `checks` to `approve`; version 26 makes an agent's proposal withdraw the
 /// pending changes of its workspace; version 27 lets a recovery key sign a
-/// `daemon.recover` (`recover`).
-pub const FORMAT_CURRENT: u32 = 27;
+/// `daemon.recover` (`recover`); version 28 accepts human keys on FIDO
+/// security keys (`sk-p256`, `sk-ed25519`).
+pub const FORMAT_CURRENT: u32 = 28;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -138,6 +139,10 @@ pub const FORMAT_REPLACES: u32 = 26;
 /// lost Mac (daemon key and Secure Enclave key both gone) is recovered
 /// with the recovery key alone.
 pub const FORMAT_RECOVERY_DAEMON: u32 = 27;
+/// The first format that accepts a human key on a FIDO security key
+/// (`sk-p256`, `sk-ed25519`), whose signatures prove presence. No new
+/// field: before it, such a key is `invalid_key`, as it always was.
+pub const FORMAT_SECURITY_KEYS: u32 = 28;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

@@ -16,7 +16,8 @@ use std::collections::BTreeSet;
 
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_LEASE_INTENT,
-    FORMAT_LEASE_LIVENESS, FORMAT_REPLACES, FORMAT_SESSION_HARNESS,
+    FORMAT_LEASE_LIVENESS, FORMAT_LEGACY, FORMAT_REPLACES, FORMAT_SECURITY_KEYS,
+    FORMAT_SESSION_HARNESS,
 };
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
@@ -296,35 +297,19 @@ fn check_continuation(state: &State, c: &Continuation, scope: &Scope, v: &mut Ve
 /// An Ed25519 public key as the daemon writes it: 32 bytes, lowercase hex,
 /// a valid point.
 pub fn valid_daemon_key(k: &str) -> bool {
-    valid_human_key(&HumanKey {
+    let key = HumanKey {
         alg: "ed25519".into(),
         public: k.to_string(),
-    })
-}
-
-/// A key a human can sign with: a known algorithm and a public key in the
-/// form that algorithm uses (lowercase hex). Stricter than the check
-/// `human.enroll` has always made, so a rotation can not lock a human out
-/// with a key nothing can sign for.
-pub fn valid_human_key(k: &HumanKey) -> bool {
-    if k.public != k.public.to_ascii_lowercase() {
-        return false;
-    }
-    let Ok(bytes) = hex::decode(&k.public) else {
-        return false;
     };
-    match k.alg.as_str() {
-        "ed25519" => <[u8; 32]>::try_from(bytes.as_slice())
-            .ok()
-            .is_some_and(|b| ed25519_dalek::VerifyingKey::from_bytes(&b).is_ok()),
-        "p256-se" => p256::ecdsa::VerifyingKey::from_sec1_bytes(&bytes).is_ok(),
-        _ => false,
-    }
+    crate::human::valid_key(&key, FORMAT_LEGACY)
 }
 
-/// Checks a key that a key operation adds.
-fn check_new_key(state: &State, k: &HumanKey, v: &mut Verdict) {
-    if !valid_human_key(k) {
+/// Checks a key that a key operation adds: a kind of key the entry's
+/// format knows, with a public key in the form that kind uses. Stricter
+/// than the check `human.enroll` made before format 28, so a rotation can
+/// not lock a human out with a key nothing can sign for.
+fn check_new_key(state: &State, k: &HumanKey, format: u32, v: &mut Verdict) {
+    if !crate::human::valid_key(k, format) {
         v.deny("invalid_key");
     } else if state.key_known(&k.public) {
         v.deny("key_reused");
@@ -583,7 +568,7 @@ pub fn decide(
         let Some(sig) = human else {
             return Decision::deny("missing_human_signature");
         };
-        if let Err(e) = crate::human::verify(human_key, repo, op, sig, t) {
+        if let Err(e) = crate::human::verify(human_key, repo, op, sig, t, ctx.format) {
             return Decision::deny(e);
         }
         return Decision::allow();
@@ -638,12 +623,15 @@ pub fn decide(
             if state.nonces.contains(&sig.nonce) {
                 return Decision::deny("nonce_reused");
             }
-            if let Err(e) = crate::human::verify(key, &state.repo, op, sig, t) {
+            if let Err(e) = crate::human::verify(key, &state.repo, op, sig, t, ctx.format) {
                 return Decision::deny(e);
             }
             // The recovery key is the one signature without presence: the
-            // Secure Enclave key it replaces is bound to a lost machine.
-            if cfg.approvals.require_presence && key.alg != "p256-se" && !recover {
+            // key it replaces is bound to a lost machine or a lost device.
+            if cfg.approvals.require_presence
+                && !crate::human::proves_presence(&key.alg)
+                && !recover
+            {
                 return Decision::deny("presence_required");
             }
             if !is_human_op(op) {
@@ -692,9 +680,15 @@ pub fn decide(
             if state.humans.contains_key(who) {
                 v.deny("already_enrolled");
             }
-            if !matches!(key.alg.as_str(), "ed25519" | "p256-se")
-                || hex::decode(&key.public).is_err()
-            {
+            // Before format 28 an enrolment checked only that the kind
+            // was known and the key was hex; those entries replay so.
+            let valid = if ctx.format >= FORMAT_SECURITY_KEYS {
+                crate::human::valid_key(key, ctx.format)
+            } else {
+                crate::human::alg(&key.alg, ctx.format).is_some()
+                    && hex::decode(&key.public).is_ok()
+            };
+            if !valid {
                 v.deny("invalid_key");
             }
             if state.retired_keys.contains(&key.public) {
@@ -707,7 +701,7 @@ pub fn decide(
             if actor.label() != format!("human:{who}") {
                 v.deny("not_own_key");
             }
-            check_new_key(state, key, &mut v);
+            check_new_key(state, key, ctx.format, &mut v);
         }
         Op::DaemonRotate { key } | Op::DaemonRecover { key, .. } => {
             if !valid_daemon_key(key) {
@@ -727,7 +721,7 @@ pub fn decide(
                 if actor.label() != format!("human:{}", r.human) {
                     v.deny("not_own_key");
                 }
-                check_new_key(state, &r.key, &mut v);
+                check_new_key(state, &r.key, ctx.format, &mut v);
             }
         }
         Op::HumanRevoke { human: who, reason } => {

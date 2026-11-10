@@ -18,7 +18,7 @@ the same pull request, as for the OWASP review.
 | Trunk | `refs/heads/main` of the daemon's store | code that nobody allowed, or that skipped verification, becomes the project |
 | The operation log | `refs/lonca/oplog`, hash-chained, every entry signed by the daemon | the record of who did what, and the input every decision and audit is replayed from |
 | The policy | `refs/lonca/policy` (`lonca.toml`, `policy.cedar`), changed only by human operations | the rules every decision applies |
-| Human keys | Secure Enclave, or a file under `~/.config/lonca/humans` | whoever signs as a human approves, changes the policy and manages keys |
+| Human keys | Secure Enclave, a FIDO security key, or a file under `~/.config/lonca/humans` | whoever signs as a human approves, changes the policy and manages keys |
 | The daemon key | `<home>/daemon.key` | whoever holds it can append entries the chain accepts |
 | Session tokens | given once to the agent's harness; the daemon keeps a SHA-256 | whoever holds one acts as that session, within its capability |
 | The developer's secrets | the developer's files, keys of other services | Lonca keeps them out of its sandboxes; outside them it does not own them |
@@ -46,9 +46,9 @@ the same pull request, as for the OWASP review.
 
 The **human** is trusted but shares the machine with the agents, so
 everything a human approves is shown by the daemon, not written by an agent.
-Presence (Touch ID) proves that a person touched the key; it does not prove
-that they read what they approved. The rule for people is: never approve a
-system prompt an agent asked you for.
+Presence (Touch ID, a touch on a security key) proves that a person touched
+the key; it does not prove that they read what they approved. The rule for
+people is: never approve a system prompt an agent asked you for.
 
 ## Modes
 
@@ -70,7 +70,7 @@ What each mode does about each threat:
 | An operation outside the agent's capability, scope, lease or quota | prevented: `decide()` | prevented | prevented |
 | A change no one verified reaching trunk | prevented when the policy requires verification | prevented (`verification.required`) | prevented, as hardened |
 | Writing the store or its refs directly | detected: `reconcile()` restores or freezes, the auditor reports | prevented: the store belongs to the daemon's user | prevented |
-| Signing as a human | prevented with a Secure Enclave key; with a file key the agent can read it | prevented on macOS (presence required); not on Linux, see [limits](#humans-and-approvals) | prevented: human keys are closed to the sandbox |
+| Signing as a human | prevented with a Secure Enclave key or a security key; with a file key the agent can read it | prevented where the human has a key that proves presence (required); not with `--without-presence`, see [limits](#humans-and-approvals) | prevented: human keys are closed to the sandbox |
 | Reading outside content, then changing code | every change waits for a human, since `unobserved` counts as tainted | prevented from inside the harness (taint: the change waits for a human); from a process started outside it, detected | prevented: all traffic goes through the proxy and taints |
 | Touching build scripts, CI, lockfiles, agent instructions | refused to unobserved and tainted sessions | refused to tainted sessions | refused to tainted sessions |
 | Replacing the daemon, the hook program or the harness settings | possible: they are the developer's files; sessions stay `unobserved` | prevented: root-owned, clients check the daemon's uid | prevented |
@@ -91,7 +91,7 @@ daemon key can append entries the chain accepts. The auditor still replays
 every decision, so a forged entry passes only if `decide()` would have
 allowed it; but evidence (a build or test result) is recorded, not
 recomputed, so it can be forged with the key. A human operation needs a
-human signature, so with a Secure Enclave key the policy, approvals and keys
+human signature, so with a key that proves presence the policy, approvals and keys
 stay out of an agent's reach. A log rewritten after it was pushed no longer
 extends the remote's copy.
 
@@ -177,10 +177,26 @@ It does not catch:
 
 ### Humans and approvals
 
-- **Linux has no presence.** No key there proves a person is present, so a
-  hardened repository on Linux is initialised `--without-presence`, and a
-  human's file key is readable by the agents running as that human. FIDO2
-  keys are [#17](https://github.com/selcukgural/lonca/issues/17).
+- **Presence on Linux needs a security key.** A FIDO security key signs
+  through OpenSSH (`lonca human keygen --security-key`) and proves presence
+  there. Without one, a hardened repository on Linux is initialised
+  `--without-presence`, and a human's file key is readable by the agents
+  running as that human.
+- **A security key shows nothing.** Touch ID names the operation in its
+  dialog; a security key only blinks, and what the touch approves is the
+  line `lonca` prints before it. A process running as the human that asks
+  for a signature at the moment a touch is expected can have its own
+  request touched instead. The signature still covers one operation, the
+  daemon logs it, and it can not be replayed.
+- **A kind of key is a claim.** The log records `p256-se` or `sk-p256` as
+  the enrolling human named it, and checks the device's "user present"
+  flag on a security key's signatures; it does not check an attestation
+  that the key lives in hardware. Whoever enrolls a software key under
+  those names has lied to their own repository.
+- **Security keys were verified against OpenSSH, not yet against a
+  device.** The verifier agrees with `ssh-keygen -Y verify` of OpenSSH
+  10.5 on signatures in the security-key format; signing with a physical
+  key through `lonca` has not been exercised by the project yet.
 - **A two-signature rule needs two people.** The approval count is capped at
   the number of enrolled humans; a signature plus a waiting period for a
   single developer is [#19](https://github.com/selcukgural/lonca/issues/19).

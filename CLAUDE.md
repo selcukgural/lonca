@@ -86,8 +86,8 @@ cargo mutants -p lonca-policy -j 4          # one crate
 
 ## Fuzzing
 
-Seven cargo-fuzz targets (`entry`, `replay`, `request`, `hook`, `parse`,
-`merge`, `policy`); what each holds and how to run it: `docs/fuzzing.md`.
+Eight cargo-fuzz targets (`entry`, `replay`, `request`, `hook`, `parse`,
+`merge`, `policy`, `signature`); what each holds and how to run it: `docs/fuzzing.md`.
 
 ```sh
 cargo install --locked cargo-fuzz@0.13.2

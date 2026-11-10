@@ -176,8 +176,8 @@ Without a recovery key, one of these has to have survived:
   or a file key of yours kept off the machine, where the repository does not
   require presence. With it: `lonca restore`, `lonca daemon-key recover
   --repo demo`, then `lonca human revoke ayse` and `lonca human enroll ayse
-  --alg p256-se --public <hex>` for your new key (the hex from `lonca human
-  whoami`).
+  --alg p256-se --public <hex>` for your new key (the algorithm and the hex
+  from `lonca human whoami`).
 - **A backup of the old daemon's key**, for example in a Time Machine backup
   of the Mac: `daemon.key` in the daemon's home (`~/.lonca`, or
   `/Library/Lonca/home` when hardened). Put it into the new daemon's home

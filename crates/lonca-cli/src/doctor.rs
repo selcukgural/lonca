@@ -328,11 +328,15 @@ fn human_check(repo: &str, human: &str, status: &Value, require_presence: bool) 
             "an enrolled human runs `lonca human enroll`",
         );
     };
-    if require_presence && key["alg"] != "p256-se" {
+    let presence = key["alg"]
+        .as_str()
+        .is_some_and(lonca_policy::human::proves_presence);
+    if require_presence && !presence {
         return warn(
             name,
             format!("{human} has a file key; this repository requires presence"),
-            "use a Secure Enclave key: `lonca human rotate --secure-enclave`",
+            "use a key that proves presence: `lonca human rotate --secure-enclave` (Mac) \
+             or `--security-key` (a FIDO security key)",
         );
     }
     pass(name, format!("{human} is enrolled"))
@@ -386,13 +390,65 @@ fn repository_checks(human: &str, repo: &str) -> Result<Vec<Check>> {
     Ok(out.into_iter().map(|c| c.in_group(group())).collect())
 }
 
-/// A Secure Enclave key signs a login with a prompt, and a session that is
-/// about to end would be renewed by one.
-fn would_prompt(enclave_key: bool, session_expires_ms: Option<i64>, now_ms: i64) -> bool {
-    enclave_key && !session_expires_ms.is_some_and(|e| e > now_ms + 30_000)
+/// Whether this human's signatures prove presence, and with what.
+fn presence_check(human: &str) -> Check {
+    presence_of(
+        ctx::key_kind(human),
+        ctx::se_helper().is_ok(),
+        ctx::ssh_keygen_found(),
+    )
 }
 
-/// Nothing here prompts: a Secure Enclave key without a live session is
+/// `enclave`: the `lonca-se` helper is here; `ssh_keygen`: so is OpenSSH's
+/// key program, which signs with a FIDO security key.
+fn presence_of(kind: Option<ctx::KeyKind>, enclave: bool, ssh_keygen: bool) -> Check {
+    use ctx::KeyKind;
+    let name = "presence";
+    match kind {
+        Some(KeyKind::SecureEnclave) if enclave => pass(
+            name,
+            "Secure Enclave key: every signature asks for Touch ID or the password",
+        ),
+        Some(KeyKind::SecureEnclave) => fail(
+            name,
+            "Secure Enclave key, and no lonca-se helper to sign with",
+            "put lonca-se next to lonca, or set LONCA_SE",
+        ),
+        Some(KeyKind::SecurityKey) if ssh_keygen => {
+            pass(name, "security key: every signature asks for a touch")
+        }
+        Some(KeyKind::SecurityKey) => fail(
+            name,
+            "security key, and no ssh-keygen to sign with",
+            "install OpenSSH 8.2 or later, or set LONCA_SSH_KEYGEN",
+        ),
+        Some(KeyKind::File) | None => {
+            let mut ways = vec![];
+            if enclave {
+                ways.push("the Secure Enclave (`lonca human rotate --secure-enclave`)");
+            }
+            if ssh_keygen {
+                ways.push("a FIDO security key (`lonca human rotate --security-key`)");
+            }
+            let available = match ways.is_empty() {
+                true => "nothing here can (no lonca-se helper, no ssh-keygen)".to_string(),
+                false => format!("available here: {}", ways.join(", ")),
+            };
+            pass(
+                name,
+                format!("file key: its signatures do not prove presence; {available}"),
+            )
+        }
+    }
+}
+
+/// A key that proves presence signs a login with a prompt (Touch ID, a
+/// touch), and a session that is about to end would be renewed by one.
+fn would_prompt(presence_key: bool, session_expires_ms: Option<i64>, now_ms: i64) -> bool {
+    presence_key && !session_expires_ms.is_some_and(|e| e > now_ms + 30_000)
+}
+
+/// Nothing here prompts: a key that proves presence without a live session is
 /// asked to log in first. The errors stay out of the output, since a login
 /// failure names the directory of the keys.
 /// What the security log holds for the last day ([`security.events`]):
@@ -446,7 +502,8 @@ fn human_and_repositories() -> Vec<Check> {
         )];
     };
     let session = ctx::read_session(&human).map(|s| s.expires_ms);
-    if would_prompt(ctx::se_key_path(&human).exists(), session, ctx::now_ms()) {
+    let prompts = ctx::key_kind(&human).is_some_and(ctx::KeyKind::prompts);
+    if would_prompt(prompts, session, ctx::now_ms()) {
         return vec![warn(
             "human",
             format!("{human} has no session, and opening one would prompt"),
@@ -465,7 +522,11 @@ fn human_and_repositories() -> Vec<Check> {
         .ok()
         .and_then(|r| serde_json::from_value(r).ok())
         .unwrap_or_default();
-    let mut out = vec![pass("human", human.clone()), security_check(&mut c)];
+    let mut out = vec![
+        pass("human", human.clone()),
+        presence_check(&human),
+        security_check(&mut c),
+    ];
     for repo in repos {
         match repository_checks(&human, &repo) {
             Ok(checks) => out.extend(checks),
@@ -861,12 +922,66 @@ mod tests {
     fn a_human_who_can_not_satisfy_the_repository_is_told() {
         let status = json!({"humans": {
             "file": {"alg": "ed25519"}, "enclave": {"alg": "p256-se"},
+            "touch": {"alg": "sk-p256"}, "touch2": {"alg": "sk-ed25519"},
+            "odd": {"alg": 7},
         }});
         let level = |human, presence| human_check("demo", human, &status, presence).level;
         assert_eq!(level("file", false), Level::Pass);
         assert_eq!(level("enclave", true), Level::Pass);
+        assert_eq!(level("touch", true), Level::Pass);
+        assert_eq!(level("touch2", true), Level::Pass);
         assert_eq!(level("file", true), Level::Warn);
+        assert_eq!(level("odd", true), Level::Warn);
+        assert_eq!(level("odd", false), Level::Pass);
         assert_eq!(level("nobody", false), Level::Warn);
+        let hint = human_check("demo", "file", &status, true).hint.unwrap();
+        assert!(hint.contains("--secure-enclave") && hint.contains("--security-key"));
+    }
+
+    #[test]
+    fn presence_names_the_key_and_what_this_machine_could_use() {
+        use ctx::KeyKind::{File, SecureEnclave, SecurityKey};
+        let of = |kind, enclave, ssh| {
+            let c = presence_of(kind, enclave, ssh);
+            assert_eq!(c.name, "presence");
+            (c.level, c.detail, c.hint.unwrap_or_default())
+        };
+        let (level, detail, _) = of(Some(SecureEnclave), true, false);
+        assert_eq!(level, Level::Pass);
+        assert!(detail.contains("Touch ID"), "{detail}");
+        let (level, _, hint) = of(Some(SecureEnclave), false, true);
+        assert_eq!(level, Level::Fail);
+        assert!(hint.contains("LONCA_SE"), "{hint}");
+        let (level, detail, _) = of(Some(SecurityKey), false, true);
+        assert_eq!(level, Level::Pass);
+        assert!(detail.contains("a touch"), "{detail}");
+        let (level, _, hint) = of(Some(SecurityKey), true, false);
+        assert_eq!(level, Level::Fail);
+        assert!(hint.contains("LONCA_SSH_KEYGEN"), "{hint}");
+
+        // A file key, or none yet: never a problem by itself, and the
+        // report says what could prove presence here.
+        for kind in [Some(File), None] {
+            let (level, detail, _) = of(kind, true, true);
+            assert_eq!(level, Level::Pass);
+            assert!(
+                detail.contains("--secure-enclave") && detail.contains("--security-key"),
+                "{detail}"
+            );
+            let (_, detail, _) = of(kind, true, false);
+            assert!(
+                detail.contains("--secure-enclave") && !detail.contains("--security-key"),
+                "{detail}"
+            );
+            let (_, detail, _) = of(kind, false, true);
+            assert!(
+                !detail.contains("--secure-enclave") && detail.contains("--security-key"),
+                "{detail}"
+            );
+            let (level, detail, _) = of(kind, false, false);
+            assert_eq!(level, Level::Pass);
+            assert!(detail.contains("nothing here can"), "{detail}");
+        }
     }
 
     #[test]

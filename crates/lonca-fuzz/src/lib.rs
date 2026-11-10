@@ -3,7 +3,8 @@
 //! Every input that crosses a trust boundary has a target here: one stored
 //! log entry, a whole log as the auditor reads it, a line on the daemon's
 //! socket, a hook event, a file the symbol engine reads, a three-way merge,
-//! and a repository's configuration and policy. A target is a function of
+//! a repository's configuration and policy, and a signature made with a
+//! security key. A target is a function of
 //! bytes that panics when what it checks does not hold; every input the
 //! engine accepts must leave it quiet.
 //!
@@ -21,6 +22,7 @@ pub mod parse;
 pub mod policy;
 pub mod replay;
 pub mod request;
+pub mod signature;
 pub mod template;
 
 /// What a target is: bytes in, a panic if what it holds does not.
@@ -36,6 +38,7 @@ pub const TARGETS: &[(&str, Check)] = &[
     ("policy", policy::check),
     ("replay", replay::check),
     ("request", request::check),
+    ("signature", signature::check),
 ];
 
 /// Where several texts share one input, they are cut at this byte: a NUL,

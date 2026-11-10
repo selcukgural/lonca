@@ -1700,12 +1700,12 @@ impl Service {
                 false => Ok((profile, false)),
             };
         }
-        if !p.without_presence && p.human_key.alg != "p256-se" {
+        if !p.without_presence && !lonca_policy::human::proves_presence(&p.human_key.alg) {
             return fail(
                 "invalid",
                 "a hardened repository requires presence and this key can not prove it: \
-                 use `lonca human keygen --secure-enclave`, or on a machine with no such \
-                 key pass --without-presence",
+                 use `lonca human keygen --secure-enclave` (Mac) or `--security-key` (a \
+                 FIDO security key), or with neither pass --without-presence",
             );
         }
         Ok((profile, !p.without_presence))

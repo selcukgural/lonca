@@ -26,7 +26,9 @@ serde_json = "1.0.154"
 thiserror = "2.0.21"
 
 [dev-dependencies]
+ed25519-dalek = "3.0.0"
 lonca-audit = { path = "../lonca-audit" }
+p256 = { version = "0.14.0", features = ["ecdsa"] }
 tempfile = "3.27.0"
 
 [lints]

@@ -97,9 +97,16 @@ again afterwards, so your account joins group `lonca`.
 | Backups (group `lonca` reads) | `/Library/Lonca/backups` | `/var/lib/lonca-backups` |
 | Imports (group `lonca` writes) | `/Library/Lonca/import` | `/var/lib/lonca-import` |
 
-Linux has no key that proves user presence, which the hardened profile
-asks for: create repositories there with `lonca init <repo>
---without-presence`.
+The hardened profile asks for a key that proves user presence. On Linux
+that is a FIDO security key, used through OpenSSH 8.2 or later (`ssh-keygen`
+built with FIDO support, as distributions ship it):
+
+```sh
+lonca human keygen <name> --security-key   # touch the key when it blinks
+```
+
+With no security key, create repositories with `lonca init <repo>
+--without-presence` ([Profiles](profiles.md#presence)).
 
 **Bringing history in.** The daemon reads nothing in your home. Leave a
 Git bundle in the import directory and name it; the daemon copies the file

@@ -107,6 +107,16 @@ APIs have no stability promise.
   and deviation from it with its reasons. [SECURITY.md](SECURITY.md) to
   report a vulnerability.
 
+## Questions and ideas
+
+- [Discussions](https://github.com/selcukgural/lonca/discussions): questions
+  (Q&A), ideas, and how you run your agents (Show and tell). Releases are
+  announced there.
+- [Issues](https://github.com/selcukgural/lonca/issues): bugs, and work
+  that was agreed on. The plan is the
+  [roadmap](https://github.com/selcukgural/lonca/issues/24).
+- A security problem: privately, as [SECURITY.md](SECURITY.md) says.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

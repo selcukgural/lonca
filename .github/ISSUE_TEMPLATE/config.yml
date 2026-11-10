@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question
+    url: https://github.com/selcukgural/lonca/discussions/categories/q-a
+    about: How to install, run or understand Lonca. Questions are answered in Discussions.
+  - name: Idea
+    url: https://github.com/selcukgural/lonca/discussions/categories/ideas
+    about: Something Lonca should do, or do differently. An idea that is agreed on becomes an issue.
+  - name: Security problem
+    url: https://github.com/selcukgural/lonca/security/advisories/new
+    about: Report a vulnerability privately. Please do not open a public issue or discussion for it.

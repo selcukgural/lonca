@@ -1,0 +1,57 @@
+name: Bug report
+description: Lonca did something wrong, and you can say how to see it again.
+labels: ["type: bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a question, use [Discussions](https://github.com/selcukgural/lonca/discussions/categories/q-a).
+        For a security problem, [report it privately](https://github.com/selcukgural/lonca/security/advisories/new).
+        Leave tokens, keys and private code out of what you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to see it again
+      render: sh
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `lonca --version`.
+      placeholder: lonca 0.2.2
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      description: "`lonca doctor` says which."
+      options:
+        - Cooperative
+        - Hardened
+        - Not sure
+  - type: textarea
+    id: doctor
+    attributes:
+      label: lonca doctor
+      description: Its output, if the daemon runs. Remove anything you would rather not share, such as paths.
+      render: text

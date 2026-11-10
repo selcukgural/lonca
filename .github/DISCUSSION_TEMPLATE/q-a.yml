@@ -1,0 +1,54 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions about installing, running or understanding Lonca. The
+        [guides](https://selcukgural.github.io/lonca/) and
+        [troubleshooting](https://selcukgural.github.io/lonca/docs/guide/troubleshooting)
+        may already have the answer.
+
+        A security problem does not belong here: report it privately through
+        [Report a vulnerability](https://github.com/selcukgural/lonca/security/advisories/new).
+        Leave tokens, keys and private code out of what you paste.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What you want to do, what you tried, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `lonca --version`.
+      placeholder: lonca 0.2.2
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Other
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      description: "`lonca doctor` says which."
+      options:
+        - Cooperative
+        - Hardened
+        - Not sure
+  - type: input
+    id: harness
+    attributes:
+      label: Agent harness
+      description: Which agent runs under Lonca, if any.
+      placeholder: Claude Code, Codex, Gemini CLI, OpenCode
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The command and what it printed, or the relevant part of `lonca doctor`.
+      render: text

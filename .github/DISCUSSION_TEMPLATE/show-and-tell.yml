@@ -1,0 +1,25 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        How you run agents with Lonca: a setup, a policy, a harness profile,
+        a script, numbers from real work. Leave tokens, keys and private
+        code out of what you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What you did
+      description: The setup and what it is for.
+    validations:
+      required: true
+  - type: input
+    id: agents
+    attributes:
+      label: Agents and harness
+      description: How many agents, and what runs them.
+      placeholder: three Claude Code sessions on one repository
+  - type: textarea
+    id: learned
+    attributes:
+      label: What worked and what did not
+      description: Where Lonca helped, where it was in the way.

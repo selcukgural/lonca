@@ -1,0 +1,29 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas for Lonca: something it should do, or do differently. What is
+        already planned is on the
+        [roadmap](https://github.com/selcukgural/lonca/issues/24); what was
+        decided and why is in
+        [docs/decisions.md](https://github.com/selcukgural/lonca/blob/main/docs/decisions.md).
+        An idea that is agreed on here becomes an issue.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were doing with your agents when you ran into it. A real case helps more than a feature name.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What Lonca would do. Say what a person or an agent would type or see, if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today
+      description: How you work around it now, and other ways you considered.

@@ -29,6 +29,7 @@ const sidebars = {
         { type: 'doc', id: 'guide/policies', label: 'Writing policies' },
         { type: 'doc', id: 'guide/runners', label: 'Running agents' },
         { type: 'doc', id: 'guide/verification', label: 'Verification' },
+        { type: 'doc', id: 'guide/languages', label: 'Languages' },
         { type: 'doc', id: 'guide/recovery', label: 'Recovery' },
         { type: 'doc', id: 'guide/troubleshooting', label: 'Troubleshooting' },
       ],

@@ -386,6 +386,16 @@ impl Lang {
         Lang::of(found.unwrap_or_else(|| panic!("no language {name}")))
     }
 
+    /// Every language of the table, in its order.
+    pub fn all() -> impl Iterator<Item = Lang> {
+        TABLE.language.iter().map(Lang::of)
+    }
+
+    /// The extensions of the files this language reads.
+    pub fn extensions(self) -> &'static [String] {
+        &self.entry.extensions
+    }
+
     /// The language of a file, as this build's engine reads it.
     pub fn detect(path: &str) -> Option<Lang> {
         Lang::detect_at(crate::engine::ENGINE_CURRENT, path)

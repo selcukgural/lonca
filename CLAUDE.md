@@ -35,6 +35,12 @@ cargo deny check                # advisories, licenses, crates.io only (deny.tom
 - A new operation type needs: `ops.rs` (Op, OpKind, as_str), `decide.rs`
   (who may request it, per-op checks), `state.rs` (effects), and the
   auditor's deep checks if it carries recomputable data.
+- `crates/lonca-symbols/tests/corpus/` has samples of each language's recent
+  syntax; `known.txt` there and the table at the end of
+  `docs/guide/languages.md` say what the grammars read of them. After a grammar
+  update or a new sample: `LONCA_CORPUS=write cargo test -p lonca-symbols
+  --test corpus`, then read the diff. A sample has one new thing and a
+  definition in it.
 - `lonca-client` is what harnesses depend on: protocol types, socket
   client, daemon checks, session file. It must not pull in the store or
   the policy (`cargo tree -p lonca-client -e normal` has no gix, no

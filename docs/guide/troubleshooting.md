@@ -151,7 +151,8 @@ did, so its sessions are `unobserved`, every change escalates
 
 No `build` or `test` command is set in `[verification]`, so nothing checks
 that the code compiles: a file the grammar can not read waits for a person,
-whether it is a mistake or syntax newer than the grammar. Set them with
+whether it is a mistake or syntax newer than the grammar
+([Languages](languages.md)). Set them with
 `lonca policy set`; with
 `verification.required = true` a change can not land without them
 ([Verification](verification.md)).

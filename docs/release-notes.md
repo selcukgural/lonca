@@ -19,6 +19,18 @@ stopped by Lonca itself. Set `build` and `test` in `[verification]` so that
 your compiler is the judge. Entries of older engines are recomputed as they
 were written.
 
+### Languages: what each grammar reads
+
+A new page of the guide, [Languages](guide/languages.md), says for each
+language which grammar this build has, which versions' syntax was tried and
+what is known not to be read yet, and what a file with such syntax goes
+through ([#247](https://github.com/selcukgural/lonca/issues/247)). The table
+on it is written by a test from 210 small samples, so it can not drift from
+the build: 29 of them are not read today, among them C# 14's extension
+blocks, Java 25's module imports, Kotlin's guard conditions and C++23's
+deducing `this`. None of this is refused (engine 17, above); such a file
+merges by its lines until a release brings a newer grammar.
+
 ### Presence on Linux: FIDO security keys
 
 A human's key can now live on a FIDO security key, so a hardened repository

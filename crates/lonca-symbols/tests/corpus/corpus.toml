@@ -1,0 +1,65 @@
+# What a person calls each language of `src/languages.toml`, and the crate
+# its grammar comes from. `version` is the grammar's own, where the crate's
+# version in Cargo.lock is not it. `no_symbol` names, by sample, the
+# definitions that are read and come out as no symbol: tests/corpus.rs fails
+# once one of them is a symbol, until it is taken out here.
+
+[rust]
+title = "Rust"
+crate = "tree-sitter-rust"
+
+[python]
+title = "Python"
+crate = "tree-sitter-python"
+no_symbol = { "3.12-type-statement.py" = ["Pair"] }
+
+[typescript]
+title = "TypeScript"
+crate = "tree-sitter-typescript"
+
+[tsx]
+title = "TSX"
+crate = "tree-sitter-typescript"
+
+[javascript]
+title = "JavaScript"
+crate = "tree-sitter-javascript"
+
+[csharp]
+title = "C#"
+crate = "tree-sitter-c-sharp"
+
+[go]
+title = "Go"
+crate = "tree-sitter-go"
+
+[java]
+title = "Java"
+crate = "tree-sitter-java"
+
+[kotlin]
+title = "Kotlin"
+crate = "tree-sitter-kotlin-ng"
+
+[c]
+title = "C"
+crate = "tree-sitter-c"
+
+[cpp]
+title = "C++"
+crate = "tree-sitter-cpp"
+no_symbol = { "20-concepts.cpp" = ["Addable"] }
+
+[ruby]
+title = "Ruby"
+crate = "lonca-tree-sitter-ruby"
+version = "(tree-sitter-ruby 0.23.1 with a scanner fix)"
+
+[php]
+title = "PHP"
+crate = "tree-sitter-php"
+
+[swift]
+title = "Swift"
+crate = "tree-sitter-swift"
+no_symbol = { "5.9-macros.swift" = ["stringify"] }

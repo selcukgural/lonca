@@ -65,7 +65,8 @@ randomness in them.
   symbols it says it changed. Lonca computes the *facts* from the Git
   objects with tree-sitter (Rust, Python, TypeScript and TSX, JavaScript,
   C#, Go, Java, Kotlin, C, C++, Ruby, PHP, Swift; other files are leased
-  whole); any mismatch is refused. Every touched symbol must be leased.
+  whole; [Languages](languages.md) says what is read of each); any mismatch
+  is refused. Every touched symbol must be leased.
 - **Taint.** Hooks in the agent's harness report every tool call; a network
   proxy sees every outbound connection of sandboxed commands. A session that
   reads external content (a web page, an issue, another MCP server) is
@@ -118,7 +119,9 @@ and auditable by every later release.
   runs its agents on Lonca, by the same developer.
 - One daemon per machine, one sequencer per repository.
 - Symbol extraction covers thirteen languages, and Markdown, TOML, JSON
-  and YAML files are split into sections; other files are leased whole. Signature changes are detected and must be declared, but their
+  and YAML files are split into sections; other files are leased whole. A
+  grammar is older than its language: [Languages](languages.md) lists the
+  recent syntax each one does not read yet. Signature changes are detected and must be declared, but their
   callers are not analyzed: the merge queue's tests are what catch broken
   callers.
 - Verification needs `bubblewrap` on Linux to be sandboxed. Its limits hold

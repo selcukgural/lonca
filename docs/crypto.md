@@ -2,7 +2,7 @@
 
 What Lonca uses cryptography for, where each key lives, who can read it and
 how it is replaced (ASVS 5.0 V11.1.1). Keep it current: a change to any row
-changes this file in the same pull request. The threat model (#14) and
+changes this file in the same pull request. The [threat model](security/threat-model.md) and
 `docs/security/owasp.md` point here.
 
 ## Algorithms

@@ -21,6 +21,13 @@ limits leave open: a command's total disk in the scratch directory, its
 memory as a whole and, on macOS, its number of processes. Bounds for these
 are planned.
 
+### A threat model
+
+[Threat model](security/threat-model.md) gathers in one English page what was
+spread over the design and the decisions: the assets, who Lonca defends
+against, what each mode prevents and what it only detects, what the auditor
+does not catch, the known limits and what is out of scope.
+
 ### Homebrew 7 asks to trust the tap
 
 Homebrew 7 refuses a formula from a tap that is not its own until it is

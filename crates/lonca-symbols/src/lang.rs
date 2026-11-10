@@ -29,7 +29,7 @@ fn grammar(name: &str) -> Option<Language> {
         "kotlin" => tree_sitter_kotlin_ng::LANGUAGE.into(),
         "c" => tree_sitter_c::LANGUAGE.into(),
         "cpp" => tree_sitter_cpp::LANGUAGE.into(),
-        "ruby" => tree_sitter_ruby::LANGUAGE.into(),
+        "ruby" => lonca_tree_sitter_ruby::LANGUAGE.into(),
         "php" => tree_sitter_php::LANGUAGE_PHP.into(),
         "swift" => tree_sitter_swift::LANGUAGE.into(),
         _ => return None,

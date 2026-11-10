@@ -110,13 +110,18 @@ read = []
 # path = ["/usr/bin", "/bin"]
 path = []
 # What each process of a command may use; 0 means no limit. A limit the
-# daemon runs under already is never raised. Processes and address space
-# hold on Linux only. See docs/guide/verification.md.
+# daemon runs under already is never raised, and the account keeps 256
+# processes of its own. Address space holds on Linux only. See
+# docs/guide/verification.md.
 limit_cpu_seconds = 0
 limit_address_bytes = 0
 limit_processes = 16384
 limit_file_bytes = 8589934592
 limit_open_files = 4096
+# A command is stopped, as an error, once the disk of the daemon's stores
+# has less than this free (a look every 20 ms, not a quota); 0 means it is
+# not watched.
+keep_free_bytes = 1073741824
 
 [observation]
 # Sessions that nothing observes are treated like tainted sessions.

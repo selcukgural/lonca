@@ -45,6 +45,14 @@ pub struct Jail {
     /// macOS: a Mach name nothing provides, allowed so that a process can
     /// be told to be in this sandbox from outside it.
     pub mark: Option<String>,
+    /// Linux: a directory on disk to mount at `/tmp`, where what is written
+    /// counts against the disk and goes with the run. Without one `/tmp` is
+    /// a memory file system, which no process is charged for.
+    pub tmp: Option<PathBuf>,
+    /// Linux: the same for `/dev/shm`, which is where POSIX shared memory
+    /// and semaphores live. With one, the rest of `/dev`, a memory file
+    /// system as well, is read-only.
+    pub shm: Option<PathBuf>,
 }
 
 /// Mach services a command needs to start and that open no way out: name
@@ -191,8 +199,14 @@ impl Jail {
             flag("--ro-bind-try", &[Path::new(dir), Path::new(dir)]);
         }
         flag("--dev", &[Path::new("/dev")]);
+        if let Some(shm) = &self.shm {
+            flag("--bind", &[shm, Path::new("/dev/shm")]);
+        }
         flag("--proc", &[Path::new("/proc")]);
-        flag("--tmpfs", &[Path::new("/tmp")]);
+        match &self.tmp {
+            Some(tmp) => flag("--bind", &[tmp, Path::new("/tmp")]),
+            None => flag("--tmpfs", &[Path::new("/tmp")]),
+        }
         for dir in &self.readable {
             flag("--ro-bind", &[dir, dir]);
         }
@@ -211,6 +225,9 @@ impl Jail {
         // What bubblewrap starts from is an empty tree that takes writes.
         for dir in &self.secrets {
             flag("--remount-ro", &[dir]);
+        }
+        if self.shm.is_some() {
+            flag("--remount-ro", &[Path::new("/dev")]);
         }
         flag("--remount-ro", &[Path::new("/")]);
         flag("--chdir", &[&self.workspace]);
@@ -351,6 +368,8 @@ mod tests {
             relay: None,
             loopback: false,
             mark: None,
+            tmp: None,
+            shm: None,
         }
     }
 
@@ -513,6 +532,61 @@ mod tests {
         assert!(socket < pos(&["--remount-ro", "/h/.lonca"]));
         assert!(socket < pos(&["--remount-ro", "/"]));
         assert!(!a.iter().any(|x| x == "--share-net"), "{a:?}");
+    }
+
+    #[test]
+    fn bwrap_puts_tmp_on_disk_only_when_told_where() {
+        let memory = strings(&jail().bwrap_args());
+        let tmpfs = ["--tmpfs", "/tmp"];
+        assert!(memory.windows(2).any(|w| w == tmpfs), "{memory:?}");
+        let disk = Jail {
+            tmp: Some("/w/run/tmp".into()),
+            ..jail()
+        };
+        let args = strings(&disk.bwrap_args());
+        assert!(!args.windows(2).any(|w| w == tmpfs), "{args:?}");
+        let bound = ["--bind", "/w/run/tmp", "/tmp"];
+        let at = args.windows(3).position(|w| w == bound);
+        let usr = args
+            .windows(3)
+            .position(|w| w == ["--ro-bind-try", "/usr", "/usr"]);
+        assert!(at.is_some() && usr < at, "{args:?}");
+        // The rest is as it was: nothing else moved for it.
+        let without = |a: &[String]| {
+            let mut a = a.to_vec();
+            let i = a.windows(3).position(|w| w == bound).unwrap();
+            a.drain(i..i + 3);
+            a
+        };
+        let mut plain = memory.clone();
+        let i = plain.windows(2).position(|w| w == tmpfs).unwrap();
+        plain.drain(i..i + 2);
+        assert_eq!(without(&args), plain);
+        // Seatbelt has no `/tmp` of its own to give.
+        assert_eq!(disk.seatbelt(), jail().seatbelt());
+    }
+
+    #[test]
+    fn bwrap_puts_shared_memory_on_disk_and_closes_the_rest_of_dev() {
+        let plain = strings(&jail().bwrap_args());
+        assert!(!plain.iter().any(|a| a == "/dev/shm"), "{plain:?}");
+        assert!(!plain.windows(2).any(|w| w == ["--remount-ro", "/dev"]));
+        let disk = Jail {
+            shm: Some("/w/run/shm".into()),
+            ..jail()
+        };
+        let a = strings(&disk.bwrap_args());
+        let pos = |what: &[&str]| {
+            a.windows(what.len())
+                .position(|w| w == what)
+                .unwrap_or_else(|| panic!("no {what:?} in {a:?}"))
+        };
+        let dev = pos(&["--dev", "/dev"]);
+        let shm = pos(&["--bind", "/w/run/shm", "/dev/shm"]);
+        let closed = pos(&["--remount-ro", "/dev"]);
+        let root = pos(&["--remount-ro", "/"]);
+        assert!(dev < shm && shm < closed && closed < root, "{a:?}");
+        assert_eq!(disk.seatbelt(), jail().seatbelt());
     }
 
     #[test]

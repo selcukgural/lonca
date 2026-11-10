@@ -7,10 +7,13 @@
 #![allow(unsafe_code)]
 
 use std::collections::VecDeque;
+use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, ErrorKind, Read};
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -32,6 +35,11 @@ const POLL_MS: libc::c_int = 20;
 /// be taken by anyone else while its leader is a zombie.
 const SEE_EXIT: libc::c_int = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
 
+/// What the account keeps of its processes whatever a command forks. The
+/// limit counts every process of the account, the daemon's and those of the
+/// person at the machine, so this is what they can still start.
+pub const KEEP_PROCESSES: u64 = 256;
+
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 type Resource = libc::__rlimit_resource_t;
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
@@ -39,8 +47,10 @@ type Resource = libc::c_int;
 
 /// How a command ended.
 pub struct Ended {
-    /// `None` when it ran out of time.
+    /// `None` when it was stopped, or when its end was not seen: out of time.
     pub status: Option<ExitStatus>,
+    /// Stopped because the disk came down to what it must keep free.
+    pub out_of_room: bool,
     /// The end of its output, stdout and stderr as they were written.
     pub output: Vec<u8>,
     /// For the evidence, when something of it would not end.
@@ -53,6 +63,84 @@ pub struct Running {
     output: File,
 }
 
+/// The disk a command writes to, and what it must leave free there.
+pub struct Room<'a> {
+    pub dir: &'a Path,
+    pub keep: u64,
+}
+
+impl Room<'_> {
+    /// Whether the disk is down to what it must keep. One that can not be
+    /// asked counts as full: a command does not write on unseen.
+    pub fn is_short(&self) -> bool {
+        short_of(free_bytes(self.dir), self.keep)
+    }
+}
+
+fn short_of(free: Option<u64>, keep: u64) -> bool {
+    free.is_none_or(|free| free < keep)
+}
+
+/// The bytes on the disk of `dir` that a process without privileges may
+/// still write.
+pub fn free_bytes(dir: &Path) -> Option<u64> {
+    let path = CString::new(dir.as_os_str().as_bytes()).ok()?;
+    // macOS: `statvfs` has 32-bit counts there, `statfs` does not.
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: an all-zero `statfs` is valid, and the path outlives the
+        // call.
+        let mut s: libc::statfs = unsafe { std::mem::zeroed() };
+        let got = unsafe { libc::statfs(path.as_ptr(), &mut s) };
+        (got == 0).then(|| s.f_bavail.saturating_mul(u64::from(s.f_bsize)))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // SAFETY: as above.
+        let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+        let got = unsafe { libc::statvfs(path.as_ptr(), &mut s) };
+        (got == 0).then(|| (s.f_bavail as u64).saturating_mul(s.f_frsize as u64))
+    }
+}
+
+/// Removes `dir` and all in it, whatever a command did to keep it there: a
+/// directory it closed (`chmod 0`) and, on macOS, what it made unchangeable
+/// (`chflags uchg`). A directory that will not go keeps its disk space from
+/// every later run. Links are not followed, and the walk keeps its own list:
+/// a command can nest directories deeper than any stack.
+pub fn remove_tree(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(path) = todo.pop() {
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        unflag(&path);
+        if meta.is_dir() {
+            // The path is a directory, not a link, so this changes only it.
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+            let entries = std::fs::read_dir(&path).into_iter().flatten();
+            todo.extend(entries.flatten().map(|e| e.path()));
+        }
+    }
+    std::fs::remove_dir_all(dir)
+}
+
+/// macOS: clears the flags an owner may set, `uchg` and `uappnd` among them;
+/// a link's own, not what it points at.
+#[cfg(target_os = "macos")]
+fn unflag(path: &Path) {
+    let Ok(name) = CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    // SAFETY: the path outlives the call.
+    unsafe { libc::lchflags(name.as_ptr(), 0) };
+}
+
+/// Linux: a flag that keeps a file takes a privilege to set.
+#[cfg(not(target_os = "macos"))]
+fn unflag(_: &Path) {}
+
 /// Starts `command` as a session of its own, under the limits of `cfg`. A
 /// session, not only a group: the leader of a group can move to another one
 /// of its session and leave nothing for a kill to reach, and the leader of a
@@ -61,7 +149,14 @@ pub struct Running {
 pub fn start(mut command: Command, cfg: &Verification) -> io::Result<Running> {
     let limits: Vec<(Resource, libc::rlimit)> = wanted(cfg)
         .into_iter()
-        .map(|(resource, value)| (resource, held_to(value, in_force(resource))))
+        .map(|(resource, value)| {
+            let now = in_force(resource);
+            let value = match resource == libc::RLIMIT_NPROC {
+                true => processes(value, now.rlim_cur, per_account()),
+                false => value,
+            };
+            (resource, held_to(value, now))
+        })
         .collect();
     let (output, input) = io::pipe()?;
     command
@@ -75,6 +170,7 @@ pub fn start(mut command: Command, cfg: &Verification) -> io::Result<Running> {
     unsafe {
         command.pre_exec(move || {
             libc::setsid();
+            first_to_go()?;
             for (resource, limit) in &limits {
                 if libc::setrlimit(*resource, limit) != 0 {
                     return Err(io::Error::last_os_error());
@@ -96,15 +192,78 @@ fn wanted(cfg: &Verification) -> Vec<(Resource, u64)> {
         (libc::RLIMIT_CPU, cfg.limit_cpu_seconds),
         (libc::RLIMIT_FSIZE, cfg.limit_file_bytes),
         (libc::RLIMIT_NOFILE, cfg.limit_open_files),
+        (libc::RLIMIT_NPROC, cfg.limit_processes),
     ];
-    // On macOS one counts every process of the account, and the other is
-    // refused below what a process maps at its start, so every spawn fails.
+    // macOS refuses it below what a process maps at its start, so every
+    // spawn would fail.
     if cfg!(target_os = "linux") {
-        all.push((libc::RLIMIT_NPROC, cfg.limit_processes));
         all.push((libc::RLIMIT_AS, cfg.limit_address_bytes));
     }
     all.retain(|&(_, value)| value != 0);
     all
+}
+
+/// `wanted` processes for the account, and never so many that it is left
+/// with fewer than [`KEEP_PROCESSES`] of the most it may have: its limit in
+/// force, and the system's for one account where there is one.
+fn processes(wanted: u64, in_force: u64, per_account: Option<u64>) -> u64 {
+    let most = per_account.map_or(in_force, |system| system.min(in_force));
+    wanted.min(most.saturating_sub(KEEP_PROCESSES))
+}
+
+/// macOS holds an account to `kern.maxprocperuid` whatever its limit says.
+#[cfg(target_os = "macos")]
+fn per_account() -> Option<u64> {
+    let mut value: libc::c_int = 0;
+    let mut size = std::mem::size_of::<libc::c_int>();
+    // SAFETY: `value` is live and `size` is its size; nothing is set.
+    let got = unsafe {
+        libc::sysctlbyname(
+            c"kern.maxprocperuid".as_ptr(),
+            (&raw mut value).cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    (got == 0 && value > 0).then_some(value as u64)
+}
+
+/// Linux has no limit for one account but `RLIMIT_NPROC`.
+#[cfg(not(target_os = "macos"))]
+fn per_account() -> Option<u64> {
+    None
+}
+
+/// Linux: when memory runs out, the kernel ends the command's processes
+/// before anything else, the daemon among them. Nothing else bounds the
+/// memory of a command as a whole, nor what it keeps in a memory file
+/// system. Any process may raise its own; only lowering it takes a
+/// privilege. Between fork and exec: system calls only.
+#[cfg(target_os = "linux")]
+fn first_to_go() -> io::Result<()> {
+    let flags = libc::O_WRONLY | libc::O_CLOEXEC;
+    // SAFETY: the path is a C string literal, and `fd` is closed below.
+    let fd = unsafe { libc::open(c"/proc/self/oom_score_adj".as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let most = b"1000";
+    // SAFETY: `most` is live and its length goes with it.
+    let wrote = unsafe { libc::write(fd, most.as_ptr().cast(), most.len()) };
+    let error = io::Error::last_os_error();
+    // SAFETY: `fd` was opened above and is not used after.
+    unsafe { libc::close(fd) };
+    match wrote == most.len() as isize {
+        true => Ok(()),
+        false => Err(error),
+    }
+}
+
+/// macOS has no such order to set.
+#[cfg(not(target_os = "linux"))]
+fn first_to_go() -> io::Result<()> {
+    Ok(())
 }
 
 fn in_force(resource: Resource) -> libc::rlimit {
@@ -127,15 +286,22 @@ fn held_to(wanted: u64, now: libc::rlimit) -> libc::rlimit {
     }
 }
 
-/// Follows a command to its end, or to `timeout`, and ends all of it. `mark`
-/// names its sandbox, where something can have left the group.
-pub fn watch(running: Running, timeout: Duration, mark: Option<&str>) -> Ended {
+/// Follows a command to its end, to `timeout`, or to the disk coming down
+/// to what `room` keeps, and ends all of it. `mark` names its sandbox, where
+/// something can have left the group.
+pub fn watch(
+    running: Running,
+    timeout: Duration,
+    room: Option<&Room>,
+    mark: Option<&str>,
+) -> Ended {
     let started = Instant::now();
     let Running { mut child, output } = running;
     let pid = child.id();
     let mut pipe = Some(output);
     let mut tail = Tail::default();
-    let mut timed_out = false;
+    let mut stopped = false;
+    let mut out_of_room = false;
     let mut left = None;
     let mut killed_at = None;
     loop {
@@ -143,8 +309,9 @@ pub fn watch(running: Running, timeout: Duration, mark: Option<&str>) -> Ended {
         match killed_at {
             None => {
                 let exited = has_exited(pid);
-                timed_out = !exited && past(started.elapsed(), timeout);
-                if exited || timed_out {
+                out_of_room = !exited && room.is_some_and(Room::is_short);
+                stopped = !exited && (out_of_room || past(started.elapsed(), timeout));
+                if exited || stopped {
                     kill_group(pid);
                     left = mark.and_then(sweep::what_would_not_end);
                     killed_at = Some(Instant::now());
@@ -160,7 +327,8 @@ pub fn watch(running: Running, timeout: Duration, mark: Option<&str>) -> Ended {
         }
     }
     Ended {
-        status: reaped(&mut child).filter(|_| !timed_out),
+        status: reaped(&mut child).filter(|_| !stopped),
+        out_of_room,
         output: tail.into_bytes(),
         left,
     }
@@ -283,12 +451,96 @@ mod tests {
             (libc::RLIMIT_CPU, 1),
             (libc::RLIMIT_FSIZE, 4),
             (libc::RLIMIT_NOFILE, 5),
+            (libc::RLIMIT_NPROC, 3),
         ];
         if cfg!(target_os = "linux") {
-            expected.push((libc::RLIMIT_NPROC, 3));
             expected.push((libc::RLIMIT_AS, 2));
         }
         assert_eq!(wanted(&cfg()), expected);
+    }
+
+    #[test]
+    fn the_account_keeps_room_to_start_processes() {
+        let keep = KEEP_PROCESSES;
+        // Below what the account may have, the policy's figure stands.
+        assert_eq!(processes(100, 10_000, None), 100);
+        assert_eq!(processes(10_000 - keep, 10_000, None), 10_000 - keep);
+        // At or past it, the account keeps its share.
+        assert_eq!(processes(10_000 - keep + 1, 10_000, None), 10_000 - keep);
+        assert_eq!(processes(16_384, 10_000, None), 10_000 - keep);
+        // The system's limit for one account counts when it is the lower.
+        assert_eq!(processes(16_384, 10_000, Some(8_000)), 8_000 - keep);
+        assert_eq!(processes(16_384, 8_000, Some(10_000)), 8_000 - keep);
+        // No limit in force: only the policy's.
+        assert_eq!(processes(16_384, libc::RLIM_INFINITY, None), 16_384);
+        // An account with less than its share starts nothing.
+        assert_eq!(processes(16_384, keep - 1, None), 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_says_what_one_account_may_have() {
+        assert!(per_account().is_some_and(|n| n > KEEP_PROCESSES));
+    }
+
+    #[test]
+    fn a_tree_goes_whatever_was_done_to_keep_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let here = tempfile::tempdir().unwrap();
+        let outside = here.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("kept"), "").unwrap();
+        let dir = here.path().join("run");
+        let mut deep = dir.clone();
+        for _ in 0..50 {
+            deep.push("d");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("f"), "x").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("link")).unwrap();
+        let closed = dir.join("closed");
+        std::fs::create_dir(&closed).unwrap();
+        std::fs::write(closed.join("f"), "x").unwrap();
+        #[cfg(target_os = "macos")]
+        {
+            let fixed = dir.join("fixed");
+            std::fs::write(&fixed, "x").unwrap();
+            let name = CString::new(fixed.as_os_str().as_bytes()).unwrap();
+            // SAFETY: the path outlives the call.
+            assert_eq!(
+                unsafe { libc::chflags(name.as_ptr(), libc::UF_IMMUTABLE) },
+                0
+            );
+            assert!(std::fs::remove_file(&fixed).is_err(), "it is not kept");
+        }
+        let mode = |p: &Path, m| std::fs::set_permissions(p, std::fs::Permissions::from_mode(m));
+        mode(&closed, 0o000).unwrap();
+        mode(&deep, 0o000).unwrap();
+        assert!(std::fs::remove_dir_all(&dir).is_err(), "nothing kept it");
+        remove_tree(&dir).unwrap();
+        assert!(!dir.exists());
+        // What a link pointed at stays as it was.
+        assert!(outside.join("kept").exists());
+        let outside_mode = std::fs::metadata(&outside).unwrap().permissions().mode();
+        assert_ne!(outside_mode & 0o777, 0o700);
+    }
+
+    #[test]
+    fn a_disk_is_short_once_it_has_less_than_it_keeps() {
+        assert!(!short_of(Some(11), 10));
+        assert!(!short_of(Some(10), 10));
+        assert!(short_of(Some(9), 10));
+        assert!(!short_of(Some(0), 0));
+        assert!(short_of(None, 0), "what can not be asked is full");
+        let here = tempfile::tempdir().unwrap();
+        assert!(free_bytes(here.path()).is_some_and(|n| n > 0));
+        assert_eq!(free_bytes(&here.path().join("no-such-dir")), None);
+        let room = |keep| Room {
+            dir: here.path(),
+            keep,
+        };
+        assert!(!room(0).is_short());
+        assert!(room(u64::MAX).is_short());
     }
 
     #[test]

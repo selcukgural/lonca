@@ -1863,6 +1863,14 @@ impl Service {
         }))
     }
 
+    /// Ends what the verifications of the daemon before this one left
+    /// running, and removes their directories; returns how many there were.
+    /// Only once this daemon holds the socket, and so knows it is the only
+    /// one on this home: see [`Verifier::clear_left_over`].
+    pub fn clear_left_over_verifications(&self) -> usize {
+        self.verifier.clear_left_over()
+    }
+
     /// What to say at the start about `sandbox`: the repositories whose
     /// verification can not pass without one.
     pub fn sandbox_warnings(&self, sandbox: Sandbox) -> Vec<String> {

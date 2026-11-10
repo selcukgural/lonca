@@ -876,6 +876,44 @@ a table entry, not an enum.
 - **A word the table gets wrong would read as a kind that never comes,** so a
   test checks every kind and field in it against the grammars that use it.
 
+- **What each grammar does not read is a file, held by a test** (#247). A
+  grammar is older than its language, and until now the gap showed only when an
+  agent's valid code came back unread. `crates/lonca-symbols/tests/corpus/` has
+  a few lines of each piece of syntax that the recent versions of every language
+  of the table brought (`<language>/<version>-<feature>.<ext>`, each with a
+  definition in it), and `tests/corpus.rs` reads them with the current engine.
+  - `known.txt` is what came out: the symbols of each sample, or `error` and the
+    line where the grammar stopped. The test writes it (`LONCA_CORPUS=write`)
+    and fails when it differs, so a grammar update shows as a diff of that list,
+    a gap can not open unseen, and one that closes has to be written down.
+  - A sample has one new thing in it. Where a first sample did not read, it was
+    cut down until the line of the error was the feature's: C#'s list patterns
+    read and a slice with a subpattern (`.. var rest`) does not; C23's
+    `enum e : int` reads and `enum e : unsigned char` does not.
+  - "Reads" means symbols too: a sample that reads and gives no symbol fails.
+    A definition that is read and gets no symbol of its own is named in
+    `corpus.toml` (`no_symbol`: Python's `type` statement, a C++ concept, a
+    Swift macro), and the test fails once it is one, until the entry goes.
+  - The page of the guide (`docs/guide/languages.md`) ends with the same list as
+    a table, written and checked by the same test, so the site can not say
+    something else than the build does.
+  - The samples were compiled where a compiler was at hand (Rust, Python,
+    TypeScript, JavaScript, C#, Go, Java, C, C++, Swift). Not compiled: Kotlin,
+    PHP and Ruby (written from their documentation), and C++26's contracts and
+    reflection (no compiler here has them yet).
+  - This is not `tests/engine/`: that one freezes what old engines gave and is
+    never edited; this one says what the current engine reads and is rewritten
+    with every grammar update. Titles and the grammar's crate are data
+    (`corpus.toml`), the version is read from `Cargo.lock`, and a language of the
+    table with no samples fails the test.
+  - Found by the first run (2026-11-10, engine 17), 29 of 210 samples not read:
+    Rust `unsafe extern`; Python type parameter defaults and `lazy import`;
+    TypeScript variance annotations, `export type *` and `import defer`; six in
+    C# 11 to 14; Go generic methods; Java 25's module imports and flexible
+    constructor bodies; three in Kotlin 2.1 and 2.2; four in C23; seven in
+    C++20 to 26. Nothing was found in TSX, JavaScript, Ruby, PHP and Swift.
+    Closing them is the grammar round (#248).
+
 ## Harness profiles
 
 Which harnesses Lonca can read is data, not code (issue #109). A profile

@@ -3,7 +3,9 @@
 Symbols, facts and the structural merge of Lonca, as pure functions of
 file contents. tree-sitter finds the functions and types a change
 touches in thirteen languages, and a symbol-level three-way merge lets
-agents change different symbols of one file at the same time.
+agents change different symbols of one file at the same time. What each
+grammar reads of its language's recent syntax, and what it does not yet:
+[Languages](https://selcukgural.github.io/lonca/docs/guide/languages).
 
 This crate is a part of [Lonca](https://selcukgural.github.io/lonca/),
 agent-native, Git-compatible version control. Most people want the

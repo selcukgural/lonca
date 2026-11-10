@@ -1,0 +1,3 @@
+def forward(*, **)
+  target(*, **)
+end

@@ -1,0 +1,215 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#helper"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#<module>",
+          "src/sample.py#User.<def>"
+        ],
+        "import_only_files": [],
+        "lines_added": 3,
+        "lines_removed": 3,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "LIMIT = 10\nTEMPLATE = \"a b\"\n\nif LIMIT > 5:\n    MODE = \"big\"\nEXTRA = 1\n\n\nclass User:\n    label = \"x y\"\n\n    def greet(self):\n        return \"hi\"\n\n\ndef helper():\n    return 111\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module(expression_statement(assignment(LIMIT\u001f=\u001f10\u001f))expression_statement(assignment(TEMPLATE\u001f=\u001f\"a  b\"\u001f))if_statement(if\u001fcomparison_operator(LIMIT\u001f>\u001f5\u001f):\u001fblock(expression_statement(assignment(MODE\u001f=\u001f\"big\"\u001f))expression_statement(assignment(EXTRA\u001f=\u001f1\u001f)))))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "User.greet",
+              "own": "",
+              "signature": "def greet(self):",
+              "skipped": false,
+              "span": [
+                113,
+                113,
+                149
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "User",
+          "own": "class_definition(class\u001fUser\u001f:\u001fblock(expression_statement(assignment(label\u001f=\u001f\"x  y\"\u001f))))",
+          "signature": "class User:",
+          "skipped": false,
+          "span": [
+            77,
+            77,
+            149
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "helper",
+          "own": "",
+          "signature": "def helper():",
+          "skipped": false,
+          "span": [
+            152,
+            152,
+            178
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module(expression_statement(assignment(LIMIT\u001f=\u001f10\u001f))expression_statement(assignment(TEMPLATE\u001f=\u001f\"a  b\"\u001f))if_statement(if\u001fcomparison_operator(LIMIT\u001f>\u001f5\u001f):\u001fblock(expression_statement(assignment(MODE\u001f=\u001f\"big\"\u001f))expression_statement(assignment(EXTRA\u001f=\u001f1\u001f)))))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "User.greet",
+              "own": "",
+              "signature": "def greet(self):",
+              "skipped": false,
+              "span": [
+                113,
+                113,
+                149
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "User",
+          "own": "class_definition(class\u001fUser\u001f:\u001fblock(expression_statement(assignment(label\u001f=\u001f\"x  y\"\u001f))))",
+          "signature": "class User:",
+          "skipped": false,
+          "span": [
+            77,
+            77,
+            149
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "helper",
+          "own": "",
+          "signature": "def helper():",
+          "skipped": false,
+          "span": [
+            152,
+            152,
+            180
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module(expression_statement(assignment(LIMIT\u001f=\u001f10\u001f))expression_statement(assignment(TEMPLATE\u001f=\u001f\"a b\"\u001f))if_statement(if\u001fcomparison_operator(LIMIT\u001f>\u001f5\u001f):\u001fblock(expression_statement(assignment(MODE\u001f=\u001f\"big\"\u001f))))expression_statement(assignment(EXTRA\u001f=\u001f1\u001f)))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "User.greet",
+              "own": "",
+              "signature": "def greet(self):",
+              "skipped": false,
+              "span": [
+                107,
+                107,
+                143
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "User",
+          "own": "class_definition(class\u001fUser\u001f:\u001fblock(expression_statement(assignment(label\u001f=\u001f\"x y\"\u001f))))",
+          "signature": "class User:",
+          "skipped": false,
+          "span": [
+            72,
+            72,
+            143
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "helper",
+          "own": "",
+          "signature": "def helper():",
+          "skipped": false,
+          "span": [
+            146,
+            146,
+            172
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -50,7 +50,7 @@ reasons say what to look for:
 | `tainted_session` | Content from outside entered the session. The agent may have been told what to write by a web page or an issue. |
 | `critical_path:<path>` | The change touches a build script, CI, a lockfile or agent instructions. These run code or steer every later agent. |
 | `unobserved_write:<path>` | A file changed that no observed tool wrote. |
-| `unread_file:<path>` | A file that parsed before no longer parses, so its symbols can not be checked. |
+| `unread_file:<path>` | A file that parsed before no longer parses, or a new one does not, so its symbols can not be checked. Either the code has a syntax error, or it uses syntax newer than the grammar Lonca has for the language: look at the diff, and at the build. |
 | `signature_change:<symbol>` | A signature changed; callers are not analysed, the tests are what catch them. `affected_lease:<session>:<set>` names sessions working on code that mentions it. |
 | a rule's id, e.g. `auth`, `blast-radius` | A rule of `policy.cedar` with `@escalate` matched. |
 

@@ -714,6 +714,22 @@ entry format, so they have their own version
     syntax check leaves it alone, so a strict language does not refuse a long
     generated file. `Lang::parse_at` stops at the budget on every path, the
     scan of what mentions a removed name too.
+- **Engine 17** takes a parse error in any language as the grammar's (#246).
+  A grammar is older than its language: the C# grammar in the build
+  (tree-sitter-c-sharp 0.23.5) gives a parse error for C# 14's extension
+  blocks, `c?.X = 1` and `operator +=`, and for C# 13's `allows ref struct`.
+  Rust, Python, TypeScript, TSX, JavaScript, C# and Go were strict, so the
+  syntax check refused valid code until a release brought a newer grammar.
+  From this engine they go the way the seven of engine 10 always went (see
+  "The language table"): the syntax check passes the file, it merges by its
+  lines, and a proposal that leaves unreadable a file that read, or adds one,
+  escalates with `unread_file:<path>`.
+  - The table says it as data: `strict_until = 17` on those seven entries, and
+    `Lang::is_strict_at(engine)`. Engines 0 to 16 recompute as they did.
+  - The price: a real syntax error in these languages is no longer refused by
+    Lonca. A person sees it, and the repository's `build` and `test` commands
+    where it has them. No setting brings the refusal back: a repository's own
+    compiler is the better judge of its language's version.
   - A file is parsed once more to tell whether it is within its budget, so
     what a file costs at most doubles.
   - Engines before 16 parse as they did, without a budget, so that entries are
@@ -820,10 +836,12 @@ a table entry, not an enum.
   The other grammars' scanners were read for the same mistake (C#, C++ and
   Python assert, unreachably). When upstream releases a fixed version, going back
   is a grammar update like any other: a new engine if its output differs.
-- **`strict` says what a parse error means.** For a language that shipped before
-  the table it means the file is wrong, and verification fails it. For the seven
-  of engine 10 it is `false`: the error may be the grammar's, as with Kotlin's on a
-  member and `}` on one line, or a C macro. Such a file counts as one no parser
+- **`strict_until` says what a parse error means.** For a language that shipped
+  before the table it meant the file is wrong, and verification failed it, up to
+  engine 17 (`strict_until = 17`); from there on, and for the seven of engine 10
+  from their start, the error may be the grammar's, as with Kotlin's on a
+  member and `}` on one line, a C macro, or syntax newer than the grammar. Such a
+  file counts as one no parser
   reads: the syntax check passes it, the merge goes by lines and facts list it, so
   it does no worse than with no grammar at all. `syntax_errors` still reports it.
   Only a file the grammar could not read before counts. No file gets there unseen:
@@ -836,7 +854,8 @@ a table entry, not an enum.
   of the rule. At integration a trunk that reads must still read: a proposal on an
   older base that did not is a conflict unless the result reads. A repair on such
   a base has no facts to go by, and a person agreed to that base once.
-  `strict` decides facts and merges, so changing it for a language is a new engine.
+  Strictness decides facts and merges, so changing it for a language is a new
+  engine, which is why it is written as the engine it ends at.
 - **`.h` goes to the C++ grammar,** which reads nearly all of C, and a file it can
   not read falls back as above.
 - **Limits of the first entries:** declarations of several names go by the first

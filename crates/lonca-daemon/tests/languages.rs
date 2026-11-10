@@ -209,3 +209,55 @@ fn breaking_a_file_gets_past_no_lease_and_no_person() {
     let reasons = r["decision"]["reasons"].to_string();
     assert!(reasons.contains(&format!("unread_file:{PATH}")), "{r}");
 }
+
+/// Syntax newer than the grammar is not a mistake: C# 14's extension block,
+/// which the grammar in the build can not read, is not refused by the syntax
+/// check. A person agrees to the file once, it lands, and the log recomputes.
+#[test]
+fn syntax_newer_than_the_grammar_waits_for_a_person_and_lands() {
+    const PATH: &str = "src/E.cs";
+    let seed = "static class E\n{\n    public static int One() => 1;\n}\n";
+    let newer = "static class E\n{\n    public static int One() => 1;\n\n    extension(string s)\n    {\n        public int Size => s.Length;\n    }\n}\n";
+    let csharp = lonca_symbols::Lang::detect(PATH).unwrap();
+    assert!(!lonca_symbols::parse(csharp, seed).has_error);
+    assert!(lonca_symbols::parse(csharp, newer).has_error);
+
+    let mut e = Env::new();
+    e.init(None);
+    let r = e.human_change(vec![file(PATH, seed)], "seed");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let base = e.trunk();
+
+    let token = e.session("a", &["src/**"]);
+    e.bind(&token);
+    let r = e.lease(&token, &format!("{PATH}#<file>"));
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    e.wrote(&token, PATH);
+    let claim = Claim {
+        intent: "an extension block".into(),
+        edits: vec![format!("{PATH}#<file>")],
+        ..Default::default()
+    };
+    let args = json!({"base": base, "files": [file(PATH, newer)], "claim": claim});
+    let r = e.ok("change.propose", None, Some(&token), args);
+    assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
+    let reasons = r["decision"]["reasons"].to_string();
+    assert!(reasons.contains(&format!("unread_file:{PATH}")), "{r}");
+    assert_eq!(r["syntax_errors"], json!([PATH]), "{r}");
+    assert_eq!(e.svc.process_all(), 0, "a person decides first");
+
+    let seq = r["seq"].as_u64().unwrap();
+    let r = e.human(lonca_core::ops::Op::Approve {
+        target_seq: seq,
+        note: "C# 14".into(),
+        checks: vec![],
+    });
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let head = e.trunk();
+    let text = e.store().read_file(&head, PATH).unwrap().unwrap();
+    assert_eq!(String::from_utf8(text).unwrap(), newer);
+    let report = audit(&e.store(), Options::default()).unwrap();
+    assert!(report.ok(), "{:#?}", report.findings);
+}

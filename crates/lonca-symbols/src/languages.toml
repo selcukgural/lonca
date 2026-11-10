@@ -15,42 +15,49 @@ name = "rust"
 grammar = "rust"
 extensions = ["rs"]
 rules = "rust"
+strict_until = 17
 
 [[language]]
 name = "python"
 grammar = "python"
 extensions = ["py", "pyi"]
 rules = "python"
+strict_until = 17
 
 [[language]]
 name = "typescript"
 grammar = "typescript"
 extensions = ["ts", "mts", "cts"]
 rules = "ecmascript"
+strict_until = 17
 
 [[language]]
 name = "tsx"
 grammar = "tsx"
 extensions = ["tsx"]
 rules = "ecmascript"
+strict_until = 17
 
 [[language]]
 name = "javascript"
 grammar = "javascript"
 extensions = ["js", "mjs", "cjs", "jsx"]
 rules = "ecmascript"
+strict_until = 17
 
 [[language]]
 name = "csharp"
 grammar = "c_sharp"
 extensions = ["cs"]
 rules = "csharp"
+strict_until = 17
 
 [[language]]
 name = "go"
 grammar = "go"
 extensions = ["go"]
 rules = "go"
+strict_until = 17
 
 [[language]]
 name = "java"
@@ -58,7 +65,6 @@ grammar = "java"
 extensions = ["java"]
 rules = "java"
 since = 10
-strict = false
 
 [[language]]
 name = "kotlin"
@@ -66,7 +72,6 @@ grammar = "kotlin"
 extensions = ["kt", "kts"]
 rules = "kotlin"
 since = 10
-strict = false
 
 [[language]]
 name = "c"
@@ -74,7 +79,6 @@ grammar = "c"
 extensions = ["c"]
 rules = "c_family"
 since = 10
-strict = false
 
 [[language]]
 name = "cpp"
@@ -82,7 +86,6 @@ grammar = "cpp"
 extensions = ["cc", "cpp", "cxx", "c++", "h", "hh", "hpp", "hxx"]
 rules = "c_family"
 since = 10
-strict = false
 
 [[language]]
 name = "ruby"
@@ -90,7 +93,6 @@ grammar = "ruby"
 extensions = ["rb", "rake"]
 rules = "ruby"
 since = 10
-strict = false
 
 [[language]]
 name = "php"
@@ -98,7 +100,6 @@ grammar = "php"
 extensions = ["php"]
 rules = "php"
 since = 10
-strict = false
 
 [[language]]
 name = "swift"
@@ -106,7 +107,6 @@ grammar = "swift"
 extensions = ["swift"]
 rules = "swift"
 since = 10
-strict = false
 
 # Rust
 

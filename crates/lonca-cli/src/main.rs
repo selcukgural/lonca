@@ -2480,7 +2480,9 @@ fn run(cmd: Cmd) -> Result<()> {
             }
             walk(&parsed.syms, 0);
             if parsed.has_error {
-                outln!("(the file has syntax errors)");
+                outln!(
+                    "(the grammar could not read all of the file: a syntax error, or syntax newer than the grammar)"
+                );
             }
             Ok(())
         }

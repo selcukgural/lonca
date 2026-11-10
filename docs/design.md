@@ -299,7 +299,7 @@ Agent'lar dosya değil **sembol** (fonksiyon, sınıf, metod) düzeyinde kiralam
 
 Kanıt üreticileri her değişiklik için şu kontrolleri **kendileri** yapar. Her kontrol imzalı bir attestation üretir.
 
-1. **Sözdizimi/AST geçerliliği.**
+1. **Sözdizimi/AST geçerliliği.** Gramer dilin gerisinden gelir; bu yüzden sembol motoru 17'den itibaren ayrıştırma hatası hiçbir dilde reddetme nedeni değildir: gramerin okuyamadığı dosya satır satır birleşir ve öneri `unread_file:<yol>` nedeniyle insana gider (`docs/decisions.md`, "Symbol engine versions", motor 17). Kodun doğruluğunu deponun kendi `build` ve `test` komutları söyler.
 2. **Kapsam:** Gerçek diff'ten hesaplanan semboller, lease ile capability'nin kesişimi içinde mi?
 3. **Beyan–diff tutarlılığı:** Agent'ın *yapısal* beyanı (düzenlenen, eklenen ve silinen semboller, silinen dosyalar, imza ve test değişiklikleri) hesaplanan gerçek etkiyle birebir karşılaştırılır. Uyumsuzluk varsa öneri reddedilir. Serbest metin `intent` yalnızca insanlar içindir; karar girdisi değildir. Böylece bu kontrol AI gerektirmez.
 4. **Build:** Sandbox'ta yapılır. Ağ yoktur, sır yoktur, depo salt okunurdur; süre ve bellek sınırı vardır.

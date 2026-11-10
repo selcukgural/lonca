@@ -153,10 +153,13 @@ unknown method: `unknown_method`, whatever the token.
   `unparsed_files`.
   From engine 9 only edits of lines are listed: the mode stays and is that of a
   plain file, no NUL, and at least half of the old text's lines stay.
-- **`unread_files`** in facts, from log format 16: files of languages that are
-  not strict that a grammar read until this change and can not read after it, or
-  that a change adds and it can not read. Such a proposal escalates with the reason
-  `unread_file:<path>`.
+- **`unread_files`** in facts, from log format 16: files that a grammar read
+  until this change and can not read after it, or that a change adds and it can
+  not read. Such a proposal escalates with the reason `unread_file:<path>`. From
+  symbol engine 17 this holds for every language with a grammar; before it, a
+  parse error in Rust, Python, TypeScript, JavaScript, C# or Go failed the
+  `syntax` check instead. The error may be syntax newer than the grammar, so
+  `syntax_errors` in an answer is a note, not a refusal.
 - **`affected`** and **`affected_more`** in facts, from log format 18: symbols
   of the base that mention by name what the change gives a new signature, renames
   or deletes, at most 1000, and how many more there were. A guess, not a call
@@ -526,7 +529,9 @@ An attestation: `{"check": "syntax" | "scope" | "claim_diff" | "merge"
 | "build" | "tests" | "test_integrity" | "extended" | "named", "result": "pass" | "fail" |
 "error" | "skipped", "subject_tree": id, "details": {string: string},
 "env": hex, "log": id | null, "producer": string}`. A `named` check
-carries its name in `details.name`.
+carries its name in `details.name`. The `syntax` check passes
+from symbol engine 17 on, and names in `details.unread` the files a grammar
+could not read: a mistake, or syntax newer than the grammar.
 
 ### `tree`
 

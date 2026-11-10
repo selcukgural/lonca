@@ -1,0 +1,314 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#C.b",
+          "src/sample.rs#last"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [
+          "src/sample.rs#C.a",
+          "src/sample.rs#first"
+        ],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 0,
+        "lines_removed": 8,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "struct C;\n\nimpl C {\n    fn b(&self) -> i32 {\n        20\n    }\n}\n\nfn last() -> i32 {\n    30\n}\n"
+  },
+  "path": "src/sample.rs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "first",
+          "own": "",
+          "signature": "fn first() -> i32",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            27
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "C",
+          "own": "",
+          "signature": "struct C;",
+          "skipped": false,
+          "span": [
+            29,
+            29,
+            38
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.a",
+              "own": "",
+              "signature": "fn a(&self) -> i32",
+              "skipped": false,
+              "span": [
+                53,
+                53,
+                89
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.b",
+              "own": "",
+              "signature": "fn b(&self) -> i32",
+              "skipped": false,
+              "span": [
+                95,
+                95,
+                131
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:C",
+          "own": "impl_item(impl\u001fC\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "impl C",
+          "skipped": false,
+          "span": [
+            40,
+            40,
+            133
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "last",
+          "own": "",
+          "signature": "fn last() -> i32",
+          "skipped": false,
+          "span": [
+            135,
+            135,
+            161
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "first",
+          "own": "",
+          "signature": "fn first() -> i32",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            27
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "C",
+          "own": "",
+          "signature": "struct C;",
+          "skipped": false,
+          "span": [
+            29,
+            29,
+            38
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.a",
+              "own": "",
+              "signature": "fn a(&self) -> i32",
+              "skipped": false,
+              "span": [
+                53,
+                53,
+                89
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.b",
+              "own": "",
+              "signature": "fn b(&self) -> i32",
+              "skipped": false,
+              "span": [
+                95,
+                95,
+                132
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:C",
+          "own": "impl_item(impl\u001fC\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "impl C",
+          "skipped": false,
+          "span": [
+            40,
+            40,
+            134
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "last",
+          "own": "",
+          "signature": "fn last() -> i32",
+          "skipped": false,
+          "span": [
+            136,
+            136,
+            163
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "C",
+          "own": "",
+          "signature": "struct C;",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            9
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "C.b",
+              "own": "",
+              "signature": "fn b(&self) -> i32",
+              "skipped": false,
+              "span": [
+                24,
+                24,
+                60
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:C",
+          "own": "impl_item(impl\u001fC\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "impl C",
+          "skipped": false,
+          "span": [
+            11,
+            11,
+            62
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "last",
+          "own": "",
+          "signature": "fn last() -> i32",
+          "skipped": false,
+          "span": [
+            64,
+            64,
+            90
+          ]
+        }
+      ]
+    }
+  }
+}

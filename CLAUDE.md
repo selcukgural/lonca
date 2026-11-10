@@ -24,7 +24,7 @@ the design: `docs/decisions.md`.
 ## Working on the code
 
 ```sh
-cargo test --workspace          # ~880 tests, includes real sandbox and socket tests
+cargo test --workspace          # ~1470 tests, includes real sandbox and socket tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo deny check                # advisories, licenses, crates.io only (deny.toml)

@@ -182,6 +182,23 @@ limit_open_files = 4096         # RLIMIT_NOFILE
   every figure below what a process maps at its start, so it is not applied
   there.
 
+What these limits do not cover yet, so a command can still starve the machine
+the daemon runs on until `timeout_seconds` ends it:
+
+- **Disk:** `limit_file_bytes` holds for each file, and nothing bounds how many
+  files a command writes in the verifier's scratch directory, which sits beside
+  the stores.
+- **Processes on macOS:** with no `limit_processes` there, a command can fork
+  up to the account's own limit.
+- **Memory:** nothing bounds a command's memory as a whole, and on Linux
+  bubblewrap's `/tmp` is memory charged to no process, so the kernel's
+  out-of-memory killer may pick the daemon.
+
+Run verification only for build and test commands you would run yourself.
+A tainted session can not touch build scripts, CI or lockfiles, but a
+repository's own tests are code like any other. Total disk, memory and process
+bounds are planned for a 0.x release.
+
 ## Quota
 
 ```toml

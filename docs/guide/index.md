@@ -119,7 +119,9 @@ and auditable by every later release.
   and YAML files are split into sections; other files are leased whole. Signature changes are detected and must be declared, but their
   callers are not analyzed: the merge queue's tests are what catch broken
   callers.
-- Verification needs `bubblewrap` on Linux to be sandboxed.
+- Verification needs `bubblewrap` on Linux to be sandboxed. Its limits hold
+  for each process, not yet for a command's total disk, memory and (on macOS)
+  processes: see [Verification](verification.md#limits).
 - Redaction is logical: content is withheld by the daemon, objects are not
   yet purged from Git history.
 - Creating a Secure Enclave key needs an interactive session; it could not

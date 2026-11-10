@@ -13,6 +13,14 @@ MCP tool does for a Claude Code session, how far each observation level goes,
 and where the other harnesses stand. The home page and the README have
 diagrams of the same.
 
+### What the verifier's limits do not cover, said
+
+[Verification](guide/verification.md#limits) and the limitations on
+[What Lonca is](guide/index.md#limitations) now say what the per-process
+limits leave open: a command's total disk in the scratch directory, its
+memory as a whole and, on macOS, its number of processes. Bounds for these
+are planned.
+
 ## 0.2.2 (2026-11-09)
 
 ### `lonca doctor` reads like `flutter doctor`

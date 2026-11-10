@@ -19,7 +19,7 @@ use crate::engine::{
 };
 use crate::lang::{
     CallTests, DefHow, DefRule, GroupHow, GroupRule, ImportCalls, Lang, Marked, Partial, Rules,
-    Tests,
+    Tests, Wrapper,
 };
 
 /// Declarations with a definition of their own even with no members in the
@@ -1355,7 +1355,14 @@ impl<'s> Extractor<'s> {
     /// Unwraps `export ...` and `@decorator def ...` to the definition.
     fn unwrap_def<'t>(&self, n: Node<'t>) -> Node<'t> {
         let mut wrappers = self.rules.wrappers.iter();
-        match wrappers.find(|w| w.kind == n.kind()) {
+        let holds = |w: &&Wrapper| {
+            w.kind == n.kind()
+                && self.engine >= w.since
+                && w.without
+                    .as_ref()
+                    .is_none_or(|f| n.child_by_field_name(f).is_none())
+        };
+        match wrappers.find(holds) {
             Some(w) => {
                 let field = w.field.as_ref().and_then(|f| n.child_by_field_name(f));
                 let mut parts = named(n).into_iter();

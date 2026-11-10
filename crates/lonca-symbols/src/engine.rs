@@ -35,8 +35,10 @@ use crate::lang::Lang;
 /// theirs, and deletes a symbol with the wider of the gaps around it; version
 /// 16 parses a file within a budget of steps; version 17 takes a parse error
 /// in any language as the grammar's, not the file's; version 18 keeps, in a file
-/// with a parse error, the symbols the error is not in.
-pub const ENGINE_CURRENT: u32 = 18;
+/// with a parse error, the symbols the error is not in; version 19 names
+/// Python's `type` statement, C++ concepts and types declared in a class, and
+/// Swift macros.
+pub const ENGINE_CURRENT: u32 = 19;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -167,9 +169,15 @@ pub const ENGINE_LENIENT: u32 = 17;
 /// it was is a change of those symbols, not of the file.
 pub const ENGINE_PARTIAL: u32 = 18;
 
+/// The first engine that reads, as symbols of their own, definitions their
+/// grammar reads and no rule named before (`since = 19` in the table):
+/// Python's `type Pair[T] = ...`, a C++ `concept`, a type declared in a C++
+/// class or struct, and a Swift `macro`.
+pub const ENGINE_MORE_DEFS: u32 = 19;
+
 /// Every engine version this build can recompute.
 pub const ENGINES_KNOWN: &[u32] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 ];
 
 /// Refuses an engine version this build can not recompute.

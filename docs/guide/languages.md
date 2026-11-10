@@ -109,7 +109,7 @@ grammar may still miss something no sample has.
 | Language | Files | Grammar | Versions tried | Samples | Not read | Read, with no symbol for |
 |---|---|---|---|---|---|---|
 | Rust | `.rs` | tree-sitter-rust 0.24.2 | 1.65 to 1.89 | 13 | 1.82: unsafe extern | nothing found |
-| Python | `.py` `.pyi` | tree-sitter-python 0.25.0 | 3.8 to 3.15 | 13 | 3.13: type parameter defaults; 3.15: lazy imports | 3.12: type statement (`Pair`) |
+| Python | `.py` `.pyi` | tree-sitter-python 0.25.0 | 3.8 to 3.15 | 13 | 3.13: type parameter defaults; 3.15: lazy imports | nothing found |
 | TypeScript | `.ts` `.mts` `.cts` | tree-sitter-typescript 0.23.2 | 4.3 to 5.9 | 12 | 4.7: variance annotations; 5.0: export type star; 5.9: import defer | nothing found |
 | TSX | `.tsx` | tree-sitter-typescript 0.23.2 | 4.9 to 5.3 | 5 | nothing found | nothing found |
 | JavaScript | `.js` `.mjs` `.cjs` `.jsx` | tree-sitter-javascript 0.25.0 | 2020 to 2026 | 14 | nothing found | nothing found |
@@ -118,7 +118,7 @@ grammar may still miss something no sample has.
 | Java | `.java` | tree-sitter-java 0.23.5 | 14 to 25 | 11 | 25: flexible constructor bodies, module imports | nothing found |
 | Kotlin | `.kt` `.kts` | tree-sitter-kotlin-ng 1.1.0 | 1.4 to 2.3 | 11 | 2.1: guard conditions; 2.2: context parameters, multi dollar interpolation | nothing found |
 | C | `.c` | tree-sitter-c 0.24.2 | 11 to 23 | 16 | 23: auto type inference, bit precise integers, embed, enum with an unsigned underlying type | nothing found |
-| C++ | `.cc` `.cpp` `.cxx` `.c++` `.h` `.hh` `.hpp` `.hxx` | tree-sitter-cpp 0.23.4 | 17 to 26 | 25 | 20: modules; 23: deducing this, if consteval; 26: contracts, deleted with reason, pack indexing, reflection | 20: concepts (`Addable`) |
+| C++ | `.cc` `.cpp` `.cxx` `.c++` `.h` `.hh` `.hpp` `.hxx` | tree-sitter-cpp 0.23.4 | 17 to 26 | 25 | 20: modules; 23: deducing this, if consteval; 26: contracts, deleted with reason, pack indexing, reflection | nothing found |
 | Ruby | `.rb` `.rake` | lonca-tree-sitter-ruby (tree-sitter-ruby 0.23.1 with a scanner fix) | 2.7 to 3.4 | 13 | nothing found | nothing found |
 | PHP | `.php` | tree-sitter-php 0.25.1 | 8.0 to 8.5 | 19 | nothing found | nothing found |
-| Swift | `.swift` | lonca-tree-sitter-swift (tree-sitter-swift 0.7.4 with a scanner fix) | 5.5 to 6.2 | 15 | nothing found | 5.9: macros (`stringify`) |
+| Swift | `.swift` | lonca-tree-sitter-swift (tree-sitter-swift 0.7.4 with a scanner fix) | 5.5 to 6.2 | 15 | nothing found | nothing found |

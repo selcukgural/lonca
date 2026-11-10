@@ -1,0 +1,179 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#<file>"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        },
+        "unparsed_files": [
+          "src/sample.rs"
+        ]
+      },
+      "syntax_errors": [
+        "src/sample.rs"
+      ]
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#<file>"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        },
+        "unparsed_files": [
+          "src/sample.rs"
+        ]
+      },
+      "syntax_errors": [
+        "src/sample.rs"
+      ]
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "fn a( {\n\nfn b() { 1; }\n\nfn c() { 2; }\n"
+  },
+  "path": "src/sample.rs",
+  "symbols": {
+    "base": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "ERROR(fn\u001fa\u001fparameters((\u001f\u001f){\u001f)",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "fn b()",
+          "skipped": false,
+          "span": [
+            9,
+            9,
+            18
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "fn c()",
+          "skipped": false,
+          "span": [
+            20,
+            20,
+            29
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "ERROR(fn\u001fa\u001fparameters((\u001f\u001f){\u001f)",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "fn b()",
+          "skipped": false,
+          "span": [
+            9,
+            9,
+            22
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "fn c()",
+          "skipped": false,
+          "span": [
+            24,
+            24,
+            33
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "ERROR(fn\u001fa\u001fparameters((\u001f\u001f){\u001f)",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "b",
+          "own": "",
+          "signature": "fn b()",
+          "skipped": false,
+          "span": [
+            9,
+            9,
+            18
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "c",
+          "own": "",
+          "signature": "fn c()",
+          "skipped": false,
+          "span": [
+            20,
+            20,
+            33
+          ]
+        }
+      ]
+    }
+  }
+}

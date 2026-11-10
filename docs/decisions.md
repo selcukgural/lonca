@@ -776,6 +776,32 @@ entry format, so they have their own version
     (`not read`, `partly read`; `unread: true`).
   - Decided with it (2026-11-10): no grammar is copied or updated ahead of its
     release to close a gap, and no language is added, until somebody asks.
+- **Engine 19** names four kinds of definition that their grammar read and no
+  rule named (issue #251), so each can be leased by itself and a change to it
+  is no longer a change of the code around it. They are rules of the table,
+  gated by `since = 19` (`ENGINE_MORE_DEFS`); every case of v18 gives the same
+  output under v19.
+  - **Python's `type Pair[T] = ...`** (3.12) is named by the first identifier of
+    its `left`, and is a type, as a TypeScript `type` alias is: its signature is
+    the whole statement, so a change to what it stands for lists the code that
+    mentions it in `affected`, and its edits are `Pair.<def>`.
+  - **A C++ `concept`** is read through `template <...>` as a class template is,
+    and is a type as `using X = ...` is: the whole definition is its
+    signature. Read as a plain declaration, `concept Small = sizeof(T) <= 8;`
+    had a signature that stopped at `<=`, where the value of the comparison
+    starts.
+  - **A type declared in a class or struct** (`struct promise_type { ... };`,
+    `enum class State { ... };`) is a member with members of its own:
+    `Task.promise_type.get`. A wrapper reads the `type` of a
+    `field_declaration` that has no declarator. Wrappers have `since` and
+    `without` for it: without the condition `struct node *next;`, a field of a
+    type declared elsewhere, would read as that type and lose the field, and
+    `struct { int a; } anon;` stays the field `anon`.
+  - **A Swift `macro`** (5.9) is named by its first `simple_identifier`, behind
+    its attributes, and told from another of its name by its parameters, as a
+    `func` is. Its signature keeps `= #externalMacro(...)`: an expansion
+    depends on which type implements the macro, so a change there lists the
+    code that uses it.
 - **The cost of a merge grows with the file**, in every engine. Going through a
   list for each symbol, node or change made a merge of 300 KB take minutes.
   What did that now has a look-up (`Cuts`, `Namespaces`, `neighbours`,
@@ -953,8 +979,9 @@ a table entry, not an enum.
     `enum e : int` reads and `enum e : unsigned char` does not.
   - "Reads" means symbols too: a sample that reads and gives no symbol fails.
     A definition that is read and gets no symbol of its own is named in
-    `corpus.toml` (`no_symbol`: Python's `type` statement, a C++ concept, a
-    Swift macro), and the test fails once it is one, until the entry goes.
+    `corpus.toml` (`no_symbol`), and the test fails once it is one, until the
+    entry goes. The first run had three (Python's `type` statement, a C++
+    concept, a Swift macro); engine 19 named them, and the list is empty.
   - The page of the guide (`docs/guide/languages.md`) ends with the same list as
     a table, written and checked by the same test, so the site can not say
     something else than the build does.

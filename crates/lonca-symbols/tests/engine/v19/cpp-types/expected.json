@@ -1,0 +1,506 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cpp#Task.promise_type.stop"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cpp#Small.<def>"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cpp"
+        ],
+        "signature_changes": [
+          "src/sample.cpp#Small.<def>"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cpp#Addable.<def>",
+          "src/sample.cpp#Task.State.<def>"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.cpp"
+        ],
+        "signature_changes": [
+          "src/sample.cpp#Addable.<def>",
+          "src/sample.cpp#Task.State.<def>"
+        ],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "#include <concepts>\n\ntemplate <typename T>\nconcept Addable = requires(T a, T b) { a + b; a - b; };\n\ntemplate <typename T>\nconcept Small = sizeof(T) <= 4;\n\nstruct Task {\n    struct promise_type {\n        int get();\n        void stop();\n    };\n    struct node *next;\n    struct { int a; } anon;\n    class Later;\n    enum class State { Ready, Waiting, Done };\n    void run();\n};\n"
+  },
+  "path": "src/sample.cpp",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          20
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Addable",
+          "own": "",
+          "signature": "concept Addable = requires(T a, T b) { a + b; };",
+          "skipped": false,
+          "span": [
+            21,
+            43,
+            91
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Small",
+          "own": "",
+          "signature": "concept Small = sizeof(T) <= 8;",
+          "skipped": false,
+          "span": [
+            93,
+            115,
+            146
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Task.promise_type.get",
+                  "own": "",
+                  "signature": "int get();",
+                  "skipped": false,
+                  "span": [
+                    196,
+                    196,
+                    206
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "Task.promise_type",
+              "own": "field_declaration(struct_specifier(struct\u001fpromise_type\u001ffield_declaration_list({\u001f}\u001f));\u001f)",
+              "signature": "struct promise_type",
+              "skipped": false,
+              "span": [
+                166,
+                166,
+                213
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.next",
+              "own": "",
+              "signature": "struct node *next;",
+              "skipped": false,
+              "span": [
+                218,
+                218,
+                236
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.anon",
+              "own": "",
+              "signature": "struct { int a; } anon;",
+              "skipped": false,
+              "span": [
+                241,
+                241,
+                264
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.State",
+              "own": "",
+              "signature": "enum class State { Ready, Done }",
+              "skipped": false,
+              "span": [
+                286,
+                286,
+                319
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.run",
+              "own": "",
+              "signature": "void run();",
+              "skipped": false,
+              "span": [
+                324,
+                324,
+                335
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Task",
+          "own": "struct_specifier(struct\u001fTask\u001ffield_declaration_list({\u001ffield_declaration(class_specifier(class\u001fLater\u001f);\u001f)}\u001f))",
+          "signature": "struct Task",
+          "skipped": false,
+          "span": [
+            148,
+            148,
+            338
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          20
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Addable",
+          "own": "",
+          "signature": "concept Addable = requires(T a, T b) { a + b; };",
+          "skipped": false,
+          "span": [
+            21,
+            43,
+            91
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Small",
+          "own": "",
+          "signature": "concept Small = sizeof(T) <= 4;",
+          "skipped": false,
+          "span": [
+            93,
+            115,
+            146
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Task.promise_type.get",
+                  "own": "",
+                  "signature": "int get();",
+                  "skipped": false,
+                  "span": [
+                    196,
+                    196,
+                    206
+                  ]
+                },
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Task.promise_type.stop",
+                  "own": "",
+                  "signature": "void stop();",
+                  "skipped": false,
+                  "span": [
+                    215,
+                    215,
+                    227
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "Task.promise_type",
+              "own": "field_declaration(struct_specifier(struct\u001fpromise_type\u001ffield_declaration_list({\u001f}\u001f));\u001f)",
+              "signature": "struct promise_type",
+              "skipped": false,
+              "span": [
+                166,
+                166,
+                234
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.next",
+              "own": "",
+              "signature": "struct node *next;",
+              "skipped": false,
+              "span": [
+                239,
+                239,
+                257
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.anon",
+              "own": "",
+              "signature": "struct { int a; } anon;",
+              "skipped": false,
+              "span": [
+                262,
+                262,
+                285
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.State",
+              "own": "",
+              "signature": "enum class State { Ready, Done }",
+              "skipped": false,
+              "span": [
+                307,
+                307,
+                340
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.run",
+              "own": "",
+              "signature": "void run();",
+              "skipped": false,
+              "span": [
+                345,
+                345,
+                356
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Task",
+          "own": "struct_specifier(struct\u001fTask\u001ffield_declaration_list({\u001ffield_declaration(class_specifier(class\u001fLater\u001f);\u001f)}\u001f))",
+          "signature": "struct Task",
+          "skipped": false,
+          "span": [
+            148,
+            148,
+            359
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          20
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Addable",
+          "own": "",
+          "signature": "concept Addable = requires(T a, T b) { a + b; a - b; };",
+          "skipped": false,
+          "span": [
+            21,
+            43,
+            98
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Small",
+          "own": "",
+          "signature": "concept Small = sizeof(T) <= 8;",
+          "skipped": false,
+          "span": [
+            100,
+            122,
+            153
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [],
+                  "container": false,
+                  "is_test": false,
+                  "name": "Task.promise_type.get",
+                  "own": "",
+                  "signature": "int get();",
+                  "skipped": false,
+                  "span": [
+                    203,
+                    203,
+                    213
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "Task.promise_type",
+              "own": "field_declaration(struct_specifier(struct\u001fpromise_type\u001ffield_declaration_list({\u001f}\u001f));\u001f)",
+              "signature": "struct promise_type",
+              "skipped": false,
+              "span": [
+                173,
+                173,
+                220
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.next",
+              "own": "",
+              "signature": "struct node *next;",
+              "skipped": false,
+              "span": [
+                225,
+                225,
+                243
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.anon",
+              "own": "",
+              "signature": "struct { int a; } anon;",
+              "skipped": false,
+              "span": [
+                248,
+                248,
+                271
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.State",
+              "own": "",
+              "signature": "enum class State { Ready, Waiting, Done }",
+              "skipped": false,
+              "span": [
+                293,
+                293,
+                335
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Task.run",
+              "own": "",
+              "signature": "void run();",
+              "skipped": false,
+              "span": [
+                340,
+                340,
+                351
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Task",
+          "own": "struct_specifier(struct\u001fTask\u001ffield_declaration_list({\u001ffield_declaration(class_specifier(class\u001fLater\u001f);\u001f)}\u001f))",
+          "signature": "struct Task",
+          "skipped": false,
+          "span": [
+            155,
+            155,
+            354
+          ]
+        }
+      ]
+    }
+  }
+}

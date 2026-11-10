@@ -1,0 +1,270 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.py#Tank.level[deleter]"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 4,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.py#Tank.level[setter]"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "class Tank:\n    @property\n    def level(self):\n        return self._level\n\n    @level.setter\n    def level(self, v):\n        self._level = max(v, 0)\n\n    @level.deleter\n    def level(self):\n        del self._level\n\n    def drain(self):\n        self._level = 0\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.level(self)",
+              "own": "",
+              "signature": "def level(self):",
+              "skipped": false,
+              "span": [
+                16,
+                30,
+                73
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.level[setter]",
+              "own": "",
+              "signature": "def level(self, v):",
+              "skipped": false,
+              "span": [
+                79,
+                97,
+                140
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.drain",
+              "own": "",
+              "signature": "def drain(self):",
+              "skipped": false,
+              "span": [
+                146,
+                146,
+                186
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Tank",
+          "own": "class_definition(class\u001fTank\u001f:\u001fblock())",
+          "signature": "class Tank:",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            186
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.level(self)",
+              "own": "",
+              "signature": "def level(self):",
+              "skipped": false,
+              "span": [
+                16,
+                30,
+                73
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.level[setter]",
+              "own": "",
+              "signature": "def level(self, v):",
+              "skipped": false,
+              "span": [
+                79,
+                97,
+                140
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.level[deleter]",
+              "own": "",
+              "signature": "def level(self):",
+              "skipped": false,
+              "span": [
+                146,
+                165,
+                205
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.drain",
+              "own": "",
+              "signature": "def drain(self):",
+              "skipped": false,
+              "span": [
+                211,
+                211,
+                251
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Tank",
+          "own": "class_definition(class\u001fTank\u001f:\u001fblock())",
+          "signature": "class Tank:",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            251
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.level(self)",
+              "own": "",
+              "signature": "def level(self):",
+              "skipped": false,
+              "span": [
+                16,
+                30,
+                73
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.level[setter]",
+              "own": "",
+              "signature": "def level(self, v):",
+              "skipped": false,
+              "span": [
+                79,
+                97,
+                148
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Tank.drain",
+              "own": "",
+              "signature": "def drain(self):",
+              "skipped": false,
+              "span": [
+                154,
+                154,
+                194
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Tank",
+          "own": "class_definition(class\u001fTank\u001f:\u001fblock())",
+          "signature": "class Tank:",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            194
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -162,6 +162,7 @@ constructors = ["__init__"]
 attached = [{ kinds = ["comment"] }]
 imports = ["import_statement", "import_from_statement", "future_import_statement"]
 wrappers = [{ kind = "decorated_definition", field = "definition" }]
+types = ["type_alias_statement"]
 
 [[rules.python.tests]]
 kinds = ["function_definition"]
@@ -182,6 +183,12 @@ how = { leaf = "name" }
 [[rules.python.defs]]
 kinds = ["class_definition"]
 how = { members = { name = "name", members = "body" } }
+
+# `type Pair[T] = ...`: the name is the first identifier of `left`.
+[[rules.python.defs]]
+kinds = ["type_alias_statement"]
+since = 19
+how = { inner = { descendant = ["identifier"] } }
 
 # TypeScript, TSX, JavaScript
 
@@ -447,9 +454,13 @@ wrappers = [
         "function_definition",
         "declaration",
         "alias_declaration",
+        "concept_definition",
     ] },
+    # A type declared in a class: `struct promise_type { ... };`. One with a
+    # declarator (`struct node *next;`) is a field.
+    { kind = "field_declaration", field = "type", without = "declarator", since = 19 },
 ]
-types = ["enum_specifier", "type_definition", "alias_declaration"]
+types = ["enum_specifier", "type_definition", "alias_declaration", "concept_definition"]
 parameters = [
     { kinds = ["function_definition", "declaration", "field_declaration"], list = "parameter_list" },
 ]
@@ -478,6 +489,11 @@ how = { members_only = { name = "name", members = "body" } }
 
 [[rules.c_family.defs]]
 kinds = ["enum_specifier", "preproc_def", "preproc_function_def", "alias_declaration"]
+how = { leaf = "name" }
+
+[[rules.c_family.defs]]
+kinds = ["concept_definition"]
+since = 19
 how = { leaf = "name" }
 
 [[rules.c_family.defs]]
@@ -578,7 +594,12 @@ attached = [{ kinds = ["comment", "multiline_comment"] }]
 imports = ["import_declaration"]
 types = ["typealias_declaration"]
 parameters = [
-    { kinds = ["function_declaration", "init_declaration", "protocol_function_declaration"], item = "parameter" },
+    { kinds = [
+        "function_declaration",
+        "init_declaration",
+        "protocol_function_declaration",
+        "macro_declaration",
+    ], item = "parameter" },
 ]
 
 [[rules.swift.tests]]
@@ -609,6 +630,13 @@ kinds = [
     "enum_entry",
 ]
 how = { leaf = "name" }
+
+# `macro stringify<T>(...)`: its name is its first `simple_identifier`, behind
+# its attributes.
+[[rules.swift.defs]]
+kinds = ["macro_declaration"]
+since = 19
+how = { inner = { child = ["simple_identifier"] } }
 
 [[rules.swift.defs]]
 kinds = ["init_declaration"]

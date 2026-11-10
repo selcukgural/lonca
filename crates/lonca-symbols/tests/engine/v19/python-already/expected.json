@@ -1,0 +1,170 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.py#helper",
+          "src/sample.py#other"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 8,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.py#helper"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 4,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.py"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "def f():\n    return 1\n\n\ndef helper(a, b):\n    return a * b + 2\n\n\ndef other(x):\n    return [x, x, x]\n"
+  },
+  "path": "src/sample.py",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "def f():",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            21
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "def f():",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            21
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "helper",
+          "own": "",
+          "signature": "def helper(a, b):",
+          "skipped": false,
+          "span": [
+            24,
+            24,
+            62
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "other",
+          "own": "",
+          "signature": "def other(x):",
+          "skipped": false,
+          "span": [
+            65,
+            65,
+            99
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "module()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "f",
+          "own": "",
+          "signature": "def f():",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            21
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "helper",
+          "own": "",
+          "signature": "def helper(a, b):",
+          "skipped": false,
+          "span": [
+            24,
+            24,
+            62
+          ]
+        }
+      ]
+    }
+  }
+}

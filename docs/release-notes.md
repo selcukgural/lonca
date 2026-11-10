@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Symbol engine 19: four definitions get symbols of their own
+
+Python's `type Pair[T] = ...`, a C++ `concept`, a type declared inside a C++
+class or struct (`Task.promise_type`), and a Swift `macro` were read by
+their grammar and still gave no symbol: a change to one counted as a change
+to the code around it, and nobody could lease it by itself. From engine 19
+each is a symbol. A change to what a type alias or a concept stands for, or
+to the type that implements a macro, is a signature change and lists the
+code that mentions it. Entries of older engines are recomputed as they were
+written.
+
 ### A verification leaves the machine its share
 
 A build or test command could fill the disk the stores are on, fork up to the account's limit on

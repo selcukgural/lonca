@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 
 use lonca_core::ops::Facts;
 use lonca_core::{FileEntry, FileMap, FileMode, GitId};
-use lonca_symbols::engine::{ENGINE_CURRENT, ENGINE_LENIENT, ENGINE_PARTIAL};
+use lonca_symbols::engine::{ENGINE_CURRENT, ENGINE_LENIENT, ENGINE_MORE_DEFS, ENGINE_PARTIAL};
 use lonca_symbols::merge::merge_text_at;
-use lonca_symbols::{Lang, analyze, parse};
+use lonca_symbols::{Lang, analyze, parse, parse_at};
 
 struct Row {
     path: &'static str,
@@ -738,4 +738,63 @@ fn what_each_language_has_of_its_own() {
     }
     has(&s, "C.testT", true, false);
     has(&s, "C.m", true, true);
+}
+
+/// The definitions of engine 19: read by their grammar before it, they were
+/// text of the code around them.
+#[test]
+fn definitions_of_their_own_from_their_engine_on() {
+    let names = |engine: u32, path: &str, text: &str| {
+        fn walk(syms: &[lonca_symbols::Sym], out: &mut Vec<String>) {
+            for s in syms {
+                out.push(s.name.clone());
+                walk(&s.children, out);
+            }
+        }
+        let p = parse_at(engine, Lang::detect(path).unwrap(), text);
+        assert!(!p.has_error, "{path}");
+        let mut out = Vec::new();
+        walk(&p.syms, &mut out);
+        out
+    };
+    let cases: [(&str, &str, &[&str], &[&str]); 4] = [
+        (
+            "a.py",
+            "type Pair[T] = tuple[T, T]\ntype N = int\n\ndef f(): pass\n",
+            &["Pair", "N", "f"],
+            &["f"],
+        ),
+        (
+            "a.cpp",
+            "template <typename T>\nconcept Small = sizeof(T) <= 8;\nint f();\n",
+            &["Small", "f"],
+            &["f"],
+        ),
+        (
+            "a.swift",
+            "@attached(member)\nmacro AddInit() = #externalMacro(module: \"M\", type: \"A\")\nfunc f() {}\n",
+            &["AddInit", "f"],
+            &["f"],
+        ),
+        // A type declared in a class is a member with members; a field of a
+        // type declared elsewhere stays a field, and so does one of a type
+        // with no name.
+        (
+            "b.cpp",
+            "struct Task {\n  struct promise_type {\n    int get();\n  };\n  struct node *next;\n  struct { int a; } anon;\n  enum class E { A };\n  class Later;\n};\n",
+            &[
+                "Task",
+                "Task.promise_type",
+                "Task.promise_type.get",
+                "Task.next",
+                "Task.anon",
+                "Task.E",
+            ],
+            &["Task", "Task.next", "Task.anon"],
+        ),
+    ];
+    for (path, text, now, before) in cases {
+        assert_eq!(names(ENGINE_MORE_DEFS, path, text), now, "{path}");
+        assert_eq!(names(ENGINE_MORE_DEFS - 1, path, text), before, "{path}");
+    }
 }

@@ -1,0 +1,560 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.c#add"
+        ],
+        "import_only_files": [
+          "src/sample.c"
+        ],
+        "lines_added": 2,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.c"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.c#point.z",
+          "src/sample.c#sub"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.c#name"
+        ],
+        "import_only_files": [],
+        "lines_added": 6,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.c"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "#include <stdio.h>\n#include <stdlib.h>\n\n#define LIMIT 10\n\n/* The total. */\nstatic int total = 0;\n\nstruct point {\n    int x;\n    int y;\n    int z;\n};\n\ntypedef struct node {\n    struct node *next;\n} node;\n\nenum color { RED, BLUE };\n\nint add(int a, int b) {\n    return a + b + total;\n}\n\nstatic char *name(void) {\n    return \"y\";\n}\n\nint sub(int a, int b) {\n    return a - b;\n}\n\n#ifdef DEBUG\nint debug(void) {\n    return 1;\n}\n#endif\n"
+  },
+  "path": "src/sample.c",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          19
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit(preproc_ifdef(#ifdef\u001fDEBUG\u001f#endif\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "LIMIT",
+          "own": "",
+          "signature": "#define LIMIT",
+          "skipped": false,
+          "span": [
+            20,
+            20,
+            37
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "total",
+          "own": "",
+          "signature": "static int total =",
+          "skipped": false,
+          "span": [
+            38,
+            55,
+            76
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "point.x",
+              "own": "",
+              "signature": "int x;",
+              "skipped": false,
+              "span": [
+                97,
+                97,
+                103
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "point.y",
+              "own": "",
+              "signature": "int y;",
+              "skipped": false,
+              "span": [
+                108,
+                108,
+                114
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "point",
+          "own": "struct_specifier(struct\u001fpoint\u001ffield_declaration_list({\u001f}\u001f))",
+          "signature": "struct point",
+          "skipped": false,
+          "span": [
+            78,
+            78,
+            117
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "node",
+          "own": "",
+          "signature": "typedef struct node { struct node *next; } node;",
+          "skipped": false,
+          "span": [
+            119,
+            119,
+            171
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "color",
+          "own": "",
+          "signature": "enum color { RED, BLUE }",
+          "skipped": false,
+          "span": [
+            173,
+            173,
+            198
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "add",
+          "own": "",
+          "signature": "int add(int a, int b)",
+          "skipped": false,
+          "span": [
+            200,
+            200,
+            243
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "name",
+          "own": "",
+          "signature": "static char *name(void)",
+          "skipped": false,
+          "span": [
+            245,
+            245,
+            288
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "debug",
+          "own": "",
+          "signature": "int debug(void)",
+          "skipped": false,
+          "span": [
+            303,
+            303,
+            336
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          19
+        ],
+        [
+          19,
+          39
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit(preproc_ifdef(#ifdef\u001fDEBUG\u001f#endif\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "LIMIT",
+          "own": "",
+          "signature": "#define LIMIT",
+          "skipped": false,
+          "span": [
+            40,
+            40,
+            57
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "total",
+          "own": "",
+          "signature": "static int total =",
+          "skipped": false,
+          "span": [
+            58,
+            75,
+            96
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "point.x",
+              "own": "",
+              "signature": "int x;",
+              "skipped": false,
+              "span": [
+                117,
+                117,
+                123
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "point.y",
+              "own": "",
+              "signature": "int y;",
+              "skipped": false,
+              "span": [
+                128,
+                128,
+                134
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "point",
+          "own": "struct_specifier(struct\u001fpoint\u001ffield_declaration_list({\u001f}\u001f))",
+          "signature": "struct point",
+          "skipped": false,
+          "span": [
+            98,
+            98,
+            137
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "node",
+          "own": "",
+          "signature": "typedef struct node { struct node *next; } node;",
+          "skipped": false,
+          "span": [
+            139,
+            139,
+            191
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "color",
+          "own": "",
+          "signature": "enum color { RED, BLUE }",
+          "skipped": false,
+          "span": [
+            193,
+            193,
+            218
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "add",
+          "own": "",
+          "signature": "int add(int a, int b)",
+          "skipped": false,
+          "span": [
+            220,
+            220,
+            271
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "name",
+          "own": "",
+          "signature": "static char *name(void)",
+          "skipped": false,
+          "span": [
+            273,
+            273,
+            316
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "debug",
+          "own": "",
+          "signature": "int debug(void)",
+          "skipped": false,
+          "span": [
+            331,
+            331,
+            364
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [
+        [
+          0,
+          19
+        ]
+      ],
+      "js_tests": [],
+      "residual": "translation_unit(preproc_ifdef(#ifdef\u001fDEBUG\u001f#endif\u001f))",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "LIMIT",
+          "own": "",
+          "signature": "#define LIMIT",
+          "skipped": false,
+          "span": [
+            20,
+            20,
+            37
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "total",
+          "own": "",
+          "signature": "static int total =",
+          "skipped": false,
+          "span": [
+            38,
+            55,
+            76
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "point.x",
+              "own": "",
+              "signature": "int x;",
+              "skipped": false,
+              "span": [
+                97,
+                97,
+                103
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "point.y",
+              "own": "",
+              "signature": "int y;",
+              "skipped": false,
+              "span": [
+                108,
+                108,
+                114
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "point.z",
+              "own": "",
+              "signature": "int z;",
+              "skipped": false,
+              "span": [
+                119,
+                119,
+                125
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "point",
+          "own": "struct_specifier(struct\u001fpoint\u001ffield_declaration_list({\u001f}\u001f))",
+          "signature": "struct point",
+          "skipped": false,
+          "span": [
+            78,
+            78,
+            128
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "node",
+          "own": "",
+          "signature": "typedef struct node { struct node *next; } node;",
+          "skipped": false,
+          "span": [
+            130,
+            130,
+            182
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "color",
+          "own": "",
+          "signature": "enum color { RED, BLUE }",
+          "skipped": false,
+          "span": [
+            184,
+            184,
+            209
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "add",
+          "own": "",
+          "signature": "int add(int a, int b)",
+          "skipped": false,
+          "span": [
+            211,
+            211,
+            254
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "name",
+          "own": "",
+          "signature": "static char *name(void)",
+          "skipped": false,
+          "span": [
+            256,
+            256,
+            299
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "sub",
+          "own": "",
+          "signature": "int sub(int a, int b)",
+          "skipped": false,
+          "span": [
+            301,
+            301,
+            344
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "debug",
+          "own": "",
+          "signature": "int debug(void)",
+          "skipped": false,
+          "span": [
+            359,
+            359,
+            392
+          ]
+        }
+      ]
+    }
+  }
+}

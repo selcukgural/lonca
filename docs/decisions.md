@@ -735,6 +735,47 @@ entry format, so they have their own version
   - Engines before 16 parse as they did, without a budget, so that entries are
     recomputed as they were written. The auditor reads at those engines only
     an entry, and an entry exists only if its daemon got through its files.
+- **Engine 18** keeps, in a file with a parse error, the symbols the error is
+  not in. Up to 17 one piece of syntax the grammar did not know cost the file
+  every symbol: one extension block in a C# file of fifty methods, and the
+  file was leased whole, so the agents on it waited for each other. Leases per
+  symbol are what keeps agents from blocking each other, and a grammar is
+  always behind its language (C# 14 was not in a release of its grammar a year
+  after the language's), so the gap has to cost little instead of being
+  chased with grammar updates.
+  - tree-sitter goes on after what it can not read and marks it (an `ERROR`
+    node, or a token it assumed). `Parsed.errors` has those places, and a
+    symbol none of them touches was read whole (`reads_whole`). `read_parts`
+    gives the outermost such symbols, a container with an error giving its
+    members instead, and the **rest**: the file without them, as lines with
+    their indentation and without blank lines.
+  - The rule is in the facts only. Both sides of a change have a parse error
+    and the same rest: the change is compared as those symbols, with every
+    fact a file that reads gets (edits, adds, deletes, signatures, order,
+    tests), and the file is in neither `unparsed_files` nor `unread_files`.
+    Anything else is what it was: an edit of `<file>`. So a change to the
+    unread part, to a definition it is in, to imports or to code outside
+    definitions takes the file's lease, and a file that stops or starts being
+    read is compared whole and escalates as before.
+  - Why the rest must be the same, and not only the error: where a grammar
+    stopped, a boundary can be wrong. Of the 29 unread samples of the corpus,
+    Kotlin's guard condition ends the function before its body, Go's generic
+    method is no symbol at all, and C#'s extension block ends the class one
+    brace early. In each of them the misread text is in the rest, so changing
+    it is a change of the file; a symbol is trusted only when the grammar read
+    it from start to end.
+  - The merge is unchanged: a file with a parse error on any side merges by
+    its lines and is not held to its symbols. Two agents with leases on
+    different methods merge unless their lines touch, and a conflict there is
+    named `<file>`. Mentions of a removed name are still not looked for in
+    such a file.
+  - `[leases] unparsed_files = "optimistic"` let any line edit of such a file
+    go without a lease; a change inside read symbols now needs theirs, as in
+    any file that reads.
+  - `lonca symbols` and the MCP `symbols` tool mark what was not read
+    (`not read`, `partly read`; `unread: true`).
+  - Decided with it (2026-11-10): no grammar is copied or updated ahead of its
+    release to close a gap, and no language is added, until somebody asks.
 - **The cost of a merge grows with the file**, in every engine. Going through a
   list for each symbol, node or change made a merge of 300 KB take minutes.
   What did that now has a look-up (`Cuts`, `Namespaces`, `neighbours`,
@@ -843,7 +884,8 @@ a table entry, not an enum.
   member and `}` on one line, a C macro, or syntax newer than the grammar. Such a
   file counts as one no parser
   reads: the syntax check passes it, the merge goes by lines and facts list it, so
-  it does no worse than with no grammar at all. `syntax_errors` still reports it.
+  it does no worse than with no grammar at all (from engine 18 it does better:
+  the symbols the error is not in stay, see "Symbol engine versions"). `syntax_errors` still reports it.
   Only a file the grammar could not read before counts. No file gets there unseen:
   a proposal that leaves unreadable a file that read until then, by a syntax error
   or by bytes that are no text, or that adds such a file, is listed in `unread_files`

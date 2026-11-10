@@ -1,0 +1,1623 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cs#After.ours"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29.C30.C31.<def>"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "class C0\n{\n class C1\n {\n  class C2\n  {\n   class C3\n   {\n    class C4\n    {\n     class C5\n     {\n      class C6\n      {\n       class C7\n       {\n        class C8\n        {\n         class C9\n         {\n          class C10\n          {\n           class C11\n           {\n            class C12\n            {\n             class C13\n             {\n              class C14\n              {\n               class C15\n               {\n                class C16\n                {\n                 class C17\n                 {\n                  class C18\n                  {\n                   class C19\n                   {\n                    class C20\n                    {\n                     class C21\n                     {\n                      class C22\n                      {\n                       class C23\n                       {\n                        class C24\n                        {\n                         class C25\n                         {\n                          class C26\n                          {\n                           class C27\n                           {\n                            class C28\n                            {\n                             class C29\n                             {\n                              class C30\n                              {\n                               class C31\n                               {\n                                class C32\n                                {\n                                 class C33\n                                 {\n                                  int deep = 1;\n                                 }\n                                }\n                               }\n                              }\n                             }\n                            }\n                           }\n                          }\n                         }\n                        }\n                       }\n                      }\n                     }\n                    }\n                   }\n                  }\n                 }\n                }\n               }\n              }\n             }\n            }\n           }\n          }\n         }\n        }\n       }\n      }\n     }\n    }\n   }\n  }\n }\n}\n\nclass After\n{\n    int a;\n    int ours;\n}\n"
+  },
+  "path": "src/sample.cs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "children": [
+                                    {
+                                      "children": [
+                                        {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "children": [
+                                                        {
+                                                          "children": [
+                                                            {
+                                                              "children": [
+                                                                {
+                                                                  "children": [
+                                                                    {
+                                                                      "children": [
+                                                                        {
+                                                                          "children": [
+                                                                            {
+                                                                              "children": [
+                                                                                {
+                                                                                  "children": [
+                                                                                    {
+                                                                                      "children": [
+                                                                                        {
+                                                                                          "children": [
+                                                                                            {
+                                                                                              "children": [
+                                                                                                {
+                                                                                                  "children": [
+                                                                                                    {
+                                                                                                      "children": [
+                                                                                                        {
+                                                                                                          "children": [
+                                                                                                            {
+                                                                                                              "children": [
+                                                                                                                {
+                                                                                                                  "children": [
+                                                                                                                    {
+                                                                                                                      "children": [
+                                                                                                                        {
+                                                                                                                          "children": [
+                                                                                                                            {
+                                                                                                                              "children": [
+                                                                                                                                {
+                                                                                                                                  "children": [
+                                                                                                                                    {
+                                                                                                                                      "children": [],
+                                                                                                                                      "container": false,
+                                                                                                                                      "is_test": false,
+                                                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29.C30.C31",
+                                                                                                                                      "own": "",
+                                                                                                                                      "signature": "C31",
+                                                                                                                                      "skipped": false,
+                                                                                                                                      "span": [
+                                                                                                                                        1323,
+                                                                                                                                        1323,
+                                                                                                                                        1665
+                                                                                                                                      ]
+                                                                                                                                    }
+                                                                                                                                  ],
+                                                                                                                                  "container": true,
+                                                                                                                                  "is_test": false,
+                                                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29.C30",
+                                                                                                                                  "own": "class_declaration(class\u001fC30\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                                  "signature": "C30",
+                                                                                                                                  "skipped": false,
+                                                                                                                                  "span": [
+                                                                                                                                    1250,
+                                                                                                                                    1250,
+                                                                                                                                    1697
+                                                                                                                                  ]
+                                                                                                                                }
+                                                                                                                              ],
+                                                                                                                              "container": true,
+                                                                                                                              "is_test": false,
+                                                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29",
+                                                                                                                              "own": "class_declaration(class\u001fC29\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                              "signature": "C29",
+                                                                                                                              "skipped": false,
+                                                                                                                              "span": [
+                                                                                                                                1179,
+                                                                                                                                1179,
+                                                                                                                                1728
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          ],
+                                                                                                                          "container": true,
+                                                                                                                          "is_test": false,
+                                                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28",
+                                                                                                                          "own": "class_declaration(class\u001fC28\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                          "signature": "C28",
+                                                                                                                          "skipped": false,
+                                                                                                                          "span": [
+                                                                                                                            1110,
+                                                                                                                            1110,
+                                                                                                                            1758
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      ],
+                                                                                                                      "container": true,
+                                                                                                                      "is_test": false,
+                                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27",
+                                                                                                                      "own": "class_declaration(class\u001fC27\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                      "signature": "C27",
+                                                                                                                      "skipped": false,
+                                                                                                                      "span": [
+                                                                                                                        1043,
+                                                                                                                        1043,
+                                                                                                                        1787
+                                                                                                                      ]
+                                                                                                                    }
+                                                                                                                  ],
+                                                                                                                  "container": true,
+                                                                                                                  "is_test": false,
+                                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26",
+                                                                                                                  "own": "class_declaration(class\u001fC26\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                  "signature": "C26",
+                                                                                                                  "skipped": false,
+                                                                                                                  "span": [
+                                                                                                                    978,
+                                                                                                                    978,
+                                                                                                                    1815
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              ],
+                                                                                                              "container": true,
+                                                                                                              "is_test": false,
+                                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25",
+                                                                                                              "own": "class_declaration(class\u001fC25\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                              "signature": "C25",
+                                                                                                              "skipped": false,
+                                                                                                              "span": [
+                                                                                                                915,
+                                                                                                                915,
+                                                                                                                1842
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          ],
+                                                                                                          "container": true,
+                                                                                                          "is_test": false,
+                                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24",
+                                                                                                          "own": "class_declaration(class\u001fC24\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                          "signature": "C24",
+                                                                                                          "skipped": false,
+                                                                                                          "span": [
+                                                                                                            854,
+                                                                                                            854,
+                                                                                                            1868
+                                                                                                          ]
+                                                                                                        }
+                                                                                                      ],
+                                                                                                      "container": true,
+                                                                                                      "is_test": false,
+                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23",
+                                                                                                      "own": "class_declaration(class\u001fC23\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                      "signature": "C23",
+                                                                                                      "skipped": false,
+                                                                                                      "span": [
+                                                                                                        795,
+                                                                                                        795,
+                                                                                                        1893
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  ],
+                                                                                                  "container": true,
+                                                                                                  "is_test": false,
+                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22",
+                                                                                                  "own": "class_declaration(class\u001fC22\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                  "signature": "C22",
+                                                                                                  "skipped": false,
+                                                                                                  "span": [
+                                                                                                    738,
+                                                                                                    738,
+                                                                                                    1917
+                                                                                                  ]
+                                                                                                }
+                                                                                              ],
+                                                                                              "container": true,
+                                                                                              "is_test": false,
+                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21",
+                                                                                              "own": "class_declaration(class\u001fC21\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                              "signature": "C21",
+                                                                                              "skipped": false,
+                                                                                              "span": [
+                                                                                                683,
+                                                                                                683,
+                                                                                                1940
+                                                                                              ]
+                                                                                            }
+                                                                                          ],
+                                                                                          "container": true,
+                                                                                          "is_test": false,
+                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20",
+                                                                                          "own": "class_declaration(class\u001fC20\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                          "signature": "C20",
+                                                                                          "skipped": false,
+                                                                                          "span": [
+                                                                                            630,
+                                                                                            630,
+                                                                                            1962
+                                                                                          ]
+                                                                                        }
+                                                                                      ],
+                                                                                      "container": true,
+                                                                                      "is_test": false,
+                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19",
+                                                                                      "own": "class_declaration(class\u001fC19\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                      "signature": "C19",
+                                                                                      "skipped": false,
+                                                                                      "span": [
+                                                                                        579,
+                                                                                        579,
+                                                                                        1983
+                                                                                      ]
+                                                                                    }
+                                                                                  ],
+                                                                                  "container": true,
+                                                                                  "is_test": false,
+                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18",
+                                                                                  "own": "class_declaration(class\u001fC18\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                  "signature": "C18",
+                                                                                  "skipped": false,
+                                                                                  "span": [
+                                                                                    530,
+                                                                                    530,
+                                                                                    2003
+                                                                                  ]
+                                                                                }
+                                                                              ],
+                                                                              "container": true,
+                                                                              "is_test": false,
+                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17",
+                                                                              "own": "class_declaration(class\u001fC17\u001fdeclaration_list({\u001f}\u001f))",
+                                                                              "signature": "C17",
+                                                                              "skipped": false,
+                                                                              "span": [
+                                                                                483,
+                                                                                483,
+                                                                                2022
+                                                                              ]
+                                                                            }
+                                                                          ],
+                                                                          "container": true,
+                                                                          "is_test": false,
+                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16",
+                                                                          "own": "class_declaration(class\u001fC16\u001fdeclaration_list({\u001f}\u001f))",
+                                                                          "signature": "C16",
+                                                                          "skipped": false,
+                                                                          "span": [
+                                                                            438,
+                                                                            438,
+                                                                            2040
+                                                                          ]
+                                                                        }
+                                                                      ],
+                                                                      "container": true,
+                                                                      "is_test": false,
+                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15",
+                                                                      "own": "class_declaration(class\u001fC15\u001fdeclaration_list({\u001f}\u001f))",
+                                                                      "signature": "C15",
+                                                                      "skipped": false,
+                                                                      "span": [
+                                                                        395,
+                                                                        395,
+                                                                        2057
+                                                                      ]
+                                                                    }
+                                                                  ],
+                                                                  "container": true,
+                                                                  "is_test": false,
+                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14",
+                                                                  "own": "class_declaration(class\u001fC14\u001fdeclaration_list({\u001f}\u001f))",
+                                                                  "signature": "C14",
+                                                                  "skipped": false,
+                                                                  "span": [
+                                                                    354,
+                                                                    354,
+                                                                    2073
+                                                                  ]
+                                                                }
+                                                              ],
+                                                              "container": true,
+                                                              "is_test": false,
+                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13",
+                                                              "own": "class_declaration(class\u001fC13\u001fdeclaration_list({\u001f}\u001f))",
+                                                              "signature": "C13",
+                                                              "skipped": false,
+                                                              "span": [
+                                                                315,
+                                                                315,
+                                                                2088
+                                                              ]
+                                                            }
+                                                          ],
+                                                          "container": true,
+                                                          "is_test": false,
+                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12",
+                                                          "own": "class_declaration(class\u001fC12\u001fdeclaration_list({\u001f}\u001f))",
+                                                          "signature": "C12",
+                                                          "skipped": false,
+                                                          "span": [
+                                                            278,
+                                                            278,
+                                                            2102
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "container": true,
+                                                      "is_test": false,
+                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11",
+                                                      "own": "class_declaration(class\u001fC11\u001fdeclaration_list({\u001f}\u001f))",
+                                                      "signature": "C11",
+                                                      "skipped": false,
+                                                      "span": [
+                                                        243,
+                                                        243,
+                                                        2115
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "container": true,
+                                                  "is_test": false,
+                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10",
+                                                  "own": "class_declaration(class\u001fC10\u001fdeclaration_list({\u001f}\u001f))",
+                                                  "signature": "C10",
+                                                  "skipped": false,
+                                                  "span": [
+                                                    210,
+                                                    210,
+                                                    2127
+                                                  ]
+                                                }
+                                              ],
+                                              "container": true,
+                                              "is_test": false,
+                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9",
+                                              "own": "class_declaration(class\u001fC9\u001fdeclaration_list({\u001f}\u001f))",
+                                              "signature": "C9",
+                                              "skipped": false,
+                                              "span": [
+                                                180,
+                                                180,
+                                                2138
+                                              ]
+                                            }
+                                          ],
+                                          "container": true,
+                                          "is_test": false,
+                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8",
+                                          "own": "class_declaration(class\u001fC8\u001fdeclaration_list({\u001f}\u001f))",
+                                          "signature": "C8",
+                                          "skipped": false,
+                                          "span": [
+                                            152,
+                                            152,
+                                            2148
+                                          ]
+                                        }
+                                      ],
+                                      "container": true,
+                                      "is_test": false,
+                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7",
+                                      "own": "class_declaration(class\u001fC7\u001fdeclaration_list({\u001f}\u001f))",
+                                      "signature": "C7",
+                                      "skipped": false,
+                                      "span": [
+                                        126,
+                                        126,
+                                        2157
+                                      ]
+                                    }
+                                  ],
+                                  "container": true,
+                                  "is_test": false,
+                                  "name": "C0.C1.C2.C3.C4.C5.C6",
+                                  "own": "class_declaration(class\u001fC6\u001fdeclaration_list({\u001f}\u001f))",
+                                  "signature": "C6",
+                                  "skipped": false,
+                                  "span": [
+                                    102,
+                                    102,
+                                    2165
+                                  ]
+                                }
+                              ],
+                              "container": true,
+                              "is_test": false,
+                              "name": "C0.C1.C2.C3.C4.C5",
+                              "own": "class_declaration(class\u001fC5\u001fdeclaration_list({\u001f}\u001f))",
+                              "signature": "C5",
+                              "skipped": false,
+                              "span": [
+                                80,
+                                80,
+                                2172
+                              ]
+                            }
+                          ],
+                          "container": true,
+                          "is_test": false,
+                          "name": "C0.C1.C2.C3.C4",
+                          "own": "class_declaration(class\u001fC4\u001fdeclaration_list({\u001f}\u001f))",
+                          "signature": "C4",
+                          "skipped": false,
+                          "span": [
+                            60,
+                            60,
+                            2178
+                          ]
+                        }
+                      ],
+                      "container": true,
+                      "is_test": false,
+                      "name": "C0.C1.C2.C3",
+                      "own": "class_declaration(class\u001fC3\u001fdeclaration_list({\u001f}\u001f))",
+                      "signature": "C3",
+                      "skipped": false,
+                      "span": [
+                        42,
+                        42,
+                        2183
+                      ]
+                    }
+                  ],
+                  "container": true,
+                  "is_test": false,
+                  "name": "C0.C1.C2",
+                  "own": "class_declaration(class\u001fC2\u001fdeclaration_list({\u001f}\u001f))",
+                  "signature": "C2",
+                  "skipped": false,
+                  "span": [
+                    26,
+                    26,
+                    2187
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "C0.C1",
+              "own": "class_declaration(class\u001fC1\u001fdeclaration_list({\u001f}\u001f))",
+              "signature": "C1",
+              "skipped": false,
+              "span": [
+                12,
+                12,
+                2190
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C0",
+          "own": "class_declaration(class\u001fC0\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "C0",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            2192
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "After.a",
+              "own": "",
+              "signature": "int a;",
+              "skipped": false,
+              "span": [
+                2212,
+                2212,
+                2218
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "After",
+          "own": "class_declaration(class\u001fAfter\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "After",
+          "skipped": false,
+          "span": [
+            2194,
+            2194,
+            2220
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "children": [
+                                    {
+                                      "children": [
+                                        {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "children": [
+                                                        {
+                                                          "children": [
+                                                            {
+                                                              "children": [
+                                                                {
+                                                                  "children": [
+                                                                    {
+                                                                      "children": [
+                                                                        {
+                                                                          "children": [
+                                                                            {
+                                                                              "children": [
+                                                                                {
+                                                                                  "children": [
+                                                                                    {
+                                                                                      "children": [
+                                                                                        {
+                                                                                          "children": [
+                                                                                            {
+                                                                                              "children": [
+                                                                                                {
+                                                                                                  "children": [
+                                                                                                    {
+                                                                                                      "children": [
+                                                                                                        {
+                                                                                                          "children": [
+                                                                                                            {
+                                                                                                              "children": [
+                                                                                                                {
+                                                                                                                  "children": [
+                                                                                                                    {
+                                                                                                                      "children": [
+                                                                                                                        {
+                                                                                                                          "children": [
+                                                                                                                            {
+                                                                                                                              "children": [
+                                                                                                                                {
+                                                                                                                                  "children": [
+                                                                                                                                    {
+                                                                                                                                      "children": [],
+                                                                                                                                      "container": false,
+                                                                                                                                      "is_test": false,
+                                                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29.C30.C31",
+                                                                                                                                      "own": "",
+                                                                                                                                      "signature": "C31",
+                                                                                                                                      "skipped": false,
+                                                                                                                                      "span": [
+                                                                                                                                        1323,
+                                                                                                                                        1323,
+                                                                                                                                        1665
+                                                                                                                                      ]
+                                                                                                                                    }
+                                                                                                                                  ],
+                                                                                                                                  "container": true,
+                                                                                                                                  "is_test": false,
+                                                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29.C30",
+                                                                                                                                  "own": "class_declaration(class\u001fC30\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                                  "signature": "C30",
+                                                                                                                                  "skipped": false,
+                                                                                                                                  "span": [
+                                                                                                                                    1250,
+                                                                                                                                    1250,
+                                                                                                                                    1697
+                                                                                                                                  ]
+                                                                                                                                }
+                                                                                                                              ],
+                                                                                                                              "container": true,
+                                                                                                                              "is_test": false,
+                                                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29",
+                                                                                                                              "own": "class_declaration(class\u001fC29\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                              "signature": "C29",
+                                                                                                                              "skipped": false,
+                                                                                                                              "span": [
+                                                                                                                                1179,
+                                                                                                                                1179,
+                                                                                                                                1728
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          ],
+                                                                                                                          "container": true,
+                                                                                                                          "is_test": false,
+                                                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28",
+                                                                                                                          "own": "class_declaration(class\u001fC28\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                          "signature": "C28",
+                                                                                                                          "skipped": false,
+                                                                                                                          "span": [
+                                                                                                                            1110,
+                                                                                                                            1110,
+                                                                                                                            1758
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      ],
+                                                                                                                      "container": true,
+                                                                                                                      "is_test": false,
+                                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27",
+                                                                                                                      "own": "class_declaration(class\u001fC27\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                      "signature": "C27",
+                                                                                                                      "skipped": false,
+                                                                                                                      "span": [
+                                                                                                                        1043,
+                                                                                                                        1043,
+                                                                                                                        1787
+                                                                                                                      ]
+                                                                                                                    }
+                                                                                                                  ],
+                                                                                                                  "container": true,
+                                                                                                                  "is_test": false,
+                                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26",
+                                                                                                                  "own": "class_declaration(class\u001fC26\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                  "signature": "C26",
+                                                                                                                  "skipped": false,
+                                                                                                                  "span": [
+                                                                                                                    978,
+                                                                                                                    978,
+                                                                                                                    1815
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              ],
+                                                                                                              "container": true,
+                                                                                                              "is_test": false,
+                                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25",
+                                                                                                              "own": "class_declaration(class\u001fC25\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                              "signature": "C25",
+                                                                                                              "skipped": false,
+                                                                                                              "span": [
+                                                                                                                915,
+                                                                                                                915,
+                                                                                                                1842
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          ],
+                                                                                                          "container": true,
+                                                                                                          "is_test": false,
+                                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24",
+                                                                                                          "own": "class_declaration(class\u001fC24\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                          "signature": "C24",
+                                                                                                          "skipped": false,
+                                                                                                          "span": [
+                                                                                                            854,
+                                                                                                            854,
+                                                                                                            1868
+                                                                                                          ]
+                                                                                                        }
+                                                                                                      ],
+                                                                                                      "container": true,
+                                                                                                      "is_test": false,
+                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23",
+                                                                                                      "own": "class_declaration(class\u001fC23\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                      "signature": "C23",
+                                                                                                      "skipped": false,
+                                                                                                      "span": [
+                                                                                                        795,
+                                                                                                        795,
+                                                                                                        1893
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  ],
+                                                                                                  "container": true,
+                                                                                                  "is_test": false,
+                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22",
+                                                                                                  "own": "class_declaration(class\u001fC22\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                  "signature": "C22",
+                                                                                                  "skipped": false,
+                                                                                                  "span": [
+                                                                                                    738,
+                                                                                                    738,
+                                                                                                    1917
+                                                                                                  ]
+                                                                                                }
+                                                                                              ],
+                                                                                              "container": true,
+                                                                                              "is_test": false,
+                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21",
+                                                                                              "own": "class_declaration(class\u001fC21\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                              "signature": "C21",
+                                                                                              "skipped": false,
+                                                                                              "span": [
+                                                                                                683,
+                                                                                                683,
+                                                                                                1940
+                                                                                              ]
+                                                                                            }
+                                                                                          ],
+                                                                                          "container": true,
+                                                                                          "is_test": false,
+                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20",
+                                                                                          "own": "class_declaration(class\u001fC20\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                          "signature": "C20",
+                                                                                          "skipped": false,
+                                                                                          "span": [
+                                                                                            630,
+                                                                                            630,
+                                                                                            1962
+                                                                                          ]
+                                                                                        }
+                                                                                      ],
+                                                                                      "container": true,
+                                                                                      "is_test": false,
+                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19",
+                                                                                      "own": "class_declaration(class\u001fC19\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                      "signature": "C19",
+                                                                                      "skipped": false,
+                                                                                      "span": [
+                                                                                        579,
+                                                                                        579,
+                                                                                        1983
+                                                                                      ]
+                                                                                    }
+                                                                                  ],
+                                                                                  "container": true,
+                                                                                  "is_test": false,
+                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18",
+                                                                                  "own": "class_declaration(class\u001fC18\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                  "signature": "C18",
+                                                                                  "skipped": false,
+                                                                                  "span": [
+                                                                                    530,
+                                                                                    530,
+                                                                                    2003
+                                                                                  ]
+                                                                                }
+                                                                              ],
+                                                                              "container": true,
+                                                                              "is_test": false,
+                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17",
+                                                                              "own": "class_declaration(class\u001fC17\u001fdeclaration_list({\u001f}\u001f))",
+                                                                              "signature": "C17",
+                                                                              "skipped": false,
+                                                                              "span": [
+                                                                                483,
+                                                                                483,
+                                                                                2022
+                                                                              ]
+                                                                            }
+                                                                          ],
+                                                                          "container": true,
+                                                                          "is_test": false,
+                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16",
+                                                                          "own": "class_declaration(class\u001fC16\u001fdeclaration_list({\u001f}\u001f))",
+                                                                          "signature": "C16",
+                                                                          "skipped": false,
+                                                                          "span": [
+                                                                            438,
+                                                                            438,
+                                                                            2040
+                                                                          ]
+                                                                        }
+                                                                      ],
+                                                                      "container": true,
+                                                                      "is_test": false,
+                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15",
+                                                                      "own": "class_declaration(class\u001fC15\u001fdeclaration_list({\u001f}\u001f))",
+                                                                      "signature": "C15",
+                                                                      "skipped": false,
+                                                                      "span": [
+                                                                        395,
+                                                                        395,
+                                                                        2057
+                                                                      ]
+                                                                    }
+                                                                  ],
+                                                                  "container": true,
+                                                                  "is_test": false,
+                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14",
+                                                                  "own": "class_declaration(class\u001fC14\u001fdeclaration_list({\u001f}\u001f))",
+                                                                  "signature": "C14",
+                                                                  "skipped": false,
+                                                                  "span": [
+                                                                    354,
+                                                                    354,
+                                                                    2073
+                                                                  ]
+                                                                }
+                                                              ],
+                                                              "container": true,
+                                                              "is_test": false,
+                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13",
+                                                              "own": "class_declaration(class\u001fC13\u001fdeclaration_list({\u001f}\u001f))",
+                                                              "signature": "C13",
+                                                              "skipped": false,
+                                                              "span": [
+                                                                315,
+                                                                315,
+                                                                2088
+                                                              ]
+                                                            }
+                                                          ],
+                                                          "container": true,
+                                                          "is_test": false,
+                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12",
+                                                          "own": "class_declaration(class\u001fC12\u001fdeclaration_list({\u001f}\u001f))",
+                                                          "signature": "C12",
+                                                          "skipped": false,
+                                                          "span": [
+                                                            278,
+                                                            278,
+                                                            2102
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "container": true,
+                                                      "is_test": false,
+                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11",
+                                                      "own": "class_declaration(class\u001fC11\u001fdeclaration_list({\u001f}\u001f))",
+                                                      "signature": "C11",
+                                                      "skipped": false,
+                                                      "span": [
+                                                        243,
+                                                        243,
+                                                        2115
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "container": true,
+                                                  "is_test": false,
+                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10",
+                                                  "own": "class_declaration(class\u001fC10\u001fdeclaration_list({\u001f}\u001f))",
+                                                  "signature": "C10",
+                                                  "skipped": false,
+                                                  "span": [
+                                                    210,
+                                                    210,
+                                                    2127
+                                                  ]
+                                                }
+                                              ],
+                                              "container": true,
+                                              "is_test": false,
+                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9",
+                                              "own": "class_declaration(class\u001fC9\u001fdeclaration_list({\u001f}\u001f))",
+                                              "signature": "C9",
+                                              "skipped": false,
+                                              "span": [
+                                                180,
+                                                180,
+                                                2138
+                                              ]
+                                            }
+                                          ],
+                                          "container": true,
+                                          "is_test": false,
+                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8",
+                                          "own": "class_declaration(class\u001fC8\u001fdeclaration_list({\u001f}\u001f))",
+                                          "signature": "C8",
+                                          "skipped": false,
+                                          "span": [
+                                            152,
+                                            152,
+                                            2148
+                                          ]
+                                        }
+                                      ],
+                                      "container": true,
+                                      "is_test": false,
+                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7",
+                                      "own": "class_declaration(class\u001fC7\u001fdeclaration_list({\u001f}\u001f))",
+                                      "signature": "C7",
+                                      "skipped": false,
+                                      "span": [
+                                        126,
+                                        126,
+                                        2157
+                                      ]
+                                    }
+                                  ],
+                                  "container": true,
+                                  "is_test": false,
+                                  "name": "C0.C1.C2.C3.C4.C5.C6",
+                                  "own": "class_declaration(class\u001fC6\u001fdeclaration_list({\u001f}\u001f))",
+                                  "signature": "C6",
+                                  "skipped": false,
+                                  "span": [
+                                    102,
+                                    102,
+                                    2165
+                                  ]
+                                }
+                              ],
+                              "container": true,
+                              "is_test": false,
+                              "name": "C0.C1.C2.C3.C4.C5",
+                              "own": "class_declaration(class\u001fC5\u001fdeclaration_list({\u001f}\u001f))",
+                              "signature": "C5",
+                              "skipped": false,
+                              "span": [
+                                80,
+                                80,
+                                2172
+                              ]
+                            }
+                          ],
+                          "container": true,
+                          "is_test": false,
+                          "name": "C0.C1.C2.C3.C4",
+                          "own": "class_declaration(class\u001fC4\u001fdeclaration_list({\u001f}\u001f))",
+                          "signature": "C4",
+                          "skipped": false,
+                          "span": [
+                            60,
+                            60,
+                            2178
+                          ]
+                        }
+                      ],
+                      "container": true,
+                      "is_test": false,
+                      "name": "C0.C1.C2.C3",
+                      "own": "class_declaration(class\u001fC3\u001fdeclaration_list({\u001f}\u001f))",
+                      "signature": "C3",
+                      "skipped": false,
+                      "span": [
+                        42,
+                        42,
+                        2183
+                      ]
+                    }
+                  ],
+                  "container": true,
+                  "is_test": false,
+                  "name": "C0.C1.C2",
+                  "own": "class_declaration(class\u001fC2\u001fdeclaration_list({\u001f}\u001f))",
+                  "signature": "C2",
+                  "skipped": false,
+                  "span": [
+                    26,
+                    26,
+                    2187
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "C0.C1",
+              "own": "class_declaration(class\u001fC1\u001fdeclaration_list({\u001f}\u001f))",
+              "signature": "C1",
+              "skipped": false,
+              "span": [
+                12,
+                12,
+                2190
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C0",
+          "own": "class_declaration(class\u001fC0\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "C0",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            2192
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "After.a",
+              "own": "",
+              "signature": "int a;",
+              "skipped": false,
+              "span": [
+                2212,
+                2212,
+                2218
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "After.ours",
+              "own": "",
+              "signature": "int ours;",
+              "skipped": false,
+              "span": [
+                2223,
+                2223,
+                2232
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "After",
+          "own": "class_declaration(class\u001fAfter\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "After",
+          "skipped": false,
+          "span": [
+            2194,
+            2194,
+            2234
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "children": [
+                                    {
+                                      "children": [
+                                        {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "children": [
+                                                        {
+                                                          "children": [
+                                                            {
+                                                              "children": [
+                                                                {
+                                                                  "children": [
+                                                                    {
+                                                                      "children": [
+                                                                        {
+                                                                          "children": [
+                                                                            {
+                                                                              "children": [
+                                                                                {
+                                                                                  "children": [
+                                                                                    {
+                                                                                      "children": [
+                                                                                        {
+                                                                                          "children": [
+                                                                                            {
+                                                                                              "children": [
+                                                                                                {
+                                                                                                  "children": [
+                                                                                                    {
+                                                                                                      "children": [
+                                                                                                        {
+                                                                                                          "children": [
+                                                                                                            {
+                                                                                                              "children": [
+                                                                                                                {
+                                                                                                                  "children": [
+                                                                                                                    {
+                                                                                                                      "children": [
+                                                                                                                        {
+                                                                                                                          "children": [
+                                                                                                                            {
+                                                                                                                              "children": [
+                                                                                                                                {
+                                                                                                                                  "children": [
+                                                                                                                                    {
+                                                                                                                                      "children": [],
+                                                                                                                                      "container": false,
+                                                                                                                                      "is_test": false,
+                                                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29.C30.C31",
+                                                                                                                                      "own": "",
+                                                                                                                                      "signature": "C31",
+                                                                                                                                      "skipped": false,
+                                                                                                                                      "span": [
+                                                                                                                                        1323,
+                                                                                                                                        1323,
+                                                                                                                                        1669
+                                                                                                                                      ]
+                                                                                                                                    }
+                                                                                                                                  ],
+                                                                                                                                  "container": true,
+                                                                                                                                  "is_test": false,
+                                                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29.C30",
+                                                                                                                                  "own": "class_declaration(class\u001fC30\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                                  "signature": "C30",
+                                                                                                                                  "skipped": false,
+                                                                                                                                  "span": [
+                                                                                                                                    1250,
+                                                                                                                                    1250,
+                                                                                                                                    1701
+                                                                                                                                  ]
+                                                                                                                                }
+                                                                                                                              ],
+                                                                                                                              "container": true,
+                                                                                                                              "is_test": false,
+                                                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28.C29",
+                                                                                                                              "own": "class_declaration(class\u001fC29\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                              "signature": "C29",
+                                                                                                                              "skipped": false,
+                                                                                                                              "span": [
+                                                                                                                                1179,
+                                                                                                                                1179,
+                                                                                                                                1732
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          ],
+                                                                                                                          "container": true,
+                                                                                                                          "is_test": false,
+                                                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27.C28",
+                                                                                                                          "own": "class_declaration(class\u001fC28\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                          "signature": "C28",
+                                                                                                                          "skipped": false,
+                                                                                                                          "span": [
+                                                                                                                            1110,
+                                                                                                                            1110,
+                                                                                                                            1762
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      ],
+                                                                                                                      "container": true,
+                                                                                                                      "is_test": false,
+                                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26.C27",
+                                                                                                                      "own": "class_declaration(class\u001fC27\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                      "signature": "C27",
+                                                                                                                      "skipped": false,
+                                                                                                                      "span": [
+                                                                                                                        1043,
+                                                                                                                        1043,
+                                                                                                                        1791
+                                                                                                                      ]
+                                                                                                                    }
+                                                                                                                  ],
+                                                                                                                  "container": true,
+                                                                                                                  "is_test": false,
+                                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25.C26",
+                                                                                                                  "own": "class_declaration(class\u001fC26\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                                  "signature": "C26",
+                                                                                                                  "skipped": false,
+                                                                                                                  "span": [
+                                                                                                                    978,
+                                                                                                                    978,
+                                                                                                                    1819
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              ],
+                                                                                                              "container": true,
+                                                                                                              "is_test": false,
+                                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24.C25",
+                                                                                                              "own": "class_declaration(class\u001fC25\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                              "signature": "C25",
+                                                                                                              "skipped": false,
+                                                                                                              "span": [
+                                                                                                                915,
+                                                                                                                915,
+                                                                                                                1846
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          ],
+                                                                                                          "container": true,
+                                                                                                          "is_test": false,
+                                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23.C24",
+                                                                                                          "own": "class_declaration(class\u001fC24\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                          "signature": "C24",
+                                                                                                          "skipped": false,
+                                                                                                          "span": [
+                                                                                                            854,
+                                                                                                            854,
+                                                                                                            1872
+                                                                                                          ]
+                                                                                                        }
+                                                                                                      ],
+                                                                                                      "container": true,
+                                                                                                      "is_test": false,
+                                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22.C23",
+                                                                                                      "own": "class_declaration(class\u001fC23\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                      "signature": "C23",
+                                                                                                      "skipped": false,
+                                                                                                      "span": [
+                                                                                                        795,
+                                                                                                        795,
+                                                                                                        1897
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  ],
+                                                                                                  "container": true,
+                                                                                                  "is_test": false,
+                                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21.C22",
+                                                                                                  "own": "class_declaration(class\u001fC22\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                                  "signature": "C22",
+                                                                                                  "skipped": false,
+                                                                                                  "span": [
+                                                                                                    738,
+                                                                                                    738,
+                                                                                                    1921
+                                                                                                  ]
+                                                                                                }
+                                                                                              ],
+                                                                                              "container": true,
+                                                                                              "is_test": false,
+                                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20.C21",
+                                                                                              "own": "class_declaration(class\u001fC21\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                              "signature": "C21",
+                                                                                              "skipped": false,
+                                                                                              "span": [
+                                                                                                683,
+                                                                                                683,
+                                                                                                1944
+                                                                                              ]
+                                                                                            }
+                                                                                          ],
+                                                                                          "container": true,
+                                                                                          "is_test": false,
+                                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19.C20",
+                                                                                          "own": "class_declaration(class\u001fC20\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                          "signature": "C20",
+                                                                                          "skipped": false,
+                                                                                          "span": [
+                                                                                            630,
+                                                                                            630,
+                                                                                            1966
+                                                                                          ]
+                                                                                        }
+                                                                                      ],
+                                                                                      "container": true,
+                                                                                      "is_test": false,
+                                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18.C19",
+                                                                                      "own": "class_declaration(class\u001fC19\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                      "signature": "C19",
+                                                                                      "skipped": false,
+                                                                                      "span": [
+                                                                                        579,
+                                                                                        579,
+                                                                                        1987
+                                                                                      ]
+                                                                                    }
+                                                                                  ],
+                                                                                  "container": true,
+                                                                                  "is_test": false,
+                                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17.C18",
+                                                                                  "own": "class_declaration(class\u001fC18\u001fdeclaration_list({\u001f}\u001f))",
+                                                                                  "signature": "C18",
+                                                                                  "skipped": false,
+                                                                                  "span": [
+                                                                                    530,
+                                                                                    530,
+                                                                                    2007
+                                                                                  ]
+                                                                                }
+                                                                              ],
+                                                                              "container": true,
+                                                                              "is_test": false,
+                                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16.C17",
+                                                                              "own": "class_declaration(class\u001fC17\u001fdeclaration_list({\u001f}\u001f))",
+                                                                              "signature": "C17",
+                                                                              "skipped": false,
+                                                                              "span": [
+                                                                                483,
+                                                                                483,
+                                                                                2026
+                                                                              ]
+                                                                            }
+                                                                          ],
+                                                                          "container": true,
+                                                                          "is_test": false,
+                                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15.C16",
+                                                                          "own": "class_declaration(class\u001fC16\u001fdeclaration_list({\u001f}\u001f))",
+                                                                          "signature": "C16",
+                                                                          "skipped": false,
+                                                                          "span": [
+                                                                            438,
+                                                                            438,
+                                                                            2044
+                                                                          ]
+                                                                        }
+                                                                      ],
+                                                                      "container": true,
+                                                                      "is_test": false,
+                                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14.C15",
+                                                                      "own": "class_declaration(class\u001fC15\u001fdeclaration_list({\u001f}\u001f))",
+                                                                      "signature": "C15",
+                                                                      "skipped": false,
+                                                                      "span": [
+                                                                        395,
+                                                                        395,
+                                                                        2061
+                                                                      ]
+                                                                    }
+                                                                  ],
+                                                                  "container": true,
+                                                                  "is_test": false,
+                                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13.C14",
+                                                                  "own": "class_declaration(class\u001fC14\u001fdeclaration_list({\u001f}\u001f))",
+                                                                  "signature": "C14",
+                                                                  "skipped": false,
+                                                                  "span": [
+                                                                    354,
+                                                                    354,
+                                                                    2077
+                                                                  ]
+                                                                }
+                                                              ],
+                                                              "container": true,
+                                                              "is_test": false,
+                                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12.C13",
+                                                              "own": "class_declaration(class\u001fC13\u001fdeclaration_list({\u001f}\u001f))",
+                                                              "signature": "C13",
+                                                              "skipped": false,
+                                                              "span": [
+                                                                315,
+                                                                315,
+                                                                2092
+                                                              ]
+                                                            }
+                                                          ],
+                                                          "container": true,
+                                                          "is_test": false,
+                                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11.C12",
+                                                          "own": "class_declaration(class\u001fC12\u001fdeclaration_list({\u001f}\u001f))",
+                                                          "signature": "C12",
+                                                          "skipped": false,
+                                                          "span": [
+                                                            278,
+                                                            278,
+                                                            2106
+                                                          ]
+                                                        }
+                                                      ],
+                                                      "container": true,
+                                                      "is_test": false,
+                                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10.C11",
+                                                      "own": "class_declaration(class\u001fC11\u001fdeclaration_list({\u001f}\u001f))",
+                                                      "signature": "C11",
+                                                      "skipped": false,
+                                                      "span": [
+                                                        243,
+                                                        243,
+                                                        2119
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "container": true,
+                                                  "is_test": false,
+                                                  "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9.C10",
+                                                  "own": "class_declaration(class\u001fC10\u001fdeclaration_list({\u001f}\u001f))",
+                                                  "signature": "C10",
+                                                  "skipped": false,
+                                                  "span": [
+                                                    210,
+                                                    210,
+                                                    2131
+                                                  ]
+                                                }
+                                              ],
+                                              "container": true,
+                                              "is_test": false,
+                                              "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8.C9",
+                                              "own": "class_declaration(class\u001fC9\u001fdeclaration_list({\u001f}\u001f))",
+                                              "signature": "C9",
+                                              "skipped": false,
+                                              "span": [
+                                                180,
+                                                180,
+                                                2142
+                                              ]
+                                            }
+                                          ],
+                                          "container": true,
+                                          "is_test": false,
+                                          "name": "C0.C1.C2.C3.C4.C5.C6.C7.C8",
+                                          "own": "class_declaration(class\u001fC8\u001fdeclaration_list({\u001f}\u001f))",
+                                          "signature": "C8",
+                                          "skipped": false,
+                                          "span": [
+                                            152,
+                                            152,
+                                            2152
+                                          ]
+                                        }
+                                      ],
+                                      "container": true,
+                                      "is_test": false,
+                                      "name": "C0.C1.C2.C3.C4.C5.C6.C7",
+                                      "own": "class_declaration(class\u001fC7\u001fdeclaration_list({\u001f}\u001f))",
+                                      "signature": "C7",
+                                      "skipped": false,
+                                      "span": [
+                                        126,
+                                        126,
+                                        2161
+                                      ]
+                                    }
+                                  ],
+                                  "container": true,
+                                  "is_test": false,
+                                  "name": "C0.C1.C2.C3.C4.C5.C6",
+                                  "own": "class_declaration(class\u001fC6\u001fdeclaration_list({\u001f}\u001f))",
+                                  "signature": "C6",
+                                  "skipped": false,
+                                  "span": [
+                                    102,
+                                    102,
+                                    2169
+                                  ]
+                                }
+                              ],
+                              "container": true,
+                              "is_test": false,
+                              "name": "C0.C1.C2.C3.C4.C5",
+                              "own": "class_declaration(class\u001fC5\u001fdeclaration_list({\u001f}\u001f))",
+                              "signature": "C5",
+                              "skipped": false,
+                              "span": [
+                                80,
+                                80,
+                                2176
+                              ]
+                            }
+                          ],
+                          "container": true,
+                          "is_test": false,
+                          "name": "C0.C1.C2.C3.C4",
+                          "own": "class_declaration(class\u001fC4\u001fdeclaration_list({\u001f}\u001f))",
+                          "signature": "C4",
+                          "skipped": false,
+                          "span": [
+                            60,
+                            60,
+                            2182
+                          ]
+                        }
+                      ],
+                      "container": true,
+                      "is_test": false,
+                      "name": "C0.C1.C2.C3",
+                      "own": "class_declaration(class\u001fC3\u001fdeclaration_list({\u001f}\u001f))",
+                      "signature": "C3",
+                      "skipped": false,
+                      "span": [
+                        42,
+                        42,
+                        2187
+                      ]
+                    }
+                  ],
+                  "container": true,
+                  "is_test": false,
+                  "name": "C0.C1.C2",
+                  "own": "class_declaration(class\u001fC2\u001fdeclaration_list({\u001f}\u001f))",
+                  "signature": "C2",
+                  "skipped": false,
+                  "span": [
+                    26,
+                    26,
+                    2191
+                  ]
+                }
+              ],
+              "container": true,
+              "is_test": false,
+              "name": "C0.C1",
+              "own": "class_declaration(class\u001fC1\u001fdeclaration_list({\u001f}\u001f))",
+              "signature": "C1",
+              "skipped": false,
+              "span": [
+                12,
+                12,
+                2194
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "C0",
+          "own": "class_declaration(class\u001fC0\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "C0",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            2196
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "After.a",
+              "own": "",
+              "signature": "int a;",
+              "skipped": false,
+              "span": [
+                2216,
+                2216,
+                2222
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "After",
+          "own": "class_declaration(class\u001fAfter\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "After",
+          "skipped": false,
+          "span": [
+            2198,
+            2198,
+            2224
+          ]
+        }
+      ]
+    }
+  }
+}

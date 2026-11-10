@@ -1,0 +1,258 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#Ledger.total"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rs#Ledger.total"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.rs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [
+      "src/sample.rs#Ledger.total"
+    ],
+    "text": "pub struct Ledger {\n    entries: Vec<u64>,\n}\n\nimpl Ledger {\n    /// Adds up what is due.\n    pub fn total(&self, fee: u64) -> u64 {\n        let mut sum = 0;\n        for e in &self.entries {\n            sum += e;\n        }\n        let fee = fee;\n        sum + fee + 1\n    }\n\n    pub fn count(&self) -> usize {\n        self.entries.len()\n    }\n}\n"
+  },
+  "path": "src/sample.rs",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": "pub struct Ledger { entries: Vec<u64>, }",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            44
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "pub fn total(&self, fee: u64) -> u64",
+              "skipped": false,
+              "span": [
+                64,
+                93,
+                268
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.count",
+              "own": "",
+              "signature": "pub fn count(&self) -> usize",
+              "skipped": false,
+              "span": [
+                274,
+                274,
+                337
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Ledger",
+          "own": "impl_item(impl\u001fLedger\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "impl Ledger",
+          "skipped": false,
+          "span": [
+            46,
+            46,
+            339
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": "pub struct Ledger { entries: Vec<u64>, }",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            44
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "pub fn total(&self, fee: u64) -> u64",
+              "skipped": false,
+              "span": [
+                64,
+                93,
+                272
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.count",
+              "own": "",
+              "signature": "pub fn count(&self) -> usize",
+              "skipped": false,
+              "span": [
+                278,
+                278,
+                341
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Ledger",
+          "own": "impl_item(impl\u001fLedger\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "impl Ledger",
+          "skipped": false,
+          "span": [
+            46,
+            46,
+            343
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "source_file()",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "Ledger",
+          "own": "",
+          "signature": "pub struct Ledger { entries: Vec<u64>, }",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            44
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.total",
+              "own": "",
+              "signature": "pub fn total(&self, fee: u64) -> u64",
+              "skipped": false,
+              "span": [
+                64,
+                93,
+                271
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Ledger.count",
+              "own": "",
+              "signature": "pub fn count(&self) -> usize",
+              "skipped": false,
+              "span": [
+                277,
+                277,
+                340
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "impl:Ledger",
+          "own": "impl_item(impl\u001fLedger\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "impl Ledger",
+          "skipped": false,
+          "span": [
+            46,
+            46,
+            342
+          ]
+        }
+      ]
+    }
+  }
+}

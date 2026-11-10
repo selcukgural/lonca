@@ -214,6 +214,10 @@ pub struct Parsed {
     pub syms: Vec<Sym>,
     pub imports: Vec<(usize, usize)>,
     pub has_error: bool,
+    /// Where the grammar stopped reading: the outermost error nodes and the
+    /// places where it had to assume a token. Empty when `has_error` is not
+    /// set; the whole text when there is no tree at all.
+    pub errors: Vec<(usize, usize)>,
     /// Normalized top-level text outside symbols and imports.
     pub residual: String,
     /// The same code as [`exact_text`] writes it.
@@ -262,6 +266,82 @@ impl Parsed {
             out.insert(format!("test:{}", t.name), (t.text.clone(), t.skipped));
         }
         out
+    }
+}
+
+/// What of a file with a parse error was read all the same: the definitions
+/// the error is not in, and the rest of the text.
+#[derive(Clone, Debug)]
+pub struct ReadParts {
+    /// The outermost symbols with no error in them, in the order of the
+    /// file; a container with an error gives its members instead of itself.
+    pub syms: Vec<Sym>,
+    /// The file without those symbols, line by line: what the grammar did
+    /// not read and everything nothing vouches for. Indentation is kept,
+    /// blank lines and the ends of lines are not.
+    pub rest: Vec<String>,
+}
+
+impl Parsed {
+    /// No error of the parse touches `sym`.
+    pub fn reads_whole(&self, sym: &Sym) -> bool {
+        let touches = |&(start, end): &(usize, usize)| start <= sym.end && end >= sym.start;
+        !self.errors.iter().any(touches)
+    }
+
+    /// The parts of `src` that were read. `None` when a span does not stand
+    /// in `src` as text, which then goes whole.
+    pub fn read_parts(&self, src: &str) -> Option<ReadParts> {
+        let mut syms = Vec::new();
+        self.read_of(&self.syms, &mut syms);
+        let mut rest = String::new();
+        let mut at = 0;
+        for s in &syms {
+            // Symbols of one level do not overlap; one that does is left in.
+            if s.start < at {
+                return None;
+            }
+            rest.push_str(src.get(at..s.start)?);
+            at = s.end;
+        }
+        rest.push_str(src.get(at..)?);
+        let lines = rest.lines().map(str::trim_end).filter(|l| !l.is_empty());
+        let rest = lines.map(String::from).collect();
+        Some(ReadParts { syms, rest })
+    }
+
+    fn read_of(&self, level: &[Sym], out: &mut Vec<Sym>) {
+        for s in level {
+            if self.reads_whole(s) {
+                out.push(s.clone());
+            } else {
+                self.read_of(&s.children, out);
+            }
+        }
+    }
+}
+
+/// The outermost error nodes under `root`, and the tokens it assumed.
+fn error_spans(root: Node) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    if !root.has_error() {
+        return out;
+    }
+    let mut cursor = root.walk();
+    loop {
+        let node = cursor.node();
+        let stops = node.is_error() || node.is_missing();
+        if stops {
+            out.push((node.start_byte(), node.end_byte()));
+        }
+        if !stops && node.has_error() && cursor.goto_first_child() {
+            continue;
+        }
+        while !cursor.goto_next_sibling() {
+            if !cursor.goto_parent() {
+                return out;
+            }
+        }
     }
 }
 
@@ -339,6 +419,7 @@ pub fn parse_keyed(engine: u32, lang: Lang, src: &str, keyed: &Keyed) -> Parsed 
             syms: vec![],
             imports: vec![],
             has_error: true,
+            errors: vec![(0, src.len())],
             residual: normalize(src),
             residual_exact: normalize(src),
             spots: vec![],
@@ -384,6 +465,7 @@ pub fn parse_keyed(engine: u32, lang: Lang, src: &str, keyed: &Keyed) -> Parsed 
         syms,
         imports,
         has_error: root.has_error(),
+        errors: error_spans(root),
         residual,
         residual_exact,
         spots,
@@ -3576,5 +3658,54 @@ mod tests {
     fn syntax_errors_are_reported() {
         assert!(parse(Lang::named("rust"), "fn broken( {").has_error);
         assert!(parse(Lang::named("python"), "def x(:\n  pass").has_error);
+    }
+    #[test]
+    fn the_read_parts_of_a_file_leave_out_what_an_error_touches() {
+        let src = "struct Counter {\n    int value = 0;\n    int get(this const Counter& self) { return 1; }\n};\n\nint total() { return 2; }\n";
+        let p = parse(Lang::named("cpp"), src);
+        assert!(p.has_error && !p.errors.is_empty());
+        let parts = p.read_parts(src).unwrap();
+        let names: Vec<&str> = parts.syms.iter().map(|s| s.name.as_str()).collect();
+        // The type has the error in it, so its members stand for it.
+        assert_eq!(names, ["Counter.value", "total"]);
+        assert_eq!(parts.rest[0], "struct Counter {");
+        assert!(parts.rest.iter().any(|l| l.starts_with("    int get(this")));
+        assert!(
+            !parts
+                .rest
+                .iter()
+                .any(|l| l.contains("total") || l.is_empty())
+        );
+        // An error that ends where a symbol starts is not vouched for.
+        let first = &p.syms[0];
+        let at = Parsed {
+            errors: vec![(first.end, first.end)],
+            ..p.clone()
+        };
+        assert!(!at.reads_whole(first));
+        let past = Parsed {
+            errors: vec![(first.end + 1, first.end + 2)],
+            ..p.clone()
+        };
+        assert!(past.reads_whole(first));
+    }
+
+    #[test]
+    fn a_file_that_reads_is_all_read_parts_and_one_with_no_tree_is_none() {
+        let src = "fn a() {}\n\nuse b;\n";
+        let p = parse(Lang::named("rust"), src);
+        assert!(p.errors.is_empty());
+        let parts = p.read_parts(src).unwrap();
+        assert_eq!(parts.syms.len(), 1);
+        assert_eq!(parts.rest, ["use b;"]);
+        let none = Parsed {
+            syms: vec![],
+            errors: vec![(0, src.len())],
+            has_error: true,
+            ..p
+        };
+        let parts = none.read_parts(src).unwrap();
+        assert!(parts.syms.is_empty());
+        assert_eq!(parts.rest, ["fn a() {}", "use b;"]);
     }
 }

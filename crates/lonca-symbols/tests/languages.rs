@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use lonca_core::ops::Facts;
 use lonca_core::{FileEntry, FileMap, FileMode, GitId};
-use lonca_symbols::engine::ENGINE_CURRENT;
+use lonca_symbols::engine::{ENGINE_CURRENT, ENGINE_LENIENT};
 use lonca_symbols::merge::merge_text_at;
 use lonca_symbols::{Lang, analyze, parse};
 
@@ -112,7 +112,7 @@ fn facts(engine: u32, path: &str, old: &str, new: &str) -> Facts {
 fn methods_are_symbols_with_no_syntax_error() {
     for row in ROWS {
         let lang = Lang::detect(row.path).unwrap();
-        assert!(!lang.is_strict(), "{}", row.path);
+        assert!(!lang.is_strict_at(ENGINE_CURRENT), "{}", row.path);
         let p = parse(lang, &row.base(3));
         assert!(!p.has_error, "{}", row.path);
         let mut names = Vec::new();
@@ -340,9 +340,10 @@ fn a_side_that_breaks_a_file_that_read_is_listed() {
             .unread_files
             .is_empty()
     );
-    // A strict language has the syntax check for it.
-    let rust = facts(ENGINE_CURRENT, "a.rs", "fn a() {}\n", "fn a( {\n");
-    assert!(rust.unread_files.is_empty(), "{rust:?}");
+    // A language that was strict had the syntax check for it.
+    let rust = |engine| facts(engine, "a.rs", "fn a() {}\n", "fn a( {\n").unread_files;
+    assert!(rust(ENGINE_LENIENT - 1).is_empty());
+    assert_eq!(rust(ENGINE_LENIENT), ["a.rs"]);
 }
 
 /// A number follows the order of a name, so numbered siblings can change
@@ -407,11 +408,12 @@ fn no_file_becomes_unread_unseen() {
     assert!(at(Some(bad), Some(bytes)).is_empty(), "unread already");
     assert!(at(Some(bytes), Some(bad)).is_empty(), "unread already");
     assert!(at(Some(good), None).is_empty(), "deleted");
-    let f = facts_of(ENGINE_CURRENT, "a.rs", None, Some(bad));
+    let rust = |engine| facts_of(engine, "a.rs", None, Some(bad)).unread_files;
     assert!(
-        f.unread_files.is_empty(),
-        "the syntax check has a strict language"
+        rust(ENGINE_LENIENT - 1).is_empty(),
+        "the syntax check had a strict language"
     );
+    assert_eq!(rust(ENGINE_LENIENT), ["a.rs"], "and now no language is");
     let f = facts_of(ENGINE_CURRENT, "a.zig", None, Some(bad));
     assert!(f.unread_files.is_empty(), "no grammar to stop reading");
 }
@@ -498,17 +500,52 @@ fn an_unreadable_side_lands_alone_and_conflicts_with_company() {
     );
 }
 
-/// A strict language still takes a parse error for a mistake.
+/// A language that was strict took a parse error for a mistake, up to the
+/// engine that takes it for the grammar's in every language.
 #[test]
-fn a_strict_language_is_not_read_that_way() {
+fn a_language_is_strict_up_to_the_engine_that_is_not() {
     let path = "a.rs";
-    let broken = "fn a( {\n\nfn b() {}\n";
-    assert!(Lang::detect(path).unwrap().is_strict());
+    let broken = "fn a( {\n\nfn b() {}\n\nfn z() {}\n\nfn last() {}\n";
+    let lang = Lang::detect(path).unwrap();
+    assert!(lang.is_strict_at(ENGINE_LENIENT - 1));
+    assert!(!lang.is_strict_at(ENGINE_LENIENT));
     let o = broken.replace("fn b", "fn c");
-    let f = facts(ENGINE_CURRENT, path, broken, &o);
-    assert!(f.unparsed_files.is_empty(), "{f:?}");
-    let t = format!("{broken}\n// more\n");
-    assert!(merge_text_at(ENGINE_CURRENT, path, broken, &o, &t).is_err());
+    let t = broken.replace("fn last", "fn end");
+    let before = facts(ENGINE_LENIENT - 1, path, broken, &o);
+    assert!(before.unparsed_files.is_empty(), "{before:?}");
+    assert!(merge_text_at(ENGINE_LENIENT - 1, path, broken, &o, &t).is_err());
+    let after = facts(ENGINE_LENIENT, path, broken, &o);
+    assert_eq!(after.unparsed_files, [path], "{after:?}");
+    let merged = merge_text_at(ENGINE_LENIENT, path, broken, &o, &t).unwrap();
+    assert_eq!(merged, o.replace("fn last", "fn end"));
+}
+
+/// Code that read and now does not takes a person's word in every language:
+/// the grammar may be older than the syntax.
+#[test]
+fn every_language_lists_a_file_that_stops_reading() {
+    for (path, good, bad) in [
+        ("a.rs", "fn a() {}\n", "fn a( {\n"),
+        ("a.py", "def a():\n    pass\n", "def a(:\n    pass\n"),
+        ("a.ts", "function a() {}\n", "function a( {\n"),
+        ("a.tsx", "function a() {}\n", "function a( {\n"),
+        ("a.js", "function a() {}\n", "function a( {\n"),
+        ("a.cs", "class C {}\n", "class C {\n"),
+        (
+            "a.go",
+            "package a\n\nfunc a() {}\n",
+            "package a\n\nfunc a( {\n",
+        ),
+    ] {
+        let before = facts(ENGINE_LENIENT - 1, path, good, bad);
+        assert!(before.unread_files.is_empty(), "{path}: {before:?}");
+        let after = facts(ENGINE_LENIENT, path, good, bad);
+        assert_eq!(after.unread_files, [path], "{path}");
+        let added = facts_of(ENGINE_LENIENT, path, None, Some(bad.as_bytes()));
+        assert_eq!(added.unread_files, [path], "{path}");
+        let added = facts_of(ENGINE_LENIENT - 1, path, None, Some(bad.as_bytes()));
+        assert!(added.unread_files.is_empty(), "{path}");
+    }
 }
 
 /// An overload added in front of another changes no name: languages that

@@ -94,7 +94,7 @@ pub fn analyze(
                 f.added_files.push(path.clone());
                 let bytes = read(&n.blob)?;
                 let lang = lang.filter(|&l| reads_bytes(engine, l, &bytes));
-                if lang.is_some_and(|l| !l.is_strict() && !reads(engine, l, &bytes)) {
+                if lang.is_some_and(|l| !l.is_strict_at(engine) && !reads(engine, l, &bytes)) {
                     f.unread_files.push(path.clone());
                 }
                 if let Ok(text) = std::str::from_utf8(&bytes) {
@@ -141,7 +141,7 @@ pub fn analyze(
                     (std::str::from_utf8(&old), std::str::from_utf8(&new_bytes))
                 else {
                     f.edits.push(sym_id(path, FILE));
-                    if lang.is_some_and(|l| !l.is_strict() && reads(engine, l, &old)) {
+                    if lang.is_some_and(|l| !l.is_strict_at(engine) && reads(engine, l, &old)) {
                         f.unread_files.push(path.clone());
                     }
                     continue;
@@ -178,10 +178,11 @@ pub fn analyze(
                     f.edits.push(sym_id(path, FILE));
                     // A file that read until now takes a person's word: what
                     // comes after it here can be seen by nothing but lines.
-                    if !lang.is_strict() && !pb.has_error {
+                    if !lang.is_strict_at(engine) && !pb.has_error {
                         f.unread_files.push(path.clone());
                     }
-                    if !lang.is_strict() && pb.has_error && edits_lines(b, n, old, newt, r) {
+                    if !lang.is_strict_at(engine) && pb.has_error && edits_lines(b, n, old, newt, r)
+                    {
                         f.unparsed_files.push(path.clone());
                     }
                     continue;

@@ -81,7 +81,12 @@ impl Verifier {
         }
     }
 
-    /// Static syntax check of every supported file that the change touched.
+    /// What the grammars make of every file the change touched. It passes: a
+    /// grammar is older than its language, so a parse error may be syntax it
+    /// does not know yet, and from symbol engine 17 no language takes one for
+    /// a mistake. The files a grammar could not read are named in `unread`,
+    /// for the person the proposal waits for (`unread_files` in its facts);
+    /// whether the code is right is for the build and the tests to say.
     pub fn syntax(
         &self,
         store: &Store,
@@ -89,35 +94,29 @@ impl Verifier {
         touched: &[String],
         subject: &GitId,
     ) -> Result<Attestation> {
-        let mut bad = Vec::new();
+        let mut unread = Vec::new();
         for p in touched {
             let (Some(lang), Some(e)) = (Lang::detect(p), files.get(p)) else {
                 continue;
             };
-            // A grammar that can not read valid code must not refuse it.
-            if !lang.is_strict() {
-                continue;
-            }
             let bytes = store.read_blob(&e.blob)?;
-            let ok = std::str::from_utf8(&bytes)
+            // Past its size or its budget a file goes by its lines, and
+            // bytes that are no text are not parsed at all.
+            let read = std::str::from_utf8(&bytes)
                 .map(|t| !reads_text(ENGINE_CURRENT, lang, t) || !parse(lang, t).has_error)
                 .unwrap_or(false);
-            if !ok {
-                bad.push(p.clone());
+            if !read {
+                unread.push(p.clone());
             }
         }
         let mut details = BTreeMap::new();
         details.insert("files_checked".into(), touched.len().to_string());
-        if !bad.is_empty() {
-            details.insert("errors".into(), bad.join(","));
+        if !unread.is_empty() {
+            details.insert("unread".into(), unread.join(","));
         }
         Ok(Attestation {
             check: CheckKind::Syntax,
-            result: if bad.is_empty() {
-                CheckResult::Pass
-            } else {
-                CheckResult::Fail
-            },
+            result: CheckResult::Pass,
             subject_tree: subject.clone(),
             details,
             env: "tree-sitter".into(),
@@ -1235,23 +1234,30 @@ mod tests {
         }
     }
 
+    /// A parse error does not fail the check in any language: the files a
+    /// grammar could not read are named, and the check passes.
     #[test]
-    fn syntax_check() {
+    fn syntax_names_what_no_grammar_could_read_and_passes() {
         let (dir, store, files, tree) = setup(&[
             ("a.rs", "fn ok() {}\n"),
             ("b.rs", "fn bad( {\n"),
             ("c.md", "x"),
+            ("d.kt", "class C { fun f() = 1 }\n"),
+            ("e.cs", "class C { void F(C c) { c?.X = 1; } int X; }\n"),
         ]);
         let v = Verifier::new(dir.path().join("scratch"));
         let a = v
             .syntax(&store, &files, &["a.rs".into(), "c.md".into()], &tree)
             .unwrap();
         assert_eq!(a.result, CheckResult::Pass);
-        let a = v
-            .syntax(&store, &files, &["a.rs".into(), "b.rs".into()], &tree)
-            .unwrap();
-        assert_eq!(a.result, CheckResult::Fail);
-        assert_eq!(a.details["errors"], "b.rs");
+        assert_eq!(a.details["files_checked"], "2");
+        assert!(!a.details.contains_key("unread"), "{:?}", a.details);
+        let all = ["a.rs", "b.rs", "c.md", "d.kt", "e.cs", "gone.rs"].map(String::from);
+        let a = v.syntax(&store, &files, &all, &tree).unwrap();
+        assert_eq!(a.result, CheckResult::Pass);
+        assert_eq!(a.details["unread"], "b.rs,d.kt,e.cs");
+        assert_eq!(a.check, CheckKind::Syntax);
+        assert_eq!(a.subject_tree, tree);
     }
 
     /// A file past the limit goes by its lines, whatever a grammar would say.
@@ -1262,10 +1268,12 @@ mod tests {
         let (dir, store, files, tree) =
             setup(&[("at.rs", at.as_str()), ("past.rs", past.as_str())]);
         let v = Verifier::new(dir.path().join("scratch"));
-        let a = v.syntax(&store, &files, &["past.rs".into()], &tree);
-        assert_eq!(a.unwrap().result, CheckResult::Pass);
-        let a = v.syntax(&store, &files, &["at.rs".into()], &tree);
-        assert_eq!(a.unwrap().result, CheckResult::Fail);
+        let a = v
+            .syntax(&store, &files, &["past.rs".into()], &tree)
+            .unwrap();
+        assert!(!a.details.contains_key("unread"));
+        let a = v.syntax(&store, &files, &["at.rs".into()], &tree).unwrap();
+        assert_eq!(a.details["unread"], "at.rs");
     }
 
     /// So does a file the grammar does not get through within its budget.
@@ -1277,20 +1285,29 @@ mod tests {
         let (dir, store, files, tree) =
             setup(&[("within.rs", within.as_str()), ("past.rs", past.as_str())]);
         let v = Verifier::new(dir.path().join("scratch"));
-        let a = v.syntax(&store, &files, &["past.rs".into()], &tree);
-        assert_eq!(a.unwrap().result, CheckResult::Pass);
-        let a = v.syntax(&store, &files, &["within.rs".into()], &tree);
-        assert_eq!(a.unwrap().result, CheckResult::Fail);
+        let a = v
+            .syntax(&store, &files, &["past.rs".into()], &tree)
+            .unwrap();
+        assert!(!a.details.contains_key("unread"));
+        let a = v
+            .syntax(&store, &files, &["within.rs".into()], &tree)
+            .unwrap();
+        assert_eq!(a.details["unread"], "within.rs");
     }
 
-    /// A grammar that can not read a file says nothing about the file.
+    /// Bytes that are no text are not read by a grammar.
     #[test]
-    fn syntax_passes_what_a_lenient_grammar_can_not_read() {
-        let unread = "class C { fun f() = 1 }\n";
-        let (dir, store, files, tree) = setup(&[("a.kt", unread)]);
-        assert!(parse(Lang::detect("a.kt").unwrap(), unread).has_error);
+    fn syntax_names_a_file_that_is_no_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("s.git")).unwrap();
+        let mut files = FileMap::new();
+        let blob = store.write_blob(b"\xff fn a() {}\n").unwrap();
+        let mode = FileMode::Regular;
+        files.insert("a.rs".into(), FileEntry { blob, mode });
+        let tree = store.write_tree(&files).unwrap();
         let v = Verifier::new(dir.path().join("scratch"));
-        let a = v.syntax(&store, &files, &["a.kt".into()], &tree).unwrap();
+        let a = v.syntax(&store, &files, &["a.rs".into()], &tree).unwrap();
         assert_eq!(a.result, CheckResult::Pass);
+        assert_eq!(a.details["unread"], "a.rs");
     }
 }

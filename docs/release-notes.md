@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Symbol engine 17: new syntax is not refused
+
+A grammar is older than its language. Lonca's C# grammar, for one, does not
+read C# 14's extension blocks, and until now a change with such code in a
+Rust, Python, TypeScript, JavaScript, C# or Go file failed the syntax check
+as if it were a mistake ([#246](https://github.com/selcukgural/lonca/issues/246)).
+From engine 17 a parse error in any language means that the grammar could
+not read the file, as it already did for Java, Kotlin, C, C++, Ruby, PHP and
+Swift: the change is not refused, the file merges by its lines, and a
+proposal that leaves a file unreadable, or adds one, waits for a person with
+the reason `unread_file:<path>`.
+
+What this costs: a real syntax error in those six languages is no longer
+stopped by Lonca itself. Set `build` and `test` in `[verification]` so that
+your compiler is the judge. Entries of older engines are recomputed as they
+were written.
+
 ### Presence on Linux: FIDO security keys
 
 A human's key can now live on a FIDO security key, so a hardened repository

@@ -53,14 +53,10 @@ struct Entry {
     /// The first engine that reads this language.
     #[serde(default)]
     since: u32,
-    /// Whether a parse error says the file is wrong, and not that the grammar
-    /// could not read it.
-    #[serde(default = "yes")]
-    strict: bool,
-}
-
-fn yes() -> bool {
-    true
+    /// The first engine for which a parse error says that the grammar could
+    /// not read the file. For those before it, it says the file is wrong.
+    #[serde(default)]
+    strict_until: u32,
 }
 
 /// What a family of grammars means to the engine.
@@ -406,10 +402,12 @@ impl Lang {
         &self.entry.name
     }
 
-    /// Whether a parse error means the file is wrong. If not, it means that
-    /// the grammar could not read the file, which then counts as unread.
-    pub fn is_strict(self) -> bool {
-        self.entry.strict
+    /// Whether a parse error means the file is wrong to `engine`. If not, it
+    /// means that the grammar could not read the file, which then counts as
+    /// unread: a grammar is older than its language, so from
+    /// [`crate::engine::ENGINE_LENIENT`] on no language is strict.
+    pub fn is_strict_at(self, engine: u32) -> bool {
+        engine < self.entry.strict_until
     }
 
     pub(crate) fn rules(self) -> &'static Rules {

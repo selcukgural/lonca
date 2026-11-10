@@ -149,8 +149,10 @@ did, so its sessions are `unobserved`, every change escalates
 
 ### Changes integrate without any build or tests
 
-No `build` or `test` command is set in `[verification]`, so only the
-syntax check runs. Set them with `lonca policy set`; with
+No `build` or `test` command is set in `[verification]`, so nothing checks
+that the code compiles: a file the grammar can not read waits for a person,
+whether it is a mistake or syntax newer than the grammar. Set them with
+`lonca policy set`; with
 `verification.required = true` a change can not land without them
 ([Verification](verification.md)).
 

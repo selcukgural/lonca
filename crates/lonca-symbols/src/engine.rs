@@ -33,8 +33,9 @@ use crate::lang::Lang;
 /// by lines a symbol both sides changed, where the caller says it may;
 /// version 15 takes ours as the merge when it already has every change of
 /// theirs, and deletes a symbol with the wider of the gaps around it; version
-/// 16 parses a file within a budget of steps.
-pub const ENGINE_CURRENT: u32 = 16;
+/// 16 parses a file within a budget of steps; version 17 takes a parse error
+/// in any language as the grammar's, not the file's.
+pub const ENGINE_CURRENT: u32 = 17;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -155,8 +156,13 @@ pub fn reads_bytes(engine: u32, lang: Lang, bytes: &[u8]) -> bool {
     }
 }
 
+/// The first engine for which no language is strict: a grammar is older than
+/// its language, so a parse error may be new syntax, and the file then counts
+/// as one the grammar could not read (`strict_until` in the table).
+pub const ENGINE_LENIENT: u32 = 17;
+
 /// Every engine version this build can recompute.
-pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+pub const ENGINES_KNOWN: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
 
 /// Refuses an engine version this build can not recompute.
 pub fn check(engine: u32) -> Result<()> {

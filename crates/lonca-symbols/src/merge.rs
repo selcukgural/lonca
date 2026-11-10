@@ -248,7 +248,7 @@ pub fn merge_text_joining(
         // nothing for it to judge.
         let reads = || !parse_at(engine, lang, &merged).has_error;
         let was_unread = pb.has_error && (po.has_error || reads());
-        if !lang.is_strict() && (was_unread || b == o || b == t) {
+        if !lang.is_strict_at(engine) && (was_unread || b == o || b == t) {
             return Ok(merged);
         }
         let engine = if unread || engine < ENGINE_PLACES {

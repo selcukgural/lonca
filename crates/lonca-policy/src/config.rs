@@ -987,6 +987,15 @@ pub struct PolicyBundle {
     pub policy_text: String,
 }
 
+/// The stack every Cedar evaluation runs on. Cedar fails an evaluation
+/// ("recursion limit reached") when less than 100 KiB of stack seem left, and
+/// what it sees depends on the caller: musl reports a main thread's stack as
+/// only what is mapped so far, so the static Linux `lonca-audit` replayed every
+/// recorded decision as a denial. On a stack of its own, of this size, an
+/// evaluation gives the same outcome on every thread, libc and platform, as
+/// `decide()` must.
+const CEDAR_STACK: usize = 4 << 20;
+
 impl PolicyBundle {
     #[allow(
         clippy::expect_used,
@@ -1208,6 +1217,17 @@ impl PolicyBundle {
     /// Evaluates one request. Any evaluation error counts as a denial: a
     /// forbid rule that fails to evaluate must not silently stop applying.
     pub fn evaluate(
+        &self,
+        principal: &Actor,
+        action: &str,
+        context: Vec<(&str, CVal)>,
+    ) -> CedarOutcome {
+        stacker::grow(CEDAR_STACK, || {
+            self.evaluate_on_this_stack(principal, action, context)
+        })
+    }
+
+    fn evaluate_on_this_stack(
         &self,
         principal: &Actor,
         action: &str,
@@ -1714,6 +1734,27 @@ mod tests {
             }
             other => panic!("expected deny, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn evaluation_does_not_depend_on_the_callers_stack() {
+        // Less than Cedar's 100 KiB is left on this thread: without a stack
+        // of its own the evaluation would fail and deny. (Parsing needs more,
+        // so it happens here.)
+        let b = PolicyBundle::default_bundle();
+        let outcome = std::thread::Builder::new()
+            .stack_size(96 << 10)
+            .spawn(move || {
+                b.evaluate(
+                    &agent(),
+                    "file.delete",
+                    vec![("path", CVal::Str("src/a.rs".into()))],
+                )
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(outcome, CedarOutcome::Allow);
     }
 
     #[test]

@@ -325,3 +325,14 @@
     max-width: 18rem;
   }
 }
+
+/* The terminal recording on the home page. */
+.lonca-demo {
+  margin-bottom: 0.8rem;
+  border-radius: 12px;
+}
+.lonca-demo-note {
+  color: var(--lonca-muted);
+  font-size: 0.95rem;
+  text-align: center;
+}

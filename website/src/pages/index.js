@@ -339,6 +339,21 @@ export default function Home() {
         <Harnesses />
         <section className="lonca-terminal">
           <h2>A session, start to end</h2>
+          <img
+            className="lonca-figure lonca-demo"
+            src={useBaseUrl('/img/lonca-demo.gif')}
+            alt="A terminal recording: two agents lease different methods of one file, a lease that is held and a write outside a session's paths are refused, a human approves both changes, they merge, and lonca-audit verifies the log"
+            width="983"
+            height="694"
+            loading="lazy"
+          />
+          <p className="lonca-demo-note">
+            Two agents on one file, recorded from the released binaries by{' '}
+            <Link to="https://github.com/selcukgural/lonca/blob/main/docs/demo/demo.sh">
+              docs/demo/demo.sh
+            </Link>
+            . The same steps, to type:
+          </p>
           <CodeBlock language="bash">{session}</CodeBlock>
         </section>
         <section className="lonca-other">

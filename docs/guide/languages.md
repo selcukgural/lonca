@@ -121,4 +121,4 @@ grammar may still miss something no sample has.
 | C++ | `.cc` `.cpp` `.cxx` `.c++` `.h` `.hh` `.hpp` `.hxx` | tree-sitter-cpp 0.23.4 | 17 to 26 | 25 | 20: modules; 23: deducing this, if consteval; 26: contracts, deleted with reason, pack indexing, reflection | 20: concepts (`Addable`) |
 | Ruby | `.rb` `.rake` | lonca-tree-sitter-ruby (tree-sitter-ruby 0.23.1 with a scanner fix) | 2.7 to 3.4 | 13 | nothing found | nothing found |
 | PHP | `.php` | tree-sitter-php 0.25.1 | 8.0 to 8.5 | 19 | nothing found | nothing found |
-| Swift | `.swift` | tree-sitter-swift 0.7.4 | 5.5 to 6.2 | 15 | nothing found | 5.9: macros (`stringify`) |
+| Swift | `.swift` | lonca-tree-sitter-swift (tree-sitter-swift 0.7.4 with a scanner fix) | 5.5 to 6.2 | 15 | nothing found | 5.9: macros (`stringify`) |

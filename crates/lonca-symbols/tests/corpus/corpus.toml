@@ -61,5 +61,6 @@ crate = "tree-sitter-php"
 
 [swift]
 title = "Swift"
-crate = "tree-sitter-swift"
+crate = "lonca-tree-sitter-swift"
+version = "(tree-sitter-swift 0.7.4 with a scanner fix)"
 no_symbol = { "5.9-macros.swift" = ["stringify"] }

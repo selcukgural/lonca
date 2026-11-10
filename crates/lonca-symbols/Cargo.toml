@@ -31,7 +31,7 @@ tree-sitter-php = "0.25.1"
 tree-sitter-python = "0.25.0"
 lonca-tree-sitter-ruby = { version = "0.2.2", path = "../lonca-tree-sitter-ruby" }
 tree-sitter-rust = "0.24.2"
-tree-sitter-swift = "0.7.4"
+lonca-tree-sitter-swift = { version = "0.2.2", path = "../lonca-tree-sitter-swift" }
 tree-sitter-typescript = "0.23.2"
 
 [dev-dependencies]

@@ -11,7 +11,7 @@ description = "The tree-sitter Swift grammar 0.7.4 with a read past a string in 
 keywords = ["tree-sitter", "swift", "parsing"]
 categories = ["parsing"]
 build = "build.rs"
-include = ["build.rs", "src/**", "queries/*", "grammar.js", "tree-sitter.json", "LICENSE", "README.md"]
+include = ["build.rs", "src/**", "queries/*", "LICENSE", "README.md"]
 
 [lib]
 path = "src/lib.rs"

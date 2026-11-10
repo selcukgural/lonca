@@ -25,8 +25,8 @@ is what the log says, and a human changes it with `lonca policy set`
 Cooperative trusts the account you work in: it records and detects. Hardened is
 what the boundary of a hardened install is for. The profile by itself draws no
 boundary: on a cooperative daemon it tightens the rules, and an agent running as
-you can still reach the daemon's files. The threat model is in
-[#14](https://github.com/selcukgural/lonca/issues/14).
+you can still reach the daemon's files. What each mode prevents
+and what it only detects is the [threat model](../security/threat-model.md).
 
 ## After a hardened init
 

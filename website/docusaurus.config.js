@@ -61,6 +61,7 @@ const config = {
             'guide/**/*.md',
             'protocol.md',
             'crypto.md',
+            'security/threat-model.md',
             'security/owasp.md',
             'release-notes.md',
           ],

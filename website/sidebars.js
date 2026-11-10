@@ -38,6 +38,7 @@ const sidebars = {
       label: 'Reference',
       items: [
         { type: 'doc', id: 'protocol', label: 'Daemon protocol' },
+        { type: 'doc', id: 'security/threat-model', label: 'Threat model' },
         { type: 'doc', id: 'crypto', label: 'Cryptography' },
         { type: 'doc', id: 'security/owasp', label: 'OWASP review' },
       ],

@@ -23,6 +23,12 @@ You should get an answer within a week. Once a fix is ready, it is
 published together with a GitHub security advisory that credits you,
 unless you would rather stay anonymous.
 
+## Threat model
+
+[docs/security/threat-model.md](docs/security/threat-model.md) says what
+Lonca protects, from whom, what each mode prevents and what it only
+detects, and its known limits.
+
 ## How Lonca maps to OWASP
 
 [docs/security/owasp.md](docs/security/owasp.md) maps Lonca to the OWASP Top

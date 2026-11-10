@@ -15,7 +15,8 @@ every request is authenticated and authorized, privilege only narrows, unknown
 things are refused, and a breach is assumed and looked for (hash-chained log,
 auditor, reconcile). The invariants are in `CLAUDE.md`; the cryptographic
 inventory is `docs/crypto.md`; decisions and deviations are
-`docs/decisions.md`. The threat model is #14 and links here once written.
+`docs/decisions.md`. The threat model, [threat-model.md](threat-model.md), says
+what each mode prevents and what it only detects.
 
 Status words: **met** (in place, with where), **gap** (missing, with an open
 issue), **accepted** (a known limit, with where it is written down), **n/a**.
@@ -29,7 +30,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 | A03 Software Supply Chain Failures | met | cargo-deny (crates.io only, advisories, licenses), actions pinned by commit and allowlisted, Dependabot with cooldown, pinned toolchain, zizmor, SBOM and build provenance attestation of a release (#7), Scorecard (#60) | — |
 | A04 Cryptographic Failures | met | Ed25519 `verify_strict`, Secure Enclave P-256, SHA-256 chain, tokens stored as hashes, keys private on load and wiped in memory (`docs/crypto.md`, #62); human and daemon key rotation and recovery (#4, #5) | — |
 | A05 Injection | met | git: `--`, scheme allowlist, clean environment, no hooks, `GIT_ALLOW_PROTOCOL` (#57); strict repository paths (`crates/lonca-core/src/paths.rs`); Cedar context built from typed values; advisor input framed as data (#63); every parser of untrusted input fuzzed, found crashes kept as regressions (#15, `docs/fuzzing.md`) | — |
-| A06 Insecure Design | met | pure `decide()`, single writer, append-only log replayed by the auditor; socket, request and rate limits (#50); verifier process-tree kill, rlimits, quota (#59) | threat model #14 |
+| A06 Insecure Design | met | pure `decide()`, single writer, append-only log replayed by the auditor; socket, request and rate limits (#50); verifier process-tree kill, rlimits, quota (#59); the threat model ([threat-model.md](threat-model.md), #14) | — |
 | A07 Authentication Failures | met | random 32-byte tokens, presence signatures with nonce and age checks (`human.rs`), clients verify the daemon (#52), token expiry, sweep and rotation (#53) | — |
 | A08 Software or Data Integrity Failures | met | hash-chained signed log, every ref held to it by `reconcile()` and the auditor (#58), anchors in pushed remotes | independent auditor #18 |
 | A09 Security Logging & Alerting Failures | met | every decision logged, denials included; security events outside the log and notification of freezes (#56) | — |

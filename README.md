@@ -101,7 +101,7 @@ APIs have no stability promise.
 ## Documentation
 
 - [The site](https://selcukgural.github.io/lonca/): guides, the protocol,
-  release notes, the OWASP review and cryptography.
+  release notes, the threat model, the OWASP review and cryptography.
 - [docs/design.md](docs/design.md) (Turkish) and
   [docs/decisions.md](docs/decisions.md): the design, and every decision
   and deviation from it with its reasons. [SECURITY.md](SECURITY.md) to

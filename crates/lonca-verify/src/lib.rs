@@ -945,9 +945,11 @@ mod tests {
         let (dir, store, files, tree) = setup(&[("a", "")]);
         let v = Verifier::new(dir.path().join("scratch"));
         let mut c = cfg(None, Some("ulimit -u"));
-        c.limit_processes = 2000;
+        // Below the share of any Mac: a GitHub runner's `kern.maxprocperuid`
+        // is far below a desktop's, and a limit above the share is cut to it.
+        c.limit_processes = 300;
         let r = v.run(&store, &files, &tree, &c).unwrap();
-        assert!(log_of(&store, &r[0]).ends_with("\n2000\n"), "{:?}", r[0]);
+        assert!(log_of(&store, &r[0]).ends_with("\n300\n"), "{:?}", r[0]);
         c.limit_processes = Verification::default().limit_processes;
         let r = v.run(&store, &files, &tree, &c).unwrap();
         let log = log_of(&store, &r[0]);

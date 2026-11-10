@@ -4002,7 +4002,12 @@ merge, and both landed unless a check happened to run the migrations.
   reserves member names; conflicts, interests, reservations and pins work
   as they do for names. Anything else on a `<dir>` is refused (deny by
   default): another kind, no keys, a directory the policy does not name, a
-  key the directory would not write.
+  key the directory would not write. So is any other symbol of a keyed
+  directory's path (`key_container`): the first live run had Claude lease
+  `db/migration#db/migration` and `db/migration#migration`, which were
+  allowed, reserved nothing, and left it believing it held the key. `status`
+  lists the keyed directories, since an agent has no `lonca.toml`. This came
+  before any release with format 29, so it is part of format 29.
 - **`next` is the daemon's.** `decide()` can not read trunk's tree, so the
   daemon resolves `next` before deciding: one past the highest key on trunk
   and in every live reservation, written into the operation. The log

@@ -1760,6 +1760,12 @@ impl Service {
         let r = Self::repo(&mut inner, &name)?;
         let policy = r.policy().ok();
         let unparsed = policy.as_ref().map(|p| p.config.leases.unparsed_files);
+        // Where a new file's key is reserved: an agent has no lonca.toml.
+        let keyed: Option<serde_json::Map<String, Value>> = policy.as_ref().map(|p| {
+            let dirs = p.config.paths.keyed.keys();
+            dirs.map(|d| (d.clone(), json!(lonca_core::keyed::container(d))))
+                .collect()
+        });
         // Names only: a command can hold paths and environment details.
         let policy_checks: Option<Vec<&String>> = policy
             .as_ref()
@@ -1857,7 +1863,7 @@ impl Service {
             "repo": s.repo, "trunk": s.trunk, "policy": s.policy, "policy_checks": policy_checks,
             "frozen": s.frozen, "queue": s.queue,
             "verification_day_ms": s.day_spent(now),
-            "unparsed_files": unparsed, "below_hardened": below_hardened,
+            "unparsed_files": unparsed, "keyed": keyed, "below_hardened": below_hardened,
             "humans": humans, "sessions": sessions, "leases": leases, "changes": changes, "pending": pending,
             "next_seq": s.next_seq, "head_hash": s.head_hash, "now_ms": now, "daemon_key": s.daemon_key,
             "proxy_unattributed": self.proxy_unattributed(),

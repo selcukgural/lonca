@@ -9396,3 +9396,24 @@ fn keys_are_asked_from_format_29() {
     assert!(d.is_allow(), "{d:?}");
     h.assert_replay();
 }
+
+/// A keyed directory's path takes no other symbol: an agent that writes the
+/// container another way is told the one there is, and reserves nothing.
+#[test]
+fn a_keyed_directory_is_leased_only_as_its_container() {
+    let mut h = keyed_harness();
+    for wrong in [
+        "db/migration#db/migration",
+        "db/migration#migration",
+        "db/migration#<file>",
+    ] {
+        let d = insert_named(&mut h, "a", "lw", wrong, &["2"]);
+        assert!(
+            denied_with(&d, &format!("key_container:{KEYS}")),
+            "{wrong}: {d:?}"
+        );
+    }
+    // Another directory, keyed or not, is what it was.
+    assert!(insert_named(&mut h, "a", "lo", "db/other.sql#<file>", &["x"]).is_allow());
+    h.assert_replay();
+}

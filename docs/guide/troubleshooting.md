@@ -82,6 +82,7 @@ caused them:
 | `key_taken:<dir>#<key>` | Another file has that key, in your tree or on trunk since your base: `lonca sync`, reserve `next` and rename the file. |
 | `key_unreadable:<path>` | The file's name has no key the directory's pattern reads (`[paths.keyed]` in `lonca.toml`): name it as the others are. |
 | `not_keyed:<dir>`, `key_required:<symbol>`, `invalid_key:<dir>#<key>` | A `<dir>` lease is an `insert` with keys, on a directory `[paths.keyed]` names; a number key has no leading zero. |
+| `key_container:<dir>#<dir>` | A keyed directory is leased only as its container, written as it is, `<dir>` included: `lonca lease acquire '<dir>#<dir>' --kind insert --name <key>`. `lonca status` lists the keyed directories. |
 
 ### The proposal
 

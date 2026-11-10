@@ -1922,6 +1922,7 @@ dependencies = [
  "getrandom",
  "gix",
  "hex",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
@@ -1990,6 +1991,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "stacker",
  "thiserror",
  "toml",
 ]

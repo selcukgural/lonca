@@ -139,9 +139,14 @@ fn next_reserves_the_number_after_trunk_and_every_reservation() {
         vec![item(KEYS, LeaseKind::Insert, &["next", "next"])],
     );
     assert_eq!(r["keys"], json!({KEYS: ["4", "5"]}), "{r}");
-    // The log holds the numbers.
+    // The log holds the numbers, and status names where keys are reserved.
     let s = e.ok("status", Some("demo"), None, json!({}));
     assert!(!s.to_string().contains("\"next\""), "{s}");
+    assert_eq!(
+        s["keyed"],
+        json!({DIR: KEYS, "docs/adr": "docs/adr#<dir>"}),
+        "{s}"
+    );
     // `next` has no order in a text directory, and is no key elsewhere.
     let r = e.call(
         "lease.acquire",

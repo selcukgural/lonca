@@ -56,6 +56,27 @@ cargo deny check                # advisories, licenses, crates.io only (deny.tom
 - Unix socket paths are limited to ~100 bytes; tests use short temp dirs or
   `LONCA_SOCKET`.
 
+## Acceptance tests
+
+`docs/acceptance.md` lists what a release must do for a user (criteria
+A01…, manual M01…); `acceptance/scenarios/*.sh` prove them with the real
+binaries and real daemon processes (docs/decisions.md, "Acceptance tests").
+
+```sh
+cargo build --release -p lonca -p lonca-audit
+acceptance/run.sh                      # target/release; --bin target/debug
+acceptance/run.sh 03 05                # some scenarios
+acceptance/run.sh --check              # catalogue and scenarios agree
+```
+
+- They run in `ci.yml`'s `test` jobs on every pull request (required) and
+  on the archives in `release.yml`; the draft release is made only when
+  they pass. They are never skipped before a release.
+- Every change that adds, changes or removes user-visible behaviour
+  updates its criterion and scenario in the same pull request; a removed
+  feature's criterion is removed. Something that can not be automated goes
+  under "Not covered yet" or the manual criteria.
+
 ## Mutation testing
 
 cargo-mutants checks that the tests would catch a wrong `>=`, a dropped `!`
@@ -120,15 +141,15 @@ cd fuzz && cargo fuzz run -s none <target> corpus/<target> seeds/<target> -- -ma
 ## CI
 
 The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,
-`sandbox`) run on every pull request, every merge to main, a pushed `v*`
+`sandbox`; the `test` jobs end with the acceptance tests) run on every pull request, every merge to main, a pushed `v*`
 tag, and on demand (`gh workflow run ci.yml --ref main`). Only the mutants
 run on demand alone (see "Mutation testing"). The main ruleset requires a
 pull request (no direct push) and those three jobs as status checks. `cargo-deny`, CodeQL and zizmor (workflow changes)
 run on pull requests; they block nothing. The toolchain is pinned in
 `rust-toolchain.toml`; Actions are GitHub's own plus five named ones
 (docs/decisions.md, "CI and the repository's own settings").
-A `v*` tag also runs `release.yml` (binaries, SHA256SUMS, SBOM,
-attestations, a *draft* release) and `fuzz.yml`, green before the draft is
+A `v*` tag also runs `release.yml` (binaries, the acceptance tests on
+them, SHA256SUMS, SBOM, attestations, a *draft* release) and `fuzz.yml`, green before the draft is
 published; publishing the draft runs
 `registries.yml` (crates.io). Steps: `docs/release-checklist.md`. The CLI's
 package is `lonca` (`-p lonca`, directory `crates/lonca-cli`); every crate

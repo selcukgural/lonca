@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Acceptance tests gate every release
+
+Every release is now checked, before its draft exists, by acceptance tests
+run on the archives it ships: a daemon started from them in a fresh home,
+then what the guides tell a user to do, from `lonca init --import` to
+leases, proposals, approval, undo, push, backup and restore, the hooks and
+the MCP server, and `lonca-audit` catching an edited log. The criteria are
+in [docs/acceptance.md](https://github.com/selcukgural/lonca/blob/main/docs/acceptance.md);
+every pull request runs them too.
+
+### `lonca-audit --version`
+
+`lonca-audit --version` (or `-V`) prints `lonca-audit X.Y.Z`, as `lonca
+--version` does, so a script can check that the auditor it runs is the
+release it installed.
+
 ### Symbol engine 19: four definitions get symbols of their own
 
 Python's `type Pair[T] = ...`, a C++ `concept`, a type declared inside a C++

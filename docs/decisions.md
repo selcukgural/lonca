@@ -3929,6 +3929,43 @@ run them and what each holds: `docs/fuzzing.md`.
   boundary at the daemon (`hook.input`, `mcp.call`, every request), which
   `request` fuzzes.
 
+## Acceptance tests (2026-11-10)
+
+A release is accepted when it does, for the people who install it, what the
+guides say; `cargo test` proves the parts, mostly against a daemon inside
+the test process, and never runs the archives a release ships. The
+acceptance tests (`docs/acceptance.md`, `acceptance/`) close that gap.
+
+- **A catalogue and scenarios.** Each criterion has an id, one sentence a
+  user would recognise, and the scenario that proves it. `acceptance/run.sh
+  --check` fails when the catalogue and the scenarios' `criterion` lines
+  disagree, so a criterion can not be listed and unproved, or proved and
+  unlisted. Criteria that need a model, an account or hardware CI lacks are
+  manual (M01, M02: the live harness runs and the install paths of the
+  release checklist); what nobody checks yet is listed under "Not covered
+  yet", so the gap is written down rather than implied.
+- **Shell, not Rust.** A scenario is the commands a user types, run against
+  any directory of binaries: a debug build, a release build, an unpacked
+  archive. A Rust test would link the daemon or depend on a build of the
+  same package; a script sees only the binaries and what they print. Bash
+  3.2 (macOS's), with a small helper library; no network, no model.
+- **Every pull request.** The `test` jobs of `ci.yml` run them on the
+  binaries `cargo test` just built, so they are required checks and can not
+  drift for a release to find. They take seconds.
+- **Every release, mechanically.** `release.yml` runs them on the unpacked
+  archives of macOS arm64 and Linux x86_64 and arm64, and the draft job
+  needs those jobs: without a green run there is no draft to publish. The
+  x86_64 macOS archive is not run (Apple silicon runners may not have
+  Rosetta); it is the arm64 code built for another target.
+- **Kept with the change.** Every pull request that adds, changes or
+  removes user-visible behaviour adds, changes or removes its criterion in
+  the same pull request. A criterion is never skipped or weakened to get a
+  release out: the code is fixed, or the criterion changed in a pull
+  request that says why the promise changed.
+- **Found on the way:** `lonca-audit` had no `--version`, so a script could
+  not check that the auditor it runs is the release it installed; it has
+  one now (`lonca-audit X.Y.Z`, as `lonca --version`).
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

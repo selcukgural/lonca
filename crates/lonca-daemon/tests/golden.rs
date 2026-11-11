@@ -95,6 +95,7 @@ fn golden_repo() -> Env {
     give_back(&mut e);
     unhooked(&mut e);
     folded_paths(&mut e);
+    reaches_children(&mut e);
     named_checks(&mut e);
     replaces(&mut e);
     lost_mac(&mut e);
@@ -372,6 +373,34 @@ fn folded_paths(e: &mut Env) {
     let r = e.ok("change.propose", None, Some(&t), args);
     let reasons = r["decision"]["reasons"].to_string();
     assert!(reasons.contains("critical_path:src/Build.rs"), "{r}");
+}
+
+/// From format 34: a tool the parent ran without its hook marks the child
+/// that was made before it, too.
+fn reaches_children(e: &mut Env) {
+    let t = e.session("s-par", &["src/**"]);
+    e.bind(&t);
+    let scope = json!({"paths": ["src/**"], "symbols": null, "ops": ["lease.acquire"],
+                       "max_files": null, "max_lines": null});
+    let expires = e.now() + 60_000;
+    let child = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&t),
+        json!({"agent": "bot-s-par", "scope": scope, "expires_ms": expires}),
+    );
+    assert_eq!(child["decision"]["outcome"], "allow", "{child}");
+    let id = child["session"].as_str().unwrap().to_string();
+    e.advance(lonca_daemon::hooked::START_GRACE_MS);
+    let r = e.ok("mcp.call", None, Some(&t), json!({"tool": "propose"}));
+    assert_eq!(r["hooked"], false, "{r}");
+    let status = e.ok("status", Some("demo"), None, json!({}));
+    let sessions = status["sessions"].as_array().unwrap();
+    let kid = sessions.iter().find(|s| s["id"] == id.as_str()).unwrap();
+    assert_eq!(kid["level"], "unobserved", "{kid}");
+    assert!(kid["unhooked"].is_object(), "{kid}");
+    let taint = kid["taint"].as_str().unwrap_or_default();
+    assert!(taint.starts_with("inherited: "), "{kid}");
 }
 
 /// From format 23: a child whose time runs out gives the set it was handed
@@ -1585,6 +1614,28 @@ fn golden_v30_log_still_verifies_replays_and_audits() {
     assert_eq!(new.level, ObservationLevel::Unobserved);
     let placed = s.sessions.values().filter(|x| x.workspace.is_some());
     assert_eq!(placed.count(), 2, "the others name none");
+}
+
+/// Format 34: what enters a session is in the sessions made from it.
+#[test]
+fn golden_v34_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v34.bundle",
+        "99c569c89270794a365a6df2e7938582521a1ec597f99fd913506c2fedf82669",
+        34,
+    );
+    let s = lonca_policy::state::State::replay(&ops);
+    let parent = &s.sessions["s-par"];
+    assert!(parent.unhooked.is_some());
+    let kids: Vec<_> = s
+        .sessions
+        .values()
+        .filter(|c| c.parent.as_deref() == Some("s-par"))
+        .collect();
+    assert_eq!(kids.len(), 1);
+    let taint = kids[0].taint.as_deref().unwrap_or_default();
+    assert!(taint.starts_with("inherited: "), "{taint}");
+    assert!(kids[0].unhooked.is_some());
 }
 
 /// Format 33: every human signature names an entry of the log.

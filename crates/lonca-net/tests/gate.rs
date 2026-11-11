@@ -12,6 +12,8 @@ use lonca_net::{Gate, Outcome, Request, Verdict};
 struct Recorder {
     allowed: String,
     outcomes: Mutex<Vec<(String, Outcome)>>,
+    /// The name each misnamed tunnel asked its server for.
+    misnamed: Mutex<Vec<Option<String>>>,
 }
 
 impl Gate for Recorder {
@@ -32,6 +34,10 @@ impl Gate for Recorder {
             .lock()
             .unwrap()
             .push((request.host.to_owned(), outcome));
+    }
+
+    fn misnamed(&self, _request: &Request<'_>, asked: Option<&str>) {
+        self.misnamed.lock().unwrap().push(asked.map(str::to_owned));
     }
 }
 
@@ -74,6 +80,7 @@ fn the_gate_decides_and_hears_how_it_ended() {
     let gate = Arc::new(Recorder {
         allowed: "127.0.0.1".into(),
         outcomes: Mutex::new(Vec::new()),
+        misnamed: Mutex::new(Vec::new()),
     });
     let listener = lonca_net::bind("127.0.0.1:0").unwrap();
     let proxy = listener.local_addr().unwrap().port();
@@ -121,6 +128,7 @@ fn spawn_proxy() -> (lonca_net::Server, Arc<Recorder>) {
     let gate = Arc::new(Recorder {
         allowed: "127.0.0.1".into(),
         outcomes: Mutex::new(Vec::new()),
+        misnamed: Mutex::new(Vec::new()),
     });
     let listener = lonca_net::bind("127.0.0.1:0").unwrap();
     let server = lonca_net::spawn(listener, gate.clone()).unwrap();
@@ -310,6 +318,7 @@ fn spawn_with(limits: lonca_net::Limits) -> (lonca_net::Server, Arc<Recorder>) {
     let gate = Arc::new(Recorder {
         allowed: "127.0.0.1".into(),
         outcomes: Mutex::new(Vec::new()),
+        misnamed: Mutex::new(Vec::new()),
     });
     let listener = lonca_net::bind("127.0.0.1:0").unwrap();
     let server = lonca_net::spawn_with(listener, gate.clone(), limits).unwrap();
@@ -423,6 +432,7 @@ fn spawn_named() -> (lonca_net::Server, Arc<Recorder>) {
     let gate = Arc::new(Recorder {
         allowed: "localhost".into(),
         outcomes: Mutex::new(Vec::new()),
+        misnamed: Mutex::new(Vec::new()),
     });
     let listener = lonca_net::bind("127.0.0.1:0").unwrap();
     let server = lonca_net::spawn(listener, gate.clone()).unwrap();
@@ -478,6 +488,7 @@ fn a_tunnel_is_held_to_the_name_it_was_let_through_for() {
         seen.iter().all(|(_, o)| *o == Outcome::Tunneled),
         "{seen:?}"
     );
+    assert!(gate.misnamed.lock().unwrap().is_empty());
 
     // Another name the same address may serve: nothing of it gets there.
     for sent in [
@@ -493,6 +504,16 @@ fn a_tunnel_is_held_to_the_name_it_was_let_through_for() {
         let seen = wait_for(&gate, before + 1);
         assert_eq!(seen[before], ("localhost".to_owned(), Outcome::Misnamed));
     }
+    // The gate heard which name each asked for, where one could be read.
+    let asked = |name: &str| Some(name.to_owned());
+    assert_eq!(
+        *gate.misnamed.lock().unwrap(),
+        [
+            asked("elsewhere.example"),
+            asked("localhost.elsewhere.example"),
+            None
+        ]
+    );
     // A hello that never ends is held back for as long as it does not.
     let (_, back) = through(&server, &target, &[&hello(Some("localhost"))[..40]]);
     assert_eq!(back, b"");

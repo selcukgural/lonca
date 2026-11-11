@@ -69,9 +69,12 @@ pub mod kind {
     /// A call to `lonca mcp` came with no before-tool event: the session's
     /// hooks are not running (#190).
     pub const UNHOOKED: &str = "unhooked";
+    /// A tunnel through the proxy whose TLS client asked the server for
+    /// another name than the host it was let through for.
+    pub const MISNAMED_TUNNEL: &str = "misnamed_tunnel";
 
     /// Every kind, for `docs/decisions.md` and the tests.
-    pub const ALL: [&str; 15] = [
+    pub const ALL: [&str; 16] = [
         REFUSED_PEER,
         AUTH_FAILURE,
         OVERSIZED,
@@ -87,6 +90,7 @@ pub mod kind {
         SUDO_WITHOUT_PASSWORD,
         TOKEN_ROTATED,
         UNHOOKED,
+        MISNAMED_TUNNEL,
     ];
 
     /// The kinds a human is told of as they happen.

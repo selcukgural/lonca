@@ -267,7 +267,8 @@ tunnel through which nothing has moved for 10 minutes.
 A connection is for the host it was asked for. A TLS client that asks the proxy
 for one host and the server for another (`curl --connect-to`, a server name
 set by hand) has its tunnel closed before anything of it reaches the host; to
-the command it looks like a connection that was dropped during the handshake.
+the command it looks like a connection that was dropped during the handshake,
+and the session gets a `misnamed_tunnel` security event that names both hosts.
 A plain `http://` request whose `Host` header is not its URL's host is answered
 `400`, and each plain request goes on its own connection. An address in place
 of a name (`https://10.0.0.5/`) is not held to a name. Inside TLS the proxy

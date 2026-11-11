@@ -943,7 +943,11 @@ Denied `yield_to_another_session`, `lease_pinned`, `lease_expired`,
 *agent.* `{"agent": string, "scope": scope, "expires_ms": time, "leases":
 [string] | null}`. A child session with a narrower scope. `agent` is the
 caller's own agent name (`child_agent_name:<name>` otherwise, from log
-format 31): a child is the same agent to the policy and to a reviewer.
+format 31): a child is the same agent to the policy and to a reviewer. It
+starts with its parent's level, taint and `unhooked` mark, and from log
+format 34 it takes them whenever the parent, or a session above that,
+gets one later: a taint, an unhooked tool, a bind to a lower level.
+Nothing goes from a child up to its parent.
 `leases` hands
 lease sets to it until it ends, expires or misses its heartbeat; they go
 back to the parent then, with the time they had, if the parent is still

@@ -137,8 +137,9 @@ the daemon's own key, and a ref the log does not explain.
 It does not catch:
 
 - **A bug the daemon and the auditor share.** Both use the same `decide()`.
-  An independent implementation is
-  [#18](https://github.com/selcukgural/lonca/issues/18).
+  An independent implementation is an open question
+  (`docs/decisions.md`; [#18](https://github.com/selcukgural/lonca/issues/18)
+  is closed).
 - **False evidence.** Build and test results are recorded as the daemon saw
   them; a replay can not run them again.
 - **Entries the rules allow, written by whoever holds the daemon key**, which

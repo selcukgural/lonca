@@ -43,8 +43,14 @@
    draft has four archives, `SHA256SUMS` and `lonca-sbom.cdx.tar.gz`: check one
    archive with `gh attestation verify lonca-aarch64-apple-darwin.tar.gz
    --repo selcukgural/lonca`.
-4. crates.io. A crate that is not on crates.io yet is published by hand
-   from the tag, by its owner, in dependency order:
+4. crates.io. A crate that is not on crates.io yet is best published by
+   its owner before the release, from main, with a token of its own
+   (scope `publish-new`, limited to the crate's name, short-lived, deleted
+   afterwards): `cargo publish -p <crate> --locked`, then Trusted
+   Publishing for it as below, and the release goes out through
+   `registries.yml` as usual (0.2.3 did this for `lonca-tree-sitter-*`).
+   Otherwise, set `PUBLISH_CRATES` to `false` before step 5 and publish
+   every crate by hand from the tag, by its owner, in dependency order:
    `git checkout vX.Y.Z && cargo publish --workspace --exclude lonca-fuzz
    --locked`. Then on crates.io, for each new crate: Settings → Trusted
    Publishing → GitHub, `selcukgural/lonca`, workflow `registries.yml`,

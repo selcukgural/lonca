@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.3 (2026-11-11)
+
 ### A runner can wait for news instead of polling
 
 A runner that drives several agents can now wake an idle one as soon as
@@ -262,6 +264,19 @@ Homebrew 7 refuses a formula from a tap that is not its own until it is
 trusted. The README, the [install guide](guide/install.md#homebrew) and the
 site now put `brew trust --formula selcukgural/lonca/lonca` between
 `brew tap` and `brew install`; an older Homebrew needs no such step.
+
+### Live runs for this release
+
+Claude Code 2.1 (haiku), as `docs/release-checklist.md` asks, on the
+binaries of this release: a session leased, proposed and integrated after
+approval, and `lonca diff` listed no generated file; two sessions at once on
+one file, on different symbols, both integrated; one asked only for an edit
+was sent back by the stop hook, proposed, and left no unproposed work. A
+fourth, asked for a Flyway migration in a keyed `db/migration`, reserved
+the next key (`V2`) before writing it and integrated it.
+`lonca-audit verify` passed on the log. **Not run: Codex and OpenCode**, for
+the reason given under 0.2.2; their harness profiles have not changed since
+0.2.1.
 
 ## 0.2.2 (2026-11-09)
 

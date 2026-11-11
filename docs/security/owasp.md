@@ -28,13 +28,13 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 | A01 Broken Access Control (incl. SSRF) | met | every daemon method names its credential, deny by default (`METHODS`, `crates/lonca-daemon/src/service.rs`); capabilities only narrow (`cap.attenuate`, `scope_within` in `decide.rs`); peer uid allowlist (`server.rs`); proxy: private ranges, metadata always, port allowlist, per-host rules (`crates/lonca-net`, #64); local-path remotes kept out of the daemon home (#57) | — |
 | A02 Security Misconfiguration | met | hardened profile and installers, root-owned hook and managed-settings checks, no silent unsandboxed verification (#54); key and home ownership checks (#62); `lonca policy check` tries a policy against the log before it is set, and a guide to writing one (#13) | — |
 | A03 Software Supply Chain Failures | met | cargo-deny (crates.io only, advisories, licenses), actions pinned by commit and allowlisted, Dependabot with cooldown, pinned toolchain, zizmor, SBOM and build provenance attestation of a release (#7), Scorecard (#60) | — |
-| A04 Cryptographic Failures | met | Ed25519 `verify_strict`, Secure Enclave P-256, SHA-256 chain, tokens stored as hashes, keys private on load and wiped in memory (`docs/crypto.md`, #62); human and daemon key rotation and recovery (#4, #5) | — |
+| A04 Cryptographic Failures | met | Ed25519 `verify_strict`, Secure Enclave P-256, SHA-256 chain, tokens stored as hashes, keys private on load and wiped in memory (`docs/crypto.md`, #62); human and daemon key rotation and recovery (#4, #5); FIDO security keys (`sk-p256`, `sk-ed25519`) verified as OpenSSH does, a signature without a touch refused (#17) | — |
 | A05 Injection | met | git: `--`, scheme allowlist, clean environment, no hooks, `GIT_ALLOW_PROTOCOL` (#57); strict repository paths (`crates/lonca-core/src/paths.rs`); Cedar context built from typed values; advisor input framed as data (#63); every parser of untrusted input fuzzed, found crashes kept as regressions (#15, `docs/fuzzing.md`) | — |
 | A06 Insecure Design | met | pure `decide()`, single writer, append-only log replayed by the auditor; socket, request and rate limits (#50); verifier process-tree kill, rlimits, quota (#59); the threat model ([threat-model.md](threat-model.md), #14) | — |
 | A07 Authentication Failures | met | random 32-byte tokens, presence signatures with nonce and age checks (`human.rs`), clients verify the daemon (#52), token expiry, sweep and rotation (#53) | — |
-| A08 Software or Data Integrity Failures | met | hash-chained signed log, every ref held to it by `reconcile()` and the auditor (#58), anchors in pushed remotes | independent auditor #18 |
+| A08 Software or Data Integrity Failures | met | hash-chained signed log, every ref held to it by `reconcile()` and the auditor (#58), anchors in pushed remotes | accepted: the auditor shares `decide()` with the daemon (`docs/decisions.md`, "The auditor shares the decision code"; #18 closed) |
 | A09 Security Logging & Alerting Failures | met | every decision logged, denials included; security events outside the log and notification of freezes (#56) | — |
-| A10 Mishandling of Exceptional Conditions | met | Cedar errors deny; hooks fail closed; no panics on extreme numbers, overflow checks, panic lints on the trusted core (#61); a failed reconcile is an event (#56); the parsers and the merge fuzzed (#15); a symbol parse stops at a budget of work (engine 16) | — |
+| A10 Mishandling of Exceptional Conditions | met | Cedar errors deny; hooks fail closed; no panics on extreme numbers, overflow checks, panic lints on the trusted core (#61); a failed reconcile is an event (#56); the parsers and the merge fuzzed (#15); a symbol parse stops at a budget of work (engine 16); a Cedar evaluation runs on a stack of its own, so no platform's stack turns a decision into a denial (#260); keyed-directory patterns compile to bounded automata that never backtrack (#261) | — |
 
 ## Top 10 for LLM Applications 2025
 
@@ -64,7 +64,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 | ASI07 Insecure Inter-Agent Communication | met | negotiation only through the daemon, authenticated, logged, bounded rounds | — |
 | ASI08 Cascading Failures | met | per-session rate limits, connection and byte budgets, quotas (#50, #59, #64); one session's denial touches no other | — |
 | ASI09 Human-Agent Trust Exploitation | met | the daemon writes what a human approves; presence keys in the hardened profile (#54); advice labelled tainted (#63) | — |
-| ASI10 Rogue Agents | met | taint, freeze, auditor, security events and alarms (#56, #58) | #18 |
+| ASI10 Rogue Agents | met | taint, freeze, auditor, security events and alarms (#56, #58) | as A08 |
 
 ## CI/CD Security Top 10
 
@@ -110,8 +110,8 @@ requirement in it met, or the exception named.
 | V6.2 Password security | n/a | no passwords; keys and presence |
 | V6.3 General authentication security | met | every method authenticated (#51); clients verify the daemon (#52) |
 | V6.4 Factor lifecycle and recovery | met | key rotation, revocation and a one-time recovery key (#4, #5) |
-| V6.5, V6.6 Multi-factor, out of band | accepted | presence (Secure Enclave, Touch ID) is the second factor where required; no out-of-band channel (`docs/guide/profiles.md`) |
-| V6.7 Cryptographic authentication | met | Ed25519 and P-256 signatures over intent with nonce and age checks (`human.rs`) |
+| V6.5, V6.6 Multi-factor, out of band | accepted | presence (Secure Enclave and Touch ID, or a FIDO security key, #17) is the second factor where required; no out-of-band channel (`docs/guide/profiles.md`) |
+| V6.7 Cryptographic authentication | met | Ed25519 and P-256 signatures over intent with nonce and age checks, and OpenSSH security-key signatures that prove presence (`human.rs`) |
 | V6.8 Identity provider | n/a | none |
 | V7.1 Session documentation | met | `docs/decisions.md` "Session tokens: expiry, sweep, rotation (#53)" |
 | V7.2 Fundamental session security | met | 32 random bytes, stored as SHA-256, never logged (`home.rs`) |

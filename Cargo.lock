@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "lonca"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -2267,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-audit"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "lonca-core",
  "lonca-policy",
@@ -2279,7 +2279,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-client"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "libc",
  "lonca-core",
@@ -2290,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -2308,7 +2308,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-daemon"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -2330,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-fuzz"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -2351,11 +2351,11 @@ dependencies = [
 
 [[package]]
 name = "lonca-net"
-version = "0.2.2"
+version = "0.2.3"
 
 [[package]]
 name = "lonca-policy"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64",
  "cedar-policy",
@@ -2374,7 +2374,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-symbols"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aho-corasick",
  "diffy",
@@ -2403,7 +2403,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-tree-sitter-ruby"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -2412,7 +2412,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-tree-sitter-swift"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -2421,7 +2421,7 @@ dependencies = [
 
 [[package]]
 name = "lonca-verify"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "hex",
  "libc",

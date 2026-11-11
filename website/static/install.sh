@@ -16,7 +16,7 @@
 # --bin .` from it instead (docs/guide/install.md, "Hardened mode").
 #
 # Settings, from the environment:
-#   LONCA_VERSION=0.2.2      a version instead of the latest
+#   LONCA_VERSION=0.2.3      a version instead of the latest
 #   LONCA_INSTALL_DIR=DIR    where lonca goes (default: ~/.local/bin)
 #   LONCA_NO_MODIFY_PATH=1   never touch a startup file
 #   LONCA_DOWNLOAD_URL=URL   where the release files are (a mirror, or a

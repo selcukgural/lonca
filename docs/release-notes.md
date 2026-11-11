@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### A runner can wait for news instead of polling
+
+A runner that drives several agents can now wake an idle one as soon as
+something happens to its session, with one open request and the human
+session it started the agents with
+([#262](https://github.com/selcukgural/lonca/issues/262)):
+
+```sh
+lonca events --watch --follow --json --repo demo
+# {"session":"ses_…","kind":"lease_received","seq":41,"from":"ses_…"}
+```
+
+One line per event: a change integrated, conflicted or refused, an approval
+or rejection, a message or a lease handed over, an interest now reserved. The
+runner sees the kind, the session and the change, never what another agent
+wrote, and watching marks nothing as read: the agent is still told through
+its tools. The socket method is `events.watch`; `lonca-client` has
+`Client::watch`. [Running agents](guide/runners.md#waking-an-idle-agent) has
+the details.
+
 ### Keyed directories: two agents can not take one migration version
 
 Flyway's `V12__add_users.sql`, Django's `0012_add_users.py` and the like get

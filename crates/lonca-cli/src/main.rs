@@ -16,6 +16,7 @@ mod run;
 mod setup;
 mod sys;
 mod undo;
+mod watch;
 mod workspace;
 mod wsfs;
 
@@ -408,10 +409,37 @@ enum Cmd {
         human: Option<String>,
     },
     /// What happened that this session should know of (agent workspaces).
+    /// With --watch, for a runner: what happened to the sessions this human
+    /// started, waiting until something did. Nothing is marked as read: the
+    /// agents are still told; and no message text, only that one came.
     Events {
         /// The sequence number to start from: `next` of the last answer.
-        #[arg(long, default_value_t = 0)]
-        from: u64,
+        /// With --watch, nothing older than now when left out.
+        #[arg(long)]
+        from: Option<u64>,
+        /// As a human: the sessions this human started (`events.watch`).
+        #[arg(long)]
+        watch: bool,
+        /// With --watch: go on, one line per event, until stopped or every
+        /// named session has ended.
+        #[arg(long, requires = "watch")]
+        follow: bool,
+        /// With --watch: only these sessions (comma-separated), each one
+        /// this human started.
+        #[arg(long, value_delimiter = ',', requires = "watch")]
+        session: Vec<String>,
+        /// With --watch: `reserved` of the last answer (comma-separated),
+        /// reservations already reported.
+        #[arg(long, value_delimiter = ',', requires = "watch")]
+        reserved: Vec<String>,
+        /// With --watch: how long to wait for something, in seconds (the
+        /// daemon holds a request at most 30).
+        #[arg(long, default_value_t = 30, requires = "watch")]
+        wait: u64,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long = "as")]
+        human: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -1997,10 +2025,32 @@ fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Events {
             from,
+            watch: true,
+            follow,
+            session,
+            reserved,
+            wait,
+            repo,
+            human,
             json: as_json,
         } => {
+            let w = lonca_client::protocol::Watch {
+                from,
+                sessions: (!session.is_empty()).then_some(session),
+                reserved,
+                wait_ms: Some(i64::try_from(wait.saturating_mul(1000)).unwrap_or(i64::MAX)),
+            };
+            let repo = repo_name(repo)?;
+            let human = human_name(human)?;
+            watch::run(&repo, &human, w, follow, as_json)
+        }
+        Cmd::Events {
+            from,
+            json: as_json,
+            ..
+        } => {
             let (mut c, _) = agent_client()?;
-            let r = call(&mut c, "events", json!({"from": from}))?;
+            let r = call(&mut c, "events", json!({"from": from.unwrap_or(0)}))?;
             if as_json {
                 return ctx::print_json(&r);
             }

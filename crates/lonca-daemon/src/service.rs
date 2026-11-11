@@ -412,6 +412,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("lease.interest", Cred::Agent),
     ("events", Cred::Agent),
     ("inbox", Cred::Agent),
+    ("events.watch", Cred::Human),
     ("session.end", Cred::Agent),
     ("session.rotate", Cred::Agent),
     ("hook.event", Cred::Agent),
@@ -686,6 +687,133 @@ impl Verified {
 fn reused(mut a: Attestation) -> Attestation {
     a.details.insert("reused".into(), "true".into());
     a
+}
+
+/// The sessions an `events.watch` of `human` looks at: those it names, each
+/// one this human started, or every live one this human started. Another
+/// human's session and one never started get the same refusal.
+fn watched(
+    state: &State,
+    human: &str,
+    named: Option<&[String]>,
+    now: i64,
+) -> std::result::Result<Vec<String>, (String, String)> {
+    let mine = |id: &str| {
+        state
+            .sessions
+            .get(id)
+            .is_some_and(|s| s.root_human == human)
+    };
+    match named {
+        Some(named) => match named.iter().find(|id| !mine(id)) {
+            Some(id) => fail("forbidden", format!("session {id} is not one you started")),
+            None => Ok(named.to_vec()),
+        },
+        None => {
+            let live = state.sessions.values().filter(|s| s.root_human == human);
+            let live = live.filter(|s| state.session_active(&s.id, now));
+            Ok(live.map(|s| s.id.clone()).collect())
+        }
+    }
+}
+
+/// Of the sessions an `events.watch` names, those that can not act any
+/// more, with why: the reason the first of it and its parents was ended
+/// with, or `expired`.
+fn ended_of(state: &State, named: Option<&[String]>, now: i64) -> Vec<EndedSession> {
+    let reason = |id: &str| {
+        let mut cur = state.sessions.get(id);
+        while let Some(s) = cur {
+            if let Some(r) = &s.ended {
+                return r.clone();
+            }
+            if now >= s.expires_ms {
+                return "expired".into();
+            }
+            cur = s.parent.as_deref().and_then(|p| state.sessions.get(p));
+        }
+        "expired".into()
+    };
+    let named = named.unwrap_or_default().iter();
+    let gone = named.filter(|id| !state.session_active(id, now));
+    gone.map(|id| EndedSession {
+        session: id.clone(),
+        reason: reason(id),
+    })
+    .collect()
+}
+
+/// The log from `from`, and from earlier when an approval or a rejection in
+/// it names an older request: [`for_session`] needs that request to know
+/// whose it was.
+fn ops_for_events(store: &Store, from: u64) -> Result<Vec<SignedOp>> {
+    let log = OpLog::new(store);
+    let ops = log.read_from(from)?;
+    let targets = ops.iter().filter_map(|o| match &o.entry.op {
+        Op::Approve { target_seq, .. } | Op::Reject { target_seq, .. } => Some(*target_seq),
+        _ => None,
+    });
+    match targets.min() {
+        Some(oldest) if oldest < from => log.read_from(oldest),
+        _ => Ok(ops),
+    }
+}
+
+/// What a watcher is told of `event`: its kind, entry, change and sender,
+/// never what was written.
+fn watched_event(session: &str, event: &SessionEvent) -> WatchedEvent {
+    let mut out = WatchedEvent {
+        session: session.to_string(),
+        kind: String::new(),
+        seq: None,
+        change: None,
+        from: None,
+        reservation: None,
+        until_ms: None,
+    };
+    let (kind, seq) = match event {
+        SessionEvent::Integrated { seq, change } => {
+            out.change = Some(*change);
+            ("integrated", Some(*seq))
+        }
+        SessionEvent::Conflicted { seq, change, .. } => {
+            out.change = Some(*change);
+            ("conflicted", Some(*seq))
+        }
+        SessionEvent::Failed { seq, change, .. } => {
+            out.change = Some(*change);
+            ("failed", Some(*seq))
+        }
+        SessionEvent::Approved { seq, .. } => ("approved", Some(*seq)),
+        SessionEvent::Rejected { seq, .. } => ("rejected", Some(*seq)),
+        SessionEvent::Message { seq, from, .. } => {
+            out.from.clone_from(from);
+            ("message", Some(*seq))
+        }
+        SessionEvent::LeaseReceived { seq, from, .. } => {
+            out.from.clone_from(from);
+            ("lease_received", Some(*seq))
+        }
+        SessionEvent::SymbolsChanged { seq, change, .. } => {
+            out.change = Some(*change);
+            ("symbols_changed", Some(*seq))
+        }
+        SessionEvent::Reserved { until_ms, .. } => {
+            out.until_ms = Some(*until_ms);
+            ("reserved", None)
+        }
+    };
+    out.kind = kind.into();
+    out.seq = seq;
+    out
+}
+
+/// A reservation's name for a watcher: the same while the same session
+/// holds the same items, whatever its window says.
+fn reservation_id(session: &str, items: &[LeaseItem]) -> String {
+    let mut id = digest_of(&(session, items));
+    id.truncate(16);
+    id
 }
 
 /// The change is still the proposal `commit` on `base`: withdrawn and
@@ -1013,7 +1141,14 @@ impl Service {
         self.take_alarms();
         if !matches!(
             req.method.as_str(),
-            "ping" | "status" | "log" | "tree" | "change.get" | "whoami" | "repo.list"
+            "ping"
+                | "status"
+                | "log"
+                | "tree"
+                | "change.get"
+                | "whoami"
+                | "repo.list"
+                | "events.watch"
         ) {
             self.notify_appended();
         }
@@ -1262,6 +1397,7 @@ impl Service {
             "lease.interest" => self.lease_interest(req, params(p)?),
             "events" => self.events(req, params(p)?),
             "inbox" => self.inbox(req),
+            "events.watch" => self.watch(&auth, params(p)?),
             "session.end" => self.agent_end(req, params(p)?),
             "session.heartbeat" => self.heartbeat(req),
             "session.rotate" => self.rotate(req),
@@ -3065,6 +3201,83 @@ impl Service {
         Ok(json!({"events": events, "text": text}))
     }
 
+    /// What happened to the sessions a human started, for a runner that
+    /// wakes agents: never told (an agent's `inbox` keeps it), never a
+    /// message's words. With `wait_ms` and nothing new, held (not the lock)
+    /// like `log`; the clock is looked at every [`LOG_POLL_MS`], since a
+    /// reservation or an expiry needs no entry.
+    fn watch(&self, auth: &Auth, p: Watch) -> Hr {
+        let Caller::Human { human, .. } = &auth.caller else {
+            return fail(
+                "forbidden",
+                "a human session is required (lonca human login)",
+            );
+        };
+        let name = auth.repo()?;
+        let wait = p.wait_ms.unwrap_or(0).clamp(0, LOG_WAIT_MAX_MS);
+        let deadline = std::time::Instant::now() + Duration::from_millis(wait as u64);
+        let known: BTreeSet<&String> = p.reserved.iter().collect();
+        let mut from = p.from;
+        loop {
+            let mut inner = self.lock();
+            let now = self.now();
+            let r = Self::repo(&mut inner, &name)?;
+            let state = &r.chain.state;
+            let next = state.next_seq;
+            let start = *from.get_or_insert(next);
+            let sessions = watched(state, human, p.sessions.as_deref(), now)?;
+            let ended = ended_of(state, p.sessions.as_deref(), now);
+            let mut events = Vec::new();
+            if next > start && !sessions.is_empty() {
+                let ops = ops_for_events(&r.store, start).or_fail()?;
+                for s in &sessions {
+                    let all = for_session(state, s, &ops, start, now);
+                    let logged = all
+                        .iter()
+                        .filter(|e| !matches!(e, SessionEvent::Reserved { .. }));
+                    events.extend(logged.map(|e| watched_event(s, e)));
+                }
+            }
+            let mut reserved = Vec::new();
+            for res in state.reservations_at(now) {
+                if !sessions.contains(&res.session) {
+                    continue;
+                }
+                let id = reservation_id(&res.session, &res.items);
+                if !known.contains(&id) {
+                    events.push(WatchedEvent {
+                        session: res.session.clone(),
+                        kind: "reserved".into(),
+                        seq: None,
+                        change: None,
+                        from: None,
+                        reservation: Some(id.clone()),
+                        until_ms: Some(res.until_ms),
+                    });
+                }
+                reserved.push(id);
+            }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if !events.is_empty() || !ended.is_empty() || left.is_zero() {
+                let out = Watched {
+                    events,
+                    next,
+                    reserved,
+                    ended,
+                };
+                return Ok(json!(out));
+            }
+            // Read up to here: what it held was nobody's this caller watches.
+            from = Some(next);
+            drop(inner);
+            let (m, c) = &self.appended;
+            let held = m.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = c
+                .wait_timeout(held, left.min(Duration::from_millis(LOG_POLL_MS)))
+                .unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
     /// The same for a hook after a tool call: an agent that is editing calls
     /// no tool of Lonca's for minutes, and the sender is waiting.
     fn news_for_hook(
@@ -4510,6 +4723,136 @@ pub fn is_ancestor(store: &Store, ancestor: &GitId, commit: &GitId) -> Result<bo
 
 #[cfg(test)]
 mod tests {
+    /// Every kind of event reaches a watcher as kind, entry, change and
+    /// sender; what was written stays out.
+    #[test]
+    fn a_watcher_gets_the_kind_and_never_the_words() {
+        use super::{ChangeId, SessionEvent as E, watched_event};
+        use lonca_core::ops::{LeaseItem, NegotiationMsg};
+        let c = ChangeId::random();
+        let words = "WORDS-OF-ANOTHER-AGENT";
+        let cases = [
+            (
+                E::Integrated { seq: 1, change: c },
+                "integrated",
+                Some(c),
+                None,
+            ),
+            (
+                E::Conflicted {
+                    seq: 1,
+                    change: c,
+                    conflicts: vec![words.into()],
+                },
+                "conflicted",
+                Some(c),
+                None,
+            ),
+            (
+                E::Failed {
+                    seq: 1,
+                    change: c,
+                    reasons: vec![words.into()],
+                },
+                "failed",
+                Some(c),
+                None,
+            ),
+            (
+                E::Approved {
+                    seq: 1,
+                    target_seq: 0,
+                },
+                "approved",
+                None,
+                None,
+            ),
+            (
+                E::Rejected {
+                    seq: 1,
+                    target_seq: 0,
+                    reason: words.into(),
+                },
+                "rejected",
+                None,
+                None,
+            ),
+            (
+                E::Message {
+                    seq: 1,
+                    thread: words.into(),
+                    from: Some("s9".into()),
+                    message: NegotiationMsg::Counter { note: words.into() },
+                },
+                "message",
+                None,
+                Some("s9"),
+            ),
+            (
+                E::LeaseReceived {
+                    seq: 1,
+                    set: words.into(),
+                    from: Some("s9".into()),
+                },
+                "lease_received",
+                None,
+                Some("s9"),
+            ),
+            (
+                E::SymbolsChanged {
+                    seq: 1,
+                    change: c,
+                    from: words.into(),
+                    sets: vec![words.into()],
+                    symbols: vec![words.into()],
+                },
+                "symbols_changed",
+                Some(c),
+                None,
+            ),
+        ];
+        for (event, kind, change, from) in cases {
+            let w = watched_event("s1", &event);
+            assert_eq!(w.session, "s1");
+            assert_eq!(w.kind, kind);
+            assert_eq!(w.seq, Some(1), "{kind}");
+            assert_eq!(w.change, change, "{kind}");
+            assert_eq!(w.from.as_deref(), from, "{kind}");
+            let said = serde_json::to_string(&w).unwrap();
+            assert!(!said.contains(words), "{said}");
+        }
+        let r = E::Reserved {
+            items: vec![LeaseItem {
+                symbol: words.into(),
+                kind: lonca_core::ops::LeaseKind::Edit,
+                names: vec![],
+            }],
+            until_ms: 7,
+        };
+        let w = watched_event("s1", &r);
+        assert_eq!(
+            (w.kind.as_str(), w.seq, w.until_ms),
+            ("reserved", None, Some(7))
+        );
+        assert!(!serde_json::to_string(&w).unwrap().contains(words));
+    }
+
+    #[test]
+    fn a_reservation_s_name_follows_its_session_and_items() {
+        use super::reservation_id;
+        use lonca_core::ops::{LeaseItem, LeaseKind};
+        let item = |s: &str| LeaseItem {
+            symbol: s.into(),
+            kind: LeaseKind::Edit,
+            names: vec![],
+        };
+        let a = reservation_id("s1", &[item("x")]);
+        assert_eq!(a.len(), 16);
+        assert_eq!(a, reservation_id("s1", &[item("x")]));
+        assert_ne!(a, reservation_id("s2", &[item("x")]));
+        assert_ne!(a, reservation_id("s1", &[item("y")]));
+    }
+
     #[test]
     fn a_prefix_names_one_change_or_says_why_not() {
         use super::{ChangeId, resolve_prefix};

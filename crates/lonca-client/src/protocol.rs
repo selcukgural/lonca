@@ -246,6 +246,89 @@ pub struct Events {
     pub from: u64,
 }
 
+/// `events.watch`: a runner waits, with the human session it started its
+/// agents with, for something it should wake one of them for. It marks
+/// nothing as told: the agent still hears it through `inbox`. Keep the
+/// answer's `next` and `reserved` for the next call ([`Watch::after`]).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Watch {
+    /// `next` of the last answer. `None`: from now on, nothing older.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<u64>,
+    /// Only these sessions, each one this human started. `None`: every
+    /// live session this human started, as it is when the daemon looks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions: Option<Vec<String>>,
+    /// `reserved` of the last answer: reservations already reported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reserved: Vec<String>,
+    /// With nothing new, hold the request this long (the daemon caps it at
+    /// 30 seconds) for something to happen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_ms: Option<i64>,
+}
+
+impl Watch {
+    /// The call that goes on from `answer` with the same sessions and wait.
+    pub fn after(&self, answer: &Watched) -> Self {
+        Self {
+            from: Some(answer.next),
+            reserved: answer.reserved.clone(),
+            ..self.clone()
+        }
+    }
+}
+
+/// The answer to `events.watch`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Watched {
+    pub events: Vec<WatchedEvent>,
+    /// The `from` of the next call.
+    pub next: u64,
+    /// Every reservation the watched sessions hold now, reported or not:
+    /// the `reserved` of the next call.
+    #[serde(default)]
+    pub reserved: Vec<String>,
+    /// Sessions named in `sessions` that can not act any more. The wait
+    /// ends at once while there is one: stop watching it.
+    #[serde(default)]
+    pub ended: Vec<EndedSession>,
+}
+
+/// One thing that happened to a watched session. Never what another agent
+/// wrote: the agent reads that itself, with `inbox` or `events`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchedEvent {
+    pub session: String,
+    /// `integrated`, `conflicted`, `failed`, `approved`, `rejected`,
+    /// `message`, `lease_received`, `symbols_changed` or `reserved`; more
+    /// may come.
+    pub kind: String,
+    /// The log entry it comes from; `None` for `reserved`, which is the
+    /// state now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<ChangeId>,
+    /// The session that sent a message or handed a lease over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// A reservation's name, as it appears in `reserved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation: Option<String>,
+    /// When a reservation runs out unless the session leases it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndedSession {
+    pub session: String,
+    /// Why: the reason it, or the session it came from, was ended with, or
+    /// `expired`.
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FactsPreview {
     pub base: GitId,

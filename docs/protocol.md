@@ -800,6 +800,59 @@ told what it read with `events`. What was told is kept in the daemon's memory,
 so after a restart it may be told again. Nothing is logged. For the rest of
 what happened, `events`.
 
+### `events.watch`
+
+*human.* What happened to the agent sessions this human started, for a
+runner that wakes an idle agent instead of polling. Read-only and never
+logged; it marks nothing as told, so the agent still hears all of it
+through `inbox` and its tools' answers. A runner needs no agent token for
+it: the human session it started the sessions with is enough.
+
+```json
+{"from": integer | null, "sessions": [string] | null,
+ "reserved": [string], "wait_ms": integer | null}
+```
+
+- `from`: `next` of the last answer. Left out: from now on, nothing older.
+- `sessions`: only these, each one this human started (another human's
+  session, or one never started, is `forbidden`, with the same message).
+  Left out: every session this human started that can still act, as it
+  stands each time the daemon looks.
+- `reserved`: `reserved` of the last answer.
+- `wait_ms`: with nothing to report, the daemon holds the request (not its
+  lock) until something comes or the time runs out (capped at 30 000), as
+  `log` does. A new entry wakes it at once; the clock (a reservation, an
+  expiry) is looked at every 2 s.
+
+```json
+{"events": [{"session", "kind", "seq"?, "change"?, "from"?,
+             "reservation"?, "until_ms"?}],
+ "next": integer, "reserved": [string],
+ "ended": [{"session", "reason"}]}
+```
+
+Each event names the session it is for and its `kind`, the same kinds as
+`events`: `integrated`, `conflicted`, `failed` and `symbols_changed` with
+`change`; `approved`, `rejected`; `message` and `lease_received` with
+`from`, the session that sent it; each of those with `seq`, its entry.
+Never what was written: a message's words, its thread, the reasons and
+the conflicts are the agent's to read (`inbox`, `events`), not the
+runner's. `reserved` events have no `seq` but a `reservation` name and
+`until_ms`: a reservation is the state, not an entry. The answer's
+`reserved` lists every reservation the watched sessions hold now; passed
+back, those are not reported again, and one that lapses and comes back is.
+`ended` lists the sessions named in `sessions` that can not act any more,
+with the reason they were ended with or `expired`; while there is one the
+call returns at once, so drop it from `sessions`.
+
+A runner loop: `{"from": status.next_seq, "wait_ms": 30000}`, then the
+same with `from = next` and `reserved = reserved` of each answer; for
+each event, wake that session's agent (it reads the news itself). The
+`lonca-client` crate has it as `Client::watch` and `Watch::after`; a shell
+runner has `lonca events --watch --follow --json`. A waiting request is a
+connection like any other and counts against the daemon's connection
+limits.
+
 ### `change.propose`
 
 *agent.* `{"change": change id | null, "base": id, "files": [file
@@ -1114,6 +1167,12 @@ Exit codes:
   `details` for who holds what.
 - `lease interest SYMBOL… --json`: the same shape; `set` is `null`.
 - `events --from N --json`: the `events` result.
+- `events --watch [--from N] [--session S,…] [--reserved R,…] [--wait SECONDS]
+  --json`, as a human: the `events.watch` result, after at most `--wait`
+  seconds (30 by default). With `--follow`, one call after another: one
+  JSON object per line for each event, and `{"session", "kind": "ended",
+  "reason"}` for a named session that ended; it stops when stdout is
+  closed or every named session has ended.
 - `init --json`: `{"repo", "trunk", "seq", "decision", "warnings":
   [string], "profile"}`. The warnings are those of `repo.prepare_init`; with
   `--json` they are not repeated on stderr.
@@ -1217,4 +1276,4 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   The `lonca-client` crate (#192).
   `change.resolve`; `recover` on `daemon.recover` (log format 27); the
   human key kinds `sk-p256` and `sk-ed25519` and their signatures (log
-  format 28).
+  format 28). `events.watch` and `lonca events --watch` (#262).

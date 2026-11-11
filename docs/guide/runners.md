@@ -565,6 +565,36 @@ taint says content from outside really did enter the session, so it stays
 open. Set `critical = "escalate"` only if whoever approves reads those changes
 knowing the worker may have been told what to write.
 
+## Waking an idle agent
+
+An agent hears what other sessions want of it with the answer of its next
+tool call. An agent that is idle, waiting on an interest or on the queue,
+makes no call, so the runner wakes it. The runner waits with the human
+session it started its agents with, no agent token needed:
+
+```sh
+lonca events --watch --follow --json --repo demo
+# {"session":"s2","kind":"lease_received","seq":41,"from":"s1"}
+# {"session":"s1","kind":"reserved","reservation":"9c0f…","until_ms":…}
+# {"session":"s3","kind":"integrated","seq":44,"change":"…"}
+```
+
+One line per event, for every session this human started (`--session
+s1,s2` for some of them): a change `integrated`, `conflicted` or `failed`,
+a request `approved` or `rejected`, a `message` or a lease handed over
+(`lease_received`) from another session, a change of another session that
+touches what it holds (`symbols_changed`), and an interest of its that is
+now `reserved` for it. For each line, wake that agent (resume it, or send
+it a turn such as "Lonca has news for you; read your inbox"): it reads the
+news itself, with what the other agent wrote, through its tools. The runner
+gets the kind, the session and the change, never the words; and watching
+marks nothing as read, so the agent is told all the same.
+
+A named session that ended or expired comes as `{"kind": "ended",
+"reason"}` and is no longer watched. A runner in Rust uses
+`lonca_client::Client::watch`; the socket method is `events.watch`
+(`docs/protocol.md`).
+
 ## Reading results
 
 - `lonca lease needed --json` in a workspace (the `lease_needed` MCP

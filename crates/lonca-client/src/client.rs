@@ -295,6 +295,18 @@ impl Client {
         let v = self.call(method, params)?;
         serde_json::from_value(v).map_err(|e| gone(&format!("bad result: {e}")))
     }
+
+    /// `events.watch` with the human session this client carries: what
+    /// happened to its agents' sessions, held up to `watch.wait_ms` while
+    /// nothing did. Go on with `watch.after(&answer)`. A client timeout
+    /// ([`Client::set_timeout`]) must be longer than the wait.
+    pub fn watch(
+        &mut self,
+        watch: &crate::protocol::Watch,
+    ) -> Result<crate::protocol::Watched, CallError> {
+        let params = serde_json::to_value(watch).map_err(|e| gone(&format!("bad watch: {e}")))?;
+        self.call_as("events.watch", params)
+    }
 }
 
 #[cfg(test)]

@@ -102,6 +102,8 @@ last column.
 | A27 | In a keyed directory (`[paths.keyed]`), `--name next` reserves the next free key and says which; another agent can not reserve that key | `09-keyed` |
 | A28 | A new file in a keyed directory without its key reserved is refused, naming the key; with it, it lands | `09-keyed` |
 | A29 | A key a file on trunk already has is refused (`key_taken`); a person's change and an agent's that would land one key: the second is conflicted on the key, and the log audits | `09-keyed` |
+| A30 | A runner's `lonca events --watch`, with the human session, wakes when a lease is handed over between two sessions, with the sender but no message text, and the receiving agent still reads it in `lonca events` | `10-watch` |
+| A31 | `lonca events --watch --follow` prints one JSON line per event and stops by itself when every session it watches by name has ended | `10-watch` |
 
 ## Manual criteria
 
@@ -127,5 +129,5 @@ visible. Each becomes a criterion when it is automated.
   --secure-enclave`, FIDO2 keys).
 - The advisor (`lonca advise`): needs a model.
 - Policy changes (`lonca policy`), human enrollment and revocation,
-  negotiation between agents, `lonca revert`, `lonca redact`, `lonca pull`,
+  negotiation between agents beyond a handover, `lonca revert`, `lonca redact`, `lonca pull`,
   session rotation and `--continue`.

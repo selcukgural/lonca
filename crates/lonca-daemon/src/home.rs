@@ -7,7 +7,7 @@
 //!   tokens.json       sha256(token) -> agent session or human session (0600)
 //!   lonca.sock        Unix socket
 //!   repos/<name>.git  bare Git stores
-//!   scratch/          verifier work trees
+//!   scratch/          verifier work trees, a preview's objects
 //!   backups/          bundles written by `repo.backup` (or $LONCA_BACKUPS)
 //! ```
 //!

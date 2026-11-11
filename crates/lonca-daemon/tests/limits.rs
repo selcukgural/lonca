@@ -708,6 +708,134 @@ fn another_session_keeps_its_own_rate() {
     assert_audits(&e);
 }
 
+// ---------------------------------------------------------------- the disk
+
+/// How many files the store's object directory holds.
+fn objects(e: &Env) -> usize {
+    fn count(dir: &Path) -> usize {
+        let entries = std::fs::read_dir(dir).unwrap();
+        let paths = entries.map(|entry| entry.unwrap().path());
+        paths.map(|p| if p.is_dir() { count(&p) } else { 1 }).sum()
+    }
+    count(&e.root.join("home/repos/demo.git/objects"))
+}
+
+fn previews_left(e: &Env) -> usize {
+    let Ok(entries) = std::fs::read_dir(e.root.join("home/scratch")) else {
+        return 0;
+    };
+    let names = entries.map(|entry| entry.unwrap().file_name());
+    names
+        .filter(|n| n.to_string_lossy().starts_with("preview-"))
+        .count()
+}
+
+fn seeded() -> (Env, String, GitId) {
+    let mut e = Env::new();
+    e.init(None);
+    let r = e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_eq!(e.svc.process_all(), 1);
+    let t = e.session("s1", &["src/**"]);
+    let base = e.trunk();
+    (e, t, base)
+}
+
+/// A preview is nobody's record and no rate counts it: what it was sent is
+/// gone when it has answered. A proposal's files are the store's.
+#[test]
+fn a_preview_leaves_nothing_in_the_store() {
+    let (mut e, t, base) = seeded();
+    let before = objects(&e);
+    let files = vec![file("src/new.rs", "pub fn only_previewed() {}\n")];
+    let p = json!({"base": base, "files": files});
+    let r = e.ok("facts.preview", None, Some(&t), p);
+    assert_eq!(r["facts"]["added_files"], json!(["src/new.rs"]), "{r}");
+    assert_eq!(objects(&e), before, "the preview's objects stayed");
+    assert_eq!(previews_left(&e), 0);
+    // A preview that is refused leaves as little.
+    let p = json!({"base": base, "files": [file("src/new.rs", "x"), file("src/new.rs", "y")]});
+    assert_eq!(
+        e.call("facts.preview", None, Some(&t), p).unwrap_err().0,
+        "invalid"
+    );
+    assert_eq!((objects(&e), previews_left(&e)), (before, 0));
+    let r = e.propose(&t, &base, files, &[]);
+    assert!(r["seq"].is_u64(), "{r}");
+    assert!(objects(&e) > before);
+    assert_audits(&e);
+}
+
+/// What a daemon that stopped in the middle of a preview left is removed
+/// by the next one; nothing else in the scratch directory is.
+#[test]
+fn a_new_daemon_removes_the_previews_left_by_the_last() {
+    let (e, _, _) = seeded();
+    let scratch = e.root.join("home/scratch");
+    for dir in ["preview-left", "other"] {
+        std::fs::create_dir_all(scratch.join(dir).join("objects")).unwrap();
+    }
+    std::fs::write(scratch.join("preview-file"), "not a directory").unwrap();
+    e.svc.clear_left_over_verifications();
+    assert_eq!(previews_left(&e), 1, "the file stays");
+    assert!(!scratch.join("preview-left").exists() && scratch.join("other").exists());
+}
+
+/// The store's disk keeps room for the log: below it nothing a caller sends
+/// is written, by an agent or a human, and nothing is logged; what needs no
+/// files goes on.
+#[test]
+fn below_the_floor_a_callers_files_are_not_written() {
+    let (mut e, t, base) = seeded();
+    e.settings.keep_free = u64::MAX;
+    e.reopen();
+    let (seq, before) = (next_seq(&mut e), objects(&e));
+    let files = vec![file("src/new.rs", "pub fn refused() {}\n")];
+    let claim = Claim {
+        intent: "agent change".into(),
+        ..Default::default()
+    };
+    let human = json!({"base": base, "files": files, "author": "ayse", "intent": "x"});
+    let policy = lonca_policy::config::DEFAULT_POLICY;
+    let asked = [
+        (
+            "facts.preview",
+            Some(t.as_str()),
+            None,
+            json!({"base": base, "files": files}),
+        ),
+        (
+            "change.propose",
+            Some(t.as_str()),
+            None,
+            json!({"base": base, "files": files, "claim": claim}),
+        ),
+        ("human.prepare_change", None, Some("demo"), human),
+        (
+            "human.prepare_policy",
+            None,
+            Some("demo"),
+            json!({"config": "", "policy": policy}),
+        ),
+    ];
+    for (method, token, repo, params) in asked.clone() {
+        let (code, msg) = e.call(method, repo, token, params).unwrap_err();
+        assert_eq!(code, "disk_space", "{method}: {msg}");
+        assert!(msg.contains("a human has to free space"), "{msg}");
+    }
+    assert_eq!((next_seq(&mut e), objects(&e)), (seq, before));
+    assert_eq!(previews_left(&e), 0);
+    beat(&mut e, &t).unwrap();
+    assert_eq!(next_seq(&mut e), seq + 1, "the log goes on");
+    // With room again, each is answered.
+    e.settings.keep_free = 0;
+    e.reopen();
+    for (method, token, repo, params) in asked {
+        e.ok(method, repo, token, params);
+    }
+    assert_audits(&e);
+}
+
 // ---------------------------------------------------------------- log, queue
 
 #[test]

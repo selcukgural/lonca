@@ -104,6 +104,24 @@ impl Store {
         &self.path
     }
 
+    /// A store of its own at `dir` that reads this one's objects as well
+    /// (Git's `objects/info/alternates`) and writes only into `dir`: for
+    /// work whose objects are to go when it is done, by removing `dir`.
+    /// It has no refs of this store.
+    pub fn beside(&self, dir: &Path) -> Result<Self> {
+        gix::init_bare(dir).map_err(git)?;
+        let objects = self.path.canonicalize()?.join("objects");
+        let Some(objects) = objects.to_str().filter(|o| !o.contains('\n')) else {
+            return Err(Error::Invalid(
+                "the store's path can not be written as an alternate".into(),
+            ));
+        };
+        let info = dir.join("objects").join("info");
+        std::fs::create_dir_all(&info)?;
+        std::fs::write(info.join("alternates"), format!("{objects}\n"))?;
+        Self::open(dir)
+    }
+
     fn local(&self) -> gix::Repository {
         self.repo.to_thread_local()
     }
@@ -508,6 +526,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = Store::init_bare(&dir.path().join("repo.git")).unwrap();
         (dir, s)
+    }
+
+    #[test]
+    fn a_store_beside_reads_the_first_and_writes_only_its_own() {
+        let (dir, s) = store();
+        let kept = s.write_blob(b"kept").unwrap();
+        let side = dir.path().join("side");
+        let b = s.beside(&side).unwrap();
+        assert_eq!(b.read_blob(&kept).unwrap(), b"kept");
+        let own = b.write_blob(b"its own").unwrap();
+        let mut files = FileMap::new();
+        for (name, blob) in [("a.txt", &kept), ("b.txt", &own)] {
+            let mode = FileMode::Regular;
+            let blob = blob.clone();
+            files.insert(name.into(), FileEntry { mode, blob });
+        }
+        let tree = b.write_tree(&files).unwrap();
+        assert_eq!(b.read_tree(&tree).unwrap(), files);
+        assert!(!s.has_object(&own) && !s.has_object(&tree));
+        // A store opened afresh finds nothing of it either.
+        let again = Store::open(s.path()).unwrap();
+        assert!(again.has_object(&kept) && !again.has_object(&own));
+        std::fs::remove_dir_all(&side).unwrap();
+        assert_eq!(s.read_blob(&kept).unwrap(), b"kept");
     }
 
     #[test]

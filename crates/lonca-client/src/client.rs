@@ -41,6 +41,9 @@ pub enum ErrorKind {
     NotFound,
     TooLarge,
     RateLimited,
+    /// The stores' disk is below what it keeps free: the request's files
+    /// were not written. Not transient; a human frees space.
+    DiskSpace,
     Busy,
     Verifying,
     Closed,
@@ -77,6 +80,7 @@ impl ErrorKind {
             "not_found" => NotFound,
             "too_large" => TooLarge,
             "rate_limited" => RateLimited,
+            "disk_space" => DiskSpace,
             "busy" => Busy,
             "verifying" => Verifying,
             "closed" => Closed,
@@ -364,6 +368,7 @@ mod tests {
             ("not_found", ErrorKind::NotFound),
             ("too_large", ErrorKind::TooLarge),
             ("rate_limited", ErrorKind::RateLimited),
+            ("disk_space", ErrorKind::DiskSpace),
             ("busy", ErrorKind::Busy),
             ("verifying", ErrorKind::Verifying),
             ("closed", ErrorKind::Closed),

@@ -4308,7 +4308,8 @@ and `trunk.bundle` ran git for up to its 600 s. None of the three is
 counted against a session's rate.
 
 - **`facts.preview`** takes the store and the policy, lets the lock go,
-  builds its commit and reads the facts, and takes the lock again for who
+  builds its commit (since then in a store of its own: "The stores' disk
+  keeps room for the log") and reads the facts, and takes the lock again for who
   holds which lease now. The session is asked for again then: it may have
   ended meanwhile. The policy is the one from before the work, like a
   proposal's facts would be if the policy changed a moment later.
@@ -4385,8 +4386,54 @@ open (private advisory, 2026-11-11).
   it counts as the ceiling (`Sessions::rate`).
 - **What is left.** A session at its rate with entries at the limit still
   grows the log, by what the policy allows it; and a proposal's files are
-  objects in the store whatever the log says. A floor on the store's free
-  disk is a separate piece of work.
+  objects in the store whatever the log says: "The stores' disk keeps room
+  for the log", below.
+
+## The stores' disk keeps room for the log
+
+What a caller sends as files was written to the repository's store before
+anything was decided, and nothing asked how much room the disk had left
+(private advisory, 2026-11-11). The store is on the disk the log is on: once
+it is full no entry can be appended, so no lease, no merge, and no freeze or
+revocation either, for every repository of that daemon.
+
+- **A preview's objects are not the store's.** `facts.preview` built its
+  commit in the store: up to 64 MiB of blobs a call that no ref names, from
+  a method no rate counts and no entry records, and nothing ever removed
+  them. It now builds in a store of its own in the scratch directory
+  (`Store::beside`: its objects directory names the repository's as a Git
+  alternate, so the base is read and nothing is copied), and that directory
+  goes when the preview has answered, refused or not. A daemon that stopped
+  in the middle of one leaves a `preview-*` directory; the next removes it
+  at its start, with the verifier's left-overs. Throttling the preview was
+  the other way: it would have spent the rate a session's operations need,
+  and a rate bounds a minute, not a disk.
+- **Below 1 GiB free nothing a caller sends is written** (`KEEP_FREE_BYTES`,
+  `Service::room`): `change.propose`, `facts.preview`,
+  `human.prepare_change` and `human.prepare_policy` answer `disk_space`
+  before a blob is written, and nothing is logged. A proposal's objects stay
+  whatever is decided of it (a refused one is a record too), so the disk is
+  asked before, not after. The log itself is not held to it: the floor is
+  there so that entries can go on, and a session's heartbeat, a freeze or a
+  revocation needs kilobytes. A disk that can not be asked counts as full,
+  as for the verifier.
+- **A number in the code, not a policy key.** The policy is a file in the
+  store it would protect, each repository has its own while the disk is one,
+  and a floor somebody can set to nothing is not one (the rule of
+  `MAX_OPS_PER_MINUTE`). 1 GiB is `[verification] keep_free_bytes`' default:
+  the two guard the same disk, and below it no proposal could be verified
+  anyway. Tests set it through `Settings::keep_free`.
+- **A look, not a quota.** Proposals are written one at a time under the
+  lock, so each sees what the last left; previews run beside them, each up
+  to 64 MiB for as long as it takes, bounded by the connections.
+- **What is left.** A session can still take the disk down to the floor
+  with proposals: 64 MiB each, at its rate, each one an entry that names
+  it. Then proposals are refused for everyone until a human frees space,
+  and ending the session gives nothing back: the log is append-only, and
+  what its entries name stays. Nothing tells a human that the floor was
+  reached except the refusals themselves. What a human fetches
+  (`repo.init --import`, `repo.restore`, `human.prepare_import`) is git's
+  to write and is not asked about.
 
 ## Open questions (carried from the design)
 

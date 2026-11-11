@@ -75,6 +75,9 @@ pub struct Settings {
     /// The longest response line (`MAX_LINE` outside tests): `blobs`
     /// refuses a page that would not fit.
     pub line_cap: usize,
+    /// What the stores' disk keeps free (`KEEP_FREE_BYTES` outside tests):
+    /// below it a caller's files are not written.
+    pub keep_free: u64,
     /// Where the network proxy listens (`host:port`), for `lonca run`.
     pub proxy: Option<String>,
     /// A hardened install: a new repository starts hardened, and one that
@@ -119,6 +122,7 @@ impl Default for Settings {
             local_roots: None,
             import_dir: None,
             line_cap: MAX_LINE,
+            keep_free: crate::repo::KEEP_FREE_BYTES,
             proxy: None,
             hardened: false,
         }
@@ -445,6 +449,10 @@ pub const LONG_LINES: &[&str] = &[
     "hook.input",
     "hook.stop",
 ];
+
+/// What the directory of a preview's objects is called, in the scratch
+/// directory.
+const PREVIEW_PREFIX: &str = "preview-";
 
 /// Agent methods that write nothing to the log, and `session.end`: a session
 /// over its rate must still be able to stop. `mcp.call` writes once in a
@@ -2031,7 +2039,42 @@ impl Service {
     /// Only once this daemon holds the socket, and so knows it is the only
     /// one on this home: see [`Verifier::clear_left_over`].
     pub fn clear_left_over_verifications(&self) -> usize {
+        self.clear_left_over_previews();
         self.verifier.clear_left_over()
+    }
+
+    /// Removes the object directories of previews a daemon that stopped in
+    /// the middle of them left in the scratch directory.
+    fn clear_left_over_previews(&self) {
+        let Ok(entries) = std::fs::read_dir(self.home.scratch()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            if is_dir && name.to_string_lossy().starts_with(PREVIEW_PREFIX) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+
+    /// Refuses, before a caller's files are written to `store`, when its
+    /// disk is down to what it keeps for the log (`Settings::keep_free`). A
+    /// disk that can not be asked counts as full. It is a look, not a
+    /// quota: what is being written meanwhile is not counted.
+    fn room(&self, store: &Path) -> std::result::Result<(), (String, String)> {
+        let keep = self.settings.keep_free;
+        if lonca_verify::free_bytes(store).is_some_and(|free| free >= keep) {
+            return Ok(());
+        }
+        fail(
+            "disk_space",
+            format!(
+                "the disk of the daemon's stores has less than {keep} bytes free, which it keeps \
+                 for the log: the files were not written and nothing was logged. Trying again \
+                 does not help; a human has to free space on that disk"
+            ),
+        )
     }
 
     /// What to say at the start about `sandbox`: the repositories whose
@@ -2543,6 +2586,7 @@ impl Service {
         let r = Self::repo(&mut inner, &name)?;
         let now = self.now();
         let change = p.change.unwrap_or_else(ChangeId::random);
+        self.room(r.store.path())?;
         let max = r.policy().or_fail()?.config.changes.max_file_bytes;
         let commit = r
             .build_change_commit(
@@ -2584,6 +2628,7 @@ impl Service {
         let mut inner = self.lock();
         let r = Self::repo(&mut inner, &name)?;
         let parent = r.chain.state.policy.clone();
+        self.room(r.store.path())?;
         let commit = r
             .write_policy(&p.config, &p.policy, parent.as_ref(), self.now())
             .or_fail()?;
@@ -3404,6 +3449,7 @@ impl Service {
             claim: p.claim.clone(),
         };
         RepoHandle::op_fits(&actor, &probe, None).or_fail()?;
+        self.room(r.store.path())?;
         let max = r.policy().or_fail()?.config.changes.max_file_bytes;
         let commit = r
             .build_change_commit(
@@ -3491,6 +3537,17 @@ impl Service {
             let r = Self::repo(&mut guard, &repo)?;
             (actor, r.store.clone(), r.policy().or_fail()?)
         };
+        // Its objects are nobody's record: they go to a directory of their
+        // own beside the store, which goes with this answer. In the store
+        // they would stay for good, from a method no rate counts.
+        self.room(store.path())?;
+        let scratch = self.home.scratch();
+        std::fs::create_dir_all(&scratch).map_err(|e| from_err(e.into()))?;
+        let own = tempfile::Builder::new()
+            .prefix(PREVIEW_PREFIX)
+            .tempdir_in(&scratch)
+            .map_err(|e| from_err(e.into()))?;
+        let store = store.beside(own.path()).or_fail()?;
         let commit = RepoHandle::build_change_commit_in(
             &store,
             &p.base,

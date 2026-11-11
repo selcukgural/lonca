@@ -2287,13 +2287,37 @@ impl Service {
     /// page.
     fn trunk_bundle(&self, auth: &Auth, p: TrunkBundle) -> Hr {
         let name = auth.repo()?;
-        let mut inner = self.lock();
-        let r = Self::repo(&mut inner, &name)?;
-        let store = r.store.clone();
-        let trunk = r.chain.state.trunk.clone().expect("initialized");
-        let redacted = r.chain.state.redacted.clone();
-        let have: Vec<String> = p
-            .have
+        // Git makes the bundle without the lock, for as long as it takes.
+        // Trunk may move meanwhile; then the bundle is made again, so what
+        // is answered is one trunk and its bundle.
+        for _ in 0..3 {
+            let (store, trunk, redacted) = {
+                let mut inner = self.lock();
+                let r = Self::repo(&mut inner, &name)?;
+                let trunk = r.chain.state.trunk.clone().expect("initialized");
+                (r.store.clone(), trunk, r.chain.state.redacted.clone())
+            };
+            let made = self.bundle_of(&name, &store, &trunk, &redacted, &p.have)?;
+            if store.ref_get(TRUNK_REF).or_fail()?.as_ref() == Some(&trunk) {
+                return Ok(made);
+            }
+        }
+        fail(
+            "busy",
+            "trunk moved while its bundle was made; send it again",
+        )
+    }
+
+    /// The bundle of `refs/heads/main` past `have`, answered as `trunk`'s.
+    fn bundle_of(
+        &self,
+        name: &str,
+        store: &Store,
+        trunk: &GitId,
+        redacted: &BTreeSet<GitId>,
+        have: &[GitId],
+    ) -> Hr {
+        let have: Vec<String> = have
             .iter()
             .filter(|h| store.read_commit(h).is_ok())
             .map(|h| format!("^{h}"))
@@ -3214,10 +3238,18 @@ impl Service {
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
-        let ops = OpLog::new(&r.store).read_all().or_fail()?;
-        let state = &r.chain.state;
-        let events = for_session(state, &session, &ops, p.from, now);
+        // The log is read without the lock, as long as it is: the state is
+        // taken as it stands, and entries appended meanwhile are left for
+        // the next call.
+        let store = r.store.clone();
+        let state = r.chain.state.clone();
         let next = state.next_seq;
+        drop(guard);
+        let mut ops = OpLog::new(&store).read_all().or_fail()?;
+        ops.retain(|o| o.entry.seq < next);
+        let events = for_session(&state, &session, &ops, p.from, now);
+        let mut guard = self.lock();
+        let r = Self::repo(&mut guard, &repo)?;
         r.told
             .entry(session)
             .or_default()
@@ -3440,29 +3472,36 @@ impl Service {
     }
 
     fn facts_preview(&self, req: &Request, p: FactsPreview) -> Hr {
+        // The commit is built and read without the lock: it is the caller's
+        // work, as long as its files, and nothing else may wait for it.
+        let (actor, store, policy) = {
+            let mut guard = self.lock();
+            let (repo, actor) = Self::agent(&guard, req, self.now())?;
+            let r = Self::repo(&mut guard, &repo)?;
+            (actor, r.store.clone(), r.policy().or_fail()?)
+        };
+        let commit = RepoHandle::build_change_commit_in(
+            &store,
+            &p.base,
+            &p.files,
+            ChangeId::random(),
+            &actor.label(),
+            "preview@lonca.invalid",
+            ("lonca-preview", "1"),
+            "",
+            self.now(),
+            policy.config.changes.max_file_bytes,
+        )
+        .or_fail()?;
+        let keyed = &policy.keyed;
+        let a = facts_keyed(&store, ENGINE_CURRENT, &p.base, &commit, keyed).or_fail()?;
+        // Who holds what is the state's, as it is now.
         let mut guard = self.lock();
         let now = self.now();
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let r = Self::repo(&mut guard, &repo)?;
-        let max = r.policy().or_fail()?.config.changes.max_file_bytes;
-        let change = ChangeId::random();
-        let commit = r
-            .build_change_commit(
-                &p.base,
-                &p.files,
-                change,
-                &actor.label(),
-                "preview@lonca.invalid",
-                ("lonca-preview", "1"),
-                "",
-                now,
-                max,
-            )
-            .or_fail()?;
-        let keyed = &r.policy().or_fail()?.keyed;
-        let a = facts_keyed(&r.store, ENGINE_CURRENT, &p.base, &commit, keyed).or_fail()?;
         let session = actor.session().expect("agent");
-        let unparsed = r.policy().or_fail()?.config.leases.unparsed_files;
+        let unparsed = policy.config.leases.unparsed_files;
         let mut leases = details::lease_report(&r.chain.state, session, &a.facts, unparsed, now);
         leases.extend(details::key_report(
             &r.chain.state,

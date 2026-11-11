@@ -266,8 +266,37 @@ impl RepoHandle {
         time_ms: i64,
         max_file_bytes: u64,
     ) -> Result<GitId> {
-        let base_info = self.store.read_commit(base)?;
-        let mut files = self.store.read_tree(&base_info.tree)?;
+        Self::build_change_commit_in(
+            &self.store,
+            base,
+            changes,
+            change,
+            author_name,
+            author_email,
+            attribution,
+            intent,
+            time_ms,
+            max_file_bytes,
+        )
+    }
+
+    /// [`Self::build_change_commit`] with the store alone: a preview builds
+    /// its commit while others use the repository.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_change_commit_in(
+        store: &Store,
+        base: &GitId,
+        changes: &[FileChange],
+        change: ChangeId,
+        author_name: &str,
+        author_email: &str,
+        attribution: (&str, &str),
+        intent: &str,
+        time_ms: i64,
+        max_file_bytes: u64,
+    ) -> Result<GitId> {
+        let base_info = store.read_commit(base)?;
+        let mut files = store.read_tree(&base_info.tree)?;
         let mut total = 0usize;
         let mut seen = std::collections::BTreeSet::new();
         for c in changes {
@@ -314,18 +343,18 @@ impl RepoHandle {
                         c.path.clone(),
                         FileEntry {
                             mode,
-                            blob: self.store.write_blob(&bytes)?,
+                            blob: store.write_blob(&bytes)?,
                         },
                     );
                 }
             }
         }
-        let tree = self.store.write_tree(&files)?;
+        let tree = store.write_tree(&files)?;
         if tree == base_info.tree {
             return Err(Error::Invalid("the change is empty".into()));
         }
         let message = commit_message(intent, change);
-        self.store.write_commit(&CommitSpec {
+        store.write_commit(&CommitSpec {
             tree,
             parents: vec![base.clone()],
             author_name: author_name.into(),

@@ -1,5 +1,9 @@
 //! `lonca`: the command line for humans and agents.
 
+// Everything a person reads goes through `out` (`out!`, `outln!`,
+// `errln!`), which makes it safe for a terminal: agents wrote much of it.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 #[macro_use]
 mod out;
 
@@ -853,14 +857,14 @@ fn main() -> ExitCode {
             Ok(()) => match out::failed() {
                 None => ExitCode::SUCCESS,
                 Some(e) => {
-                    eprintln!("lonca: writing to stdout: {e}");
+                    errln!("lonca: writing to stdout: {e}");
                     ExitCode::from(3)
                 }
             },
             Err(e) if out::is_closed_pipe(&e) => ExitCode::SUCCESS,
             Err(e) => {
                 if !doctor::reported(&e) {
-                    eprintln!("lonca: {e:#}");
+                    errln!("lonca: {e:#}");
                 }
                 ExitCode::from(ctx::exit_code(&e))
             }
@@ -1271,7 +1275,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let said =
                 lonca_daemon::service::sandbox_at_start(hardened, sandbox, allow_unsandboxed);
             if let Some(line) = said.map_err(anyhow::Error::msg)? {
-                eprintln!("lonca daemon: {line}");
+                errln!("lonca daemon: {line}");
             }
             let home = home
                 .map(lonca_daemon::Home::new)
@@ -1284,7 +1288,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 true => None,
                 false => lonca_daemon::proxy::bind(&proxy)
                     .inspect_err(|e| {
-                        eprintln!("lonca daemon: proxy not started on {proxy}: {e}");
+                        errln!("lonca daemon: proxy not started on {proxy}: {e}");
                     })
                     .ok(),
             };
@@ -1310,7 +1314,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let svc =
                 lonca_daemon::Service::open(home.clone(), settings, lonca_daemon::system_clock())?;
             for line in svc.sandbox_warnings(sandbox) {
-                eprintln!("lonca daemon: {line}");
+                errln!("lonca daemon: {line}");
             }
             let access = lonca_daemon::server::Access {
                 mode: u32::from_str_radix(&socket_mode, 8)
@@ -1337,12 +1341,12 @@ fn run(cmd: Cmd) -> Result<()> {
                 Some(_) => {
                     let left = svc.clear_left_over_verifications();
                     if left > 0 {
-                        eprintln!(
+                        errln!(
                             "lonca daemon: ended what {left} verification(s) of an earlier run left"
                         );
                     }
                 }
-                None => eprintln!(
+                None => errln!(
                     "lonca daemon: another daemon holds {}; what verifications left is not cleared",
                     home.root.display()
                 ),
@@ -1351,12 +1355,12 @@ fn run(cmd: Cmd) -> Result<()> {
             if let Some(l) = proxy_listener {
                 let s = svc.clone();
                 std::thread::spawn(move || lonca_daemon::proxy::serve(l, s));
-                eprintln!(
+                errln!(
                     "lonca daemon: network proxy on {}",
                     proxy_addr.as_deref().unwrap_or(&proxy)
                 );
             }
-            eprintln!(
+            errln!(
                 "lonca daemon: listening on {} (key {})",
                 home.socket().display(),
                 &svc.public_key()[..16]
@@ -1557,7 +1561,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let op: Op = serde_json::from_value(prep["op"].clone())?;
             if !as_json {
                 for w in prep["warnings"].as_array().into_iter().flatten() {
-                    eprintln!("warning: {}", w.as_str().unwrap_or_default());
+                    errln!("warning: {}", w.as_str().unwrap_or_default());
                 }
             }
             let sig = ctx::sign(&human, &repo, &op)?;
@@ -1898,7 +1902,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 }
             }
             if let Some(w) = &r.git_warning {
-                eprintln!("warning: .git still shows the old base: {w}");
+                errln!("warning: .git still shows the old base: {w}");
             }
             Ok(())
         }

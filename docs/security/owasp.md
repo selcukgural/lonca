@@ -95,7 +95,7 @@ requirement in it met, or the exception named.
 |---|---|---|
 | V1.1 Encoding and sanitization architecture | met | protocol is JSON lines with typed shapes (`docs/protocol.md`); canonical JSON for the log (`canonical.rs`) |
 | V1.2 Injection prevention | met | git arguments behind `--`, validated remotes and branches (`service.rs` `check_remote`, `check_branch`), clean git environment (`gitcmd.rs`); Cedar values typed |
-| V1.3 Sanitization | met | advisor output (`advise.rs` `printable`, `clean`); event text (`security.rs` `clean`); paths refuse control and bidi characters (`paths.rs`) |
+| V1.3 Sanitization | met | everything the CLI and the auditor print for a person has its control and bidi characters written out, at the one place that writes (`lonca_core::terminal::printable`, `crates/lonca-cli/src/out.rs`); advisor output (`advise.rs` `printable`, `clean`); event text (`security.rs` `clean`); paths refuse bidi characters (`paths.rs`) |
 | V1.4 Memory, string and unmanaged code | met | Rust; unsafe code refused outside named FFI modules with SAFETY notes (#61) |
 | V1.5 Safe deserialization | met | serde into fixed types, `deny_unknown_fields` on policy, unknown operation types refused; line and size limits before parsing (#50) |
 | V2.1 Validation documentation | met | `docs/protocol.md` names every field and limit |

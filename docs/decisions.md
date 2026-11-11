@@ -4238,6 +4238,36 @@ name it took.
   their bytes and replay as they were, and nothing in the protocol changes
   shape.
 
+## Text for a terminal
+
+A person approves from what `pending`, `diff` and `status` show, and most
+of that text is an agent's: an intent, a path, the lines of a file, the
+reason of a denial that quotes another agent. A terminal obeys escape
+sequences, carriage returns and bidirectional controls, so such text could
+redraw the list it was part of.
+
+- **One place writes** (`crates/lonca-cli/src/out.rs`). Everything the CLI
+  prints for a person goes through `out!`, `outln!` or `errln!`, and they
+  pass the finished text through `lonca_core::terminal::printable`. A
+  command can not forget to clean a field, because no command cleans one,
+  and clippy refuses `println!` and `eprintln!` in the CLI
+  (`print_stdout`, `print_stderr`, denied in `main.rs`).
+  `lonca-audit` does the same for its report.
+- **Written out, not dropped.** `\u{1b}`, `\r`, `\u{202e}`: the reviewer
+  sees that something was there. Newlines and tabs stay. All of C0 but
+  those two, DEL, C1, the bidi controls and U+2028/2029.
+- **Always, not only on a terminal.** Output piped to a pager reaches a
+  terminal too. A program reads `--json`, which has the text as it is: a
+  JSON string has no raw control character.
+- **What writes as it is**: `doctor`'s own colours (`write_painted`; what
+  it shows from elsewhere is cleaned before it is painted), the hook's and
+  the MCP server's JSON, and the output of the command `lonca run` runs,
+  which is that command's terminal.
+- **Not refused at the source.** Intents and paths may still hold these
+  characters in the log: refusing them is a rule of `decide()` and a log
+  format, and what shows them is the place that must be right either way.
+  A program that shows Lonca's JSON to a person has the same duty.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

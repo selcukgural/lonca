@@ -203,7 +203,7 @@ impl Prepared {
             }
         }
         if !self.filled.note.is_empty() {
-            eprintln!("{}", self.filled.note);
+            errln!("{}", self.filled.note);
         }
         Ok(())
     }

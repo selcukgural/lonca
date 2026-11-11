@@ -8,9 +8,16 @@
 //! halfway. `main` then exits as the command did, without a panic. Any other
 //! write error (a full disk under a redirect) is kept and reported, because
 //! output lost there is not what the reader asked for.
+//!
+//! What is written is made safe for a terminal on the way (see
+//! `lonca_core::terminal`): no command prints a control character an agent
+//! put into an intent, a path or a file. Errors go the same way through
+//! [`errln!`].
 
 use std::fmt;
 use std::io::{self, ErrorKind, Write};
+
+use lonca_core::terminal::printable;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -52,8 +59,31 @@ impl Sink {
 static STDOUT: Sink = Sink::new();
 
 /// Writes `args` to stdout, unless it is closed. See the module docs.
+///
+/// Much of what a command prints an agent wrote (an intent, a path, the
+/// lines of a diff), and a person approves from what the screen shows: the
+/// text goes out [`printable`], whatever the command put into it.
 pub fn write(args: fmt::Arguments) {
-    STDOUT.write(&mut io::stdout().lock(), args);
+    let text = fmt::format(args);
+    STDOUT.write(
+        &mut io::stdout().lock(),
+        format_args!("{}", printable(&text)),
+    );
+}
+
+/// Writes text with the command's own colours in it, as it is. What came
+/// from elsewhere must be [`printable`] before it is painted: `doctor`'s
+/// report is the one caller.
+pub fn write_painted(text: &str) {
+    STDOUT.write(&mut io::stdout().lock(), format_args!("{text}"));
+}
+
+/// Writes `args` to stderr, [`printable`]: an error quotes what the daemon
+/// said, and a denial quotes agents.
+pub fn error(args: fmt::Arguments) {
+    let text = fmt::format(args);
+    // Nothing is left to tell when stderr is gone.
+    let _ = writeln!(io::stderr().lock(), "{}", printable(&text));
 }
 
 /// The reader closed stdout: a command that would go on writing stops.
@@ -90,6 +120,13 @@ macro_rules! outln {
     };
     ($($arg:tt)*) => {
         $crate::out::write(format_args!("{}\n", format_args!($($arg)*)))
+    };
+}
+
+/// `eprintln!` whose text is safe on a terminal.
+macro_rules! errln {
+    ($($arg:tt)*) => {
+        $crate::out::error(format_args!($($arg)*))
     };
 }
 

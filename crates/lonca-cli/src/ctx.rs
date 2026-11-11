@@ -129,7 +129,7 @@ pub fn denied(r: &Value) -> Result<()> {
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
         if let Some(advice) = r["advice"].as_str() {
-            eprintln!("{advice}");
+            errln!("{advice}");
         }
         bail!(Refused(reasons.join(", ")));
     }
@@ -372,7 +372,7 @@ pub fn sk_keygen_at(p: &Path, ty: SkType, name: &str) -> Result<HumanKey> {
         SkType::Ecdsa => "ecdsa-sk",
         SkType::Ed25519 => "ed25519-sk",
     };
-    eprintln!("making a key on your security key: touch it when it blinks");
+    errln!("making a key on your security key: touch it when it blinks");
     let application = format!("application={}", lonca_policy::human::sk::APPLICATION);
     let status = std::process::Command::new(ssh_keygen())
         .args(["-q", "-t", ty, "-O", &application, "-N", "", "-C"])
@@ -437,7 +437,7 @@ fn sk_public(line: &str) -> Result<HumanKey> {
 fn sk_sign(p: &Path, msg: &[u8], what: &str) -> Result<String> {
     use std::io::Write;
     use std::process::Stdio;
-    eprintln!("{what}\ntouch your security key to sign");
+    errln!("{what}\ntouch your security key to sign");
     let mut child = std::process::Command::new(ssh_keygen())
         .args(["-Y", "sign", "-n", lonca_policy::human::sk::NAMESPACE, "-f"])
         .arg(p)

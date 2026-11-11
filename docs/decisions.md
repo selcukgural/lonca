@@ -3296,7 +3296,9 @@ daemon fetched from.
   daemon pushes over SSH as the developer's own `git push` would), `LANG`,
   `LC_ALL` and `TMPDIR`; then `HOME=<daemon home>/git-home`,
   `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0`,
-  `GIT_ALLOW_PROTOCOL=file:https:ssh`, and `-c core.hooksPath=/dev/null -c
+  `GIT_ALLOW_PROTOCOL=file:https:ssh`, `GIT_LITERAL_PATHSPECS=1` (a
+  repository path given to git is that file and never a pattern: a file may
+  be called `:!src/a.rs` or `src/*`), and `-c core.hooksPath=/dev/null -c
   credential.interactive=never`. `GIT_CONFIG_*`, `GIT_SSH_COMMAND`, `GIT_DIR`
   and the rest do not reach it. **Credentials** for HTTPS remotes go in
   `<daemon home>/git-home/.gitconfig`, a file of the daemon's user: that is

@@ -27,6 +27,15 @@ copy what its workspace holds, and start a new session in a new directory.
 The daemon and `lonca hook` are upgraded together, as always; the new
 socket method is `session.where` (public).
 
+### The reviewer's diff takes file names literally
+
+A file may have a name that git reads as a pattern, such as `src/*` or
+`:!src/billing.rs`. `lonca diff <change>` (the socket's `change.diff`) now
+shows such a file as itself, and every other changed file beside it: the
+daemon's git takes each path as the file it names
+(`GIT_LITERAL_PATHSPECS=1`). What is integrated was never affected, only
+the text shown for review.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

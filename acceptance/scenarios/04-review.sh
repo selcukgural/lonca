@@ -1,5 +1,5 @@
-# What a human does to agents' work: reject, undo, freeze; and a human's own
-# change from a plain git checkout.
+# What a human does to agents' work: reject, undo, freeze, read its diff; and
+# a human's own change from a plain git checkout.
 source "$ACC_LIB"
 standard_setup
 ok lonca session start --repo demo --agent claude --paths 'src/**' --workspace "$HOME/ws/claude"
@@ -66,3 +66,20 @@ eventually "the human's commit in trunk" readme_in_trunk
 ok lonca fetch
 [ "$(git rev-parse refs/lonca/trunk)" = "$(git -C "$STORE/demo.git" rev-parse main)" ] ||
     fail "refs/lonca/trunk is not trunk"
+
+criterion A36 "the reviewer's diff shows every changed file, also beside files whose names are git patterns"
+cd "$HOME/ws/claude"
+ok lonca session end
+cd "$HOME"
+ok lonca session start --repo demo --agent codex --paths '**' --workspace "$HOME/ws/codex"
+cd "$HOME/ws/codex"
+ok lonca lease acquire 'src/billing.rs#Client.refund' ':!src/billing.rs#<file>' 'src/*#<file>' -i 'refund guard'
+edit src/billing.rs 's/\+= amount/+= amount.max(0)/'
+mkdir ':!src'
+echo "not a pattern" >':!src/billing.rs'
+echo "not a pattern" >'src/*'
+ok lonca propose -i 'refund guard' --accept-facts
+ok lonca diff "$(change_of)" --repo demo
+has '^\+.*amount\.max\(0\)'
+has '^\+\+\+ b/:!src/billing\.rs$'
+has '^\+\+\+ b/src/\*$'

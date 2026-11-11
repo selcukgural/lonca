@@ -237,6 +237,18 @@ It does not catch:
   outlive the sweep at the end of a run. Such a process holds a dead token,
   and a later run refuses the workspace it can still write. If the launcher
   itself is killed, nothing sweeps.
+- **On macOS the sandbox shares some of the machine.** Seatbelt has no
+  namespaces. A sandboxed process can open POSIX shared memory and
+  semaphores by name (test suites and language runtimes need them, under
+  names of their own choosing), so it can read and write a segment another
+  process of the same user made, if it knows or guesses the name. An
+  isolated session, which has a way out through the proxy, may ask the
+  system's certificate service (`trustd`), which runs outside the sandbox
+  and may itself fetch what a certificate names (an issuer, a revocation
+  answer) from a host of the certificate's choosing, past the proxy and
+  its list; whether that carries anything worth having back was not
+  measured. Verification has no way out and may not ask it. On Linux
+  (bubblewrap) the sandbox has its own `/dev/shm` and no such service.
 - **`sandbox_check` is not a public macOS API**, and `sandbox-exec` is
   deprecated. Both fail closed: if either goes away, isolated sessions stop
   working and say so. Whether a hardened daemon may ask about another user's

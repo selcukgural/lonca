@@ -146,6 +146,15 @@ Settings written by the hardened installers pass as before. If yours were
 written by hand and the level drops to `unobserved`, `lonca doctor` says
 which of the two it is.
 
+### A logout that could not be saved is saved at the next try
+
+When the daemon could not write its token file (a full disk), `lonca human
+logout` reported the failure, and a second try reported success without
+writing anything: the session came back after a daemon restart, until it
+expired. A failed write is now made up at the next call, the worker's own
+within two seconds included. A `lonca session rotate` whose write fails
+leaves the old token working instead of locking the session out.
+
 ### One entry of the log has a size, and the proxy a rate
 
 The log keeps every entry, so what goes into one is now bounded before it

@@ -3292,6 +3292,18 @@ and `tokens.json` kept it for good.
   token for the same session changes nothing a decision reads. It is a
   security event for #56. `lonca session rotate` calls it from a workspace
   and writes the new token where the old one was read.
+- **A change that did not reach the file is not done.** `tokens.json` is
+  what a restarted daemon knows, and a write of it can fail (a full disk).
+  A token taken away (logout, a session's end, the sweep) used to be gone
+  in memory while the file kept it; asked again, the daemon found nothing
+  to take, wrote nothing and said yes, and the token worked once more
+  after a restart. Now the caller is still told of the failure, the token
+  stays away in memory (the safe side), and the file is written at the
+  next call that takes anything away, whether it finds something to take
+  or not: `lonca human logout` again, or the worker's sweep within two
+  seconds. The other way round, a token that could not be written is not
+  kept in memory either, and a rotation whose write fails leaves the old
+  token working (it used to lock the session out until a restart).
 - **Clients read the token afresh.** `lonca mcp` reads the workspace's token
   before every tool call and every heartbeat, so a rotation or a revocation
   takes effect at once; a hook is a new process each time.

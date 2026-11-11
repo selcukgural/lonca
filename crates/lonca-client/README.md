@@ -42,6 +42,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+A runner wakes an idle agent when something happens to its session,
+with the human session it started the agents with and one open request
+(`events.watch`). It gets the kind of news, never another agent's words,
+and takes nothing from the agent's own inbox:
+
+```rust,no_run
+# use std::path::Path;
+# use lonca_client::Client;
+use lonca_client::protocol::Watch;
+use lonca_client::session::{humans_dir, read_session, session_path};
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let socket = Path::new("/home/me/.lonca/lonca.sock");
+let mut client = Client::connect(socket)?;
+// The session `lonca human login --as ayse` left.
+let file = session_path(&humans_dir().ok_or("no humans dir")?, "ayse")?;
+let human = read_session(&file)?.ok_or("log in first")?;
+client.token = Some(human.token);
+client.repo = Some("demo".into());
+
+let mut watch = Watch {
+    wait_ms: Some(30_000),
+    ..Watch::default()
+};
+loop {
+    let got = client.watch(&watch)?;
+    for event in &got.events {
+        // Resume the agent of `event.session`: it reads its inbox itself.
+        println!("wake {} for {}", event.session, event.kind);
+    }
+    watch = watch.after(&got);
+}
+# }
+```
+
 Every method, its credential and its shapes are in
 [the daemon protocol](https://selcukgural.github.io/lonca/docs/protocol);
 running agents on Lonca is in

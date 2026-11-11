@@ -149,6 +149,38 @@ fn with_every_connection_at_work_a_new_one_is_refused() {
     assert_eq!(working.answer().id, 5, "the request held was not cut");
 }
 
+/// A runner's `events.watch` is a connection at work like any other: it
+/// counts against the limits while it waits, and is answered at its end.
+#[test]
+fn a_waiting_watch_holds_its_place_and_no_more() {
+    let mut e = Env::new();
+    e.init(None);
+    let auth = human_auth(&mut e);
+    let sock = served(
+        &e,
+        Limits {
+            connections: 2,
+            per_uid: 2,
+            ..Limits::default()
+        },
+    );
+    let held = r#""params":{"wait_ms":1500}}"#;
+    let mut first = Raw::open(&sock);
+    first.send(format!("{{\"id\":5,\"method\":\"events.watch\",{auth}{held}\n").as_bytes());
+    let mut second = Raw::open(&sock);
+    second.send(format!("{{\"id\":6,\"method\":\"events.watch\",{auth}{held}\n").as_bytes());
+    std::thread::sleep(Duration::from_millis(300));
+    let mut late = Raw::open(&sock);
+    assert_eq!(late.code(), "busy");
+    assert!(late.closed());
+    for (mut w, id) in [(first, 5), (second, 6)] {
+        let a = w.answer();
+        assert_eq!(a.id, id, "the watch held was not cut");
+        assert!(a.ok, "{:?}", a.error);
+        assert_eq!(a.result["events"], json!([]));
+    }
+}
+
 #[test]
 fn a_uid_that_is_not_listed_gets_nothing() {
     let e = Env::new();

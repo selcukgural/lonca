@@ -56,6 +56,11 @@ pub fn write(args: fmt::Arguments) {
     STDOUT.write(&mut io::stdout().lock(), args);
 }
 
+/// The reader closed stdout: a command that would go on writing stops.
+pub fn closed() -> bool {
+    STDOUT.closed.load(Ordering::Relaxed)
+}
+
 /// The first write to stdout that failed for another reason than a closed
 /// pipe.
 pub fn failed() -> Option<String> {

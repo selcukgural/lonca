@@ -1479,6 +1479,7 @@ A01/A07, zero trust: every request authenticated).
 | `lease.interest` | agent | |
 | `events` | agent | |
 | `inbox` | agent | |
+| `events.watch` | human | what happened to the sessions the human started, held until something did; marks nothing as told |
 | `change.propose` | agent | |
 | `change.withdraw` | agent | |
 | `facts.preview` | agent | |
@@ -4034,6 +4035,50 @@ merge, and both landed unless a check happened to run the migrations.
   reads the keyed directories of the policy it began under, and the auditor
   those of the policy at the entry: the daemon logs an integration only if
   the policy's digest is the same when it does.
+
+## A runner waits for events (#262)
+
+A runner that starts several agents wants to wake an idle one when
+something it cares about happens: a lease handed to it, an interest now
+reserved for it, its change integrated, conflicted or refused, a message.
+`inbox` rides on the agent's next tool call, which an idle agent never
+makes, and `events` is a poll that marks what it returns as told, so a
+runner polling with the agent's token took the news out of the agent's own
+inbox.
+
+- **Who waits: the human (option A of the issue).** `events.watch` takes
+  the human session the runner started the sessions with, and looks at the
+  sessions whose `root_human` is that human: every live one, or those named
+  in `sessions`. The other option, the agents' tokens in the runner, would
+  have put every token in one more process and made the runner hold ten
+  credentials for ten agents. A runner already holds the human session (it
+  ran `session start`); no new identity was needed. A session of another
+  human and one never started are refused with one message, so the call
+  says nothing about which sessions exist.
+- **Never told, never the words.** The call keeps no state for the watcher
+  and moves nothing in `Told`: the agent hears everything through `inbox`
+  as before. A watcher gets the kind, the entry, the change and the sending
+  session; never a message's text, its thread, the reasons or the
+  conflicts. Those are another agent's words, and they belong in the
+  agent's context, marked as such, not in a runner that may pass them on.
+- **Stateless reservations.** A reservation is the state, with no entry
+  of its own, and it lasts. Each is named by a hash of its session and
+  items; the answer lists every name held now, the caller passes that list
+  back, and a name it passed is not reported again. One that lapses and
+  comes back is reported again, which is right: it is a new window.
+- **Waiting as `log` waits.** The request is held, the daemon's lock is
+  not; `notify_appended` wakes it, and the clock is looked at every
+  `LOG_POLL_MS` (2 s), since a reservation or an expiry needs no entry.
+  The same 30 s cap. A waiting request is a connection like any other and
+  counts against the limits of #50; it is not throttled (a human is not).
+- **An ended session ends the wait.** A session named in `sessions` that can
+  not act any more comes back at once in `ended`, with its reason, so a
+  runner does not wait on something that will never come. Without
+  `sessions`, an ended session is simply no longer watched.
+- Read-only: no log entry, no `decide()` change, no log format, and the
+  protocol number stays 1 (a method added). `lonca events --watch` gives
+  it to shell runners, `--follow` as one JSON line per event;
+  `lonca_client::Client::watch` and `Watch::after` to Rust ones.
 
 ## Open questions (carried from the design)
 

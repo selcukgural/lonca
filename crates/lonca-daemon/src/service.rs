@@ -1283,7 +1283,7 @@ impl Service {
         let (repo, actor) = Self::agent(inner, req, now)?;
         let session = actor.session().expect("agent");
         let r = Self::repo(inner, &repo)?;
-        let rate = r.policy().or_fail()?.config.sessions.ops_per_minute as u64;
+        let rate = r.policy().or_fail()?.config.sessions.rate();
         let root = r.chain.state.root_session(session).to_string();
         let bucket = inner.buckets.entry((repo, root));
         let bucket = bucket.or_insert_with(|| Bucket::full(rate, now));
@@ -2893,7 +2893,18 @@ impl Service {
                 sub.symbols_engine = Some(ENGINE_CURRENT);
             }
             Op::PolicyUpdate { policy } => {
-                RepoHandle::load_policy(&r.store, policy).or_fail()?;
+                // Held to what a new policy is held to, however its files
+                // came to be in the store.
+                let new = RepoHandle::load_policy(&r.store, policy).or_fail()?;
+                let most = lonca_policy::config::MAX_OPS_PER_MINUTE;
+                if new.config.sessions.ops_per_minute > most {
+                    return fail(
+                        "invalid",
+                        format!(
+                            "sessions.ops_per_minute is past the most a policy may set, {most}"
+                        ),
+                    );
+                }
             }
             // Only to a key this daemon holds: anything else would end the
             // log, since nobody could sign the next entry.
@@ -4115,7 +4126,7 @@ impl Service {
             };
             // Past its rate a connection is refused unrecorded: nothing
             // goes through that the log does not have.
-            let rate = policy.config.sessions.ops_per_minute as u64;
+            let rate = policy.config.sessions.rate();
             let bucket = book.recorded.entry(key.clone());
             let bucket = bucket.or_insert_with(|| Bucket::full(rate, now));
             if bucket.take(rate, now).is_err() {

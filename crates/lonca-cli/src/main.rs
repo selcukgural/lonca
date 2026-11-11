@@ -813,10 +813,13 @@ enum PolicyCmd {
     /// the log really had: what a different decision would have led to is
     /// not followed.
     Check {
-        #[arg(long, required_unless_present = "policy")]
+        #[arg(long, required_unless_present_any = ["policy", "value"])]
         config: Option<PathBuf>,
         #[arg(long)]
         policy: Option<PathBuf>,
+        /// One value of lonca.toml, as for `policy set`.
+        #[arg(long, value_name = "KEY=VALUE")]
+        value: Vec<String>,
         #[arg(long)]
         repo: Option<String>,
         #[arg(long = "as")]
@@ -824,12 +827,19 @@ enum PolicyCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Sign and submit a new lonca.toml and policy.cedar.
+    /// Sign and submit a new policy: the files given, or single values of
+    /// lonca.toml set in the policy in force. A file left out is taken
+    /// from the policy in force.
     Set {
+        #[arg(long, required_unless_present_any = ["policy", "value"])]
+        config: Option<PathBuf>,
         #[arg(long)]
-        config: PathBuf,
-        #[arg(long)]
-        policy: PathBuf,
+        policy: Option<PathBuf>,
+        /// One value of lonca.toml, by its table and name, as
+        /// `sessions.ops_per_minute=1200`. The rest of the file stays as
+        /// it is, comments too. May be given more than once.
+        #[arg(long, value_name = "KEY=VALUE")]
+        value: Vec<String>,
         #[arg(long)]
         repo: Option<String>,
         #[arg(long = "as")]
@@ -2449,26 +2459,33 @@ fn run(cmd: Cmd) -> Result<()> {
         Cmd::Policy(PolicyCmd::Check {
             config,
             policy,
+            value,
             repo,
             human,
             json,
         }) => {
             let mut c = human_client(&repo_name(repo)?, &human_name(human)?)?;
-            policy::check(&mut c, config, policy, json)
+            policy::check(&mut c, config, policy, &value, json)
         }
         Cmd::Policy(PolicyCmd::Set {
             config,
             policy,
+            value,
             repo,
             human,
         }) => {
             let repo = repo_name(repo)?;
             let human = human_name(human)?;
             let mut c = human_client(&repo, &human)?;
+            let (config, policy) = policy::texts(&mut c, config, policy)?;
+            let (config, said) = policy::with_values(&config, &value)?;
+            for line in said {
+                outln!("{line}");
+            }
             let prep = call(
                 &mut c,
                 "human.prepare_policy",
-                json!({"config": std::fs::read_to_string(config)?, "policy": std::fs::read_to_string(policy)?}),
+                json!({"config": config, "policy": policy}),
             )?;
             submit(
                 &mut c,

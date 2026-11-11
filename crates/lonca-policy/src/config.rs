@@ -27,7 +27,8 @@ max_ttl_minutes = 480
 stop_rounds = 3
 # What a session, with the sessions made from it, may send the log in a
 # minute; a minute's worth may come at once. Past it a request is refused
-# with `rate_limited` and the log does not grow.
+# with `rate_limited` and the log does not grow. Connections through the
+# proxy are recorded at the same rate, counted apart. 6000 at most.
 ops_per_minute = 600
 
 [leases]
@@ -402,6 +403,21 @@ pub struct Sessions {
     pub max_ttl_minutes: i64,
     pub stop_rounds: u32,
     pub ops_per_minute: u32,
+}
+
+/// The most `sessions.ops_per_minute` can be: ten times the default. The
+/// rate is what bounds how fast one session grows a log that keeps every
+/// entry, so the policy's own number is not taken on trust. A new policy
+/// above it is refused ([`PolicyBundle::parse_new`]); one already in force
+/// counts as this ([`Sessions::rate`]).
+pub const MAX_OPS_PER_MINUTE: u32 = 6_000;
+
+impl Sessions {
+    /// The rate in force: `ops_per_minute`, and never past
+    /// [`MAX_OPS_PER_MINUTE`].
+    pub fn rate(&self) -> u64 {
+        u64::from(self.ops_per_minute.min(MAX_OPS_PER_MINUTE))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1092,6 +1108,20 @@ impl PolicyBundle {
         Self::parse(DEFAULT_CONFIG, DEFAULT_POLICY).expect("default policy parses")
     }
 
+    /// [`Self::parse`] for a policy that is to be set: what a policy in
+    /// force is only held to (so that a repository still opens) a new one
+    /// is refused for.
+    pub fn parse_new(config_text: &str, policy_text: &str) -> Result<Self, String> {
+        let bundle = Self::parse(config_text, policy_text)?;
+        let rate = bundle.config.sessions.ops_per_minute;
+        if rate > MAX_OPS_PER_MINUTE {
+            return Err(format!(
+                "{CONFIG_FILE}: sessions.ops_per_minute is {rate}; the most is {MAX_OPS_PER_MINUTE}"
+            ));
+        }
+        Ok(bundle)
+    }
+
     pub fn parse(config_text: &str, policy_text: &str) -> Result<Self, String> {
         let config: Config =
             toml::from_str(config_text).map_err(|e| format!("{CONFIG_FILE}: {e}"))?;
@@ -1566,6 +1596,24 @@ mod tests {
         let b = PolicyBundle::parse("[sessions]\nops_per_minute = 1\n", DEFAULT_POLICY);
         assert_eq!(b.unwrap().config.sessions.ops_per_minute, 1);
         assert_eq!(Sessions::default().ops_per_minute, 600);
+    }
+
+    #[test]
+    fn a_session_rate_has_a_ceiling_whatever_the_policy_says() {
+        let text = |n: u64| format!("[sessions]\nops_per_minute = {n}\n");
+        let at = PolicyBundle::parse_new(&text(6_000), DEFAULT_POLICY).unwrap();
+        assert_eq!(at.config.sessions.rate(), 6_000);
+        let e = PolicyBundle::parse_new(&text(6_001), DEFAULT_POLICY)
+            .err()
+            .unwrap();
+        assert!(e.contains("the most is 6000"), "{e}");
+        // One in force from before still reads, and counts as the ceiling.
+        let old = PolicyBundle::parse(&text(4_000_000_000), DEFAULT_POLICY).unwrap();
+        assert_eq!(old.config.sessions.ops_per_minute, 4_000_000_000);
+        assert_eq!(old.config.sessions.rate(), 6_000);
+        assert_eq!(Sessions::default().rate(), 600);
+        // What `parse` refuses, `parse_new` refuses.
+        assert!(PolicyBundle::parse_new(&text(0), DEFAULT_POLICY).is_err());
     }
 
     #[test]

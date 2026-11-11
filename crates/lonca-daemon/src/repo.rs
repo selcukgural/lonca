@@ -229,7 +229,7 @@ impl RepoHandle {
         parent: Option<&GitId>,
         time_ms: i64,
     ) -> Result<GitId> {
-        PolicyBundle::parse(config, policy).map_err(Error::Invalid)?;
+        PolicyBundle::parse_new(config, policy).map_err(Error::Invalid)?;
         let mut files = FileMap::new();
         for (name, text) in [(CONFIG_FILE, config), (POLICY_FILE, policy)] {
             files.insert(

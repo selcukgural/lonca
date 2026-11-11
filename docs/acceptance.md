@@ -111,6 +111,7 @@ last column.
 | A36 | `lonca diff <change>` shows the reviewer every file a proposal changes, also when the proposal has files whose names are git patterns (`:!src/billing.rs`, `src/*`) | `04-review` |
 | A37 | What an agent wrote (an intent, a file's lines, what a denial quotes) reaches a person's terminal with its control characters written out (`\u{1b}`, `\r`), in `pending`, `diff`, `status` and errors: no escape sequence or carriage return redraws what a reviewer reads | `03-agents` |
 | A38 | An operation longer than one log entry holds (64 KiB: a very long intent or list) is refused with its name, its size and what to do, and the log does not grow; the same request with a short intent is logged | `13-log` |
+| A39 | `lonca policy set --value sessions.ops_per_minute=N` changes that one line of the `lonca.toml` in force (the comments and every other line stay), as a signed policy update that takes effect: a session is `rate_limited` at the new rate; a rate above 6000, or a key the file does not have, is refused and the policy stays | `13-log` |
 
 ## Manual criteria
 

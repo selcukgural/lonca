@@ -73,6 +73,21 @@ is written:
   for a session, counted apart from its own operations. Past that a
   connection is refused until the minute has room again.
 
+### One value of the policy from the command line
+
+```sh
+lonca policy set --repo demo --value sessions.ops_per_minute=1200
+```
+
+sets that one value in the policy in force and leaves the rest of
+`lonca.toml` as it is, comments too; `lonca policy check --value` shows
+first what it would have decided differently. Any key of `lonca.toml`
+works, more than one `--value` at a time, and `--config` and `--policy`
+are now each optional (a file left out is the one in force).
+
+`sessions.ops_per_minute` may be 6000 at most. A policy that sets more is
+refused; if yours already has more, it counts as 6000.
+
 ### `tree` with contents is one page
 
 For programs that speak the protocol: `tree` with `with_content: true`

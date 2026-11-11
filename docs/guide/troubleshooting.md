@@ -129,7 +129,8 @@ An error means the request never reached the log.
 | `unauthenticated: unknown session token: …` | The agent's session ended, expired or got a new token. A human continues the workspace (`lonca session start --continue`). Restart `lonca mcp` after that, so it reads the new token. |
 | `unauthenticated: login failed: …` | No enrolled key of that human verifies the signature: wrong `--as`, or the key was rotated on another machine. |
 | `forbidden` | A token of the wrong kind or for another repository, or a human the repository does not know. |
-| `rate_limited` | The session (with the sessions made from it) is past `[sessions] ops_per_minute`. The message says when to try again. |
+| `rate_limited` | The session (with the sessions made from it) is past `[sessions] ops_per_minute`. The message says when to try again. A human can raise it, up to 6000: `lonca policy set --value sessions.ops_per_minute=1200`. |
+| `invalid: lonca.toml: sessions.ops_per_minute is …; the most is 6000` | A policy may not set a rate above 6000 a minute. |
 | `invalid: change.propose is … bytes; an entry of the log holds 65536` (or another operation's name) | The operation's text and lists are longer than one log entry holds. Write a shorter intent, or lease or propose in smaller parts. Nothing was logged. |
 | `forbidden: denied, and not logged: bad_human_signature` | A `lonca human recover` whose recovery key is not the one the repository has for that human. Such a refusal is in the security log, not in the operation log. |
 | `busy`, `closed` | Send it again. |

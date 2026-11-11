@@ -309,11 +309,23 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
             let target = retry(|| std::fs::read_link(&src))?;
             retry(|| std::os::unix::fs::symlink(&target, &dst))?;
         } else {
-            retry(|| std::fs::copy(&src, &dst))?;
+            copy_file(&src, &dst)?;
         }
     }
     let mode = retry(|| std::fs::metadata(from))?.permissions();
     retry(|| std::fs::set_permissions(to, mode.clone()))
+}
+
+/// Copies one file so that each step can be made again after a signal:
+/// `std::fs::copy` creates the copy with the source's mode, so a read-only
+/// git object cut short could not be opened for writing a second time
+/// (os error 13). The copy is written with the default mode and given the
+/// source's at the end, inside a directory only this process can enter.
+fn copy_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let data = retry(|| std::fs::read(src))?;
+    retry(|| std::fs::write(dst, &data))?;
+    let mode = retry(|| std::fs::metadata(src))?.permissions();
+    retry(|| std::fs::set_permissions(dst, mode.clone()))
 }
 
 /// Runs `f` again while it is interrupted by a signal. libFuzzer's
@@ -331,8 +343,24 @@ fn retry<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::retry;
+    use super::{copy_file, retry};
     use std::io::{Error, ErrorKind};
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A copy cut short leaves a file behind; copying again over it works,
+    /// and the copy ends with the source's mode and bytes.
+    #[test]
+    fn a_read_only_file_is_copied_again_over_a_partial_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, dst) = (dir.path().join("src"), dir.path().join("dst"));
+        std::fs::write(&src, b"object").unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o444)).unwrap();
+        std::fs::write(&dst, b"obj").unwrap();
+        copy_file(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"object");
+        let mode = std::fs::metadata(&dst).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o444);
+    }
 
     #[test]
     fn an_interrupted_call_is_made_again_and_other_errors_return() {

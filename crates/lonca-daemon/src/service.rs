@@ -2091,6 +2091,11 @@ impl Service {
         let redacted = r.chain.state.redacted.clone();
         drop(inner);
         let files = store.commit_files(&q.commit).or_fail()?;
+        // With contents the answer is a page like one of `blobs`, counted
+        // from the sizes before a blob is read: what does not fit the line
+        // is never held.
+        let budget = page_budget(self.settings.line_cap);
+        let mut total = 0u64;
         let mut out = Vec::new();
         for (path, e) in files {
             if let Some(only) = &q.paths
@@ -2103,10 +2108,23 @@ impl Service {
             } else {
                 store.blob_size(&e.blob).or_fail()?
             };
-            let content_b64 = if q.with_content
+            let wanted = q.with_content
                 && e.mode != lonca_core::FileMode::Submodule
-                && !redacted.contains(&e.blob)
-            {
+                && !redacted.contains(&e.blob);
+            if wanted {
+                total = total.saturating_add(encoded_len(size));
+                if total > budget {
+                    return fail(
+                        "too_large",
+                        format!(
+                            "tree: the contents of {} are more than one answer holds \
+                             ({budget} encoded); ask without contents and page them with blobs",
+                            q.commit
+                        ),
+                    );
+                }
+            }
+            let content_b64 = if wanted {
                 Some(
                     base64::engine::general_purpose::STANDARD
                         .encode(store.read_blob(&e.blob).or_fail()?),

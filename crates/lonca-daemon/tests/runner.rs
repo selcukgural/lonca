@@ -581,6 +581,28 @@ fn trees_are_fetched_in_pages() {
     let err = call("blobs", json!({"commit": trunk, "paths": ["big.bin"]})).unwrap_err();
     assert_eq!(err.0, "too_large", "{err:?}");
     assert!(err.1.contains("big.bin is 3000 bytes"), "{err:?}");
+    // `tree` with contents is a page too: the whole commit does not fit,
+    // and it says where to go; without contents it has every file, and
+    // with contents the files that fit, to the byte.
+    let all = json!({"commit": trunk, "with_content": true});
+    let err = call("tree", all).unwrap_err();
+    assert_eq!(err.0, "too_large", "{err:?}");
+    assert!(err.1.contains("page them with blobs"), "{err:?}");
+    let listed = call("tree", json!({"commit": trunk, "with_content": false})).unwrap();
+    assert!(listed.as_array().unwrap().len() >= 4, "{listed}");
+    let some = json!({"commit": trunk, "with_content": true, "paths": ["a.txt", "src/lib.rs"]});
+    let some = call("tree", some).unwrap();
+    assert!(
+        some.as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["content_b64"].is_string()),
+        "{some}"
+    );
+    let edge = json!({"commit": trunk, "with_content": true, "paths": ["edge.bin"]});
+    assert_eq!(call("tree", edge).unwrap()[0]["size"], 2304);
+    let over = json!({"commit": trunk, "with_content": true, "paths": ["edge.bin", "a.txt"]});
+    assert_eq!(call("tree", over).unwrap_err().0, "too_large");
     let ok = call(
         "blobs",
         json!({"commit": trunk, "paths": ["a.txt", "src/lib.rs"]}),

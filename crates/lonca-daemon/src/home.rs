@@ -210,10 +210,19 @@ pub enum TokenEntry {
 }
 
 /// Session tokens. Only their SHA-256 is stored, never the token itself.
+///
+/// The file is what a restarted daemon knows, so a change that did not
+/// reach it is not done. A token that could not be written is not given
+/// out; one that was taken away stays away in memory (the safe side), the
+/// caller is told it failed, and the file is written at the next call that
+/// takes anything away, whether that one finds something to take or not:
+/// asking again is how it gets done.
 #[derive(Default)]
 pub struct Tokens {
     path: Option<PathBuf>,
     map: BTreeMap<String, TokenEntry>,
+    /// Tokens were taken away here that the file may still hold.
+    unsaved: bool,
 }
 
 impl Tokens {
@@ -226,6 +235,7 @@ impl Tokens {
         Ok(Self {
             path: Some(path.to_path_buf()),
             map,
+            unsaved: false,
         })
     }
 
@@ -243,15 +253,25 @@ impl Tokens {
 
     /// Replaces `old` with a new token for the same session, in one write:
     /// from then on only the new one works. `None` if `old` is unknown.
+    ///
+    /// If the write fails nothing has changed: the old one still works,
+    /// here and after a restart, and the caller holds no other.
     pub fn rotate(&mut self, old: &str) -> Result<Option<String>> {
-        let Some(entry) = self.map.remove(&sha256_hex(old.as_bytes())) else {
+        let hash = sha256_hex(old.as_bytes());
+        let Some(entry) = self.map.remove(&hash) else {
             return Ok(None);
         };
         let prefix = match entry {
             TokenEntry::Agent { .. } => "lonca_",
             TokenEntry::Human { .. } => "lonca_h_",
         };
-        self.insert(prefix, entry).map(Some)
+        match self.insert(prefix, entry.clone()) {
+            Ok(new) => Ok(Some(new)),
+            Err(e) => {
+                self.map.insert(hash, entry);
+                Err(e)
+            }
+        }
     }
 
     pub fn issue_human(&mut self, human: &str, key: &str, expires_ms: i64) -> Result<String> {
@@ -267,8 +287,13 @@ impl Tokens {
 
     fn insert(&mut self, prefix: &str, entry: TokenEntry) -> Result<String> {
         let token = format!("{prefix}{}", hex::encode(random_bytes::<32>()));
-        self.map.insert(sha256_hex(token.as_bytes()), entry);
-        self.save()?;
+        let hash = sha256_hex(token.as_bytes());
+        self.map.insert(hash.clone(), entry);
+        if let Err(e) = self.save() {
+            // Nobody was given it: it is no token.
+            self.map.remove(&hash);
+            return Err(e);
+        }
         Ok(token)
     }
 
@@ -278,9 +303,19 @@ impl Tokens {
 
     /// Drops one token (logout). Unknown tokens are not an error.
     pub fn revoke(&mut self, token: &str) -> Result<()> {
-        if self.map.remove(&sha256_hex(token.as_bytes())).is_some() {
-            self.save()?;
+        let taken = self.map.remove(&sha256_hex(token.as_bytes())).is_some();
+        self.taken(taken)
+    }
+
+    /// Writes the file after tokens were taken away, now or at an earlier
+    /// call whose write failed.
+    fn taken(&mut self, now: bool) -> Result<()> {
+        if !now && !self.unsaved {
+            return Ok(());
         }
+        self.unsaved = true;
+        self.save()?;
+        self.unsaved = false;
         Ok(())
     }
 
@@ -292,10 +327,7 @@ impl Tokens {
             } => !(r == repo && sessions.contains(session)),
             TokenEntry::Human { .. } => true,
         });
-        if self.map.len() != before {
-            self.save()?;
-        }
-        Ok(())
+        self.taken(self.map.len() != before)
     }
 
     /// Drops every token that no longer works at `now_ms`: human sessions
@@ -311,10 +343,7 @@ impl Tokens {
             } => expires_ms.is_none_or(|end| end > now_ms) && live(repo, session),
             TokenEntry::Human { expires_ms, .. } => *expires_ms > now_ms,
         });
-        if self.map.len() != before {
-            self.save()?;
-        }
-        Ok(())
+        self.taken(self.map.len() != before)
     }
 
     fn save(&self) -> Result<()> {
@@ -424,6 +453,78 @@ mod tests {
         assert!(t.lookup(&b).is_none());
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("s1") && !text.contains("s2"), "{text}");
+    }
+
+    /// A file that can not be written: its place is taken by a directory.
+    fn block(path: &Path) {
+        std::fs::create_dir(path.with_extension("tmp")).unwrap();
+    }
+
+    fn unblock(path: &Path) {
+        std::fs::remove_dir(path.with_extension("tmp")).unwrap();
+    }
+
+    #[test]
+    fn a_token_taken_away_is_written_when_asked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let mut t = Tokens::load(&path).unwrap();
+        let human = t.issue_human("ayse", "ab", 9_000).unwrap();
+        let (a, b) = (
+            t.issue("demo", "s1", 9_000).unwrap(),
+            t.issue("demo", "s2", 9_000).unwrap(),
+        );
+
+        block(&path);
+        assert!(t.revoke(&human).is_err(), "the caller hears of it");
+        assert!(
+            t.lookup(&human).is_none(),
+            "and it is gone here all the same"
+        );
+        assert!(Tokens::load(&path).unwrap().lookup(&human).is_some());
+        // Asked again with the file still closed, it fails again.
+        assert!(t.revoke(&human).is_err());
+        unblock(&path);
+        // Asked again, it is done, though there is nothing left to take.
+        t.revoke(&human).unwrap();
+        assert!(Tokens::load(&path).unwrap().lookup(&human).is_none());
+
+        // The same for sessions, and any later call writes what is owed.
+        block(&path);
+        assert!(t.revoke_sessions("demo", &["s1".into()]).is_err());
+        unblock(&path);
+        t.sweep_expired(0, |_, _| true).unwrap();
+        let saved = Tokens::load(&path).unwrap();
+        assert!(saved.lookup(&a).is_none() && saved.lookup(&b).is_some());
+        block(&path);
+        assert!(t.sweep_expired(10_000, |_, _| true).is_err());
+        unblock(&path);
+        t.revoke_sessions("demo", &[]).unwrap();
+        assert!(Tokens::load(&path).unwrap().lookup(&b).is_none());
+    }
+
+    #[test]
+    fn a_token_that_was_not_written_is_no_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tokens.json");
+        let mut t = Tokens::load(&path).unwrap();
+        let old = t.issue("demo", "s1", 9_000).unwrap();
+
+        block(&path);
+        assert!(t.issue("demo", "s2", 9_000).is_err());
+        assert!(t.issue_human("ayse", "ab", 9_000).is_err());
+        assert_eq!(t.map.len(), 1, "nothing was kept for them");
+        // A rotation that fails leaves the old token working, as the file
+        // says and the session knows.
+        assert!(t.rotate(&old).is_err());
+        assert!(t.lookup(&old).is_some());
+        assert_eq!(t.map.len(), 1);
+        unblock(&path);
+        // Nothing was taken away, so nothing is owed to the file.
+        assert!(!t.unsaved);
+        let new = t.rotate(&old).unwrap().unwrap();
+        let saved = Tokens::load(&path).unwrap();
+        assert!(saved.lookup(&old).is_none() && saved.lookup(&new).is_some());
     }
 
     #[test]

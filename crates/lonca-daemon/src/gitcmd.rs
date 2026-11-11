@@ -62,6 +62,9 @@ impl Git {
             ("GIT_CONFIG_NOSYSTEM", "1".into()),
             ("GIT_TERMINAL_PROMPT", "0".into()),
             ("GIT_ALLOW_PROTOCOL", PROTOCOLS.into()),
+            // A repository path is a name, never a pattern: without this
+            // a file called `:!src/a.rs` or `src/*` is pathspec magic.
+            ("GIT_LITERAL_PATHSPECS", "1".into()),
         ];
         out.extend(fixed.into_iter().map(|(k, v)| (OsString::from(k), v)));
         out
@@ -176,6 +179,7 @@ mod tests {
         assert_eq!(get("HOME"), [g.home.to_string_lossy().into_owned()]);
         assert_eq!(get("GIT_CONFIG_NOSYSTEM"), ["1"]);
         assert_eq!(get("GIT_ALLOW_PROTOCOL"), ["file:https:ssh"]);
+        assert_eq!(get("GIT_LITERAL_PATHSPECS"), ["1"]);
         for gone in [
             "GIT_SSH_COMMAND",
             "GIT_CONFIG_GLOBAL",

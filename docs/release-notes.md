@@ -22,6 +22,30 @@ its tools. The socket method is `events.watch`; `lonca-client` has
 `Client::watch`. [Running agents](guide/runners.md#waking-an-idle-agent) has
 the details.
 
+### Evidence names the toolchain it ran with
+
+A check's evidence carried a digest of its sandbox and command only, so a
+pass under one compiler looked the same as a pass under another
+([#263](https://github.com/selcukgural/lonca/issues/263)). `identify` in
+`[verification]` lists commands whose output names the environment:
+
+```toml
+[verification]
+identify = ["rustc --version", "cargo --version"]
+```
+
+They run once before the checks, in the same sandbox, and each check's
+`env` becomes a digest of the sandbox, the command, the `PATH`, the
+policy's fixed values, the names passed through (never their values) and
+what the identify commands printed. Their first lines are in the evidence:
+`lonca change CHANGE --evidence` prints them, `change.get` returns them as
+`environment`, and `lonca-audit verify` notes every check whose environment
+changed since it last ran. A failing identify command does not fail a
+check. No log format change; the first integration after the upgrade is
+noted once, since its digest holds more.
+[Verification](guide/verification.md#the-environment-the-evidence-names)
+has examples for Rust, Node and an image digest.
+
 ### Keyed directories: two agents can not take one migration version
 
 Flyway's `V12__add_users.sql`, Django's `0012_add_users.py` and the like get

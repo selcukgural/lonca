@@ -684,6 +684,18 @@ impl Verified {
 }
 
 /// `a` as logged for a run that did not happen.
+/// The identify lines of a piece of evidence (`env.<n>.command`, `.output`,
+/// `.error`), in their order: what its `env` digest says in words.
+fn environment(details: &BTreeMap<String, String>) -> Vec<Value> {
+    (0..lonca_policy::config::MAX_IDENTIFY)
+        .map_while(|n| {
+            let get = |k: &str| details.get(&format!("env.{n}.{k}"));
+            let command = get("command")?;
+            Some(json!({"command": command, "output": get("output"), "error": get("error")}))
+        })
+        .collect()
+}
+
 fn reused(mut a: Attestation) -> Attestation {
     a.details.insert("reused".into(), "true".into());
     a
@@ -2228,6 +2240,7 @@ impl Service {
                         "duration_ms": d.get("duration_ms").and_then(|x| x.parse::<i64>().ok()),
                         "attempts": d.get("attempts").and_then(|x| x.parse::<u32>().ok()),
                         "sandbox": d.get("sandbox"), "error": d.get("error"),
+                        "env": a.env, "environment": environment(d),
                         "details": d, "log": log, "log_truncated": log_truncated,
                     })
                 })

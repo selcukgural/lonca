@@ -412,7 +412,13 @@ pub struct Attestation {
     pub result: CheckResult,
     pub subject_tree: GitId,
     pub details: BTreeMap<String, String>,
-    /// Digest of the environment: sandbox profile, commands, tool versions.
+    /// What names the environment the check ran in. For a command, a
+    /// digest of the sandbox, the command, its `PATH`, the policy's fixed
+    /// values, the names passed through (never their values) and what each
+    /// `verification.identify` command printed, whose first lines are in
+    /// `details` (`env.<n>.command`, `.output`, `.error`). Entries from
+    /// before identify (0.2.x) digest the sandbox and the command only.
+    /// `tree-sitter` for the syntax check. Recorded, never recomputed.
     pub env: String,
     pub log: Option<GitId>,
     pub producer: String,

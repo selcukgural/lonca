@@ -17,6 +17,7 @@ retries = 0
 env_passthrough = ["HOME", "CARGO_HOME", "RUSTUP_HOME"]
 env = { CARGO_NET_OFFLINE = "true" }
 read = ["~/.cargo/registry", "~/.cargo/bin", "~/.rustup"]
+identify = ["rustc --version", "cargo --version"]
 ```
 
 ## A change that reaches other code
@@ -92,6 +93,67 @@ Every check's log starts with the sandbox and the names that were set
 ```
 lonca verify: sandbox seatbelt, env PATH HOME TMPDIR LANG LONCA_VERIFY CARGO_HOME RUSTUP_HOME
 ```
+
+## The environment the evidence names
+
+A check's result is only worth as much as the environment it ran in: a
+pass with one compiler says little of another. Evidence is recorded and
+never run again, so it says what produced it. Each check's evidence
+carries `env`, a digest of:
+
+- the sandbox and the check's command;
+- the commands' `PATH` and the policy's `env` names and values;
+- the names of `env_passthrough` the daemon had, never their values (they
+  may be secrets);
+- each `identify` command, how it ended, and what it printed.
+
+`identify` lists commands whose output names the toolchain, from the
+signed policy like the checks:
+
+```toml
+[verification]
+# Rust: rust-toolchain.toml in the tree picks the toolchain, and the
+# commands run in the tree, so this is the one the checks use.
+identify = ["rustc --version", "cargo --version"]
+# Node:
+# identify = ["node --version", "npm --version"]
+# A runner whose tools come from an image, run as CI runs it: the image
+# writes its digest into a file the commands may read.
+# identify = ["cat /etc/ci-image-digest"]
+```
+
+They run once per verification, before the checks, in the same sandbox,
+directory, environment and `PATH`, for at most 10 seconds each (or
+`timeout_seconds`, if that is shorter). At most 8, each at most 1024
+bytes. One that fails or times out does not fail the checks: the evidence
+says how it ended. A value passed through never reaches the evidence: where
+an identify command prints one, it stands as `***` in both the digest and
+the lines. Do not name a command that prints a secret of its own.
+
+Each check's `details` also keep what a person reads: the command, the
+first line of its output (200 characters at most, control characters as
+`?`), and how it failed, if it did:
+
+```
+env.0.command = "rustc --version"
+env.0.output  = "rustc 1.91.0 (f8297e351 2025-10-28)"
+env.1.command = "node --version"
+env.1.output  = ""
+env.1.error   = "exit 127"
+```
+
+The same command in the same environment gives the same `env`; a new
+compiler, another `PATH` or another fixed value gives another.
+`lonca-audit verify` notes every check whose `env` differs from the last
+time it ran (`env  12 tests  changed since 7`), and `lonca change CHANGE
+--evidence` prints it. A note, not a finding: a new toolchain is no fault,
+but a reviewer can see when one came in, and whether the queue ran what CI
+runs. Evidence from before `identify` (0.2.x) digests the sandbox and the
+command only, so the first integration after an upgrade is noted once.
+
+Running the checks inside a container image is not Lonca's to do: a runner
+that wants CI's image makes `build` and `test` run inside it, and
+`identify` says which image it was.
 
 ## The sandbox
 
@@ -313,6 +375,15 @@ env = { PYTHONDONTWRITEBYTECODE = "1" }
 ## Reading a failure
 
 `lonca change CHANGE --evidence` prints each check with its result,
-exit code, duration, sandbox and the tail of its log; the MCP
-`change_status` tool gives a worker the same. The first line of the
-log is the environment header above.
+exit code, duration, sandbox, the environment it ran in and the tail of
+its log; the MCP `change_status` tool gives a worker the same. The first
+line of the log is the environment header above:
+
+```
+tests: fail (exit 101, 48210 ms, sandbox seatbelt)
+  environment 3f2a9c1d0e4b
+    rustc --version: rustc 1.91.0 (f8297e351 2025-10-28)
+    cargo --version: cargo 1.91.0 (ea2d97820 2025-10-10)
+  lonca verify: sandbox seatbelt, env PATH HOME TMPDIR LANG LONCA_VERIFY CARGO_HOME RUSTUP_HOME
+  ...
+```

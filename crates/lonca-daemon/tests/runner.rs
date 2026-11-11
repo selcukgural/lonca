@@ -851,10 +851,15 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
     let rec = e.ok("change.get", Some("demo"), None, json!({"change": change}));
     assert_eq!(rec["evidence"], json!([]));
     assert_eq!(rec["integrate_seq"], Value::Null);
-    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
-        "# test = \"cargo test --offline\"",
-        "test = \"sh check.sh\"",
-    );
+    let config = lonca_policy::config::DEFAULT_CONFIG
+        .replace(
+            "# test = \"cargo test --offline\"",
+            "test = \"sh check.sh\"",
+        )
+        .replace(
+            "\nidentify = []\n",
+            "\nidentify = [\"echo toolchain 1.2.3\", \"exit 4\"]\n",
+        );
     let prep = e.ok(
         "human.prepare_policy",
         Some("demo"),
@@ -883,6 +888,15 @@ fn a_reviewer_gets_the_diff_and_the_evidence_from_the_daemon() {
     assert_eq!(tests["log_truncated"], true, "{tests}");
     assert_eq!(tests["log"].as_str().unwrap().len(), 32 * 1024);
     assert!(tests["sandbox"].is_string());
+    // The environment it ran in: a digest, and what identify printed.
+    assert_eq!(tests["env"].as_str().unwrap().len(), 64, "{tests}");
+    assert_eq!(
+        tests["environment"],
+        json!([
+            {"command": "echo toolchain 1.2.3", "output": "toolchain 1.2.3", "error": null},
+            {"command": "exit 4", "output": "", "error": "exit 4"},
+        ])
+    );
     assert!(rec["integrate_seq"].as_u64().is_some());
     assert_eq!(rec["integrate_decision"]["outcome"], "allow");
     let first_integrate = rec["integrate_seq"].as_u64().unwrap();

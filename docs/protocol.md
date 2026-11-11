@@ -589,14 +589,23 @@ bytes is `ceil(n / 3) * 4`. `lonca-cli` does this in `fetch`
  "integrate_seq": integer | null, "integrate_decision": decision | null,
  "evidence": [{"check": check kind, "result": "pass" | "fail" | "error" | "skipped",
                "exit": integer | null, "duration_ms": integer | null, "attempts": integer | null,
-               "sandbox": string | null, "error": string | null, "details": {string: string},
+               "sandbox": string | null, "error": string | null,
+               "env": string, "environment": [{"command", "output": string | null, "error": string | null}],
+               "details": {string: string},
                "log": string | null, "log_truncated": boolean}]}
 ```
 
 `evidence` are the checks of the change's last `change.integrate`
 entry (empty before one); `duration_ms` covers every attempt; `log` is the tail of the check's output
 (32 KiB at most, `log_truncated` when cut), null for a redacted or
-missing log. `not_found` for an unknown change.
+missing log. `env` is the digest of the environment the check ran in
+(`tree-sitter` for `syntax`); `environment` lists, in order, each
+`verification.identify` command of that run with the first line of its
+output and, when it failed, how (`"exit 127"`, `"timeout"`): the
+`env.<n>.command`, `.output` and `.error` of `details`
+([Verification](guide/verification.md#the-environment-the-evidence-names)).
+It is empty for evidence from before `identify`. `not_found` for an
+unknown change.
 
 ### `change.resolve`
 
@@ -1277,3 +1286,4 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `change.resolve`; `recover` on `daemon.recover` (log format 27); the
   human key kinds `sk-p256` and `sk-ed25519` and their signatures (log
   format 28). `events.watch` and `lonca events --watch` (#262).
+  `env` and `environment` on `change.get.evidence[]` (#263).

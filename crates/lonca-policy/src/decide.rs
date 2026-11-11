@@ -578,7 +578,7 @@ fn check_name(k: CheckKind) -> &'static str {
 
 /// The word a piece of evidence goes by in a denial: a named check by its
 /// name, which can not be one of the built-in words.
-fn evidence_name(a: &Attestation) -> &str {
+pub fn evidence_name(a: &Attestation) -> &str {
     let name = a
         .details
         .get("name")

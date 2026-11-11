@@ -165,6 +165,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   folded (see "A path that forbids is read with its case folded"). No
   field changes. Entries of older formats, where the spelling was matched,
   replay as they were.
+- **Version 34** carries a taint, an `unhooked` mark and a lowered level
+  from a session to the sessions made from it (see "What enters a session
+  enters its children"). No field changes. Entries of older formats, where
+  a child took them once at its making, replay as they were.
 - **Version 33** holds a human signature to the log it was made for (see
   "A human signature is for one log"): `at` in the signature, left out of
   the encoding when absent, so earlier entries keep their bytes. Entries
@@ -4471,6 +4475,31 @@ replayed it.
   login is not an entry.
 - **The signer asks the daemon it submits to.** A daemon that lies about
   the head gets a signature it can not use in the real log.
+
+## What enters a session enters its children
+
+Format 34. A child made with `cap.attenuate` copied its parent's level,
+taint and `unhooked` mark at that moment and went its own way. The parent
+keeps the child's token: it asked for it. So a session made a child while
+clean, read the web, and went on leasing and proposing as the child, whose
+record said nothing had entered it. In an isolated session that is a change
+with no human; at any level it is a critical path that escalates instead of
+being refused.
+
+- **`taint`, an external `observe`, an `unhooked` tool and a `session.bind`
+  reach every session below the one they name**, live or not, in the same
+  entry: the taint as `inherited: <reason>`, the mark as it is, the level
+  as the lower of the two. The state carries it, so `decide()` reads one
+  session as before.
+- **Down only.** A child's taint does not rise to its parent: the parent
+  gave the child less, and what a child reads the parent's harness reports
+  for the parent when it comes back as a tool result. (Session trees made
+  by one harness process answer for each other at the proxy already.)
+- **A level only falls this way.** A parent bound higher again does not
+  lift a child; nobody vouched for the child since.
+- **Why in `apply` and not a walk in `decide()`.** Every reader of a
+  session (the policy context, `status`, a reviewer's `pending`) then sees
+  the same thing, and no check can forget to walk.
 
 ## A check's log does not hold a passed value
 

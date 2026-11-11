@@ -11,7 +11,8 @@ use lonca_core::GitId;
 use lonca_core::keyed;
 use lonca_core::oplog::{
     FORMAT_GIVE_BACK, FORMAT_KEYED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS,
-    FORMAT_REPLACES, FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE, GENESIS_PREV, OpEntry, SignedOp,
+    FORMAT_REPLACES, FORMAT_SYMBOL_KEYS, FORMAT_TAINT_REACHES, FORMAT_WORKSPACE, GENESIS_PREV,
+    OpEntry, SignedOp,
 };
 use lonca_core::ops::{
     Actor, Attestation, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind,
@@ -340,6 +341,10 @@ pub struct State {
     /// The entry being applied is of format 30 or later: a continuation
     /// starts unobserved.
     pub placed: bool,
+    /// The entry being applied is of format 34 or later: what enters a
+    /// session (a taint, an unhooked tool, a lower level) enters the
+    /// sessions made from it too.
+    pub reaches: bool,
     /// Every trunk commit in order, genesis first: how far a base is
     /// behind is its distance from the end.
     pub trunk_line: Vec<GitId>,
@@ -1040,6 +1045,35 @@ impl State {
         }
     }
 
+    /// What entered `session` is in the sessions made from it (log format
+    /// 34 on): its taint, a tool that ran without its hook, and a level no
+    /// higher than its own. A child is the same agent with less, and its
+    /// token is the parent's to use: a child that stayed clean was a way
+    /// around everything the parent had read. Nothing goes up a level this
+    /// way, and nothing goes from a child to its parent.
+    fn reach_children(&mut self, session: &str) {
+        if !self.reaches {
+            return;
+        }
+        let Some(p) = self.sessions.get(session) else {
+            return;
+        };
+        let (taint, unhooked, level) = (p.taint.clone(), p.unhooked.clone(), p.level);
+        for id in self.descendants(session) {
+            let Some(s) = self.sessions.get_mut(&id).filter(|_| id != session) else {
+                continue;
+            };
+            if let (None, Some(t)) = (&s.taint, &taint) {
+                let said = t.strip_prefix("inherited: ").unwrap_or(t);
+                s.taint = Some(format!("inherited: {said}"));
+            }
+            if s.unhooked.is_none() {
+                s.unhooked = unhooked.clone();
+            }
+            s.level = s.level.min(level);
+        }
+    }
+
     fn descendants(&self, root: &str) -> Vec<String> {
         self.sessions
             .keys()
@@ -1097,6 +1131,7 @@ impl State {
         }
         self.gives_back = e.format >= FORMAT_GIVE_BACK;
         self.placed = e.format >= FORMAT_WORKSPACE;
+        self.reaches = e.format >= FORMAT_TAINT_REACHES;
         self.settle_reservations(e.time_ms);
         self.charge(e);
         if let Op::ChangePropose { change, commit, .. } = &e.op {
@@ -1712,6 +1747,7 @@ impl State {
                     s.bound = true;
                     s.bound_ms = Some(time_ms);
                 }
+                self.reach_children(session);
             }
             Op::SessionIsolate { session, .. } => {
                 if let Some(s) = self.sessions.get_mut(session) {
@@ -2006,6 +2042,7 @@ impl State {
                         }
                     }
                 }
+                self.reach_children(session);
             }
             Op::Taint { session, reason } => {
                 if let Some(s) = self.sessions.get_mut(session)
@@ -2013,6 +2050,7 @@ impl State {
                 {
                     s.taint = Some(reason.clone());
                 }
+                self.reach_children(session);
             }
             Op::ImportExternal { commit, .. } => {
                 self.trunk = Some(commit.clone());

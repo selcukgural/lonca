@@ -48,6 +48,16 @@ daemon's git takes each path as the file it names
 (`GIT_LITERAL_PATHSPECS=1`). What is integrated was never affected, only
 the text shown for review.
 
+### What enters a session enters its children
+
+A child session (`cap.attenuate`) took its parent's taint, `unhooked` mark
+and level when it was made, and kept them whatever the parent did next. A
+session that made a child while clean and then read outside content could
+go on working as the child, untainted. From log format 34 a taint, an
+unhooked tool and a bind to a lower level reach every session made from the
+one they name, in the same entry (`inherited: <reason>`). Nothing goes from
+a child up to its parent.
+
 ### A human signature is for one log
 
 A human signature covered the repository's name, the operation, a nonce and

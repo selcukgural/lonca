@@ -34,6 +34,21 @@ exits 1 lonca-audit verify "$HOME/edited.git"
 has 'FINDING +chain +integrity: op [0-9]+: hash does not match content'
 has '^FAILED$'
 
+criterion A44 "lonca-audit verify holds a log to the genesis and the head it is told: another log fails, and so does this one taken back"
+ok lonca-audit verify "$STORE/demo.git"
+genesis=$(sed -n 's/^genesis: *//p' <<<"$OUT")
+head=$(sed -n 's/^head: *//p' <<<"$OUT")
+ok lonca-audit verify "$STORE/demo.git" --genesis "$genesis" --extends "$head"
+has '^ok$'
+exits 1 lonca-audit verify "$STORE/demo.git" --genesis "$head"
+has 'FINDING +anchor +this is another log'
+cp -R "$STORE/demo.git" "$HOME/back.git"
+git -C "$HOME/back.git" update-ref refs/lonca/oplog refs/lonca/oplog~1
+ok lonca-audit verify "$HOME/back.git" --no-refs --genesis "$genesis"
+exits 1 lonca-audit verify "$HOME/back.git" --no-refs --extends "$head"
+has 'FINDING +anchor +the log does not have entry'
+exits 2 lonca-audit verify "$STORE/demo.git" --genesis abc
+
 criterion A18 "trunk moved behind the log's back fails the audit"
 cp -R "$STORE/demo.git" "$HOME/moved.git"
 git -C "$HOME/moved.git" update-ref refs/heads/main refs/heads/main~1

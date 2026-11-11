@@ -54,6 +54,10 @@ pub struct Finding {
 pub struct Report {
     pub ops: u64,
     pub head_hash: String,
+    /// The hash of the first entry: what names this log among all logs.
+    /// It covers the repository's name, its first daemon key and its
+    /// owner's key, so a log made with other keys has another.
+    pub genesis_hash: String,
     pub findings: Vec<Finding>,
     /// Rechecks skipped because objects were missing (e.g. a shallow clone).
     pub skipped: Vec<Finding>,
@@ -167,12 +171,61 @@ fn load_policy(store: &Store, commit: &GitId) -> std::result::Result<PolicyBundl
     PolicyBundle::parse(&read(CONFIG_FILE)?, &read(POLICY_FILE)?)
 }
 
+/// What the reader already knows of the log, from somewhere the log's
+/// writer can not reach. A log proves that it is whole and that its
+/// daemon key signed it; which log it is, and that it is not an older
+/// state of itself, only something outside it can say.
+#[derive(Clone, Debug, Default)]
+pub struct Anchor {
+    /// The hash of the first entry (`genesis:` in a report).
+    pub genesis: Option<String>,
+    /// The hash of an entry the log had before (`head:` of an earlier
+    /// report): the log must still have it.
+    pub extends: Option<String>,
+}
+
+impl Anchor {
+    /// Why `ops`, a chain that verified, is not the log this names.
+    fn mismatch(&self, ops: &[SignedOp]) -> Option<String> {
+        let genesis = ops.first().map(|o| o.hash.as_str()).unwrap_or_default();
+        if let Some(want) = &self.genesis
+            && want != genesis
+        {
+            return Some(format!(
+                "this is another log: its genesis is {genesis}, not {want}"
+            ));
+        }
+        if let Some(want) = &self.extends
+            && !ops.iter().any(|o| o.hash == *want)
+        {
+            return Some(format!(
+                "the log does not have entry {want}: it was replaced, or taken back to before it"
+            ));
+        }
+        None
+    }
+}
+
 pub fn audit(store: &Store, opts: Options) -> Result<Report> {
+    audit_anchored(store, opts, &Anchor::default())
+}
+
+/// [`audit`] of a log that must be the one `anchor` names.
+pub fn audit_anchored(store: &Store, opts: Options, anchor: &Anchor) -> Result<Report> {
     let ops = OpLog::new(store).read_all()?;
-    Ok(audit_ops(store, &ops, opts))
+    Ok(audit_ops_anchored(store, &ops, opts, anchor))
 }
 
 pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
+    audit_ops_anchored(store, ops, opts, &Anchor::default())
+}
+
+pub fn audit_ops_anchored(
+    store: &Store,
+    ops: &[SignedOp],
+    opts: Options,
+    anchor: &Anchor,
+) -> Report {
     let mut rep = Report {
         ops: ops.len() as u64,
         ..Default::default()
@@ -183,6 +236,14 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
             rep.find(None, "chain", e.to_string());
             return rep;
         }
+    }
+    rep.genesis_hash = ops.first().map(|o| o.hash.clone()).unwrap_or_default();
+    // Before anything of the log is replayed or recomputed: a log that is
+    // not the expected one is somebody else's input, and old symbol
+    // engines have no bounds on what they are asked to read.
+    if let Some(why) = anchor.mismatch(ops) {
+        rep.find(None, "anchor", why);
+        return rep;
     }
     rep.env_changes = env_changes(
         ops.iter()

@@ -4,12 +4,17 @@ The independent auditor of a Lonca repository, also as the `lonca-audit`
 binary. It replays every decision of the signed operation log,
 recomputes every fact and merge, and catches forgeries even when they
 are signed with the daemon's own key. Run it in CI on a pushed remote:
-`lonca-audit verify <repo.git>`.
+`lonca-audit verify <repo.git> --genesis <hash>`.
 
 ```sh
 cargo install --locked lonca-audit
 lonca-audit verify ~/.lonca/repos/demo.git   # a cooperative daemon's store
+lonca-audit verify .git --genesis <hash> --extends <hash>   # in CI
 ```
+
+A log proves that it is whole, not that it is yours: `--genesis` (the
+`genesis:` line of a run on your own machine) says which log is expected,
+and `--extends` (a `head:` seen before) that it was not taken back.
 
 A hardened daemon's store is readable by its user only; the auditor says
 so (permission denied) and you verify a pushed remote or a `lonca backup`

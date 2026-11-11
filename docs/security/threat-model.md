@@ -74,6 +74,7 @@ What each mode does about each threat:
 | Reading outside content, then changing code | every change waits for a human, since `unobserved` counts as tainted | prevented from inside the harness (taint: the change waits for a human); from a process started outside it, detected | prevented: all traffic goes through the proxy and taints |
 | Touching build scripts, CI, lockfiles, agent instructions | refused to unobserved and tainted sessions | refused to tainted sessions | refused to tainted sessions |
 | Replacing the daemon, the hook program or the harness settings | possible: they are the developer's files; sessions stay `unobserved` | prevented: root-owned, clients check the daemon's uid | prevented |
+| Changing the workspace's own record (`.lonca/workspace.json`) to leave the session, or to be continued as another | no gain: every change waits for a human anyway | prevented: which session works in a directory is in the log (format 30); the hook asks it and blocks tools while the record does not read, and `--continue` names the log's session | prevented: the level does not rest on hooks |
 | Using a session token outside where it was given | possible | possible (tokens are bearer tokens) | detected: the session is tainted (`not_in_sandbox`) |
 | Exhausting the daemon through the socket | bounded: connection, line, rate and byte limits | bounded | bounded |
 

@@ -287,6 +287,7 @@ fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
         expires_ms: now + 3_600_000,
         continues: None,
         harness: Some("gemini".into()),
+        workspace: None,
     };
     // Refused roots: relative, with `..`, a trailing slash, too many.
     for bad in ["scratch", "/tmp/../x", "/tmp/x/", "/", "/tmp/./x"] {
@@ -1616,7 +1617,7 @@ fn an_expired_session_can_not_beat() {
 fn a_continuation_replaces_the_token_of_the_session_it_ends() {
     let mut e = Env::new();
     e.init(None);
-    let a = e.session("a", &["src/**"]);
+    let a = e.session_in("a", &["src/**"], "/ws/a");
     let r = e.continue_session("b", "a", &["src/**"]);
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     let b = r["token"].as_str().unwrap().to_string();

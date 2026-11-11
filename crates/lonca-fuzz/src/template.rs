@@ -162,6 +162,7 @@ impl Builder {
             expires_ms: self.now() + 3_600_000,
             continues: None,
             harness: Some("claude-code".into()),
+            workspace: None,
         };
         let body = self.signed(&op);
         let r = self.call("human.submit", None, body);

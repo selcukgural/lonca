@@ -11,7 +11,7 @@ use lonca_core::GitId;
 use lonca_core::keyed;
 use lonca_core::oplog::{
     FORMAT_GIVE_BACK, FORMAT_KEYED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEASE_PINS,
-    FORMAT_REPLACES, FORMAT_SYMBOL_KEYS, GENESIS_PREV, OpEntry, SignedOp,
+    FORMAT_REPLACES, FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE, GENESIS_PREV, OpEntry, SignedOp,
 };
 use lonca_core::ops::{
     Actor, Attestation, Claim, Facts, HumanKey, LeaseItem, NegotiationMsg, ObsKind,
@@ -68,6 +68,12 @@ pub struct Session {
     /// harness is not running the session's hooks. It taints the session and
     /// drops its level to `unobserved`, for good.
     pub unhooked: Option<Unhooked>,
+    /// The directory the session works in, from its `session.start` (format
+    /// 30); a child's is its parent's. `None`: the log does not say.
+    pub workspace: Option<String>,
+    /// The harness's own name for the session it runs this one in, from
+    /// the last `session.bind`. Empty when the harness gave none.
+    pub harness_session: Option<String>,
 }
 
 /// A tool call the session's hooks did not report.
@@ -321,6 +327,9 @@ pub struct State {
     /// entry's own pruning, so that the entry that reaches the format is
     /// decided and applied alike.
     pub gives_back: bool,
+    /// The entry being applied is of format 30 or later: a continuation
+    /// starts unobserved.
+    pub placed: bool,
     /// Every trunk commit in order, genesis first: how far a base is
     /// behind is its distance from the end.
     pub trunk_line: Vec<GitId>,
@@ -1063,6 +1072,7 @@ impl State {
             self.prune_leases(e.time_ms);
         }
         self.gives_back = e.format >= FORMAT_GIVE_BACK;
+        self.placed = e.format >= FORMAT_WORKSPACE;
         self.settle_reservations(e.time_ms);
         self.charge(e);
         if let Op::ChangePropose { change, commit, .. } = &e.op {
@@ -1607,6 +1617,7 @@ impl State {
                 expires_ms,
                 continues,
                 harness,
+                workspace,
             } => {
                 let root_human = match actor {
                     Actor::Human { name } => name.clone(),
@@ -1615,6 +1626,7 @@ impl State {
                 // What is known of the workspace's files goes with them.
                 let old = continues.as_ref();
                 let old = old.and_then(|c| self.sessions.get(&c.session)).cloned();
+                let placed = self.placed;
                 self.sessions.insert(
                     session.clone(),
                     Session {
@@ -1629,10 +1641,13 @@ impl State {
                         expires_ms: *expires_ms,
                         // A sandbox is not handed on: what continues the
                         // session has not been shown to run in one.
+                        // Nor is any other level, from format 30 on: its
+                        // harness has to report before it counts.
                         level: old
                             .as_ref()
                             .map(|o| o.level)
                             .filter(|l| *l != ObservationLevel::Isolated)
+                            .filter(|_| !placed)
                             .unwrap_or(ObservationLevel::Unobserved),
                         harness: harness
                             .clone()
@@ -1651,14 +1666,21 @@ impl State {
                         unproposed: None,
                         // Its harness reports afresh; the taint went along.
                         unhooked: None,
+                        workspace: workspace.clone(),
+                        harness_session: None,
                     },
                 );
                 if let Some(old) = old {
                     self.hand_over(&old.id, session, time_ms);
                 }
             }
-            Op::SessionBind { session, level, .. } => {
+            Op::SessionBind {
+                session,
+                level,
+                checks,
+            } => {
                 if let Some(s) = self.sessions.get_mut(session) {
+                    s.harness_session = Some(checks.harness_session.clone());
                     s.level = *level;
                     s.bound = true;
                     s.bound_ms = Some(time_ms);
@@ -1715,6 +1737,8 @@ impl State {
                             unproposed: None,
                             // The same harness runs it.
                             unhooked: p.unhooked.clone(),
+                            workspace: p.workspace.clone(),
+                            harness_session: None,
                         },
                     );
                 }

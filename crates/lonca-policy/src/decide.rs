@@ -18,7 +18,7 @@ use lonca_core::keyed;
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_KEYED, FORMAT_LEASE_INTENT,
     FORMAT_LEASE_LIVENESS, FORMAT_LEGACY, FORMAT_REPLACES, FORMAT_SECURITY_KEYS,
-    FORMAT_SESSION_HARNESS,
+    FORMAT_SESSION_HARNESS, FORMAT_WORKSPACE,
 };
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
@@ -372,6 +372,48 @@ fn check_continuation(state: &State, c: &Continuation, scope: &Scope, v: &mut Ve
         && let Err(e) = scope_within(scope, &old.scope)
     {
         v.deny(format!("scope_widening:{e}"));
+    }
+}
+
+/// Is one of two normalized absolute paths the other, or inside it?
+pub fn paths_nest(a: &str, b: &str) -> bool {
+    let inside = |p: &str, root: &str| {
+        p.strip_prefix(root)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    };
+    inside(a, b) || inside(b, a)
+}
+
+/// Where a session works is the log's word (format 30): a directory holds
+/// one live session, and a session is continued where it was started. A
+/// session that names no workspace has none: it can not be continued.
+fn check_workspace(
+    state: &State,
+    workspace: Option<&str>,
+    continues: Option<&Continuation>,
+    t: i64,
+    v: &mut Verdict,
+) {
+    if workspace.is_some_and(|w| !valid_scratch_root(w)) {
+        v.deny("invalid_workspace");
+        return;
+    }
+    let old = continues.map(|c| c.session.as_str());
+    if let Some(c) = continues
+        && let Some(s) = state.sessions.get(&c.session)
+        && (workspace.is_none() || s.workspace.as_deref() != workspace)
+    {
+        v.deny("continue_other_workspace");
+    }
+    let Some(w) = workspace else { return };
+    let taken = state.sessions.values().any(|s| {
+        s.parent.is_none()
+            && Some(s.id.as_str()) != old
+            && s.workspace.as_deref().is_some_and(|o| paths_nest(o, w))
+            && state.session_active(&s.id, t)
+    });
+    if taken {
+        v.deny("workspace_in_use");
     }
 }
 
@@ -832,6 +874,7 @@ pub fn decide(
             expires_ms,
             continues,
             harness,
+            workspace,
             ..
         } => {
             if !valid_token(session, 64) || !valid_token(agent, 64) {
@@ -851,6 +894,11 @@ pub fn decide(
                 || expires_ms.saturating_sub(t) > minutes(cfg.sessions.max_ttl_minutes)
             {
                 v.deny("session_ttl");
+            }
+            if ctx.format >= FORMAT_WORKSPACE {
+                check_workspace(state, workspace.as_deref(), continues.as_ref(), t, &mut v);
+            } else if workspace.is_some() {
+                v.deny("invalid_workspace");
             }
             if let Some(c) = continues {
                 check_continuation(state, c, scope, &mut v);

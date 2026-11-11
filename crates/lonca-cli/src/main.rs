@@ -1001,10 +1001,16 @@ fn source(from: &str) -> Result<String> {
 fn repo_name(r: Option<String>) -> Result<String> {
     match r {
         Some(r) => Ok(r),
-        None => Ok(Workspace::current()
-            .context("pass --repo or run inside a workspace")?
-            .meta
-            .repo),
+        None => {
+            let ws = Workspace::current().context("pass --repo or run inside a workspace")?;
+            // In an agent's workspace the repository is the log's word:
+            // the file there is the agent's to write.
+            let placed = connect().and_then(|mut c| ctx::placed(&mut c, &ws.root, None));
+            match placed {
+                Ok(Some(p)) => Ok(p.repo),
+                _ => Ok(ws.meta.repo),
+            }
+        }
     }
 }
 
@@ -1098,8 +1104,28 @@ fn scratch_roots(workspace: &Path, dirs: &[PathBuf]) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Refuses a human's command in a directory the log gives to an agent's
+/// session. Its `workspace.json` says "no session" there, and the agent can
+/// write that file: a human would sign for what the agent left.
+fn not_an_agents(ws: &Workspace) -> Result<()> {
+    let mut c = connect()?;
+    match ctx::placed(&mut c, &ws.root, None)? {
+        Some(p) => bail!(
+            "{} is the workspace of agent session {} (repository {}), and its \
+             .lonca/workspace.json names no session: a human does not work from an agent's \
+             workspace. Continue it with `lonca session start --continue`, or use a workspace \
+             of your own",
+            ws.root.display(),
+            p.session,
+            p.repo
+        ),
+        None => Ok(()),
+    }
+}
+
 /// The human a workspace was created for, else the default identity.
 fn workspace_human(ws: &Workspace) -> Result<String> {
+    not_an_agents(ws)?;
     match &ws.meta.human {
         // It names key files, and workspace.json can be edited.
         Some(h) if h.contains('/') || h.starts_with('.') => bail!("bad human name {h:?}"),
@@ -1576,8 +1602,37 @@ fn run(cmd: Cmd) -> Result<()> {
             let human = human_name(human)?;
             let target = continue_dir.as_ref().or(workspace.as_ref());
             let dir = ctx::absolute(target.context("pass --workspace or --continue")?)?;
+            let dir = ctx::resolved(&dir)?;
+            // Which session a workspace was left by is the log's word: the
+            // id in its workspace.json is the agent's to write.
             let continuing = match continue_dir {
-                Some(_) => Some(Workspace::to_continue(&dir, &repo)?),
+                Some(_) => {
+                    let ws = Workspace::to_continue(&dir, &repo)?;
+                    let at = ctx::placed(&mut connect()?, &dir, None)?
+                        .filter(|p| p.workspace.as_deref().map(Path::new) == Some(dir.as_path()));
+                    let Some(at) = at else {
+                        if ws.meta.session.is_none() {
+                            bail!(
+                                "{} is a human workspace: no session to continue",
+                                dir.display()
+                            );
+                        }
+                        bail!(
+                            "the log places no session in {}: a session is continued in the \
+                             workspace it was started in (one started before Lonca 0.2.4, or \
+                             whose directory was moved, can not be)",
+                            dir.display()
+                        )
+                    };
+                    if at.repo != repo {
+                        bail!(
+                            "{} is the workspace of a session of repository {}, not {repo}",
+                            dir.display(),
+                            at.repo
+                        );
+                    }
+                    Some((ws, at.session))
+                }
                 None => None,
             };
             // Before the session starts: a refusal after it would leave a
@@ -1616,6 +1671,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     widen,
                 }),
                 harness: harness.clone(),
+                workspace: Some(dir.to_string_lossy().into_owned()),
             };
             let r = if as_json {
                 let sig = ctx::sign(&human, &repo, &op)?;
@@ -1864,7 +1920,7 @@ fn run(cmd: Cmd) -> Result<()> {
                         }
                         None => {
                             let human = match human {
-                                Some(h) => h,
+                                Some(h) => not_an_agents(&ws).map(|()| h)?,
                                 None => workspace_human(&ws)?,
                             };
                             human_client(&ws.meta.repo, &human)?

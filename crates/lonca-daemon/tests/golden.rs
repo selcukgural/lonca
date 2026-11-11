@@ -662,7 +662,7 @@ fn continuation(e: &mut Env) {
     e.human_change(vec![file("cont.md", "first\n")], "continued file");
     e.svc.process_all();
     let base = e.trunk();
-    let a = e.session("s14", &["cont.md"]);
+    let a = e.session_in("s14", &["cont.md"], "/ws/s14");
     e.lease(&a, "cont.md#<file>");
     let r = e.propose(
         &a,
@@ -786,6 +786,7 @@ fn scratch_roots(e: &mut Env) {
         expires_ms: e.now() + 3_600_000,
         continues: None,
         harness: None,
+        workspace: None,
     };
     let r = e.human(start);
     allowed(r.clone());
@@ -863,6 +864,7 @@ fn human_keys(e: &mut Env) {
         expires_ms: e.now() + 3_600_000,
         continues: None,
         harness: None,
+        workspace: None,
     };
     let body = json!({"op": start, "sig": sign_ed25519(&bora, "bora", "demo", &start, e.now())});
     // Bora submits on bora's own session (logins are not log entries).
@@ -1092,6 +1094,7 @@ fn scratch_roots_in_an_old_format_entry_are_refused() {
         expires_ms: e.now() + 60_000,
         continues: None,
         harness: None,
+        workspace: None,
     };
     assert_eq!(e.human(start)["decision"]["outcome"], "allow");
     assert!(*formats(&e).last().unwrap() >= 5);
@@ -1533,6 +1536,25 @@ fn golden_v27_log_still_verifies_replays_and_audits() {
 
 /// Human keys on security keys: both kinds enrolled, each signs with a
 /// touch, and a signature without one is a recorded denial.
+/// Format 30: a session's workspace is in its start, a continuation names
+/// the same one and starts unobserved.
+#[test]
+fn golden_v30_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v30.bundle",
+        "3309afef9b68f700e9d6297373cb14234aa907844e851a1c711cd6069687630c",
+        30,
+    );
+    let s = lonca_policy::state::State::replay(&ops);
+    let (old, new) = (&s.sessions["s14"], &s.sessions["s15"]);
+    assert_eq!(old.workspace.as_deref(), Some("/ws/s14"));
+    assert_eq!(new.workspace, old.workspace);
+    assert_eq!(new.continued_from.as_deref(), Some("s14"));
+    assert_eq!(new.level, ObservationLevel::Unobserved);
+    let placed = s.sessions.values().filter(|x| x.workspace.is_some());
+    assert_eq!(placed.count(), 2, "the others name none");
+}
+
 #[test]
 fn golden_v28_log_still_verifies_replays_and_audits() {
     let ops = check_golden(

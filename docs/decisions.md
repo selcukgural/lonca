@@ -3630,6 +3630,21 @@ it and what it runs are part of the trust model.
   it also requires the `ci.yml` jobs as status checks ("CI runs on every
   pull request"); from 2026-11-08 to then it required none. `cargo-deny`,
   CodeQL and zizmor run on pull requests and block nothing.
+- **A release is a tag on main, and a tag stays where it was put.**
+  `release.yml` ran on any `v*` tag: a tag on a commit that was never on
+  main, pushed with a token that may write contents, became attested
+  archives, and its published draft went to crates.io. Since 2026-11-12
+  the `on-main` job asks GitHub how the tagged commit stands to main
+  (`compare/main...<sha>`: `behind` or `identical`), and the `draft` job,
+  the only one that can write or attest, needs it; `registries.yml` asks
+  the same before anything is packaged. Two tag rulesets for `v*`: no
+  update and no deletion, for anybody (a tag can not be moved between the
+  draft and its publishing, which would send crates.io another source than
+  the attested archives were built from); creation by a repository
+  administrator only, so no workflow's token tags a release. Not set: a
+  required reviewer on the `release` environment. With one maintainer it
+  is the same person's second click, and a token that can push a tag and
+  publish a release can approve a deployment too.
 - **CODEOWNERS** names the owner of `.github/`, `deny.toml`,
   `rust-toolchain.toml`, `packaging/`, `lonca-core`, `lonca-policy`,
   `lonca-audit` and `SECURITY.md`; review by the owner is asked, not

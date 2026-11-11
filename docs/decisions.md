@@ -3698,8 +3698,24 @@ it and what it runs are part of the trust model.
   `rust-lang/crates-io-auth-action` for trusted publishing, see "Releases and
   install paths"), each pinned by commit as the repository already required.
 - **zizmor** (`.github/workflows/zizmor.yml`, version pinned) checks the
-  workflows where they change and fails on anything above `low`; today it
-  reports one `low` (the self-repository syntax of the mutants runner).
+  workflows where they change and fails on anything above `low`.
+- **An archive is taken up again by its digest, not only by its name.**
+  In `release.yml` the builds hand their archives to the acceptance jobs
+  and to the draft as artifacts. The draft took every artifact whose name
+  began with `lonca-` and merged them: a job that ran other people's code
+  (the SBOM job installs a tool) could have uploaded one more, holding a
+  file named like an archive, and it would have been hashed, attested and
+  released while the acceptance jobs had tested the real one. Since
+  2026-11-12 each build reports its archive's SHA-256 as a job output,
+  which no other job writes; the acceptance jobs and the draft take each
+  artifact by its exact name and hold the file to that digest
+  (`.github/scripts/same-archive.sh`), and the draft counts five files.
+- **The key crash inputs are encrypted to is pinned twice.** `fuzz.yml`
+  encrypts what a run finds to `fuzz/crash-recipient.txt` and uploads it
+  to a public repository's artifacts. A merged change to that one file
+  would make every later finding readable by its author. The workflow now
+  carries the expected recipient and stops when the file says another, so
+  a new recipient is two changes, both under `CODEOWNERS`.
 - **SBOM**: a `v*` tag builds a CycloneDX bill of materials of every crate
   (`cargo cyclonedx`, pinned) in `release.yml` and attaches it to the
   release (`lonca-sbom.cdx.tar.gz`, listed in `SHA256SUMS`).

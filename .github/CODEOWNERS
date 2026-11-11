@@ -8,6 +8,7 @@
 /rust-toolchain.toml      @selcukgural
 /packaging/               @selcukgural
 /website/static/install.sh @selcukgural
+/fuzz/crash-recipient.txt @selcukgural
 /crates/lonca-core/       @selcukgural
 /crates/lonca-policy/     @selcukgural
 /crates/lonca-audit/      @selcukgural

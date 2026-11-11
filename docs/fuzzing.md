@@ -90,7 +90,8 @@ seeds and regressions alone, and the cache is neither restored nor saved.
 The repository is public, so the log says only which target found what
 (`crash`, `timeout`, `oom`). The input and the fuzzer's output are uploaded
 as `fuzz-<target>`, encrypted with [age](https://age-encryption.org) to the
-key in `fuzz/crash-recipient.txt`. With the private key:
+key in `fuzz/crash-recipient.txt` (`fuzz.yml` names the same key and stops
+when the file has another: changing the recipient means changing both). With the private key:
 
 ```sh
 gh run download <run> -n fuzz-<target>

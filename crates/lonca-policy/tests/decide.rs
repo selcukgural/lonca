@@ -6,7 +6,7 @@ use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_ANCHORED, FORMAT_CHILD_AGENT, FORMAT_CURRENT, FORMAT_FOLDED_PATHS,
     FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_KEYED, FORMAT_REPLACES, FORMAT_SECURITY_KEYS,
-    FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE, SignedOp, verify_chain,
+    FORMAT_SYMBOL_KEYS, FORMAT_TAINT_REACHES, FORMAT_WORKSPACE, SignedOp, verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -5600,6 +5600,140 @@ when { context.critical };
             "{path}: {d:?}"
         );
     }
+}
+
+/// A child's token is its parent's to use: what the parent read after it
+/// made the child is in the child too, and in the child's children. Up to
+/// log format 33 a child took its parent's taint once, when it was made.
+#[test]
+fn what_enters_a_session_enters_the_sessions_made_from_it() {
+    let child = |h: &H, parent: &str, id: &str| Op::CapAttenuate {
+        parent: parent.into(),
+        child: id.into(),
+        agent: "bot-s1".into(),
+        scope: h.chain.state.sessions[parent].scope.clone(),
+        expires_ms: h.chain.state.sessions[parent]
+            .expires_ms
+            .min(h.now + 10 * MIN),
+        leases: vec![],
+    };
+    let family = |h: &mut H| {
+        h.start_observed("s1", &["**"]);
+        h.start_observed("s2", &["**"]);
+        for (parent, id) in [("s1", "kid"), ("kid", "grandkid")] {
+            let op = child(h, parent, id);
+            let d = h.agent(parent, op);
+            assert!(d.is_allow(), "{id}: {d:?}");
+        }
+    };
+
+    // A taint.
+    let mut h = H::new();
+    family(&mut h);
+    let taint = Op::Taint {
+        session: "s1".into(),
+        reason: "read the web".into(),
+    };
+    assert!(h.daemon(taint, vec![]).is_allow());
+    let sessions = &h.chain.state.sessions;
+    for id in ["kid", "grandkid"] {
+        let said = sessions[id].taint.as_deref();
+        assert_eq!(said, Some("inherited: read the web"), "{id}");
+    }
+    assert_eq!(sessions["s2"].taint, None, "another session is another");
+    // The child does not write what the parent may not.
+    h.wrote("kid", "Cargo.toml");
+    let sym = "Cargo.toml#<file>";
+    assert!(h.lease("kid", "l1", &[(sym, LeaseKind::Edit)]).is_allow());
+    let d = h.propose("kid", ChangeId::random(), edit(sym));
+    assert!(denied_with(&d, "tainted_critical_path"), "{d:?}");
+    h.assert_replay();
+
+    // Entries from before the format replay as they were: the child clean.
+    let mut old = h.log.clone();
+    for o in &mut old {
+        o.entry.format = FORMAT_TAINT_REACHES - 1;
+    }
+    let s = State::replay(&old);
+    assert!(s.sessions["s1"].taint.is_some());
+    assert_eq!(s.sessions["kid"].taint, None);
+    assert_eq!(s.sessions["grandkid"].taint, None);
+
+    // What a tool read, seen by the hook.
+    let mut h = H::new();
+    family(&mut h);
+    let read = Op::Observe {
+        session: "kid".into(),
+        events: vec![Observation {
+            phase: Phase::Pre,
+            kind: ObsKind::Fetch {
+                host: "example.org".into(),
+            },
+            external: true,
+        }],
+    };
+    assert!(h.daemon(read, vec![]).is_allow());
+    let sessions = &h.chain.state.sessions;
+    assert!(sessions["kid"].taint.is_some());
+    assert!(
+        sessions["grandkid"]
+            .taint
+            .as_deref()
+            .is_some_and(|t| t.starts_with("inherited: "))
+    );
+    assert_eq!(sessions["s1"].taint, None, "nothing goes up to the parent");
+    h.assert_replay();
+
+    // A tool that ran without its hook: the mark and the level.
+    let mut h = H::new();
+    family(&mut h);
+    assert_eq!(
+        h.chain.state.sessions["grandkid"].level,
+        ObservationLevel::HooksSandbox
+    );
+    assert!(unhook(&mut h, "s1", "Bash").is_allow());
+    for id in ["s1", "kid", "grandkid"] {
+        let s = &h.chain.state.sessions[id];
+        assert_eq!(s.level, ObservationLevel::Unobserved, "{id}");
+        assert!(s.unhooked.is_some() && s.taint.is_some(), "{id}");
+    }
+    assert_eq!(
+        h.chain.state.sessions["s2"].level,
+        ObservationLevel::HooksSandbox
+    );
+    h.assert_replay();
+
+    // A parent bound lower takes its children down; bound higher again, it
+    // does not take them up.
+    let mut h = H::new();
+    family(&mut h);
+    let bind = |h: &mut H, level| {
+        let checks = BindChecks {
+            harness: "claude-code".into(),
+            harness_session: "h-s1".into(),
+            managed_hooks: true,
+            locked_sandbox: level == ObservationLevel::HooksSandbox,
+            sudo_without_password: false,
+            config_digest: "cfg".into(),
+            hook_binary_protected: true,
+        };
+        let op = Op::SessionBind {
+            session: "s1".into(),
+            checks,
+            level,
+        };
+        h.daemon(op, vec![])
+    };
+    let d = bind(&mut h, ObservationLevel::Hooks);
+    assert!(d.is_allow(), "{d:?}");
+    for id in ["s1", "kid", "grandkid"] {
+        assert_eq!(
+            h.chain.state.sessions[id].level,
+            ObservationLevel::Hooks,
+            "{id}"
+        );
+    }
+    h.assert_replay();
 }
 
 /// macOS opens `Build.rs` as `build.rs`: a critical path is critical under

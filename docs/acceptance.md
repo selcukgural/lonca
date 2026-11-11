@@ -140,6 +140,10 @@ visible. Each becomes a criterion when it is automated.
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
   --secure-enclave`, FIDO2 keys).
 - The advisor (`lonca advise`): needs a model.
+- A parent's taint reaching its child sessions: `cap.attenuate` is a
+  socket method no command of `lonca` calls; the policy's test
+  `what_enters_a_session_enters_the_sessions_made_from_it` and the golden
+  log of format 34 cover it.
 - A human signature made for another log, or before what it approves
   (`human_signature_of_another_log`, `signed_before_its_target`,
   `unanchored_human_signature`): `lonca` always signs at the head it was

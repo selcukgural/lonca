@@ -99,7 +99,8 @@ untrusted path (`[taint]` and `[paths] untrusted` in `lonca.toml` say which;
 `Vendor/x.c` is `vendor/x.c` to these lists, as it is to macOS).
 A tainted session's changes need a human, and it may not touch **critical
 paths** at all (`[paths] critical`: build scripts, CI, lockfiles, agent
-instructions such as `CLAUDE.md`). A taint never goes away for that session.
+instructions such as `CLAUDE.md`). A taint never goes away for that session,
+and it reaches every child session made from it, before or after.
 
 The levels, the harnesses and the hooks are in
 [Running agents](runners.md#observation-levels); the modes are in

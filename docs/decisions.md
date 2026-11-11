@@ -3455,7 +3455,16 @@ tries never reaches a decision, and nothing told anyone of a freeze.
   (`freeze`, `import.unmediated`, `taint`, `unhooked`) are taken from the repository and
   written after the request, or by the worker within two seconds.
 - **Kept**: past 8 MiB the file moves to `security.log.1`, replacing the one
-  there, so at most about 16 MiB, the latest events, are kept. The log is
+  there, so about 16 MiB, the latest events, are kept. Some kinds any
+  caller can cause as often as it likes (a line that is no request, a bad
+  token: 16 MiB of them takes seconds), and they used to push out
+  everything else, a freeze or a taint included. So the latest 256 events
+  of every kind stay, whatever comes after them (`KEEP_OF_KIND`): at a
+  rotation those the two files would no longer hold are written first in
+  the new `security.log.1`. A kind pushes out its own older events and no
+  other kind's. A line that is not an event of a known kind is not
+  carried. A daemon that stops in the middle of a rotation may leave the
+  events of one file in both until the next. The log is
   the daemon's, like the stores: a backup does not carry it, and an
   uninstall removes it with the home.
 - **Told at once**: a `freeze` or an `integrity_alarm` runs a notification

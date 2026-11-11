@@ -21,8 +21,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 /// Past this size the log moves to `security.log.1` (replacing the one
-/// there) and a new one starts: at most twice this much is kept.
+/// there) and a new one starts: about twice this much is kept, and
+/// [`KEEP_OF_KIND`] of every kind besides.
 pub const ROTATE_BYTES: u64 = 8 << 20;
+
+/// The latest events of each kind that stay however many of the other
+/// kinds come after them. Some kinds any caller can cause as often as it
+/// likes (a line that is no request, a bad token); they push out their own
+/// kind and no other, so a freeze or a taint is not lost under them.
+pub const KEEP_OF_KIND: usize = 256;
 
 /// The longest free text of an event, in characters.
 const MAX_DETAIL: usize = 300;
@@ -232,19 +239,55 @@ impl SecurityLog {
     fn append(&self, event: &Event) -> std::io::Result<()> {
         let _held = self.write.lock().unwrap_or_else(|e| e.into_inner());
         if fs::metadata(&self.path).is_ok_and(|m| m.len() >= self.rotate_bytes) {
-            fs::rename(&self.path, self.path.with_extension("log.1"))?;
+            self.rotate()?;
         }
-        let mut opts = fs::OpenOptions::new();
-        opts.create(true).append(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&self.path)?;
+        let mut f = private(true).open(&self.path)?;
         let mut line = serde_json::to_vec(event).map_err(std::io::Error::other)?;
         line.push(b'\n');
         f.write_all(&line)
+    }
+
+    /// Moves the log to `security.log.1`. The file that was there is given
+    /// up, but for the latest events of each kind that the two files would
+    /// no longer hold [`KEEP_OF_KIND`] of: those go first in the new one.
+    /// Called with the write lock held.
+    fn rotate(&self) -> std::io::Result<()> {
+        let older = self.path.with_extension("log.1");
+        let full = fs::read(&self.path)?;
+        let kind_of = |line: &str| {
+            let kind = serde_json::from_str::<Event>(line).ok()?.kind;
+            kind::ALL.iter().position(|k| *k == kind)
+        };
+        // How many of each kind are still wanted from the file given up.
+        let mut wanted = [KEEP_OF_KIND; kind::ALL.len()];
+        for k in String::from_utf8_lossy(&full).lines().filter_map(kind_of) {
+            wanted[k] = wanted[k].saturating_sub(1);
+        }
+        let old = fs::read_to_string(&older).unwrap_or_default();
+        let mut carried: Vec<&str> = Vec::new();
+        for line in old.lines().rev() {
+            if let Some(k) = kind_of(line)
+                && wanted[k] > 0
+            {
+                wanted[k] -= 1;
+                carried.push(line);
+            }
+        }
+        // Written beside it and moved over it: a daemon that stops midway
+        // leaves the old file or the new one. If it stops before the last
+        // step, the events of the full file are in both until the next
+        // rotation.
+        let new = self.path.with_extension("log.1.new");
+        let _ = fs::remove_file(&new);
+        let mut f = private(false).open(&new)?;
+        for line in carried.iter().rev() {
+            f.write_all(line.as_bytes())?;
+            f.write_all(b"\n")?;
+        }
+        f.write_all(&full)?;
+        drop(f);
+        fs::rename(&new, &older)?;
+        fs::remove_file(&self.path)
     }
 
     /// The events at `since_ms` or later, oldest first, from both files.
@@ -297,6 +340,23 @@ impl SecurityLog {
             }
         });
     }
+}
+
+/// How the log's files are opened: the daemon's alone, to add to (`true`)
+/// or as a new file.
+fn private(append: bool) -> fs::OpenOptions {
+    let mut opts = fs::OpenOptions::new();
+    if append {
+        opts.create(true).append(true);
+    } else {
+        opts.create_new(true).write(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts
 }
 
 fn desktop(message: &str) -> Option<std::process::Child> {
@@ -388,6 +448,76 @@ mod tests {
         );
         assert_eq!(log.read_since(9).len(), 1);
         assert_eq!(summary(&all)[kind::AUTH_FAILURE], all.len());
+    }
+
+    #[test]
+    fn a_flood_of_one_kind_pushes_out_no_other_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = SecurityLog::new(dir.path(), Notify::Off);
+        log.rotate_bytes = 2000;
+        log.record(Event::new(1, kind::FREEZE).repo("demo").detail("moved"));
+        log.record(Event::new(2, kind::TAINT).session("s1"));
+        // Many rotations' worth of what any caller can cause.
+        let flood = 5000;
+        for i in 0..flood {
+            log.record(Event::new(10 + i, kind::MALFORMED).detail("not a request"));
+        }
+        log.record(Event::new(10 + flood, kind::TAINT).session("s2"));
+        let all = log.read_since(0);
+        let of = |k: &str| all.iter().filter(|e| e.kind == k).collect::<Vec<_>>();
+        assert_eq!(of(kind::FREEZE).len(), 1, "the freeze is still there");
+        assert_eq!(of(kind::FREEZE)[0].repo.as_deref(), Some("demo"));
+        let taints: Vec<_> = of(kind::TAINT).iter().map(|e| e.time_ms).collect();
+        assert_eq!(taints, [2, 10 + flood]);
+        // The flood keeps its latest, and no more than its share and what
+        // two files of this size hold.
+        let noise = of(kind::MALFORMED);
+        assert_eq!(noise.last().unwrap().time_ms, 9 + flood);
+        assert!(noise.len() >= KEEP_OF_KIND, "{}", noise.len());
+        assert!(
+            noise.len() <= KEEP_OF_KIND + 2 * 2000 / 50,
+            "{}",
+            noise.len()
+        );
+        assert!(
+            all.windows(2).all(|w| w[0].time_ms < w[1].time_ms),
+            "oldest first, each once"
+        );
+        // Both files are the daemon's alone, and nothing else is left.
+        #[cfg(unix)]
+        for name in ["security.log", "security.log.1"] {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(dir.path().join(name)).unwrap().permissions();
+            assert_eq!(mode.mode() & 0o777, 0o600, "{name}");
+        }
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn a_kind_keeps_its_latest_and_a_line_that_is_no_event_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = SecurityLog::new(dir.path(), Notify::Off);
+        log.rotate_bytes = 400;
+        // More of one kind than is kept, then a flood of another.
+        let many = KEEP_OF_KIND as i64 + 40;
+        for i in 0..many {
+            log.record(Event::new(i, kind::HOOK_DENIED));
+        }
+        fs::write(
+            dir.path().join("security.log.1"),
+            "not an event\n{\"time_ms\":0,\"kind\":\"made_up\"}\n",
+        )
+        .unwrap();
+        for i in 0..2000 {
+            log.record(Event::new(many + i, kind::AUTH_FAILURE));
+        }
+        let all = log.read_since(0);
+        let denied: Vec<_> = all.iter().filter(|e| e.kind == kind::HOOK_DENIED).collect();
+        assert!(denied.len() <= KEEP_OF_KIND, "{}", denied.len());
+        assert_eq!(denied.last().unwrap().time_ms, many - 1, "the latest");
+        assert!(all.iter().all(|e| e.kind != "made_up"));
+        let text = fs::read_to_string(dir.path().join("security.log.1")).unwrap();
+        assert!(!text.contains("not an event"), "{text}");
     }
 
     #[test]

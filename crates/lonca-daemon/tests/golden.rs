@@ -358,7 +358,7 @@ fn give_back(e: &mut Env) {
         "cap.attenuate",
         None,
         Some(&a),
-        json!({"agent": "sub", "scope": scope, "expires_ms": expires, "leases": [set.clone()]}),
+        json!({"agent": "bot-s-ga", "scope": scope, "expires_ms": expires, "leases": [set.clone()]}),
     );
     allowed(child);
     e.advance(60_001);
@@ -645,7 +645,7 @@ fn queue(e: &mut Env) {
         "cap.attenuate",
         None,
         Some(&a),
-        json!({"agent": "sub", "scope": scope, "expires_ms": expires, "leases": [set]}),
+        json!({"agent": "bot-s16", "scope": scope, "expires_ms": expires, "leases": [set]}),
     );
     allowed(child.clone());
     allowed(e.ok(
@@ -795,7 +795,7 @@ fn scratch_roots(e: &mut Env) {
         "cap.attenuate",
         None,
         Some(&t),
-        json!({"agent": "bot-s8-child", "scope": {"paths": ["notes.md"], "symbols": null, "ops": ["lease.acquire"], "max_files": null, "max_lines": null, "scratch": ["/tmp/golden/logs"]}, "expires_ms": e.now() + 60_000}),
+        json!({"agent": "bot-s8", "scope": {"paths": ["notes.md"], "symbols": null, "ops": ["lease.acquire"], "max_files": null, "max_lines": null, "scratch": ["/tmp/golden/logs"]}, "expires_ms": e.now() + 60_000}),
     );
     allowed(r.clone());
     let ws = e.root.join("ws");
@@ -1534,8 +1534,6 @@ fn golden_v27_log_still_verifies_replays_and_audits() {
     );
 }
 
-/// Human keys on security keys: both kinds enrolled, each signs with a
-/// touch, and a signature without one is a recorded denial.
 /// Format 30: a session's workspace is in its start, a continuation names
 /// the same one and starts unobserved.
 #[test]
@@ -1555,6 +1553,28 @@ fn golden_v30_log_still_verifies_replays_and_audits() {
     assert_eq!(placed.count(), 2, "the others name none");
 }
 
+/// Format 31: a child session has its parent's agent name.
+#[test]
+fn golden_v31_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v31.bundle",
+        "d95941b699040c68f997a6a99a5c4d6167b901ec039a589318e08eb77b79a5c8",
+        31,
+    );
+    let s = lonca_policy::state::State::replay(&ops);
+    let children: Vec<_> = s
+        .sessions
+        .values()
+        .filter_map(|c| Some((c, c.parent.as_ref()?)))
+        .collect();
+    assert_eq!(children.len(), 3);
+    for (child, parent) in children {
+        assert_eq!(child.agent, s.sessions[parent].agent, "{}", child.id);
+    }
+}
+
+/// Human keys on security keys: both kinds enrolled, each signs with a
+/// touch, and a signature without one is a recorded denial.
 #[test]
 fn golden_v28_log_still_verifies_replays_and_audits() {
     let ops = check_golden(

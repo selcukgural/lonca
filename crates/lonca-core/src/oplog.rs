@@ -59,8 +59,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// security keys (`sk-p256`, `sk-ed25519`); version 29 adds keyed
 /// directories; version 30 adds `workspace` to `session.start`, makes a
 /// continuation name the workspace of the session it continues, and starts
-/// it unobserved.
-pub const FORMAT_CURRENT: u32 = 30;
+/// it unobserved; version 31 gives a child session its parent's agent
+/// name.
+pub const FORMAT_CURRENT: u32 = 31;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -159,6 +160,12 @@ pub const FORMAT_KEYED: u32 = 29;
 /// once, and a continuation starts at `unobserved` whatever its
 /// predecessor reached. Older entries replay as they were.
 pub const FORMAT_WORKSPACE: u32 = 30;
+/// The first format in which a `cap.attenuate` names its parent's agent:
+/// a child session is the same agent with less, so what the policy says of
+/// an agent by name holds for every session made from that agent's. Before
+/// it the child's agent name was the parent's choice. Older entries replay
+/// as they were.
+pub const FORMAT_CHILD_AGENT: u32 = 31;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

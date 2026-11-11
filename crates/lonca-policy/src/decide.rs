@@ -16,9 +16,9 @@ use std::collections::BTreeSet;
 
 use lonca_core::keyed;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_KEYED, FORMAT_LEASE_INTENT,
-    FORMAT_LEASE_LIVENESS, FORMAT_LEGACY, FORMAT_REPLACES, FORMAT_SECURITY_KEYS,
-    FORMAT_SESSION_HARNESS, FORMAT_WORKSPACE,
+    FORMAT_AFFECTED, FORMAT_CHILD_AGENT, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_KEYED,
+    FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEGACY, FORMAT_REPLACES,
+    FORMAT_SECURITY_KEYS, FORMAT_SESSION_HARNESS, FORMAT_WORKSPACE,
 };
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
@@ -997,6 +997,11 @@ pub fn decide(
             }
             validate_scope(scope, &mut v);
             if let Some(p) = state.sessions.get(parent) {
+                // A child is its parent's agent with less: a name of its
+                // own would step out of every policy rule on the parent's.
+                if ctx.format >= FORMAT_CHILD_AGENT && *agent != p.agent {
+                    v.deny(format!("child_agent_name:{}", p.agent));
+                }
                 if let Err(e) = scope_within(scope, &p.scope) {
                     v.deny(format!("scope_widening:{e}"));
                 }

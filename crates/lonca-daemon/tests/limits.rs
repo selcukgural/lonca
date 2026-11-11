@@ -668,7 +668,7 @@ fn a_session_and_those_made_from_it_share_their_rate() {
         "cap.attenuate",
         None,
         Some(&parent),
-        json!({"agent": "kid", "scope": scope, "expires_ms": e.now() + 60_000}),
+        json!({"agent": "bot-s1", "scope": scope, "expires_ms": e.now() + 60_000}),
     );
     let child = child["token"].as_str().unwrap().to_string();
     beat(&mut e, &child).unwrap();

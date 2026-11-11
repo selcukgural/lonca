@@ -254,7 +254,7 @@ fn a_child_inherits_the_mark_and_a_continuation_the_taint() {
         "cap.attenuate",
         None,
         Some(&t),
-        json!({"agent": "sub", "scope": scope, "expires_ms": expires, "leases": []}),
+        json!({"agent": "bot-s1", "scope": scope, "expires_ms": expires, "leases": []}),
     );
     let id = child["session"].as_str().unwrap().to_string();
     let c = session_of(&mut e, &id);

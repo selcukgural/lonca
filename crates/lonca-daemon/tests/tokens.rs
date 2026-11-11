@@ -102,11 +102,23 @@ fn revocation_reaches_rotated_tokens_of_the_session_and_its_children() {
     let parent = e.session("s1", &["src/**"]);
     let scope = json!({"paths": ["src/**"], "symbols": null, "ops": ["lease.release"],
                        "max_files": null, "max_lines": null});
-    let child = e.ok(
+    // A child has its parent's agent name; no token is given for another.
+    let other = e.ok(
         "cap.attenuate",
         None,
         Some(&parent),
         json!({"agent": "sub", "scope": scope, "expires_ms": e.now() + 60_000, "leases": []}),
+    );
+    assert_eq!(
+        other["decision"]["reasons"],
+        json!(["child_agent_name:bot-s1"])
+    );
+    assert!(other["token"].is_null() && other["session"].is_null());
+    let child = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&parent),
+        json!({"agent": "bot-s1", "scope": scope, "expires_ms": e.now() + 60_000, "leases": []}),
     );
     let child = child["token"].as_str().unwrap().to_string();
     let rotate = |e: &mut Env, t: &str| {

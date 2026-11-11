@@ -383,7 +383,8 @@ fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
 
     // A child may keep a root or drop it, not add one.
     let expires = e.now() + 60_000;
-    let child = |roots: Vec<String>| json!({"agent": "child", "scope": scope(roots), "expires_ms": expires});
+    let child =
+        |roots: Vec<String>| json!({"agent": "bot", "scope": scope(roots), "expires_ms": expires});
     let r = e.ok(
         "cap.attenuate",
         None,

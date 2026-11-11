@@ -575,9 +575,11 @@ null}`. The files of a commit:
 ```
 
 `size` is the blob's size in bytes (0 for a submodule). `content_b64`
-is set with `with_content`, except for submodules and redacted blobs;
-the whole answer is one line (`MAX_LINE`), so for a tree of any size
-fetch the manifest without contents and page them with `blobs`.
+is set with `with_content`, except for submodules and redacted blobs.
+With contents the answer is one page, as of `blobs`: past three quarters
+of `MAX_LINE` once encoded it is `too_large` and nothing is read, so for
+a tree of any size fetch the manifest without contents and page them
+with `blobs`.
 
 ### `blobs`
 
@@ -1070,7 +1072,7 @@ the queue itself, and stays 0 under protocol 1.
 | `session_inactive` | `session.heartbeat` of a session that has ended or expired; nothing is logged |
 | `unknown_method` | not in the table |
 | `not_found` | no such repository or change; a path not in the commit (`blobs`) |
-| `too_large` | a request line over its method's limit; a `blobs` page, or one file, does not fit the line cap |
+| `too_large` | a request line over its method's limit; a `blobs` page, one file, or a `tree` with contents does not fit the line cap |
 | `invalid` | parameters that do not read, or do not fit the method. Also an operation whose JSON, with its human signature, is past 64 KiB: the message names the operation and its size; nothing is logged. Shorten its text and lists, or split it |
 | `rate_limited` | the session and those made from it are past `[sessions] ops_per_minute`; nothing is logged, and the message says when to try again. `session.end` and the methods that write nothing to the log are exempt |
 | `busy` | no room for this connection or long line; nothing ran, send it again |

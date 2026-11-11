@@ -73,6 +73,13 @@ is written:
   for a session, counted apart from its own operations. Past that a
   connection is refused until the minute has room again.
 
+### `tree` with contents is one page
+
+For programs that speak the protocol: `tree` with `with_content: true`
+answers `too_large` when the contents are past one page (three quarters
+of the line limit, as for `blobs`), instead of reading the whole commit
+first. Ask without contents and page them with `blobs`, as `lonca` does.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

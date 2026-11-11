@@ -2166,7 +2166,11 @@ under the page budget (three quarters of the line cap, encoded). A page
 never mixes commits: `blobs` names the commit and refuses a path that is
 not in its tree. A file that alone does not fit a page is refused by
 name (`too_large`), as is a page that would overflow; the client refuses
-the file before asking. `repo.prepare_init` reports files above the
+the file before asking. `tree` asked for contents (`with_content`, which
+Lonca's client does not send) is held to the same page since 2026-11-11:
+it used to read and encode every blob of the commit and meet the line cap
+afterwards, so the daemon held the repository in memory to refuse it. The
+sizes are added up before a blob is read. `repo.prepare_init` reports files above the
 change cap (`changes.max_file_bytes` of the default policy) and a tree
 above one page, and `lonca init` prints them as warnings, so the limit
 is met at import, not at the first session. Not done: a per-file cap on

@@ -3478,6 +3478,14 @@ it and what it runs are part of the trust model.
   (1.99.1, with clippy and rustfmt), here and in every CI job (`rustup
   toolchain install` reads it). It is raised by hand in a pull request of its
   own; Dependabot does not bump it.
+- **Ubuntu packages come through one script**, `.github/scripts/apt-install.sh`
+  (bubblewrap in `ci.yml`, age in `fuzz.yml`, musl-tools in `release.yml`). The
+  runner's apt mirrors are all names under ubuntu.com; on 2026-11-11 they did
+  not resolve on the runners for hours and the required `sandbox` job could
+  not start, on every pull request. The script adds kernel.org's mirror
+  after them, so apt asks it only when the others fail. A mirror can not
+  change a package: apt checks what it gets against the archive's signed
+  index, whoever served it.
 - **Actions**: the repository allows GitHub's own actions and five others by
   name (`EmbarkStudios/cargo-deny-action`, `ossf/scorecard-action`,
   `taiki-e/install-action`, `zizmorcore/zizmor-action`, and

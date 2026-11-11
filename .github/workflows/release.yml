@@ -87,7 +87,7 @@ jobs:
           rustup target add "$TARGET"
       - name: musl's C compiler (tree-sitter grammars)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: .github/scripts/apt-install.sh --update musl-tools
       - name: Build
         run: cargo build --release --locked --target "$TARGET" -p lonca -p lonca-audit
       - name: Runs and says its version

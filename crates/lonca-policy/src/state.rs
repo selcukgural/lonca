@@ -305,6 +305,10 @@ pub struct Spent {
     pub day_ms: u64,
 }
 
+/// For how long an entry can be the head a human signature names: the life
+/// of a signature and the clock difference it is allowed.
+pub const SEEN_MS: i64 = crate::human::MAX_AGE_MS + crate::human::MAX_SKEW_MS;
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct State {
     pub repo: String,
@@ -370,6 +374,13 @@ pub struct State {
     pub anchors: Vec<(String, u64, String)>,
     /// Sequence number the next entry must carry.
     pub next_seq: u64,
+    /// The hashes of the latest entries, by number, with their times: what
+    /// a human signature made in the last minutes can name as the head its
+    /// signer saw. Everything from [`SEEN_MS`] before the last entry on,
+    /// and the one entry before that (the head for as long as nothing
+    /// followed it).
+    #[serde(skip)]
+    pub seen: BTreeMap<u64, (String, i64)>,
     pub head_hash: String,
     pub last_time_ms: i64,
 }
@@ -1069,6 +1080,13 @@ impl State {
         self.next_seq = e.seq + 1;
         self.head_hash = s.hash.clone();
         self.last_time_ms = e.time_ms;
+        self.seen.insert(e.seq, (s.hash.clone(), e.time_ms));
+        // An entry leaves once the one after it is too old to be signed at.
+        while let Some((_, (_, time))) = self.seen.iter().nth(1)
+            && *time < e.time_ms.saturating_sub(SEEN_MS)
+        {
+            self.seen.pop_first();
+        }
         self.symbol_keys = e.format >= FORMAT_SYMBOL_KEYS;
         if let Some(h) = &e.human {
             self.nonces.insert(h.nonce.clone());

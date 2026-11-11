@@ -13,8 +13,8 @@ use lonca_core::keyed;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OPLOG_REF, OpLog, SignedOp};
 use lonca_core::ops::{
-    Actor, Attestation, BindChecks, CheckResult, Claim, HumanKey, LeaseItem, MAX_UNPROPOSED_PATHS,
-    ObsKind, Observation, ObservationLevel, Op, Phase,
+    Actor, Attestation, BindChecks, CheckResult, Claim, HumanKey, LeaseItem, LogPoint,
+    MAX_UNPROPOSED_PATHS, ObsKind, Observation, ObservationLevel, Op, Phase,
 };
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileMap, GitId, Result, Store};
@@ -387,6 +387,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("human.logout", Cred::Public),
     ("whoami", Cred::Any),
     ("session.where", Cred::Public),
+    ("log.head", Cred::Public),
     ("repo.list", Cred::AnyHuman),
     ("repo.prepare_init", Cred::Bootstrap),
     ("repo.init", Cred::Bootstrap),
@@ -1199,6 +1200,7 @@ impl Service {
             "ping"
                 | "status"
                 | "log"
+                | "log.head"
                 | "tree"
                 | "change.get"
                 | "whoami"
@@ -1408,6 +1410,7 @@ impl Service {
             "trunk.distance" => self.trunk_distance(&auth, params(p)?),
             "whoami" => self.whoami(&auth),
             "session.where" => self.session_where(params(p)?),
+            "log.head" => self.log_head(&auth),
             "human.prepare_change" => self.prepare_change(&auth, params(p)?),
             "human.prepare_policy" => self.prepare_policy(&auth, params(p)?),
             "human.prepare_import" => self.prepare_import(&auth, params(p)?),
@@ -2928,6 +2931,26 @@ impl Service {
         inner.repos.insert(name.to_string(), r);
         Self::revoke_ended_tokens(inner, name)?;
         Ok(logged(&op))
+    }
+
+    /// The last entry of a repository's log, for a human signature to
+    /// name (`HumanSignature::at`). Public: a recovery is signed by
+    /// someone who has no session, in a repository this daemon may not
+    /// hold the key of, and a hash of the log says nothing of what is in
+    /// it.
+    fn log_head(&self, auth: &Auth) -> Hr {
+        let name = auth.repo()?;
+        let inner = self.lock();
+        let held = inner.repos.get(&name).filter(|r| r.initialized());
+        let Some(r) = held.or_else(|| inner.foreign.get(&name)) else {
+            return fail("not_found", format!("no repository {name}"));
+        };
+        let s = &r.chain.state;
+        let at = s.next_seq.checked_sub(1).map(|seq| LogPoint {
+            seq,
+            hash: s.head_hash.clone(),
+        });
+        Ok(json!({ "at": at }))
     }
 
     fn human_submit(&self, auth: &Auth, p: HumanSubmit, peer: &Peer<'_>) -> Hr {

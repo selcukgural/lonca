@@ -348,7 +348,17 @@ fn a_lost_mac_is_recovered_with_the_recovery_key_alone() {
         .to_string();
     let fresh = KeyPair::generate();
     let now = || e.clock.load(Ordering::SeqCst);
-    let body = |op: &Op, key: &KeyPair| json!({"op": op, "sig": sign_ed25519(key, "ayse", "demo", op, now())});
+    // The head of the log that was restored: nothing is added to it until
+    // the recovery is.
+    let head = |o: &mut Other| -> Option<LogPoint> {
+        serde_json::from_value(o.ok("log.head", Some("demo"), json!({}))["at"].clone()).unwrap()
+    };
+    let at = head(&mut o);
+    assert!(
+        at.is_some(),
+        "a log this daemon holds no key of has a head to sign at"
+    );
+    let body = |op: &Op, key: &KeyPair| json!({"op": op, "sig": sign_ed25519(key, "ayse", "demo", op, now(), at.clone())});
 
     // What failed before: `human.recover` needs the daemon key that was lost.
     let op = Op::HumanRecover {
@@ -433,10 +443,11 @@ fn a_lost_mac_is_recovered_with_the_recovery_key_alone() {
         json!(before["next_seq"].as_u64().unwrap() + 1)
     );
     let op = Op::Freeze { reason: "x".into() };
+    let at = head(&mut o);
     let r = o.ok(
         "human.submit",
         Some("demo"),
-        json!({"op": op, "sig": sign_ed25519(&o.human, "ayse", "demo", &op, now())}),
+        json!({"op": op, "sig": sign_ed25519(&o.human, "ayse", "demo", &op, now(), at)}),
     );
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     let rep = audit(&o.store("demo"), deep()).unwrap();

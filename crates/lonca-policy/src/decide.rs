@@ -16,9 +16,9 @@ use std::collections::BTreeSet;
 
 use lonca_core::keyed;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CHILD_AGENT, FORMAT_FOLDED_PATHS, FORMAT_INSERT_NAMES, FORMAT_ISOLATE,
-    FORMAT_KEYED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEGACY, FORMAT_REPLACES,
-    FORMAT_SECURITY_KEYS, FORMAT_SESSION_HARNESS, FORMAT_WORKSPACE,
+    FORMAT_AFFECTED, FORMAT_ANCHORED, FORMAT_CHILD_AGENT, FORMAT_FOLDED_PATHS, FORMAT_INSERT_NAMES,
+    FORMAT_ISOLATE, FORMAT_KEYED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEGACY,
+    FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SESSION_HARNESS, FORMAT_WORKSPACE,
 };
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
@@ -659,6 +659,25 @@ pub(crate) fn session_context(
     context
 }
 
+/// A human signature is for this log: it names the head its signer saw,
+/// this log has that entry, and what it approves or rejects is not later.
+/// A hash covers every entry before it, so a log rewritten from an earlier
+/// entry on has no entry a signature made before could name.
+fn anchored(state: &State, op: &Op, sig: &HumanSignature) -> Result<(), &'static str> {
+    let Some(at) = &sig.at else {
+        return Err("unanchored_human_signature");
+    };
+    if state.seen.get(&at.seq).map(|(hash, _)| hash) != Some(&at.hash) {
+        return Err("human_signature_of_another_log");
+    }
+    match op {
+        Op::Approve { target_seq, .. } | Op::Reject { target_seq, .. } if *target_seq > at.seq => {
+            Err("signed_before_its_target")
+        }
+        _ => Ok(()),
+    }
+}
+
 pub fn decide(
     state: &State,
     actor: &Actor,
@@ -747,6 +766,11 @@ pub fn decide(
                 return Decision::deny("nonce_reused");
             }
             if let Err(e) = crate::human::verify(key, &state.repo, op, sig, t, ctx.format) {
+                return Decision::deny(e);
+            }
+            if ctx.format >= FORMAT_ANCHORED
+                && let Err(e) = anchored(state, op, sig)
+            {
                 return Decision::deny(e);
             }
             // The recovery key is the one signature without presence: the

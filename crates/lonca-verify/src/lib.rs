@@ -190,7 +190,39 @@ impl Verifier {
             .tempdir_in(&self.scratch)?;
         let root = work.path().canonicalize()?;
         let _gone = Gone(&root);
-        materialize(store, files, &root.join("tree"))?;
+        // A tree this file system can not hold (a name too long for it, two
+        // names it reads as one) is the change's fault, not the daemon's:
+        // the first check errs and says so, and the change is refused. As
+        // an `Err` it would leave the change at the head of the queue, to
+        // be tried and to fail again, with everything behind it waiting.
+        if let Err(e) = materialize(store, files, &root.join("tree")) {
+            let none = Identity {
+                digest: String::new(),
+                lines: BTreeMap::new(),
+            };
+            let said = readable(&e.to_string());
+            let log = format!(
+                "lonca verify: the files of this change could not be written out to run \
+                 its checks, on the file system of the daemon's machine:\n{said}\n"
+            );
+            let log = store.write_blob(log.as_bytes())?;
+            for (n, (kind, name, cmd)) in steps.into_iter().enumerate() {
+                let mut details: BTreeMap<String, String> = name
+                    .map(|n| ("name".to_string(), n.clone()))
+                    .into_iter()
+                    .collect();
+                details.insert("sandbox".into(), self.sandbox.name().into());
+                let (result, log) = if n == 0 {
+                    details.insert("error".into(), "unwritable_tree".into());
+                    (CheckResult::Error, Some(log.clone()))
+                } else {
+                    (CheckResult::Skipped, None)
+                };
+                let env = self.env(cmd, &none);
+                out.push(attestation(kind, result, subject, details, env, log));
+            }
+            return Ok(out);
+        }
         let identity = self.identify(&root, cfg);
         // What the log may not hold: it is a blob of the store, read back
         // by the agent that proposed the change and carried by a push. A
@@ -649,15 +681,21 @@ pub fn materialize(store: &Store, files: &FileMap, dir: &Path) -> Result<()> {
             continue;
         }
         let target = dir.join(path);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&target, store.read_blob(&entry.blob)?)?;
-        #[cfg(unix)]
-        if entry.mode == FileMode::Executable {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
-        }
+        let blob = store.read_blob(&entry.blob)?;
+        // Which file it was is the whole message: the system's has no name.
+        let write = || -> std::io::Result<()> {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&target, &blob)?;
+            #[cfg(unix)]
+            if entry.mode == FileMode::Executable {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
+            }
+            Ok(())
+        };
+        write().map_err(|e| lonca_core::Error::Invalid(format!("{path}: {e}")))?;
     }
     Ok(())
 }
@@ -1616,6 +1654,36 @@ mod tests {
             log.contains("PROBE_LOG_TOKEN"),
             "the name is no secret: {log}"
         );
+    /// A change whose files this machine's file system can not hold is
+    /// answered, not left: the first check errs and names the file, the
+    /// rest are skipped, and the queue goes on to the next change.
+    #[test]
+    fn a_tree_that_can_not_be_written_out_is_an_errored_check() {
+        let long = format!("src/{}.rs", "n".repeat(300));
+        let (dir, store, files, tree) = setup(&[("ok.txt", "yes\n"), (&long, "x\n")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let mut c = cfg(Some("true"), Some("true"));
+        c.checks.insert("api".into(), "true".into());
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        let results: Vec<_> = r.iter().map(|a| (a.check, a.result)).collect();
+        assert_eq!(
+            results,
+            [
+                (CheckKind::Build, CheckResult::Error),
+                (CheckKind::Tests, CheckResult::Skipped),
+                (CheckKind::Named, CheckResult::Skipped),
+            ]
+        );
+        assert_eq!(r[0].details["error"], "unwritable_tree");
+        assert_eq!(r[2].details["name"], "api");
+        assert!(r.iter().all(|a| a.details["sandbox"] == v.sandbox.name()));
+        let log = store.read_blob(r[0].log.as_ref().unwrap()).unwrap();
+        let log = String::from_utf8(log).unwrap();
+        assert!(log.contains("could not be written out"), "{log}");
+        assert!(log.contains("src/nnnn"), "the file is named: {log}");
+        // Nothing of the run is left behind.
+        let left = fs::read_dir(dir.path().join("scratch")).unwrap().count();
+        assert_eq!(left, 0);
     }
 
     /// An identify command that fails or takes too long is recorded as such,

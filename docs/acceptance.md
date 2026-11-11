@@ -150,6 +150,11 @@ visible. Each becomes a criterion when it is automated.
   socket method no command of `lonca` calls; the policy's test
   `what_enters_a_session_enters_the_sessions_made_from_it` and the golden
   log of format 34 cover it.
+- A change whose files the daemon's file system can not hold: a workspace
+  on the same machine can not hold them either, so no command proposes
+  one; the verifier's and the daemon's tests cover it
+  (`a_tree_that_can_not_be_written_out_is_an_errored_check`,
+  `a_proposal_with_a_name_too_long_for_a_file_system_is_refused`).
 - A human signature made for another log, or before what it approves
   (`human_signature_of_another_log`, `signed_before_its_target`,
   `unanchored_human_signature`): `lonca` always signs at the head it was

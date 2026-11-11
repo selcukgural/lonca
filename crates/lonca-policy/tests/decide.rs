@@ -4,9 +4,9 @@
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_KEYED,
-    FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE, SignedOp,
-    verify_chain,
+    FORMAT_AFFECTED, FORMAT_CHILD_AGENT, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES,
+    FORMAT_KEYED, FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE,
+    SignedOp, verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -822,7 +822,7 @@ fn attenuation_only_narrows_and_revocation_cascades() {
     let attenuate = |child: &str, scope: Scope, exp: i64| Op::CapAttenuate {
         parent: "s1".into(),
         child: child.into(),
-        agent: "sub".into(),
+        agent: "bot-s1".into(),
         scope,
         expires_ms: exp,
         leases: vec![],
@@ -1698,7 +1698,7 @@ fn revocation_by_another_human_cascades_and_is_final() {
     let child = Op::CapAttenuate {
         parent: "s2".into(),
         child: "s2c".into(),
-        agent: "sub".into(),
+        agent: "bot-s2".into(),
         scope: narrow,
         expires_ms: h.now + 60 * MIN,
         leases: vec![],
@@ -3793,7 +3793,7 @@ fn continuing_is_refused_for_what_is_not_a_single_root_session_in_scope() {
     let attenuate = Op::CapAttenuate {
         parent: "p".into(),
         child: "kid".into(),
-        agent: "bot".into(),
+        agent: "bot-p".into(),
         scope: h.chain.state.sessions["p"].scope.clone(),
         expires_ms: h.now + 10 * MIN,
         leases: vec![],
@@ -4885,7 +4885,7 @@ fn child_op(h: &H, parent: &str, child: &str, leases: &[&str]) -> Op {
     Op::CapAttenuate {
         parent: parent.into(),
         child: child.into(),
-        agent: "sub".into(),
+        agent: format!("bot-{parent}"),
         scope,
         expires_ms: h.now + 10 * MIN,
         leases: leases.iter().map(|s| s.to_string()).collect(),
@@ -6511,7 +6511,7 @@ fn a_child_can_not_bind_its_way_past_its_parent() {
     let attenuate = |parent: &str, child: &str| Op::CapAttenuate {
         parent: parent.into(),
         child: child.into(),
-        agent: "bot".into(),
+        agent: format!("bot-{parent}"),
         scope: Scope {
             paths: vec!["src/**".into()],
             symbols: None,
@@ -6612,7 +6612,7 @@ fn another_human_can_not_vouch_and_a_child_takes_its_level_from_its_parent() {
     let child = Op::CapAttenuate {
         parent: "s1".into(),
         child: "s1c".into(),
-        agent: "sub".into(),
+        agent: "bot-s1".into(),
         scope,
         expires_ms: h.now + 60 * MIN,
         leases: vec![],
@@ -6747,7 +6747,7 @@ fn only_a_session_nothing_has_used_can_be_isolated() {
     let child = Op::CapAttenuate {
         parent: "s1".into(),
         child: "c".into(),
-        agent: "sub".into(),
+        agent: "bot-s1".into(),
         scope,
         expires_ms: h.now + 60 * MIN,
         leases: vec![],
@@ -6996,7 +6996,7 @@ fn sessions_made_from_or_continuing_a_session_pay_with_it() {
     let attenuate = Op::CapAttenuate {
         parent: "a".into(),
         child: "kid".into(),
-        agent: "bot".into(),
+        agent: "bot-a".into(),
         scope: h.chain.state.sessions["a"].scope.clone(),
         expires_ms: h.now + 10 * MIN,
         leases: vec![],
@@ -7414,6 +7414,62 @@ fn a_session_ends_once() {
     };
     assert!(h.human("ayse", end()).is_allow());
     assert!(denied_with(&h.human("ayse", end()), "session_ended"));
+    h.assert_replay();
+}
+
+/// A child session is its parent's agent: a policy rule on a named agent
+/// holds for every session made from that agent's.
+#[test]
+fn a_child_session_keeps_its_parents_agent_name() {
+    let policy = PolicyBundle::parse(
+        DEFAULT_CONFIG,
+        r#"permit(principal, action, resource);
+@id("docs-bot-on-docs")
+forbid(principal == Lonca::Agent::"bot-s1", action in [Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
+when { !(context.path like "docs/*") };"#,
+    )
+    .unwrap();
+    let mut h = H::with_policy(policy);
+    h.start_observed("s1", &["**"]);
+    let child = |h: &H, id: &str, agent: &str| Op::CapAttenuate {
+        parent: "s1".into(),
+        child: id.into(),
+        agent: agent.into(),
+        scope: h.chain.state.sessions["s1"].scope.clone(),
+        expires_ms: h.now + 10 * MIN,
+        leases: vec![],
+    };
+    for other in ["x", "bot-s2", "BOT-S1"] {
+        let d = h.agent("s1", child(&h, "kid", other));
+        assert!(denied_with(&d, "child_agent_name:bot-s1"), "{other}: {d:?}");
+    }
+    assert!(!h.chain.state.sessions.contains_key("kid"));
+
+    // Entries from before the format replay as they were decided.
+    let before = Ctx {
+        format: FORMAT_CHILD_AGENT - 1,
+        time_ms: h.now,
+        policy: &h.policy,
+        facts: None,
+        evidence: &[],
+        symbols_engine: Some(0),
+    };
+    let s1 = Actor::Agent {
+        name: "bot-s1".into(),
+        session: "s1".into(),
+    };
+    let d = decide(&h.chain.state, &s1, &child(&h, "kid", "x"), None, &before);
+    assert!(d.is_allow(), "{d:?}");
+
+    let d = h.agent("s1", child(&h, "kid", "bot-s1"));
+    assert!(d.is_allow(), "{d:?}");
+    assert_eq!(h.chain.state.sessions["kid"].agent, "bot-s1");
+
+    // The rule on the parent's name is the child's rule too.
+    h.wrote("kid", "src/a.rs");
+    assert!(h.lease("kid", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let d = h.propose("kid", ChangeId::random(), edit(F));
+    assert!(denied_with(&d, "policy:docs-bot-on-docs"), "{d:?}");
     h.assert_replay();
 }
 

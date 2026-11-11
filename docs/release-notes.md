@@ -36,6 +36,16 @@ daemon's git takes each path as the file it names
 (`GIT_LITERAL_PATHSPECS=1`). What is integrated was never affected, only
 the text shown for review.
 
+### A child session has its parent's agent name
+
+The policy knows an agent by its name (`Lonca::Agent::"docs-bot"`), and a
+reviewer reads that name in `pending`. A child session made with
+`cap.attenuate` is the same agent with a narrower scope, and from log
+format 31 it has the same name: an `agent` other than the parent's is
+refused (`child_agent_name:<name>`), so a rule on a name holds for every
+session made from that agent's. Nothing Lonca ships calls `cap.attenuate`
+with another name; a runner that does must send the parent's.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

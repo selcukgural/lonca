@@ -78,7 +78,7 @@ when a human revokes it.
   `lonca sync` brings trunk in, `lonca propose` sends the local changes.
 - **Child sessions.** An agent can hand part of its work to a sub-agent with
   `cap.attenuate`: a child session whose scope is the same or narrower, never
-  wider. Revoking a session revokes every session made from it.
+  wider, under the same agent name. Revoking a session revokes every session made from it.
 - **Continuing.** A session can not be extended. A human continues its
   workspace under a new session with `lonca session start --continue <dir>`:
   the session that was started in `<dir>`, which the log records, and

@@ -916,7 +916,10 @@ Denied `yield_to_another_session`, `lease_pinned`, `lease_expired`,
 ### `cap.attenuate`
 
 *agent.* `{"agent": string, "scope": scope, "expires_ms": time, "leases":
-[string] | null}`. A child session with a narrower scope. `leases` hands
+[string] | null}`. A child session with a narrower scope. `agent` is the
+caller's own agent name (`child_agent_name:<name>` otherwise, from log
+format 31): a child is the same agent to the policy and to a reviewer.
+`leases` hands
 lease sets to it until it ends, expires or misses its heartbeat; they go
 back to the parent then, with the time they had, if the parent is still
 there (on expiry and heartbeat from log format 23). Only the child renews

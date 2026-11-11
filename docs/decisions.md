@@ -157,6 +157,9 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   of the session it continues, a directory holds one live session, and a
   continuation starts `unobserved`; entries of older formats do none of
   it and replay to the state they always had.
+- **Version 31** holds a `cap.attenuate` to its parent's agent name (see
+  "A child session is its parent's agent"). No field changes. Entries of
+  older formats, where the child's name was free, replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -4213,6 +4216,27 @@ longer asked.
   `--repo`), and commands that take the repository from the workspace take
   the log's where the log places a session. A directory once used by an
   agent's session is not reused for a human's workspace.
+
+## A child session is its parent's agent
+
+Format 31. `cap.attenuate` carries an `agent` for the child, and until this
+format it was any well-formed name. But the policy knows an agent by its
+name and nothing else (`Lonca::Agent::"<name>"`), and a name is also what a
+human reads beside a pending change. A child with a name of its own stood
+outside every rule written for its parent, and inside those written for the
+name it took.
+
+- **`agent` must be the parent's** (`child_agent_name:<the parent's>`). A
+  child is the same agent with less: narrower scope, no longer life, the
+  parent's level and harness, and now its name. Sessions are told apart by
+  their ids and by `parent`, as before.
+- **Why not another principal for Cedar.** Evaluating a child as its root
+  session's agent would keep the rules whole, but leave the name a human
+  sees in `pending` to the agent. One name, given by the human who started
+  the root session, is the simpler rule.
+- **The field stays** in the request and the entry: older entries keep
+  their bytes and replay as they were, and nothing in the protocol changes
+  shape.
 
 ## Open questions (carried from the design)
 

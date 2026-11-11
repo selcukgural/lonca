@@ -970,17 +970,27 @@ logged; once the daemon has swept its token (within seconds), the error is
 *agent.* A harness hook event: `{"hook_event_name": string,
 "tool_name": string | null, "tool_input": object, "cwd": string | null,
 "workspace": absolute path, "harness": "claude-code" | "codex" |
-"gemini" | null}`. The event name is always `PreToolUse` or `PostToolUse`;
+"gemini" | null, "real": {path: absolute path} | null}`. The event name is
+always `PreToolUse` or `PostToolUse`;
 the tool name is the harness's own. No harness means Claude Code; one
 Lonca does not know is denied. Result `{"decision": "allow" | "deny" |
 "ask", "reason": string}`. Observations are logged as `observe`
 entries.
 
+`real` says where the call's paths really are: each path the tool names
+(taken from `cwd` when relative, `..` left as it is), the workspace and
+the session's scratch roots, each to itself with its symbolic links
+resolved. The daemon places a path inside or outside the workspace by
+that; one that `real` lacks is outside. Without `real` a path is placed by
+its text, and a link in the workspace leads out of it unseen: send it, or
+use `hook.input`, which asks. `lonca_client::real_path` resolves one path.
+
 ### `hook.input`
 
 *agent.* What a hook program got from its harness, untouched:
 `{"harness": string, "input": object, "workspace": absolute path, "real":
-absolute path | null}`. `real` is `workspace` with its links resolved: when
+absolute path | null, "paths": {path: absolute path} | null}`. `real` is
+`workspace` with its links resolved: when
 the session's `session.start` named a workspace and this is another, the
 request is `invalid`. The daemon reads `input` with the harness's profile from the policy
 (`docs/guide/runners.md`, "Any other harness"). A harness without a
@@ -988,6 +998,14 @@ profile, or an event it does not have, is `invalid`. A session start gives
 `{"phase": "session_start", "session": string, "context": template,
 "tool_prefix": string}`: call `hook.bind`, then fill `{context}`, naming the
 tools with `tool_prefix`. A stop gives `{"phase": "stop"}`: call `hook.stop`.
+A tool call that names files (a write, or a read about to happen) first
+gives `{"phase": "resolve", "paths": [absolute path]}`, at most 1024 of
+them: only the caller sees the workspace. Send the same request again with
+`"paths"`: each of those to where it really is (`lonca_client::real_path`),
+leaving out one that does not resolve, which then counts as outside. Nothing
+is logged before that. The first answer also carries `"decision": "deny"`
+and an `"output"`: a hook program that does not know the phase refuses the
+call.
 A tool call gives what `hook.event` gives, plus `"output"` on a denial: the
 answer in the harness's shape. After a tool call on a harness with
 `tool_context`, `"output"` is what `inbox` has for the session, as that
@@ -1294,7 +1312,8 @@ for `claim_mismatch:<field>` adds `"claim_mismatch": [{"field", "claimed",
   `hook.stop`, `phase: "stop"` in `hook.input`, `files` on `session.end` and
   `status.sessions[].unproposed` (#121); `inbox`, `message` on a `message`
   event, `advice` on `lease.acquire`, `change.propose` and `facts.preview`,
-  `"output"` after a tool call in `hook.input`; `lease_wanted` and
+  `"output"` after a tool call in `hook.input`; `phase: "resolve"` and
+  `paths` in `hook.input`, `real` on `hook.event`; `lease_wanted` and
   `intent_required`, `status.interests[].blocks_until_ms`. A blank `intent`
   on `lease.acquire` or `lease.interest`, accepted before, is now denied.
   `ping.protocol`; `status.pending`

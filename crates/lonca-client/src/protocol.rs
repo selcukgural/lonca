@@ -3,6 +3,7 @@
 //! daemon's (`lonca_daemon::protocol::PrepareInit`): they name a policy
 //! profile, and this crate knows no policy.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
 use lonca_core::ops::{Claim, Decision, HumanSignature, LeaseItem, NegotiationMsg, Op, Scope};
@@ -392,6 +393,13 @@ pub struct HookEvent {
     /// The harness profile to read it with; none means `claude-code`.
     #[serde(default)]
     pub harness: Option<String>,
+    /// Where the call's paths really are: a path as the call names it
+    /// (from `cwd` when relative, nothing folded) to that path with its
+    /// links resolved; the workspace and the scratch roots are in it too.
+    /// A path it lacks is outside. `None`: the caller vouches that no path
+    /// goes through a link, and each is placed by its text.
+    #[serde(default)]
+    pub real: Option<BTreeMap<String, String>>,
 }
 
 /// `harness.setup`: which harness's setup to read from the policy.
@@ -412,6 +420,11 @@ pub struct HookInput {
     /// workspace: the daemon holds it against the log's.
     #[serde(default)]
     pub real: Option<String>,
+    /// The answer to `"phase": "resolve"`: each path the daemon asked
+    /// about to where it really is (`real_path`). A path left out is
+    /// outside the workspace.
+    #[serde(default)]
+    pub paths: Option<BTreeMap<String, String>>,
 }
 
 /// One file a workspace differs in from its base, as it would be in a tree.

@@ -337,6 +337,23 @@ impl Env {
         assert_eq!(r["level"], "hooks_sandbox", "{r}");
     }
 
+    /// `hook.input` as `lonca hook` sends it: asked where the call's paths
+    /// really are, it answers with `real` (a path it does not name is
+    /// where its text says) and asks again.
+    pub fn hook_input(&mut self, token: &str, mut params: Value, real: &[(&str, &str)]) -> Value {
+        let r = self.ok("hook.input", None, Some(token), params.clone());
+        if r["phase"] != "resolve" {
+            return r;
+        }
+        let asked = r["paths"].as_array().unwrap().iter();
+        let paths: std::collections::BTreeMap<&str, &str> = asked
+            .map(|p| p.as_str().unwrap())
+            .map(|p| (p, real.iter().find(|(k, _)| *k == p).map_or(p, |(_, v)| *v)))
+            .collect();
+        params["paths"] = json!(paths);
+        self.ok("hook.input", None, Some(token), params)
+    }
+
     pub fn wrote(&mut self, token: &str, path: &str) {
         let ws = self.root.join("ws");
         self.ok(

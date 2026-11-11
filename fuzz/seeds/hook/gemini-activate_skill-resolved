@@ -1,0 +1,1 @@
+{"hook_event_name":"PreToolUse","tool_name":"activate_skill","tool_input":{},"workspace":"/tmp/lonca-fuzz-ws","harness":"gemini","real":{"/tmp/lonca-fuzz-ws":"/tmp/lonca-fuzz-ws","/tmp/lonca-fuzz-ws/src/lib.rs":"/tmp/elsewhere/lib.rs"}}

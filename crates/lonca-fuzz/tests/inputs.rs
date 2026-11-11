@@ -325,6 +325,14 @@ fn write_seeds() {
                 data.extend(ev.to_string().into_bytes());
                 write("hook", &format!("{name}-{tool}-{phase}"), &data);
             }
+            // The same call with its paths resolved: a link led outside.
+            let ev = json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input,
+                "workspace": "/tmp/lonca-fuzz-ws", "harness": name,
+                "real": {"/tmp/lonca-fuzz-ws": "/tmp/lonca-fuzz-ws",
+                    "/tmp/lonca-fuzz-ws/src/lib.rs": "/tmp/elsewhere/lib.rs"}});
+            let mut data = vec![c];
+            data.extend(ev.to_string().into_bytes());
+            write("hook", &format!("{name}-{tool}-resolved"), &data);
         }
     }
 

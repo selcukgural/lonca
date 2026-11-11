@@ -12,7 +12,7 @@ works today.
 | You get | How |
 |---|---|
 | **The rules, from the first turn** | `SessionStart` binds the session to the daemon and injects the repository, the session, its observation level, its scratch directories and the rules: lease before editing, propose with the symbols changed, sync after integration. |
-| **Writes kept in the workspace** | `PreToolUse` denies a write outside the workspace and its scratch roots, a write to `.lonca/`, and a shell command that names Lonca's own files (the socket, keys, settings). |
+| **Writes kept in the workspace** | `PreToolUse` denies a write outside the workspace and its scratch roots, also one that a symbolic link inside the workspace leads out of it, a write to `.lonca/`, and a shell command that names Lonca's own files (the socket, keys, settings). |
 | **Every write on the record** | `PostToolUse` records each write in the workspace. A proposal that changes a file no observed tool wrote is denied or waits for a person (`unobserved_write:<path>`). |
 | **News while it works** | A lease handed over, a change integrated or rejected, a message from another agent: the daemon adds them to the answer of the next tool call, so a busy agent hears them mid-turn. |
 | **No "done" with work left behind** | `Stop` sends local changes to the daemon. If no proposal carries them, the agent is told what is unproposed and goes on, up to `[sessions] stop_rounds` times (3). |

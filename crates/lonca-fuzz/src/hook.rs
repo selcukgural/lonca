@@ -4,12 +4,14 @@
 //! The first byte picks the harness among the built-in profiles (data, not
 //! a list here); the rest is the event as JSON (`HookEvent`).
 //! The same bytes are also read as that harness's locked settings file.
-//! Every event gets a verdict the harness understands; none panics.
+//! Every event gets a verdict the harness understands, with its paths
+//! resolved (`real`) or not, and no call has more paths asked about than
+//! one call is resolved for; none panics.
 
 use std::sync::OnceLock;
 
 use lonca_client::protocol::HookEvent;
-use lonca_daemon::hooks::translate;
+use lonca_daemon::hooks::{MAX_RESOLVED, asks, translate};
 use lonca_policy::config::PolicyBundle;
 
 use crate::{choice, pick};
@@ -39,7 +41,10 @@ pub fn check(data: &[u8]) {
     if ev.harness.is_none() {
         ev.harness = Some(name.clone());
     }
-    let (_, verdict) = translate(&ev, policy, &[SCRATCH.to_string()]);
+    let scratch = [SCRATCH.to_string()];
+    let asked = asks(&ev, policy, &scratch);
+    assert!(asked.len() <= MAX_RESOLVED, "{} paths asked", asked.len());
+    let (_, verdict) = translate(&ev, policy, &scratch);
     assert!(
         ["allow", "deny", "ask"].contains(&verdict.decision.as_str()),
         "a verdict no harness reads: {:?}",

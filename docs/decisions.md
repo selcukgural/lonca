@@ -4435,6 +4435,53 @@ revocation either, for every repository of that daemon.
   (`repo.init --import`, `repo.restore`, `human.prepare_import`) is git's
   to write and is not asked about.
 
+## A path is where its links lead
+
+The hooks placed a tool's path inside or outside the workspace by its text:
+`.` and `..` folded away, the result compared with the workspace's path
+(private advisory, 2026-11-11). A symbolic link in the workspace was a way
+out nobody saw: a write through it was an inside write, a read through it
+an inside read that did not taint.
+
+- **The hook program resolves, the daemon places.** The daemon reads the
+  event with the profile of the signed policy, so only it knows which
+  fields are paths; and it often can not see the workspace (another
+  account in hardened mode). So `hook.input` first answers `"phase":
+  "resolve"` with the paths the call names, the workspace and the scratch
+  roots, and `lonca hook` sends the request again with where each really
+  is. One more round on the socket for a file tool; nothing is logged in
+  the first. The hook program is as trusted as before: it already says
+  which workspace this is.
+- **Walked as the kernel walks** (`lonca_client::real_path`): link by link,
+  `..` leaving the link's target and not its name, which is why the daemon
+  asks about the text unfolded. What does not exist yet is kept as named;
+  a link to nothing is followed, since a write through it creates the
+  file there. `std::fs::canonicalize` fails on both.
+- **What nobody resolved is outside**: a loop, a directory that does not
+  open, a path past the 1024 one call is resolved for (`MAX_RESOLVED`),
+  the workspace itself left out. A write there is denied, a read is
+  external.
+- **An older hook program is refused, not believed.** The first answer
+  carries a denial in the harness's shape, which a program that does not
+  know the phase passes on. Reading its paths by their text would have
+  kept the hole for whoever kept the old program.
+- **`hook.event` without `real` places by the text**, as before: its
+  caller is a harness integration that has read the event itself and can
+  resolve (`real`), and the tests and runners that send plain paths go on.
+  Said in `docs/protocol.md`.
+- **What a link to a workspace file writes is that file**: recorded under
+  its own name, so a proposal of it is an observed write, and `.lonca/`
+  and the `untrusted` patterns hold whatever names the file.
+- **A look at the time of the call.** A link made or turned between the
+  hook's answer and the tool's write is not seen; an agent with a shell
+  nothing holds can write anywhere without a link. At `hooks_sandbox` the
+  sandbox holds the shell to the workspace, and the link is what took the
+  file tools past it: that is what this closes. Shell commands are still
+  not read for paths.
+- **Names are compared as written.** On a file system that folds case a
+  path in another case is, at worst, outside; patterns and case are their
+  own question.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

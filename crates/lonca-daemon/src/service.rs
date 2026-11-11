@@ -3880,7 +3880,25 @@ impl Service {
             cwd: field(&profile.fields.cwd).map(str::to_string),
             workspace: h.workspace.clone(),
             harness: Some(h.harness.clone()),
+            real: h.paths.clone(),
         };
+        // Only the hook program sees the workspace: it says where the
+        // call's paths really are and comes back. One that does not know
+        // how reads the refusal that is here for it.
+        if ev.real.is_none() {
+            let paths = self.hook_asks(req, &ev)?;
+            if !paths.is_empty() {
+                let reason = "lonca: this hook program is older than its daemon: it does not \
+                              say where a path really is";
+                return Ok(json!({
+                    "phase": "resolve",
+                    "paths": paths,
+                    "decision": "deny",
+                    "reason": reason,
+                    "output": render(&profile.deny, "reason", reason),
+                }));
+            }
+        }
         let mut out = self.hook_event(req, ev)?;
         if out["decision"] == "deny" {
             let reason = out["reason"].as_str().unwrap_or("").to_string();
@@ -3893,6 +3911,22 @@ impl Service {
             out["output"] = render(answer, "context", &news);
         }
         Ok(out)
+    }
+
+    /// What a hook program has to resolve before `ev` can be placed
+    /// (`hooks::asks`); nothing is logged.
+    fn hook_asks(
+        &self,
+        req: &Request,
+        ev: &HookEvent,
+    ) -> std::result::Result<Vec<String>, (String, String)> {
+        let mut guard = self.lock();
+        let (repo, actor) = Self::agent(&guard, req, self.now())?;
+        let r = Self::repo(&mut guard, &repo)?;
+        let policy = r.policy().or_fail()?;
+        let held = actor.session().and_then(|s| r.chain.state.sessions.get(s));
+        let scratch = held.map(|s| s.scope.scratch.clone()).unwrap_or_default();
+        Ok(hooks::asks(ev, &policy, &scratch))
     }
 
     /// A session's hooks were heard from now. The first time, the sessions

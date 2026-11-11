@@ -2,11 +2,13 @@
 
 pub mod client;
 pub mod protocol;
+pub mod real;
 pub mod session;
 pub mod sys;
 pub mod trust;
 
 pub use client::{CallError, Client, ErrorKind};
+pub use real::real_path;
 pub use session::HumanSession;
 pub use trust::Trust;
 

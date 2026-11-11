@@ -29,6 +29,19 @@ has 'writes outside the workspace are not allowed'
 ok hook '{"hook_event_name":"PreToolUse","session_id":"h1","cwd":"'"$ws"'","tool_name":"Write","tool_input":{"file_path":"'"$ws"'/src/new.rs"}}'
 lacks 'deny'
 
+criterion A40 "a link in the workspace is no way out of it: a write through it is denied, a link to the workspace's own directory is not"
+mkdir -p "$HOME/outside"
+ln -s "$HOME/outside" "$ws/h"
+ln -s src "$ws/alias"
+ok hook '{"hook_event_name":"PreToolUse","session_id":"h1","cwd":"'"$ws"'","tool_name":"Write","tool_input":{"file_path":"h/.zshrc"}}'
+has '"permissionDecision":"deny"'
+has 'writes outside the workspace are not allowed \(.*/ws/cc/h/\.zshrc is .*/outside/\.zshrc\)'
+ok hook '{"hook_event_name":"PreToolUse","session_id":"h1","cwd":"'"$ws"'/src","tool_name":"Write","tool_input":{"file_path":"../alias/../h/x"}}'
+has '"permissionDecision":"deny"'
+ok hook '{"hook_event_name":"PreToolUse","session_id":"h1","cwd":"'"$ws"'","tool_name":"Write","tool_input":{"file_path":"alias/new.rs"}}'
+lacks 'deny'
+rm "$ws/h" "$ws/alias"
+
 criterion A26 "lonca mcp answers initialize with the version and lists the agent's tools; lonca rules prints the rules"
 mcp() {
     printf '%s\n' \

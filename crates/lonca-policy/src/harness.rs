@@ -538,10 +538,11 @@ pub fn stop_message(tool_prefix: &str, paths: &[String], total: u64) -> String {
 /// name (empty for the neutral names), `scratch` are the session's roots.
 pub fn rules(about: &str, tool_prefix: &str, scratch: &[&str]) -> String {
     let where_to_write = if scratch.is_empty() {
-        "- Edit files only inside this workspace.".to_string()
+        "- Edit files only inside this workspace; a link that leads out of it is outside it."
+            .to_string()
     } else {
         format!(
-            "- Edit files only inside this workspace. Notes, logs and throwaway files go to your scratch directory ({}); nothing there is part of the repository or of a proposal.",
+            "- Edit files only inside this workspace; a link that leads out of it is outside it. Notes, logs and throwaway files go to your scratch directory ({}); nothing there is part of the repository or of a proposal.",
             scratch.join(", ")
         )
     };
@@ -896,7 +897,9 @@ mod tests {
         assert!(neutral.contains("lease its path with kind `edit`"));
         assert!(neutral.contains("give the bare names you will add in `names`"));
         assert!(!neutral.contains("mcp_") && !neutral.contains('{'.to_string().as_str()));
-        assert!(neutral.contains("- Edit files only inside this workspace.\n"));
+        assert!(neutral.contains(
+            "- Edit files only inside this workspace; a link that leads out of it is outside it.\n"
+        ));
 
         let claude = rules(
             " (repository r)",

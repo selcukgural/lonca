@@ -10,7 +10,8 @@ link-local destinations are refused unless the gate allows them, and the
 proxy connects to the address it checked, so DNS cannot swap in a private
 address after the check. That address may serve other names too, so a
 connection is held to the host it was asked for: a tunnel whose TLS client
-asks for another server name is cut before a byte of it gets there, and a
+asks for another server name is cut before a byte of it gets there (the
+gate is told the name: `Gate::misnamed`), and a
 plain request has to name its host in `Host` and is the only one on its
 connection. The proxy never looks inside TLS itself; a gate may serve a
 tunnel it let through (`Gate::relay`).

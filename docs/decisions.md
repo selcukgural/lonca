@@ -3584,7 +3584,9 @@ tries never reaches a decision, and nothing told anyone of a freeze.
   `integrity_alarm` (the auditor's freeze flag), `taint` (the daemon tainted
   a session), `sudo_without_password` (a bind whose hook reports it),
   `token_rotated` (`session.rotate`, #53), `unhooked` (a call to `lonca mcp`
-  with no hook event before it: the tool, #190). Entries the daemon appends
+  with no hook event before it: the tool, #190), `misnamed_tunnel` (a
+  tunnel through the proxy cut for the server name its client asked for:
+  both names; see "A tunnel is for the host it was asked for"). Entries the daemon appends
   (`freeze`, `import.unmediated`, `taint`, `unhooked`) are taken from the repository and
   written after the request, or by the worker within two seconds.
 - **Kept**: past 8 MiB the file moves to `security.log.1`, replacing the one
@@ -4833,6 +4835,21 @@ the log said the allowed one.
   that starts later on a connection (`STARTTLS`) is not looked for. The
   client is not told why a tunnel ended: after `200` there is no place to
   say it.
+- **Encrypted hellos stay let through** (decided 2026-11-11). Refusing
+  every hello with the extension would close the inner name and take the
+  network from every browser in a sandbox; it was weighed and left.
+- **A cut tunnel is a security event** (decided 2026-11-11). The log has
+  the attempt under the host that was let through, which is what the
+  session asked the proxy for; that the client then asked the server for
+  another name was written nowhere. The proxy tells its gate
+  (`Gate::misnamed`, with the name, or none for a hello that can not be
+  read), and the daemon writes `misnamed_tunnel` to `security.log` for
+  every session the connection counts against: the host and port of the
+  tunnel and the first 128 characters of the name asked for. A session
+  can cause one per connection, and connections come at
+  `sessions.ops_per_minute`; they push out their own kind only. It
+  taints nothing and freezes nothing: the connection was already an
+  observation, and nothing of it reached the host.
 
 ## The hook that is checked is the hook that runs
 

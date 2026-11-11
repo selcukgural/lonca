@@ -960,3 +960,78 @@ fn an_allowed_host_passes_a_closed_network_and_says_whether_it_taints() {
     let status = e.ok("status", Some("demo"), None, json!({}));
     assert!(status["proxy_unattributed"].is_u64(), "{status}");
 }
+
+// ---------------------------------------------------------------- names
+
+fn misnamed_events(e: &Env) -> Vec<lonca_daemon::security::Event> {
+    let text = std::fs::read_to_string(e.root.join("home/security.log")).unwrap_or_default();
+    let all = text.lines().map(|l| serde_json::from_str(l).unwrap());
+    all.filter(|x: &lonca_daemon::security::Event| {
+        x.kind == lonca_daemon::security::kind::MISNAMED_TUNNEL
+    })
+    .collect()
+}
+
+/// A tunnel whose TLS client asks the server for another name is cut, and
+/// the session it counts against has a security event that says both
+/// names; one for the host's own name has none.
+#[test]
+fn a_misnamed_tunnel_is_a_security_event_of_its_session() {
+    let mut e = Env::new();
+    let up = holding_upstream();
+    let (proxy, _) = proxied(&mut e, &private_ok(), up);
+    let target = format!("localhost:{up}");
+    let send = |hello: &[u8]| {
+        let (mut s, status) = open_tunnel(proxy, &target);
+        assert!(status.contains("200"), "{status}");
+        s.write_all(hello).unwrap();
+        s
+    };
+    let hello = |name| lonca_net::hello::sample(Some(name), 16384);
+
+    let own = send(&hello("localhost"));
+    // Cut: the read ends without a byte.
+    let mut cut = send(&hello("elsewhere.example"));
+    assert_eq!(cut.read(&mut [0u8; 8]).unwrap_or(0), 0);
+    // A name is the client's words: no line of its own, no token, no end.
+    let long = format!("lonca_0123456789abcdef0123\n{}.example", "a".repeat(400));
+    let mut cut = send(&hello(&long));
+    assert_eq!(cut.read(&mut [0u8; 8]).unwrap_or(0), 0);
+    // A hello with something else in the middle of it names nothing.
+    let small = lonca_net::hello::sample(Some("localhost"), 9);
+    let broken = [&small[..13], &[23, 3, 3, 0, 1, 0], &small[13..]].concat();
+    let mut cut = send(&broken);
+    assert_eq!(cut.read(&mut [0u8; 8]).unwrap_or(0), 0);
+
+    let mut seen = Vec::new();
+    for _ in 0..200 {
+        seen = misnamed_events(&e);
+        if seen.len() >= 3 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    for x in &seen {
+        assert_eq!(x.repo.as_deref(), Some("demo"), "{x:?}");
+        assert_eq!(x.session.as_deref(), Some("s1"), "{x:?}");
+        assert!(
+            x.detail.starts_with(&format!("a tunnel to {target} ")),
+            "{x:?}"
+        );
+    }
+    assert!(
+        seen[0]
+            .detail
+            .ends_with("asked its server for elsewhere.example"),
+        "{seen:?}"
+    );
+    let said = &seen[1].detail;
+    assert!(said.contains("for lonca_[token] aaaa"), "{said}");
+    assert!(said.len() < 200 && !said.contains(".example"), "{said}");
+    assert!(
+        seen[2].detail.ends_with("a TLS hello that can not be read"),
+        "{seen:?}"
+    );
+    drop(own);
+}

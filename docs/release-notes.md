@@ -128,8 +128,10 @@ the one it let through:
 - A TLS client that asks the proxy for one host and the server for another
   (a server name that is not the `CONNECT` host) has its tunnel closed
   before a byte of it reaches the host. To the command this is a
-  connection dropped during the handshake. A tunnel asked for by address
-  is not held to a name.
+  connection dropped during the handshake; the daemon's `security.log`
+  has it as a `misnamed_tunnel` event of the session, with the host of
+  the tunnel and the name that was asked for (`lonca doctor` counts
+  them). A tunnel asked for by address is not held to a name.
 - A plain `http://` request whose `Host` header is not its URL's host and
   port is answered `400`. Each plain request now goes to the host on its
   own connection (`Connection: close`); requests for several hosts over
@@ -138,7 +140,8 @@ the one it let through:
   request is the server's to check.
 
 `lonca-net`: `Outcome::Misnamed` is new (an `Outcome` match needs an arm
-for it), and the `hello` module reads a TLS client's server name.
+for it), `Gate::misnamed` tells the gate which name such a tunnel asked
+for, and the `hello` module reads a TLS client's server name.
 
 ### The security log keeps the latest of every kind
 

@@ -32,6 +32,10 @@ impl lonca_net::Gate for Service {
         self.proxy_finished(request.peer);
     }
 
+    fn misnamed(&self, request: &lonca_net::Request<'_>, asked: Option<&str>) {
+        self.proxy_misnamed(request.peer, request.host, request.port, asked);
+    }
+
     fn carried(&self, request: &lonca_net::Request<'_>, bytes: u64) -> bool {
         self.proxy_carried(request.peer, bytes)
     }

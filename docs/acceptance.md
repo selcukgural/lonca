@@ -161,7 +161,9 @@ visible. Each becomes a criterion when it is automated.
   `a_tunnel_that_carries_nothing_is_cut`). The same for a tunnel held to
   the host it was asked for
   (`a_tunnel_is_held_to_the_name_it_was_let_through_for`,
-  `a_plain_request_is_for_its_own_host_and_is_the_only_one`).
+  `a_plain_request_is_for_its_own_host_and_is_the_only_one`) and the
+  security event of one that was cut
+  (`a_misnamed_tunnel_is_a_security_event_of_its_session`).
 - Policy changes (`lonca policy`), human enrollment and revocation,
   negotiation between agents beyond a handover, `lonca revert`, `lonca redact`, `lonca pull`,
   session rotation.

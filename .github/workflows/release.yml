@@ -140,7 +140,8 @@ jobs:
           mkdir -p pack dist
           cp "target/$TARGET/release/lonca" "target/$TARGET/release/lonca-audit" \
             LICENSE README.md pack/
-          # `sudo ./install-hardened.sh --bin .` from the unpacked archive.
+          # install-hardened.sh, run as root from where the archive was unpacked
+          # (a directory of root's: docs/guide/install.md).
           if [ "$RUNNER_OS" = macOS ]; then
             cp "target/$TARGET/release/lonca-se" packaging/macos/install-hardened.sh \
               packaging/macos/uninstall-hardened.sh pack/
@@ -246,7 +247,12 @@ jobs:
           cat SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/lonca-*-*.tar.gz
+          # The archives, and what is read beside them: the checksums a
+          # download is compared with and the bill of materials.
+          subject-path: |
+            dist/lonca-*-*.tar.gz
+            dist/lonca-sbom.cdx.tar.gz
+            dist/SHA256SUMS
       - name: The notes, from docs/release-notes.md
         run: |
           version=${TAG#v}

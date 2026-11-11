@@ -94,6 +94,19 @@ Every check's log starts with the sandbox and the names that were set
 lonca verify: sandbox seatbelt, env PATH HOME TMPDIR LANG LONCA_VERIFY CARGO_HOME RUSTUP_HOME
 ```
 
+**What the commands can read, the agent that proposed the change can
+read.** The commands are the change's own code (its tests, its build
+script), and their output is the check's log: a blob in the store that the
+agent reads back (`lonca status`, `change_status`) and that `lonca push`
+carries to the remote. Lonca writes `***` over a value of `env_passthrough`
+that turns up in a log as it is (a directory, such as `HOME`, is left
+readable), which catches what a tool prints by accident. It can not catch
+a command that means to tell: a test may print a token backwards, or the
+content of a file under `read`. So pass and open nothing an agent may not
+see: no registry token in `env_passthrough`, no `~/.npmrc` or
+`~/.cargo/credentials.toml` under `read`. Install dependencies before, as
+yourself, and let the checks run offline on what is there.
+
 ## The environment the evidence names
 
 A check's result is only worth as much as the environment it ran in: a
@@ -345,15 +358,16 @@ env_passthrough = ["HOME", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"]
 read = ["~/.cargo/registry", "~/.cargo/bin", "~/.rustup"]
 ```
 
-**Node.** `npm`/`pnpm` read `~/.npmrc` and write to `~/.npm`; install
-dependencies outside (`npm ci`) and commit the lock file; run the
-scripts offline.
+**Node.** `npm`/`pnpm` write to `~/.npm`; install dependencies outside
+(`npm ci`) and commit the lock file; run the scripts offline. `~/.npmrc`
+is not opened: it is where a registry token lives, and what a check can
+read its log can tell (see "The environment the commands see").
 
 ```toml
 build = "npm run build --offline"
 test = "npm test --offline"
 env_passthrough = ["HOME", "NODE_ENV"]
-read = ["~/.npmrc", "~/.npm", "~/.nvm"]
+read = ["~/.npm", "~/.nvm"]
 ```
 
 **Go.** The module cache (`GOMODCACHE`) and build cache (`GOCACHE`) are
@@ -392,3 +406,12 @@ tests: fail (exit 101, 48210 ms, sandbox seatbelt)
   lonca verify: sandbox seatbelt, env PATH HOME TMPDIR LANG LONCA_VERIFY CARGO_HOME RUSTUP_HOME
   ...
 ```
+
+A check that says `error` did not run to an answer: it was killed at its
+timeout, left something running, met a full disk, or (`unwritable_tree`,
+on the first check, the others skipped) the files of the change could not
+be written out on the daemon's machine at all. That last one is a file
+name the file system does not take: two names that differ only in case on
+macOS where one is a directory, or a name it has no room for. The log says
+which file. The change is rejected with `verification_error:<check>`;
+rename the file and propose again.

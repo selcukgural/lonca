@@ -71,7 +71,7 @@ impl Detail {
             needed_kind,
             holder_session: Some(by.holder.to_string()),
             holder_agent: state.sessions.get(by.holder).map(|s| s.agent.clone()),
-            intent: Some(l.intent.clone()),
+            intent: Some(state.intent_for_agents(by.holder, &l.intent).to_string()),
             expires_ms: pin.is_none().then_some(l.expires_ms),
             set: Some(l.set.clone()),
             pinned_to: pin.map(|(change, _)| *change),
@@ -141,7 +141,7 @@ pub fn lease_wanted(
                 out.push(Detail {
                     holder_session: Some(i.session.clone()),
                     holder_agent: state.sessions.get(&i.session).map(|s| s.agent.clone()),
-                    intent: Some(i.intent.clone()),
+                    intent: Some(state.intent_for_agents(&i.session, &i.intent).to_string()),
                     expires_ms: Some(i.blocks_until_ms),
                     ..Detail::free(LEASE_WANTED, &b.symbol, a.kind)
                 });

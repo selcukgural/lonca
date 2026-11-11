@@ -63,8 +63,10 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// name; version 32 matches `critical` and `checks_by_path` patterns with
 /// case folded; version 33 holds a human signature to the log it was made
 /// for (`at`); version 34 carries a taint, an unhooked tool and a lowered
-/// level from a session to the sessions made from it.
-pub const FORMAT_CURRENT: u32 = 34;
+/// level from a session to the sessions made from it; version 35 decides a
+/// pending operation again when it is released, and keeps a tainted
+/// session's lease intent out of another session's denial.
+pub const FORMAT_CURRENT: u32 = 35;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -187,6 +189,14 @@ pub const FORMAT_ANCHORED: u32 = 33;
 /// Before it a child took these once, when it was made. Older entries
 /// replay as they were.
 pub const FORMAT_TAINT_REACHES: u32 = 34;
+/// The first format in which the approval that releases a pending
+/// operation checks again what the operation itself was checked for when
+/// it was asked (a name enrolled meanwhile, a session or a lease set of
+/// that id, a lease someone else took), a `human.enroll` refuses any key
+/// the log has known and not only a retired one, and `lease_held:` does
+/// not carry the intent of a holder that is tainted. Older entries replay
+/// as they were.
+pub const FORMAT_RELEASE_RECHECK: u32 = 35;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

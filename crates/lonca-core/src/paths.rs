@@ -39,6 +39,26 @@ pub fn validate_repo_path(p: &str) -> Result<()> {
     Ok(())
 }
 
+/// The longest name of one file or directory, in bytes, on the file systems
+/// a tree is written out to (APFS, ext4, and most others).
+pub const MAX_COMPONENT_BYTES: usize = 255;
+
+/// Refuses a path with a name no file system holds. Git has no such limit
+/// and neither has the log ([`validate_repo_path`] is what `decide()`
+/// asks, and stays as it was); this is asked where files come in, so that
+/// what can never be checked out is not proposed.
+pub fn validate_writable_path(p: &str) -> Result<()> {
+    match p.split('/').find(|c| c.len() > MAX_COMPONENT_BYTES) {
+        // Not the whole path: it is what is too long.
+        Some(c) => Err(Error::Invalid(format!(
+            "a name in the path ({:?}…) is {} bytes long, and a file system holds {MAX_COMPONENT_BYTES}",
+            c.chars().take(24).collect::<String>(),
+            c.len()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Is `p` under a workspace's `.lonca/`? Case is folded: on macOS
 /// `.LONCA/session` is that same file.
 pub fn is_workspace_metadata(p: &str) -> bool {
@@ -160,6 +180,19 @@ pub fn symbol_pattern_within(inner: &str, outer: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_no_file_system_holds_is_refused_where_files_come_in() {
+        let name = |n: usize| format!("src/{}/a.rs", "d".repeat(n));
+        assert!(validate_writable_path(&name(255)).is_ok());
+        let e = validate_writable_path(&name(256)).unwrap_err().to_string();
+        assert!(e.contains("256 bytes long"), "{e}");
+        // Bytes, not letters: 128 two-byte letters are one byte too many.
+        assert!(validate_writable_path(&"\u{e7}".repeat(127)).is_ok());
+        assert!(validate_writable_path(&"\u{e7}".repeat(128)).is_err());
+        // The log's own rule is as it was: `decide()` is replayed.
+        assert!(validate_repo_path(&name(300)).is_ok());
+    }
 
     #[test]
     fn a_path_folds_to_what_a_case_folding_file_system_reads() {

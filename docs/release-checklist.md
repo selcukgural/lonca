@@ -62,6 +62,10 @@
    --body true`); from then on step 5 publishes them.
 5. Publish the draft (`gh release edit vX.Y.Z --draft=false`).
    `registries.yml` publishes the crates (when `PUBLISH_CRATES` is on).
+   Publishing is final: the repository has immutable releases on, so the
+   files and the tag of a published release can not be changed or
+   replaced. Look at the draft's files and notes before, not after; a
+   mistake is a new patch version.
 6. Homebrew: `gh workflow run update.yml --repo selcukgural/homebrew-lonca`
    (it also runs every day). Then, on a machine that has the tap,
    `brew update && brew upgrade selcukgural/lonca/lonca`, and

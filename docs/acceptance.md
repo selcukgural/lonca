@@ -116,6 +116,8 @@ last column.
 | A41 | A file its grammar would read over and over (200 KB of `/*` in Swift, which held the daemon for minutes) is answered at once: `lonca symbols` lists nothing of it and names `<file>` as what a change of it needs, and a proposal that adds it under that lease is taken | `03-agents` |
 | A42 | A file has the same symbols on every build, whatever its C library takes for a space or a letter: `lonca symbols` of a TypeScript file with an ideographic space (U+3000) behind a statement gives what the macOS build gives, on the Linux (musl) archives too | `03-agents` |
 | A43 | A critical path is critical under any spelling a file system that folds case reads as it: a proposal of `src/Build.rs` is refused to an unobserved session with `unobserved_critical_path`, as one of `src/build.rs` is | `03-agents` |
+| A44 | `lonca-audit verify` prints the log's `genesis:` and holds a log to what it is told from outside: `--genesis <hash>` fails another log (`anchor`), `--extends <hash>` fails a log that no longer has that entry (replaced, or taken back), and a hash that is not whole is a usage error | `05-audit` |
+| A45 | A value the policy passes to the checks (`env_passthrough`) is not in a check's log: a test command that prints it leaves `***` in what `lonca change --evidence` shows | `11-evidence` |
 
 ## Manual criteria
 
@@ -136,14 +138,23 @@ visible. Each becomes a criterion when it is automated.
 - Isolated mode (`lonca run`): needs a sandbox on the runner (bubblewrap
   on Linux); `ci.yml`'s `sandbox` job covers it with `cargo test`.
 - Hardened mode (`install-hardened.sh`, a daemon as its own user): needs
-  root on the runner.
+  root on the runner. That the installer refuses files that are not
+  root's alone, and that the scripts set their own `PATH`, is held by
+  `the_installers_take_nothing_from_the_callers_account` (`cargo test`).
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
-  --secure-enclave`, FIDO2 keys).
+  --secure-enclave`, FIDO2 keys). What the Touch ID dialog says is
+  held to what `lonca` prints by `the_helper_says_what_lonca_says` (macOS,
+  `cargo test`).
 - The advisor (`lonca advise`): needs a model.
 - A parent's taint reaching its child sessions: `cap.attenuate` is a
   socket method no command of `lonca` calls; the policy's test
   `what_enters_a_session_enters_the_sessions_made_from_it` and the golden
   log of format 34 cover it.
+- A change whose files the daemon's file system can not hold: a workspace
+  on the same machine can not hold them either, so no command proposes
+  one; the verifier's and the daemon's tests cover it
+  (`a_tree_that_can_not_be_written_out_is_an_errored_check`,
+  `a_proposal_with_a_name_too_long_for_a_file_system_is_refused`).
 - A human signature made for another log, or before what it approves
   (`human_signature_of_another_log`, `signed_before_its_target`,
   `unanchored_human_signature`): `lonca` always signs at the head it was

@@ -94,7 +94,7 @@ Each of these is explained on its own in [Concepts](concepts.md).
 | Mode | Agents run | Store bypass | Observation bypass | Setup |
 |---|---|---|---|---|
 | Cooperative | as you | detected (hash chain, auditor) | none: sessions count as unobserved → every change needs a human | none |
-| Hardened | as you, harness hooks and sandbox locked | prevented (daemon is a separate system user) | from the harness: prevented; from outside: detected | `sudo ./install-hardened.sh --bin .` from a release archive |
+| Hardened | as you, harness hooks and sandbox locked | prevented (daemon is a separate system user) | from the harness: prevented; from outside: detected | `install-hardened.sh` from a release archive, [as root from a directory of root's](install.md#hardened-mode) |
 | Isolated | in a container/OS sandbox | prevented | prevented | your container runtime |
 
 The hardened installers (macOS launchd, Linux systemd) create the `_lonca`

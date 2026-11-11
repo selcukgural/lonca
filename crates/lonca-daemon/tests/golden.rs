@@ -96,6 +96,7 @@ fn golden_repo() -> Env {
     unhooked(&mut e);
     folded_paths(&mut e);
     reaches_children(&mut e);
+    withheld_intent(&mut e);
     named_checks(&mut e);
     replaces(&mut e);
     lost_mac(&mut e);
@@ -401,6 +402,26 @@ fn reaches_children(e: &mut Env) {
     assert!(kid["unhooked"].is_object(), "{kid}");
     let taint = kid["taint"].as_str().unwrap_or_default();
     assert!(taint.starts_with("inherited: "), "{kid}");
+}
+
+/// From format 35: the intent of a tainted holder is not in the denial
+/// another session gets.
+fn withheld_intent(e: &mut Env) {
+    let t = e.session("s-wh", &["withheld.md"]);
+    e.bind(&t);
+    let held = e.lease(&t, "withheld.md#<file>");
+    assert_eq!(held["decision"]["outcome"], "allow", "{held}");
+    e.advance(lonca_daemon::hooked::START_GRACE_MS);
+    let r = e.ok("mcp.call", None, Some(&t), json!({"tool": "propose"}));
+    assert_eq!(r["hooked"], false, "{r}");
+    let other = e.session("s-wh2", &["withheld.md"]);
+    let r = e.lease(&other, "withheld.md#<file>");
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    let reason = r["decision"]["reasons"][0].as_str().unwrap_or_default();
+    assert!(
+        reason.ends_with(lonca_policy::state::INTENT_WITHHELD),
+        "{r}"
+    );
 }
 
 /// From format 23: a child whose time runs out gives the set it was handed
@@ -1614,6 +1635,19 @@ fn golden_v30_log_still_verifies_replays_and_audits() {
     assert_eq!(new.level, ObservationLevel::Unobserved);
     let placed = s.sessions.values().filter(|x| x.workspace.is_some());
     assert_eq!(placed.count(), 2, "the others name none");
+}
+
+/// Format 35: a tainted holder's intent is not in another session's denial.
+#[test]
+fn golden_v35_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v35.bundle",
+        "9cc7824cb77936dd75ff76e1375ac52e782f4b378b3a0b246fd6946f872662e5",
+        35,
+    );
+    let withheld = lonca_policy::state::INTENT_WITHHELD;
+    let mut reasons = ops.iter().flat_map(|o| o.entry.decision.reasons.iter());
+    assert!(reasons.any(|r| r.starts_with("lease_held:") && r.ends_with(withheld)));
 }
 
 /// Format 34: what enters a session is in the sessions made from it.

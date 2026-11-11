@@ -82,22 +82,25 @@ pub fn fetch(c: &mut Client, dir: &Path, repo: &str) -> Result<Value> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(r["bundle_b64"].as_str().unwrap_or_default())
             .context("trunk.bundle: bad bundle_b64")?;
-        let tmp = std::env::temp_dir().join(format!(
-            "{}.bundle",
-            lonca_core::canonical::random_id("lonca-trunk")
-        ));
-        std::fs::write(&tmp, &bytes)?;
-        let fetched = git(
+        // The whole of trunk, in the temporary directory every user of the
+        // machine shares: a file only this user reads (0600), gone when it
+        // is dropped.
+        use std::io::Write;
+        let mut tmp = tempfile::Builder::new()
+            .prefix("lonca-trunk-")
+            .suffix(".bundle")
+            .tempfile()?;
+        tmp.write_all(&bytes)?;
+        tmp.flush()?;
+        git(
             dir,
             &[
                 "fetch",
                 "-q",
-                &tmp.to_string_lossy(),
+                &tmp.path().to_string_lossy(),
                 &format!("+refs/heads/main:{TRUNK_REF}"),
             ],
-        );
-        let _ = std::fs::remove_file(&tmp);
-        fetched?;
+        )?;
     }
     let got = rev(dir, TRUNK_REF).context("refs/lonca/trunk missing after the fetch")?;
     if got != trunk {

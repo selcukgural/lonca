@@ -83,6 +83,22 @@ included: it replays every decision and recomputes every fact and merge.
 A ready workflow is
 [docs/ci/lonca-audit.yml](https://github.com/selcukgural/lonca/blob/main/docs/ci/lonca-audit.yml).
 
+A log shows that it is whole and that its own daemon key signed it. That
+it is *your* log, and not an older state of it, the auditor must be told
+from outside the log:
+
+```sh
+lonca-audit verify ~/.lonca/repos/demo.git      # prints genesis: and head:
+lonca-audit verify .git --genesis <genesis>     # this log and no other
+lonca-audit verify .git --genesis <genesis> --extends <a head seen before>
+```
+
+`genesis:` never changes for a repository: note it once, somewhere a push
+can not reach (the workflow reads a repository variable). `--extends`
+takes any `head:` an earlier run printed; the log must still have that
+entry. Without them, somebody who can push to the remote can put another
+log there, or an earlier state of yours, and the audit passes.
+
 ## Backup and moving
 
 A repository is its bare store, so a backup is a Git bundle and a restore

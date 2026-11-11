@@ -70,7 +70,7 @@ caused them:
 | Reason | What to do |
 |---|---|
 | `lease_missing:<symbol>` | Lease it (`lonca lease acquire`), then propose again. `lonca lease needed` lists what the local changes need and who holds it. |
-| `lease_held:<symbol>:<session>:<intent>` | Another session holds it. Wait (`lonca lease interest`, or the `lease_interest` tool), settle it with `negotiate`, or work on something else. |
+| `lease_held:<symbol>:<session>:<intent>` | Another session holds it (its intent is not shown to an agent when that session is tainted). Wait (`lonca lease interest`, or the `lease_interest` tool), settle it with `negotiate`, or work on something else. |
 | `lease_expired`, `not_own_lease`, `unknown_lease_set` | The set is gone or not yours: acquire again. |
 | `lease_hold_limit` | Held past `leases.max_hold_minutes` while someone waits: finish, or let it go and acquire again. |
 | `lease_reserved:<session>`, `lease_wanted:<session>` | Freed and reserved for that session, or that session waits first. The answer's `details` say until when. |
@@ -114,6 +114,7 @@ caused them:
 |---|---|
 | `presence_required` | The repository accepts only keys that prove presence: `lonca human rotate --secure-enclave` (Mac) or `--security-key` (a FIDO security key). |
 | `not_enrolled`, `unknown_human` | That key is not enrolled in this repository. |
+| `already_enrolled`, `session_exists`, `invalid_lease_set`, `lease_held:…` on an `approve` | What waited for your approval can no longer be done as it was asked: the name, session or lease was taken meanwhile. Reject it (`lonca reject <n> --reason …`) and ask again. |
 | `stale_human_signature` | The signature is older than 10 minutes or more than a minute ahead: check the clock. |
 | `unanchored_human_signature`, `human_signature_of_another_log`, `signed_before_its_target` | The signature does not name this log as it is now: an older `lonca` signed it, or what it approves came after it was made. Run the command again with the `lonca` of the daemon's version. |
 | `bad_human_signature`, `bad_nonce`, `nonce_reused` | The request was refused as signed. Run the command again; if it repeats, report it. |

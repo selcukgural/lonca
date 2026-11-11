@@ -9,6 +9,10 @@
 # install continues them. Take a `lonca backup` first and copy it off the
 # machine before purging.
 set -eu
+# Run with sudo, this is root: nothing it runs is found by a name in the
+# caller's PATH, where a file of the developer's account may stand first.
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 purge=0
 case "${1:-}" in

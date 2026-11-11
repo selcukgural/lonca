@@ -121,3 +121,79 @@ fn version_is_the_workspace_version_and_anything_else_is_usage() {
         assert!(text(&out.stderr).contains("lonca-audit --version"));
     }
 }
+
+/// What a log proves of itself is that it is whole and signed by its own
+/// daemon key. That it is the expected log (`--genesis`), and no older
+/// state of it (`--extends`), is said from outside it.
+#[test]
+fn verify_holds_a_log_to_the_genesis_and_the_head_it_is_given() {
+    let dir = tempfile::tempdir().unwrap();
+    let load = |name: &str, fixture: &str| {
+        let repo = dir.path().join(name);
+        let bundle = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../lonca-daemon/tests/fixtures")
+            .join(fixture);
+        git(
+            dir.path(),
+            &["init", "-q", "--bare", repo.to_str().unwrap()],
+        );
+        git(
+            &repo,
+            &["fetch", "-q", bundle.to_str().unwrap(), "+refs/*:refs/*"],
+        );
+        repo.to_str().unwrap().to_string()
+    };
+    let (mine, other) = (
+        load("a.git", "oplog-v4.bundle"),
+        load("b.git", "oplog-v5.bundle"),
+    );
+    let line = |out: &str, name: &str| {
+        let l = out.lines().find(|l| l.starts_with(name)).unwrap();
+        l.split_whitespace().last().unwrap().to_string()
+    };
+    let out = text(&audit(&["verify", &mine]).stdout);
+    let (genesis, head) = (line(&out, "genesis:"), line(&out, "head:"));
+    assert_eq!(genesis.len(), 64, "{out}");
+    assert_ne!(genesis, head);
+
+    let ok = audit(&["verify", &mine, "--genesis", &genesis, "--extends", &head]);
+    assert_eq!(ok.status.code(), Some(0), "{}", text(&ok.stdout));
+    // An entry in the middle is one the log has too.
+    let ok = audit(&["verify", &mine, "--extends", &genesis]);
+    assert_eq!(ok.status.code(), Some(0), "{}", text(&ok.stdout));
+
+    // Another log, whole and signed by its own key, in the place of mine.
+    let alone = audit(&["verify", &other]);
+    assert_eq!(alone.status.code(), Some(0), "{}", text(&alone.stdout));
+    for anchor in [["--genesis", &genesis], ["--extends", &head]] {
+        let bad = audit(&["verify", &other, anchor[0], anchor[1]]);
+        let out = text(&bad.stdout);
+        assert_eq!(bad.status.code(), Some(1), "{out}");
+        assert!(out.contains("FINDING") && out.contains("anchor"), "{out}");
+        assert!(out.trim_end().ends_with("FAILED"), "{out}");
+    }
+
+    // Mine, taken back by one entry: its own genesis, but not its head.
+    git(
+        Path::new(&mine),
+        &["update-ref", "refs/lonca/oplog", "refs/lonca/oplog~1"],
+    );
+    let back = audit(&["verify", &mine, "--no-refs", "--genesis", &genesis]);
+    assert_eq!(back.status.code(), Some(0), "{}", text(&back.stdout));
+    let back = audit(&["verify", &mine, "--no-refs", "--extends", &head]);
+    let out = text(&back.stdout);
+    assert_eq!(back.status.code(), Some(1), "{out}");
+    assert!(out.contains("taken back"), "{out}");
+
+    // A hash is whole.
+    for bad in [&genesis[..12], "", &genesis.to_uppercase()] {
+        assert_eq!(
+            audit(&["verify", &mine, "--genesis", bad]).status.code(),
+            Some(2)
+        );
+    }
+    assert_eq!(
+        audit(&["verify", &mine, "--extends"]).status.code(),
+        Some(2)
+    );
+}

@@ -72,13 +72,13 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 |---|---|---|---|
 | CICD-SEC-1 Insufficient Flow Control | met | main takes pull requests only, and requires the `ci.yml` jobs (Ubuntu, macOS, sandbox) as status checks; no approval is required (one maintainer). A release is drafted and published to crates.io only from a `v*` tag on a commit of main; such a tag is created by an administrator and can not be moved or deleted (`docs/decisions.md`, "CI runs on every pull request" and #60) | — |
 | CICD-SEC-2 Inadequate IAM | met | one maintainer; workflows hold read-only tokens, `persist-credentials: false` | — |
-| CICD-SEC-3 Dependency Chain Abuse | met | cargo-deny crates.io only, Dependabot cooldown, lockfile `--locked`; `cargo vet` not adopted (`docs/decisions.md`, #60) | — |
+| CICD-SEC-3 Dependency Chain Abuse | met | cargo-deny crates.io only, Dependabot cooldown (cargo, Actions, and the site's npm packages), lockfile `--locked`; the site's build can not change the `install.sh` it serves (`docs.yml`, job `untouched`); `cargo vet` not adopted (`docs/decisions.md`, #60) | the pages the site's build renders are as its npm packages made them |
 | CICD-SEC-4 Poisoned Pipeline Execution | met | no `pull_request_target`, no event data in `run:`; no run on a tag restores a cache; zizmor on workflow changes | — |
 | CICD-SEC-5 Insufficient PBAC | met | `permissions: contents: read` per workflow; OIDC (`id-token: write`) only on the jobs that need it, none of which runs the tests: Scorecard, the Pages deploy, the release attestation, and the crates.io publish (environment `release`, tags `v*`) | — |
 | CICD-SEC-6 Insufficient Credential Hygiene | met | no long-lived secrets in CI; secret scanning with push protection | — |
 | CICD-SEC-7 Insecure System Configuration | met | pinned toolchain, timeouts, actions allowlist and SHA pinning required | — |
 | CICD-SEC-8 Ungoverned 3rd Party Services | met | five named third-party actions, nothing else (`docs/decisions.md`, "CI and the repository's own settings") | — |
-| CICD-SEC-9 Improper Artifact Integrity Validation | met | each release archive has a build provenance attestation (`gh attestation verify`), `SHA256SUMS` and a CycloneDX SBOM (`release.yml`, #7, #60) | — |
+| CICD-SEC-9 Improper Artifact Integrity Validation | met | each release archive, `SHA256SUMS` and the CycloneDX SBOM have a build provenance attestation (`release.yml`, #7, #60); a published release is immutable; the Homebrew tap verifies the attestation, and `install.sh` does when `gh` is there and says so when it is not (`LONCA_ATTESTATION=require` makes it a condition) | a plain `curl … \| sh` on a machine without `gh` trusts the release's own checksum |
 | CICD-SEC-10 Insufficient Logging and Visibility | met | Actions logs, Scorecard, CodeQL; the auditor workflow for pushed repositories (`docs/ci/lonca-audit.yml`) | — |
 
 ## ASVS 5.0, Level 2

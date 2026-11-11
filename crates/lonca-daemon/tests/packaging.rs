@@ -88,3 +88,71 @@ fn the_daemon_is_given_the_import_directory() {
         let _ = std::fs::remove_dir_all(out);
     }
 }
+
+/// Run with sudo, a script is root: it finds nothing by a name in the
+/// caller's `PATH`, and it installs nothing from files the developer's
+/// account (and so an agent) can change.
+#[cfg(unix)]
+#[test]
+fn the_installers_take_nothing_from_the_callers_account() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for os in ["macos", "linux"] {
+        for name in ["install-hardened.sh", "uninstall-hardened.sh"] {
+            let script = root.join("packaging").join(os).join(name);
+            let text = std::fs::read_to_string(&script).unwrap();
+            let code: Vec<&str> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+            assert_eq!(
+                code[..3],
+                [
+                    "set -eu",
+                    "PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+                    "export PATH"
+                ],
+                "{os}/{name}: the first thing it does"
+            );
+        }
+    }
+
+    // This platform's installer, asked about this checkout: the developer's.
+    let os = if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    let script = root.join("packaging").join(os).join("install-hardened.sh");
+    let empty = tempfile::tempdir().unwrap();
+    let out = Command::new("/bin/sh")
+        .arg(&script)
+        .arg("--check-source")
+        .args(["--bin", empty.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{said}");
+    assert!(said.contains("not root's alone"), "{said}");
+    assert!(said.contains("install-hardened.sh\n"), "{said}");
+
+    // The rule itself, on a file of the system's and on one of ours.
+    let text = std::fs::read_to_string(&script).unwrap();
+    let start = text.find("roots_alone() {").unwrap();
+    let end = start + text[start..].find("\n}\n").unwrap() + 3;
+    let rule = &text[start..end];
+    let alone = |path: &std::path::Path| {
+        let path = path.canonicalize().unwrap();
+        Command::new("/bin/sh")
+            .args(["-c", &format!("{rule}\nroots_alone \"$1\""), "sh"])
+            .arg(path)
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(alone(std::path::Path::new("/usr/bin/env")));
+    let mine = empty.path().join("lonca");
+    std::fs::write(&mine, "x").unwrap();
+    assert!(!alone(&mine));
+    assert!(!alone(empty.path()));
+}

@@ -298,18 +298,60 @@ pub fn copy_to(to: &Path) {
 }
 
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
+    retry(|| std::fs::create_dir_all(to))?;
+    let entries = retry(|| std::fs::read_dir(from)?.collect::<std::io::Result<Vec<_>>>())?;
+    for entry in entries {
         let (src, dst) = (entry.path(), to.join(entry.file_name()));
-        let kind = entry.file_type()?;
+        let kind = retry(|| entry.file_type())?;
         if kind.is_dir() {
             copy_dir(&src, &dst)?;
         } else if kind.is_symlink() {
-            std::os::unix::fs::symlink(std::fs::read_link(&src)?, &dst)?;
+            let target = retry(|| std::fs::read_link(&src))?;
+            retry(|| std::os::unix::fs::symlink(&target, &dst))?;
         } else {
-            std::fs::copy(&src, &dst)?;
+            retry(|| std::fs::copy(&src, &dst))?;
         }
     }
-    std::fs::set_permissions(to, std::fs::metadata(from)?.permissions())
+    let mode = retry(|| std::fs::metadata(from))?.permissions();
+    retry(|| std::fs::set_permissions(to, mode.clone()))
+}
+
+/// Runs `f` again while it is interrupted by a signal. libFuzzer's
+/// `-timeout` alarm is installed without `SA_RESTART`, so a file copy in
+/// the middle of a run can fail with `EINTR` (os error 4); that is the
+/// harness's own call, not something the input did.
+fn retry<T>(mut f: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    loop {
+        match f() {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            r => return r,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retry;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn an_interrupted_call_is_made_again_and_other_errors_return() {
+        let mut calls = 0;
+        let got = retry(|| {
+            calls += 1;
+            if calls < 3 {
+                Err(Error::from(ErrorKind::Interrupted))
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(got.unwrap(), 3);
+        let mut calls = 0;
+        let got: std::io::Result<()> = retry(|| {
+            calls += 1;
+            Err(Error::from(ErrorKind::NotFound))
+        });
+        assert_eq!(got.unwrap_err().kind(), ErrorKind::NotFound);
+        assert_eq!(calls, 1);
+    }
 }

@@ -101,7 +101,7 @@ requirement in it met, or the exception named.
 | V2.1 Validation documentation | met | `docs/protocol.md` names every field and limit |
 | V2.2 Input validation | met | `decide()` checks every operation's values (`decide.rs`), extreme numbers denied (#61) |
 | V2.3 Business logic security | met | single writer orders every operation; leases, quotas and approvals in `decide()`; the auditor replays them |
-| V2.4 Anti-automation | met | per-session rate limit, connection caps (#50), proxy budgets (#64), advisor budget (#63) |
+| V2.4 Anti-automation | met | per-session rate limit, connection caps (#50), proxy budgets (#64) and a rate on what the proxy records, a size limit on a log entry, advisor budget (#63) |
 | V4.1 Generic web service security | met | one Unix socket, authenticated methods, explicit errors (`docs/protocol.md`) |
 | V4.2 HTTP message structure | met | the proxy caps request heads at 16 KiB and parses only `CONNECT` and absolute `http://` (`crates/lonca-net`) |
 | V4.3, V4.4 GraphQL, WebSocket | n/a | none |

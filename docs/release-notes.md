@@ -56,6 +56,23 @@ a line or hide text on the reviewer's screen. Newlines and tabs are kept;
 `--json` output is unchanged. A CRLF file's lines end in a visible `\r` in
 `lonca diff`.
 
+### One entry of the log has a size, and the proxy a rate
+
+The log keeps every entry, so what goes into one is now bounded before it
+is written:
+
+- An operation whose JSON, with its human signature, is past 64 KiB is
+  refused as `invalid` and not logged; the message names the operation and
+  its size. In practice this is a very long intent or list: write a shorter
+  one, or lease and propose in smaller parts.
+- `lonca human recover` with a key that is not the repository's recovery
+  key for that human is refused as `forbidden` and is in the security log
+  (`lonca doctor` counts its events), no longer an entry of the operation
+  log.
+- Connections through the proxy are recorded at `sessions.ops_per_minute`
+  for a session, counted apart from its own operations. Past that a
+  connection is refused until the minute has room again.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

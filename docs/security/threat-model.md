@@ -79,6 +79,7 @@ What each mode does about each threat:
 | Redrawing what a reviewer reads (escape sequences, carriage returns or bidi controls in an intent, a path, a file's lines or a denial's text) | prevented in Lonca's own output: `lonca` and `lonca-audit` write such characters out (`\u{1b}`, `\r`) instead of sending them to the terminal; JSON output escapes them as JSON does, so a program that shows it must do the same | prevented, as cooperative | prevented, as cooperative |
 | Using a session token outside where it was given | possible | possible (tokens are bearer tokens) | detected: the session is tainted (`not_in_sandbox`) |
 | Exhausting the daemon through the socket | bounded: connection, line, rate and byte limits | bounded | bounded |
+| Filling the log, which keeps every entry (long text in an operation, refused submissions with no session, connections through the proxy) | bounded: an entry's operation takes 64 KiB at most, asked before it is signed; a denied submission that needs no session is not logged; a session's operations and its proxy connections are each held to `sessions.ops_per_minute` | bounded | bounded |
 
 Cooperative mode is honest about what it is: it records and detects, and
 every change waits for a person. It is right for trying Lonca and for work

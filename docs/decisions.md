@@ -4268,6 +4268,55 @@ redraw the list it was part of.
   format, and what shows them is the place that must be right either way.
   A program that shows Lonca's JSON to a person has the same duty.
 
+## What a caller adds to the log is bounded
+
+The log keeps every entry for good, the refused ones too: that is what
+makes it a record. So whatever a caller can put in an entry, and however
+often, is what the store's disk and every replay pay for. Three ways were
+open (private advisory, 2026-11-11).
+
+- **An entry's operation and its human signature take 64 KiB at most**
+  (`MAX_OP_BYTES`, `RepoHandle::op_fits`), asked before anything is decided,
+  signed or written to the store. An operation's free text and lists came in
+  on lines of up to 96 MiB, and the limits the policy has on them
+  (`leases.max_items`, `intent_too_long`) are decisions: the refused entry
+  was logged whole. Past the limit the answer is `invalid`, with the
+  operation's name, its size and what to do, and nothing is logged. 64 KiB
+  is what a line that may not be long holds; the policy's own limits (64
+  lease items, 200 files) fit many times over.
+- **Not a rule of `decide()`.** It would need a log format, and it would be
+  the wrong place: a size refused by `decide()` is again an entry. Like the
+  session rate, it is the daemon declining to write; the auditor has
+  nothing to recompute, and an older log with a longer entry still replays.
+- **The daemon's merge results are let past it** (`change.integrate`,
+  `change.integrate_batch`). Their conflicts and merged lists are as long
+  as the repository makes them, and a refusal there would leave the queue
+  with a change it can never finish. Facts and evidence are not counted
+  either: the daemon computes them, from files the policy already bounds.
+  Everything else the daemon writes for a caller is held to it, `observe`
+  too: a hook event with a path past it is an error, which the hook answers
+  by blocking.
+- **A submission that needs no session is decided before it is logged.**
+  `human.recover` comes in on its signature alone, so anyone who can open
+  the socket could send one, each a denied entry. Now a denial there is
+  `forbidden`, which the security log records (it rotates), and no entry.
+  A signed-in human's denied operation is still an entry: the session says
+  who asked, and a reviewer reads that record. An escalated recovery is
+  logged as before; an escalation comes after a signature that verifies.
+- **The proxy records at the session's rate.** Every connection through it
+  is an `observe` entry for each session it counts against, and nothing
+  bounded how many a minute. They now spend from a bucket of
+  `sessions.ops_per_minute` per session, apart from the one for the
+  session's own operations, so a build that opens many connections does
+  not stop its agent's requests. Past it a connection is refused and not
+  recorded, which keeps the rule that nothing goes through the proxy
+  without being on the record. Not a new policy key: the number already
+  says how fast one session may grow the log.
+- **What is left.** A session at its rate with entries at the limit still
+  grows the log, by what the policy allows it; and a proposal's files are
+  objects in the store whatever the log says. A floor on the store's free
+  disk is a separate piece of work.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

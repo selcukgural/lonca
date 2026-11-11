@@ -1094,7 +1094,7 @@ the queue itself, and stays 0 under protocol 1.
 | `invalid` | the request does not fit: bad params, missing `repo`, a value out of range |
 | `unauthenticated` | no token, or one that is unknown, ended or expired, or whose session expired (every method but `session.heartbeat` and `session.end`); a login that did not verify |
 | `forbidden` | a token of the wrong kind, for another repository, or not enrolled; a signature by another human |
-| `not_in_sandbox` | an isolated session's token, on an agent request that came from outside a sandbox; the session is tainted. `session.heartbeat` and `session.end` are exempt |
+| `not_in_sandbox` | an isolated session's token, on a request that came from outside a sandbox, a read (`status`, `log`, `tree`, `blobs`, `change.*`, `trunk.*`, `whoami`) as much as any other; the session is tainted. `session.heartbeat` and `session.end` are exempt, and a method that needs no token answers as for anybody |
 | `session_inactive` | `session.heartbeat` of a session that has ended or expired; nothing is logged |
 | `unknown_method` | not in the table |
 | `not_found` | no such repository or change; a path not in the commit (`blobs`) |

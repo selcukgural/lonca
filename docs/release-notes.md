@@ -120,6 +120,16 @@ same for a `lonca init` cut short. Both are now finished quietly at the
 start, as a trunk left one step back always was. A policy ref changed at
 any other time is still put back, logged and frozen for.
 
+### An isolated session's token reads nothing from outside its sandbox
+
+A token of a `lonca run` session used outside the sandbox was refused
+(`not_in_sandbox`) and the session tainted, but only for the methods an
+agent alone may call. The reading methods (`status`, `log`, `tree`,
+`blobs`, `change.get`, `change.diff`, `trunk.bundle`, `whoami`) went
+through from anywhere. They are now held the same way. Nothing changes for
+a command inside the sandbox, for a human session, or for a session that
+is not isolated.
+
 ### One entry of the log has a size, and the proxy a rate
 
 The log keeps every entry, so what goes into one is now bounded before it

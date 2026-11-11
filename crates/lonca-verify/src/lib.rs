@@ -1654,6 +1654,8 @@ mod tests {
             log.contains("PROBE_LOG_TOKEN"),
             "the name is no secret: {log}"
         );
+    }
+
     /// A change whose files this machine's file system can not hold is
     /// answered, not left: the first check errs and names the file, the
     /// rest are skipped, and the queue goes on to the next change.

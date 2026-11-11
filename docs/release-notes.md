@@ -29,6 +29,7 @@ has no network, can also no longer reach the system's certificate service.
 Two limits of the macOS sandbox are written down in the threat model:
 shared memory by name, and what that certificate service fetches for an
 isolated session.
+
 ### The sudo that is asked is the system's
 
 A session counts as unobserved while `sudo` runs without a password, and

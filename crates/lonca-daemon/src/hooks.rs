@@ -4,6 +4,7 @@
 //! What the model says about itself is never used; only what the harness
 //! reports about the tool calls it executes.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -153,19 +154,131 @@ fn absolute(p: &str, cwd: &Path) -> PathBuf {
     out
 }
 
-/// Is `abs` inside one of the scratch roots?
-fn under_scratch(abs: &Path, scratch: &[String]) -> bool {
-    scratch
-        .iter()
-        .any(|root| abs.strip_prefix(Path::new(root)).is_ok())
+/// `p` as the call names it, taken from `cwd` when it is relative; nothing
+/// is folded, so whoever resolves it walks what the tool will walk.
+fn named(p: &str, cwd: &Path) -> PathBuf {
+    let raw = Path::new(p);
+    if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        cwd.join(raw)
+    }
 }
 
-/// Path relative to the workspace, or `None` if it lies outside.
-fn relative(p: &str, cwd: &Path, workspace: &Path) -> Option<String> {
-    let abs = absolute(p, cwd);
-    let rel = abs.strip_prefix(workspace).ok()?;
-    let s = rel.to_string_lossy().replace('\\', "/");
-    Some(if s.is_empty() { ".".into() } else { s })
+/// Most paths one call is resolved for; a call that names more has the
+/// rest outside.
+pub const MAX_RESOLVED: usize = 1024;
+
+/// Where a tool's path is.
+#[derive(Debug, PartialEq, Eq)]
+enum Place {
+    /// In the workspace, at this path from its root.
+    Inside(String),
+    Scratch,
+    /// Neither: the path, and what the call named when that is another
+    /// (a link led there, or nobody resolved it).
+    Outside(String, Option<String>),
+}
+
+/// Places the paths of one event: by where they really are when the
+/// caller resolved them (`HookEvent::real`), by their text when it sent
+/// nothing.
+struct Places<'a> {
+    real: Option<&'a BTreeMap<String, String>>,
+    cwd: PathBuf,
+    /// `None`: the caller resolved paths and not the workspace, so
+    /// nothing is inside.
+    workspace: Option<PathBuf>,
+    scratch: Vec<PathBuf>,
+}
+
+impl<'a> Places<'a> {
+    fn new(ev: &'a HookEvent, scratch: &[String]) -> Self {
+        let cwd = ev.cwd.as_deref().unwrap_or(&ev.workspace);
+        let mut places = Places {
+            real: ev.real.as_ref(),
+            cwd: named(cwd, Path::new("/")),
+            workspace: None,
+            scratch: vec![],
+        };
+        places.workspace = places.really(Path::new(&ev.workspace));
+        let roots = scratch.iter().filter_map(|r| places.really(Path::new(r)));
+        places.scratch = roots.collect();
+        places
+    }
+
+    /// Where `named` really is; `None` when the caller resolves paths and
+    /// did not resolve this one.
+    fn really(&self, named: &Path) -> Option<PathBuf> {
+        let Some(real) = self.real else {
+            return Some(absolute(&named.to_string_lossy(), Path::new("/")));
+        };
+        let there = real.get(named.to_str()?)?;
+        Path::new(there)
+            .is_absolute()
+            .then(|| absolute(there, Path::new("/")))
+    }
+
+    /// The workspace is looked at first, so a scratch root never exempts
+    /// a workspace file.
+    fn of(&self, p: &str) -> Place {
+        let named = named(p, &self.cwd);
+        let text = absolute(&named.to_string_lossy(), Path::new("/"));
+        let text = text.display().to_string();
+        let Some(real) = self.really(&named) else {
+            return Place::Outside(text.clone(), Some(text));
+        };
+        if let Some(rel) = self
+            .workspace
+            .as_ref()
+            .and_then(|ws| real.strip_prefix(ws).ok())
+        {
+            let s = rel.to_string_lossy().replace('\\', "/");
+            return Place::Inside(if s.is_empty() { ".".into() } else { s });
+        }
+        if self.scratch.iter().any(|root| real.starts_with(root)) {
+            return Place::Scratch;
+        }
+        let real = real.display().to_string();
+        let other = (real != text).then_some(text);
+        Place::Outside(real, other)
+    }
+}
+
+/// The paths a hook program has to resolve before this event can be
+/// placed (`"phase": "resolve"` of `hook.input`): the workspace, the
+/// scratch roots and what the call names, at most `MAX_RESOLVED`. Empty
+/// for a call that names no path.
+pub fn asks(ev: &HookEvent, policy: &PolicyBundle, scratch: &[String]) -> Vec<String> {
+    let pre = match ev.hook_event_name.as_str() {
+        "PreToolUse" => true,
+        "PostToolUse" => false,
+        _ => return vec![],
+    };
+    let name = ev.harness.as_deref().unwrap_or("claude-code");
+    let Some(profile) = policy.config.harness(name) else {
+        return vec![];
+    };
+    let tool = ev.tool_name.as_deref().unwrap_or_default();
+    let paths = match classify(profile, tool, &ev.tool_input, &policy.config.taint) {
+        Tool::Write(paths) => paths,
+        Tool::Read(paths) if pre => paths,
+        _ => return vec![],
+    };
+    let cwd = ev.cwd.as_deref().unwrap_or(&ev.workspace);
+    let cwd = named(cwd, Path::new("/"));
+    let mut out: Vec<String> = [&ev.workspace]
+        .into_iter()
+        .chain(scratch)
+        .cloned()
+        .collect();
+    for p in &paths {
+        let p = named(p, &cwd).to_string_lossy().into_owned();
+        if out.len() < MAX_RESOLVED && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
 }
 
 fn host_of(url: &str) -> String {
@@ -206,12 +319,7 @@ pub fn translate(
         "PostToolUse" => Phase::Post,
         _ => return (vec![], allow()),
     };
-    let workspace = absolute(&ev.workspace, Path::new("/"));
-    let cwd = ev
-        .cwd
-        .as_deref()
-        .map(|c| absolute(c, Path::new("/")))
-        .unwrap_or_else(|| workspace.clone());
+    let places = Places::new(ev, scratch);
     let name = ev.harness.as_deref().unwrap_or("claude-code");
     let Some(profile) = policy.config.harness(name) else {
         return (vec![], deny(format!("lonca: unknown harness {name}")));
@@ -226,7 +334,7 @@ pub fn translate(
     };
     match classify(profile, &tool, &ev.tool_input, taint) {
         Tool::Own | Tool::Inert => (vec![], allow()),
-        Tool::Write(paths) => write(&paths, phase, &cwd, &workspace, scratch),
+        Tool::Write(paths) => write(&paths, phase, &places),
         Tool::UnreadablePatch if pre => (
             vec![obs(ObsKind::Other { tool }, true)],
             deny("lonca: a patch whose paths can not be read is not allowed"),
@@ -237,19 +345,15 @@ pub fn translate(
         _ if !pre => (vec![], allow()),
         Tool::Read(paths) => {
             let read = |p: &String| {
-                let (kind, external) = match relative(p, &cwd, &workspace) {
-                    Some(rel) => {
+                let (path, external) = match places.of(p) {
+                    Place::Inside(rel) => {
                         let untrusted = policy.is_untrusted(&rel);
-                        (ObsKind::Read { path: rel }, untrusted)
+                        (rel, untrusted)
                     }
-                    None => {
-                        let abs = absolute(p, &cwd);
-                        let external = !under_scratch(&abs, scratch);
-                        let path = abs.display().to_string();
-                        (ObsKind::Read { path }, external)
-                    }
+                    Place::Scratch => (absolute(p, &places.cwd).display().to_string(), false),
+                    Place::Outside(path, _) => (path, true),
                 };
-                obs(kind, external)
+                obs(ObsKind::Read { path }, external)
             };
             (paths.iter().map(read).collect(), allow())
         }
@@ -271,13 +375,7 @@ pub fn translate(
 }
 
 /// The checks of a write, per path; one denied path denies the call.
-fn write(
-    paths: &[String],
-    phase: Phase,
-    cwd: &Path,
-    workspace: &Path,
-    scratch: &[String],
-) -> (Vec<Observation>, HookVerdict) {
+fn write(paths: &[String], phase: Phase, places: &Places) -> (Vec<Observation>, HookVerdict) {
     let pre = phase == Phase::Pre;
     let mut out = vec![];
     let mut verdict = allow();
@@ -293,20 +391,26 @@ fn write(
                 external: true,
             });
         };
-        match relative(p, cwd, workspace) {
+        match places.of(p) {
             // Scratch: the agent's own notes. Allowed, not a fact.
-            None if under_scratch(&absolute(p, cwd), scratch) => {}
-            None => {
-                let shown = absolute(p, cwd).display().to_string();
+            Place::Scratch => {}
+            Place::Outside(path, named) => {
+                let shown = match &named {
+                    Some(named) if *named == path => {
+                        format!("{path}: where it really is was not found")
+                    }
+                    Some(named) => format!("{named} is {path}"),
+                    None => path.clone(),
+                };
                 let reason =
                     format!("lonca: writes outside the workspace are not allowed ({shown})");
-                refuse(reason, shown);
+                refuse(reason, path);
             }
-            Some(rel) if lonca_core::paths::is_workspace_metadata(&rel) => {
+            Place::Inside(rel) if lonca_core::paths::is_workspace_metadata(&rel) => {
                 refuse("lonca: .lonca/ is workspace metadata".to_string(), rel);
             }
-            Some(_) if pre => {}
-            Some(rel) => out.push(Observation {
+            Place::Inside(_) if pre => {}
+            Place::Inside(rel) => out.push(Observation {
                 phase,
                 kind: ObsKind::Write { path: rel },
                 external: false,
@@ -542,6 +646,7 @@ mod tests {
             cwd: Some("/ws/src".into()),
             workspace: "/ws".into(),
             harness: None,
+            real: None,
         }
     }
 
@@ -690,6 +795,172 @@ mod tests {
             &policy(),
         );
         assert_eq!(v.decision, "deny");
+    }
+
+    /// The event with its paths resolved: `real` says where each named
+    /// path is, the workspace and the scratch root are where they say.
+    fn resolved(mut e: HookEvent, real: &[(&str, &str)]) -> HookEvent {
+        let own = [("/ws", "/ws"), ("/scratch", "/scratch")];
+        let all = own.iter().chain(real);
+        e.real = Some(all.map(|(k, v)| (k.to_string(), v.to_string())).collect());
+        e
+    }
+
+    fn placed(e: &HookEvent) -> (Vec<Observation>, HookVerdict) {
+        super::translate(e, &policy(), &["/scratch".to_string()])
+    }
+
+    #[test]
+    fn a_path_is_where_its_links_lead_not_where_its_text_says() {
+        let write = |name: &str, path: &str| ev(name, "Write", json!({"file_path": path}));
+        let read = |path: &str| ev("PreToolUse", "Read", json!({"file_path": path}));
+
+        // A link in the workspace to the home directory.
+        let home = [("/ws/h/.zshrc", "/home/dev/.zshrc")];
+        let (o, v) = placed(&resolved(write("PreToolUse", "/ws/h/.zshrc"), &home));
+        assert_eq!(v.decision, "deny");
+        assert!(
+            v.reason
+                .ends_with("not allowed (/ws/h/.zshrc is /home/dev/.zshrc)"),
+            "{}",
+            v.reason
+        );
+        let path = "/home/dev/.zshrc".to_string();
+        assert_eq!(o[0].kind, ObsKind::Write { path });
+        assert!(o[0].external);
+        // By its text alone it was a workspace file.
+        let (_, v) = placed(&write("PreToolUse", "/ws/h/.zshrc"));
+        assert_eq!(v.decision, "allow");
+
+        // Read through the link: an outside read, and it taints.
+        let (o, _) = placed(&resolved(read("/ws/h/.zshrc"), &home));
+        let path = "/home/dev/.zshrc".to_string();
+        assert_eq!(o[0].kind, ObsKind::Read { path });
+        assert!(o[0].external);
+        assert!(!placed(&read("/ws/h/.zshrc")).0[0].external);
+
+        // `..` is the resolver's to walk: the text is asked about unfolded.
+        let up = [("/ws/src/../h/../x", "/home/x")];
+        let (_, v) = placed(&resolved(write("PreToolUse", "../h/../x"), &up));
+        assert_eq!(v.decision, "deny");
+        assert!(v.reason.ends_with("(/ws/x is /home/x)"), "{}", v.reason);
+
+        // A link to a workspace file is that file: written, it is recorded
+        // under its own name; `.lonca/` stays refused whatever names it.
+        let inside = [("/ws/alias/a.rs", "/ws/src/a.rs")];
+        let (o, _) = placed(&resolved(write("PostToolUse", "/ws/alias/a.rs"), &inside));
+        let path = "src/a.rs".to_string();
+        assert_eq!(o[0].kind, ObsKind::Write { path });
+        assert!(!o[0].external);
+        let meta = [("/scratch/m/workspace.json", "/ws/.lonca/workspace.json")];
+        let e = resolved(write("PreToolUse", "/scratch/m/workspace.json"), &meta);
+        let (_, v) = placed(&e);
+        assert_eq!(v.reason, "lonca: .lonca/ is workspace metadata");
+
+        // A link under a scratch root is not scratch; a link to one is.
+        let out = [("/scratch/out/x", "/etc/x")];
+        let (_, v) = placed(&resolved(write("PreToolUse", "/scratch/out/x"), &out));
+        assert_eq!(v.decision, "deny");
+        let notes = [("/ws/notes/x", "/scratch/x")];
+        let (o, v) = placed(&resolved(write("PreToolUse", "/ws/notes/x"), &notes));
+        assert!(o.is_empty() && v.decision == "allow");
+        let (o, _) = placed(&resolved(read("/ws/notes/x"), &notes));
+        assert!(!o[0].external);
+
+        // An untrusted file keeps its name behind a link.
+        let mut lax = PolicyBundle::default_bundle();
+        lax.config.paths.untrusted = vec!["vendor/**".into()];
+        let e = resolved(
+            read("/ws/ok/readme.md"),
+            &[("/ws/ok/readme.md", "/ws/vendor/readme.md")],
+        );
+        let (o, _) = super::translate(&e, &lax, &[]);
+        assert!(o[0].external);
+    }
+
+    #[test]
+    fn a_path_nobody_resolved_is_outside() {
+        let write = |path: &str| ev("PreToolUse", "Write", json!({"file_path": path}));
+        // Resolved, where it says: as before.
+        let own = [("/ws/src/a.rs", "/ws/src/a.rs")];
+        let (o, v) = placed(&resolved(write("/ws/src/a.rs"), &own));
+        assert!(o.is_empty() && v.decision == "allow");
+        // Left out (a loop, a directory that does not open, the cap).
+        let (o, v) = placed(&resolved(write("/ws/src/a.rs"), &[]));
+        assert_eq!(v.decision, "deny");
+        assert!(
+            v.reason
+                .ends_with("(/ws/src/a.rs: where it really is was not found)"),
+            "{}",
+            v.reason
+        );
+        assert!(o[0].external);
+        let e = ev("PreToolUse", "Read", json!({"file_path": "/ws/src/a.rs"}));
+        assert!(placed(&resolved(e, &[])).0[0].external);
+        // Not a place: a relative answer.
+        let (_, v) = placed(&resolved(
+            write("/ws/src/a.rs"),
+            &[("/ws/src/a.rs", "src/a.rs")],
+        ));
+        assert_eq!(v.decision, "deny");
+        // The workspace itself left out: nothing is inside.
+        let mut e = write("/ws/src/a.rs");
+        e.real = Some([("/ws/src/a.rs".to_string(), "/ws/src/a.rs".to_string())].into());
+        assert_eq!(placed(&e).1.decision, "deny");
+        // The workspace behind a link (`/tmp` on macOS).
+        let mut e = write("/ws/src/a.rs");
+        let real = [
+            ("/ws", "/private/ws"),
+            ("/ws/src/a.rs", "/private/ws/src/a.rs"),
+        ];
+        e.real = Some(real.map(|(k, v)| (k.to_string(), v.to_string())).into());
+        assert_eq!(placed(&e).1.decision, "allow");
+    }
+
+    #[test]
+    fn what_a_call_names_is_what_is_asked_about() {
+        let scratch = ["/scratch".to_string()];
+        let asks = |e: &HookEvent| super::asks(e, &policy(), &scratch);
+        let e = ev("PreToolUse", "Write", json!({"file_path": "../h/../x"}));
+        assert_eq!(asks(&e), ["/ws", "/scratch", "/ws/src/../h/../x"]);
+        let e = ev("PostToolUse", "Edit", json!({"file_path": "/ws/src/a.rs"}));
+        assert_eq!(asks(&e), ["/ws", "/scratch", "/ws/src/a.rs"]);
+        let e = ev("PreToolUse", "Read", json!({"file_path": "/ws"}));
+        assert_eq!(asks(&e), ["/ws", "/scratch"]);
+        // No path, nothing to ask: a read that already happened, a shell
+        // command, a fetch, an event that is not a tool call, a harness
+        // nobody describes.
+        let read = ev("PostToolUse", "Read", json!({"file_path": "/etc/hosts"}));
+        let shell = ev("PreToolUse", "Bash", json!({"command": "cat /etc/hosts"}));
+        let fetch = ev(
+            "PreToolUse",
+            "WebFetch",
+            json!({"url": "https://example.com"}),
+        );
+        let stop = ev("Stop", "Write", json!({"file_path": "/ws/a"}));
+        let mut unknown = ev("PreToolUse", "Write", json!({"file_path": "/ws/a"}));
+        unknown.harness = Some("nobody".into());
+        for e in [read, shell, fetch, stop, unknown] {
+            assert!(asks(&e).is_empty(), "{e:?}");
+        }
+        // A patch that names more files than are resolved for one call.
+        let many: Vec<String> = (0..MAX_RESOLVED + 5).map(|i| format!("/ws/f{i}")).collect();
+        let patch: String = many
+            .iter()
+            .map(|p| format!("*** Update File: {p}\n"))
+            .collect();
+        let mut e = ev("PreToolUse", "apply_patch", json!({"command": patch}));
+        e.harness = Some("codex".into());
+        let asked = asks(&e);
+        assert_eq!(asked.len(), MAX_RESOLVED, "{:?}", &asked[..3]);
+        // The ones past it are outside.
+        let own: Vec<(&str, &str)> = asked.iter().map(|p| (p.as_str(), p.as_str())).collect();
+        e.real = Some(
+            own.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        );
+        assert_eq!(placed(&e).1.decision, "deny");
     }
 
     #[test]

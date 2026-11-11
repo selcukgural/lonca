@@ -20,7 +20,7 @@ what it checks does not hold.
 | `entry` | one stored log entry (`op.json`) | what decodes comes back unchanged from its canonical form, which is a fixed point (two readers can not hash one entry two ways) |
 | `replay` | log entries, one JSON line each, chained and signed by the target | the auditor reports on any log, deciding every entry again and recomputing facts and merges, and finds the same twice |
 | `request` | up to 16 daemon request lines, on a fresh copy of a repository that has seen work | every line gets an answer with its id; afterwards the log audits clean (deep, every ref) and the daemon opens again |
-| `hook` | a built-in harness and a hook event | every event gets a verdict a harness reads; the bytes also read as that harness's locked settings |
+| `hook` | a built-in harness and a hook event | every event gets a verdict a harness reads, with its paths resolved or not, and at most 1024 paths are asked about; the bytes also read as that harness's locked settings |
 | `parse` | a file kind (each language of `languages.toml`, the section formats, plain text), an engine version, two versions of a file | symbols stand inside the file on character boundaries, sections add up to the file, facts come out |
 | `merge` | file kind, engine, base, ours and theirs | the same answer twice; a conflict names something; under the current engine, sides that parse never merge into a file that does not |
 | `policy` | `lonca.toml` and `policy.cedar` | what loads loads the same again; `lonca policy check` (every entry decided again, lockouts) works on it |

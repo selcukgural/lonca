@@ -112,6 +112,7 @@ last column.
 | A37 | What an agent wrote (an intent, a file's lines, what a denial quotes) reaches a person's terminal with its control characters written out (`\u{1b}`, `\r`), in `pending`, `diff`, `status` and errors: no escape sequence or carriage return redraws what a reviewer reads | `03-agents` |
 | A38 | An operation longer than one log entry holds (64 KiB: a very long intent or list) is refused with its name, its size and what to do, and the log does not grow; the same request with a short intent is logged | `13-log` |
 | A39 | `lonca policy set --value sessions.ops_per_minute=N` changes that one line of the `lonca.toml` in force (the comments and every other line stay), as a signed policy update that takes effect: a session is `rate_limited` at the new rate; a rate above 6000, or a key the file does not have, is refused and the policy stays | `13-log` |
+| A40 | In a session's workspace, the hook denies a write through a symbolic link that leads out of the workspace and names where it leads; a write through a link to a directory of the workspace is not denied | `08-harness` |
 
 ## Manual criteria
 

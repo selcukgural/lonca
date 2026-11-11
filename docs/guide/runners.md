@@ -542,6 +542,11 @@ status 2 or a `deny` answer into its own refusal. A harness with no hooks at all
   mention Lonca's own files (`.lonca/`, the socket, keys, settings).
   Reads, fetches, shell commands and other MCP tools are observed and,
   depending on `[taint]` in `lonca.toml`, may taint the session.
+  A path is where its symbolic links lead: `lonca hook` resolves them
+  when the call is made, so a link in the workspace to your home
+  directory is outside, a file read through one is an outside read, and
+  a path that can not be resolved (a loop of links) is outside too. A
+  shell command's own paths are not read; that is the sandbox's work.
 - **PostToolUse**: writes inside the workspace are recorded; a
   proposal that changes a file no observed tool wrote is denied or
   escalated (`unobserved_write:<path>`).

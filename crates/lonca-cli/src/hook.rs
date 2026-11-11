@@ -157,8 +157,22 @@ fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
     let mut client = ctx::connect()?;
     client.token = Some(ws.token()?);
     let real = ctx::resolved(&ws.root)?;
-    let params = json!({"harness": harness, "input": v, "workspace": ws.root, "real": real});
-    let r = ctx::call(&mut client, "hook.input", params)?;
+    let mut params = json!({"harness": harness, "input": v, "workspace": ws.root, "real": real});
+    let mut r = ctx::call(&mut client, "hook.input", params.clone())?;
+    if r["phase"] == "resolve" {
+        // The daemon places the call's paths and may not see them: they
+        // are looked at here, where the tool will walk them. One that
+        // does not resolve is left out, which is outside.
+        let asked = r["paths"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let paths: std::collections::BTreeMap<&str, String> = asked
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(|p| Some((p, lonca_client::real_path(Path::new(p))?)))
+            .filter_map(|(p, real)| Some((p, real.to_str()?.to_string())))
+            .collect();
+        params["paths"] = json!(paths);
+        r = ctx::call(&mut client, "hook.input", params)?;
+    }
     if r["phase"] == "session_start" {
         return bind(&mut client, harness, &r, ws).map(Some);
     }

@@ -36,7 +36,7 @@ fn after_tool(e: &mut Env, token: &str, harness: &str, event: &str) -> Value {
     let input = json!({"hook_event_name": event, "tool_name": "Read",
         "tool_input": {}, "cwd": "/w"});
     let p = json!({"harness": harness, "input": input, "workspace": "/w"});
-    e.ok("hook.input", None, Some(token), p)
+    e.hook_input(token, p, &[])
 }
 
 #[test]

@@ -108,6 +108,28 @@ first. Ask without contents and page them with `blobs`, as `lonca` does.
   go on; that is what the room is kept for. Free space on that disk to
   propose again. The number is not a policy key.
 
+### A path is where its links lead
+
+`lonca hook` now says where the files of a tool call really are before the
+daemon places them inside or outside the workspace. Until now a path was
+placed by its text, so a symbolic link in the workspace was not seen:
+
+- A write through a link that leads out of the workspace (`h/.zshrc`, with
+  `h` a link to your home directory) is denied, as any outside write, and
+  the refusal names both paths. A read through one is recorded as the
+  outside read it is, and taints the session as the policy says.
+- A link to a workspace file is that file: a write through it is recorded
+  under the file's own name, and `.lonca/` stays closed whatever names it.
+- A path that does not resolve (a loop of links, a directory the hook can
+  not look into) is outside.
+
+The daemon and `lonca hook` are upgraded together: a 0.2.3 `lonca hook`
+with this daemon has every file tool refused ("this hook program is older
+than its daemon"). A program that calls `hook.input` itself answers the new
+`"phase": "resolve"`; one that calls `hook.event` can send `real`
+(`docs/protocol.md`; `lonca_client::real_path`). Shell commands are not
+read for paths, as before.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

@@ -1,0 +1,1 @@
+{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"command":"/tmp/lonca-fuzz-ws/src/lib.rs"},"workspace":"/tmp/lonca-fuzz-ws","harness":"codex","real":{"/tmp/lonca-fuzz-ws":"/tmp/lonca-fuzz-ws","/tmp/lonca-fuzz-ws/src/lib.rs":"/tmp/elsewhere/lib.rs"}}

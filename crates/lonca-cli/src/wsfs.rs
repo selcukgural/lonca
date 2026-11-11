@@ -128,8 +128,26 @@ fn read_within(root: &Path, rel: &str, cap: u64) -> Result<Option<Local>> {
     }
     let mut bytes = Vec::new();
     File::from(fd).take(cap).read_to_end(&mut bytes)?;
+    // The count was read after the open: a name linked in from outside
+    // and taken away between the two shows one link, on a file that was
+    // never the workspace's. What was read is the file this name still
+    // is, with no other name, or it is not taken.
+    if !still_alone(&dir, leaf, &stat) {
+        bail!("{rel} changed while it was read, or has other hard links");
+    }
     let executable = Mode::from_raw_mode(stat.st_mode).intersects(EXEC);
     Ok(Some(Local { bytes, executable }))
+}
+
+/// Is the name `leaf` in `dir` still the file `opened` was, and that file's
+/// only name?
+fn still_alone(dir: &impl std::os::fd::AsFd, leaf: &str, opened: &rustix::fs::Stat) -> bool {
+    match statat(dir, leaf, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(named) => {
+            (named.st_dev, named.st_ino) == (opened.st_dev, opened.st_ino) && named.st_nlink <= 1
+        }
+        Err(_) => false,
+    }
 }
 
 /// Writes `rel`, making the directories it needs. The new file replaces
@@ -264,6 +282,38 @@ mod tests {
         let sparse = fs::File::create(r.join("sparse")).unwrap();
         sparse.set_len(MAX_FILE + 1).unwrap();
         assert!(read(r, "sparse").is_err());
+    }
+
+    /// The link count is read after the open. A name linked in from
+    /// outside and taken away again in between shows one link on a file
+    /// that was never the workspace's: what is taken is what the name
+    /// still is when the read is over.
+    #[test]
+    fn a_name_that_was_another_file_while_it_was_read_is_not_taken() {
+        let (dir, out) = root();
+        let r = dir.path();
+        let outside = out.path().join("secret");
+        fs::write(&outside, "secret").unwrap();
+        fs::hard_link(&outside, r.join("f")).unwrap();
+        let at = openat(CWD, r, ROOT, Mode::empty()).unwrap();
+        // Opened while it was the outside file; the name goes before the count.
+        let fd = openat(&at, "f", READ, Mode::empty()).unwrap();
+        fs::remove_file(r.join("f")).unwrap();
+        let opened = fstat(&fd).unwrap();
+        assert_eq!(opened.st_nlink, 1, "the count alone would take it");
+        assert!(!still_alone(&at, "f", &opened), "the name is gone");
+        // A file of the workspace's own under that name is another file.
+        fs::write(r.join("f"), "mine").unwrap();
+        assert!(!still_alone(&at, "f", &opened));
+        // Linked in again, it has two names.
+        fs::remove_file(r.join("f")).unwrap();
+        fs::hard_link(&outside, r.join("f")).unwrap();
+        assert!(!still_alone(&at, "f", &opened));
+        // A file that stayed what it was is taken.
+        fs::write(r.join("own"), "own").unwrap();
+        let fd = openat(&at, "own", READ, Mode::empty()).unwrap();
+        assert!(still_alone(&at, "own", &fstat(&fd).unwrap()));
+        assert_eq!(read(r, "own").unwrap().unwrap().bytes, b"own");
     }
 
     #[test]

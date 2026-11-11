@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Four small fixes in the command line
+
+- A workspace file with a second hard link was refused, but a link made
+  and removed at the right moment got past the check; the name is now
+  looked at again after the read.
+- `lonca fetch` kept trunk's bundle in the shared temporary directory,
+  readable by other local users while it fetched; it is private to you now.
+- `lonca run` could run out of memory at its end in a workspace with many
+  large changed files, leaving the session open; it now holds one file at
+  a time.
+- `lonca human rotate`, `recover` and `recovery-key` say so when they go on
+  with a key file that was already there (an interrupted run leaves one),
+  and show its public key: if you did not leave it, stop and delete it.
+
 ### The macOS sandbox no longer reads what Homebrew's services keep
 
 `lonca run` and verification on macOS open `/usr` and `/opt` for the

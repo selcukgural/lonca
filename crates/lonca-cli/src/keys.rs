@@ -54,7 +54,11 @@ fn next_key(name: &str, new: NewKey) -> Result<NextKey> {
         );
     }
     let path = ctx::key_path(&next, kind);
+    let waited = path.exists();
     let key = new.at(&path, name)?;
+    if waited {
+        found_there(&path, &key.public);
+    }
     Ok(NextKey { path, kind, key })
 }
 
@@ -128,8 +132,27 @@ pub fn rotate(name: &str, repos: &[String], new: NewKey) -> Result<()> {
     Ok(())
 }
 
+/// Says that a key this command is about to have signed into the
+/// repositories was not made by this run: the file was there. That is how
+/// an interrupted run goes on, and also what a program running as the same
+/// user would arrange, with a key it knows. The person is told which key,
+/// before anything is signed.
+fn found_there(path: &Path, public: &str) {
+    errln!(
+        "note: using the key file that was already at {} (public key {}…). An interrupted \
+         run of this command leaves one there; if that was not you, stop, delete the file \
+         and run the command again.",
+        path.display(),
+        public.get(..16).unwrap_or(public)
+    );
+}
+
 pub fn recovery_key(name: &str, repos: &[String], out: &Path) -> Result<()> {
+    let waited = out.exists();
     let rk = KeyPair::load_or_create(out, current_uid())?;
+    if waited {
+        found_there(out, &rk.public_hex());
+    }
     let key = HumanKey {
         alg: "ed25519".into(),
         public: rk.public_hex(),

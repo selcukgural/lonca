@@ -119,7 +119,8 @@ jobs:
           mkdir -p pack dist
           cp "target/$TARGET/release/lonca" "target/$TARGET/release/lonca-audit" \
             LICENSE README.md pack/
-          # `sudo ./install-hardened.sh --bin .` from the unpacked archive.
+          # install-hardened.sh, run as root from where the archive was unpacked
+          # (a directory of root's: docs/guide/install.md).
           if [ "$RUNNER_OS" = macOS ]; then
             cp "target/$TARGET/release/lonca-se" packaging/macos/install-hardened.sh \
               packaging/macos/uninstall-hardened.sh pack/

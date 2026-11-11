@@ -136,7 +136,9 @@ visible. Each becomes a criterion when it is automated.
 - Isolated mode (`lonca run`): needs a sandbox on the runner (bubblewrap
   on Linux); `ci.yml`'s `sandbox` job covers it with `cargo test`.
 - Hardened mode (`install-hardened.sh`, a daemon as its own user): needs
-  root on the runner.
+  root on the runner. That the installer refuses files that are not
+  root's alone, and that the scripts set their own `PATH`, is held by
+  `the_installers_take_nothing_from_the_callers_account` (`cargo test`).
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
   --secure-enclave`, FIDO2 keys).
 - The advisor (`lonca advise`): needs a model.

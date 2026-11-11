@@ -3823,8 +3823,8 @@ release (roadmap M2).
 - **A tag drafts the release; a person publishes it.** `release.yml` builds
   `lonca` and `lonca-audit` for macOS arm64 and x86_64 and Linux x86_64 and
   arm64. Linux builds are static (musl), so any distribution runs them. The
-  archives carry the hardened install scripts (`sudo ./install-hardened.sh
-  --bin .`) and, on macOS, `lonca-se`. `SHA256SUMS`, the SBOM and a build
+  archives carry the hardened install scripts (run from a directory of
+  root's, see "A hardened install takes nothing from the caller's account") and, on macOS, `lonca-se`. `SHA256SUMS`, the SBOM and a build
   provenance attestation per archive go with them; the notes are the
   version's section of `docs/release-notes.md` (`## X.Y.Z`), and a tag with
   none fails. `ci.yml` runs on the same tag, and the
@@ -4471,6 +4471,38 @@ replayed it.
   login is not an entry.
 - **The signer asks the daemon it submits to.** A daemon that lies about
   the head gets a signature it can not use in the real log.
+
+## A hardened install takes nothing from the caller's account
+
+The path to hardened mode is cooperative first: agents have run as the
+developer before root is asked to install anything. The four scripts
+(`install-hardened.sh`, `uninstall-hardened.sh`, macOS and Linux) found
+`awk`, `install`, `dscl`, `rm` by name, in the `PATH` sudo was called with
+(macOS's sudo keeps the caller's; `install.sh` puts `~/.local/bin` first in
+it), and copied `lonca` from an archive the guide had the user unpack in
+their own directory. A shim named `awk`, or a replaced `lonca`, ran as root
+or became the daemon.
+
+- **`PATH=/usr/bin:/bin:/usr/sbin:/sbin` is the first thing each script
+  does.**
+- **The installer installs only from files that are root's alone**: this
+  script, the uninstaller and each binary, owned by root, written by no
+  group or other, no symbolic link, and the same for every directory above
+  them. Otherwise it lists them and stops. Checking a digest inside the
+  script would not do: the script itself comes from the same directory,
+  and a file can be swapped between a check and a copy. A file root owns
+  in a directory root owns can not.
+- **The guide's order is: copy to root's place, check the copy, unpack,
+  install.** The check (`gh attestation verify`, or `SHA256SUMS`) is the
+  human's, on a file that can no longer change. `tar --no-same-owner`:
+  the archive's files carry the build runner's uid, which on a Mac is the
+  first user's.
+- **`--check-source`** asks the question without sudo; **`--unprotected-source`**
+  is for a build from one's own checkout, with a warning.
+- **The uninstaller is installed** beside `bin`, root's, and run from
+  there: the one in the unpacked archive is as open as the installer was.
+- **Not confirmed by a run:** that sudo on a stock Mac passes the caller's
+  `PATH` on. The scripts no longer depend on the answer.
 
 ## Text for a terminal
 

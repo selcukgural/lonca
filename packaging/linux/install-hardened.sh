@@ -2,6 +2,14 @@
 # Lonca hardened install for Linux (systemd).
 #
 #   sudo packaging/linux/install-hardened.sh [--bin DIR] [--allow-unsandboxed]
+#   .../install-hardened.sh --check-source [--bin DIR]     say whether this
+#                                                          script and the
+#                                                          binaries are root's
+#                                                          alone, as an install
+#                                                          requires; no sudo
+#   sudo .../install-hardened.sh --unprotected-source      install a build of
+#                                                          your own from your
+#                                                          checkout all the same
 #   packaging/linux/install-hardened.sh --render DIR [--dev-uid N] [--daemon-uid N]
 #
 # Run it again from a newer archive to upgrade: it stops the daemon, replaces
@@ -17,6 +25,10 @@
 # `lonca init --import` and `lonca restore`: the daemon reads none of the
 # developer's other directories, and the developer can write none of its.
 set -eu
+# Run with sudo, this is root: nothing it runs is found by a name in the
+# caller's PATH, where a file of the developer's account may stand first.
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
 
 PREFIX=/opt/lonca
 BIN_DIR=$PREFIX/bin
@@ -31,6 +43,8 @@ MANAGED=/etc/claude-code/managed-settings.json
 PROXY_PORT=8471
 
 src_bin=""
+unprotected=""
+check_only=""
 render=""
 dev_uid=""
 daemon_uid=""
@@ -39,6 +53,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --bin) src_bin=$2; shift 2 ;;
         --render) render=$2; shift 2 ;;
+        --check-source) check_only=1; shift ;;
+        --unprotected-source) unprotected=1; shift ;;
         --dev-uid) dev_uid=$2; shift 2 ;;
         --daemon-uid) daemon_uid=$2; shift 2 ;;
         --allow-unsandboxed) unsandboxed=" --allow-unsandboxed"; shift ;;
@@ -114,12 +130,63 @@ if [ -n "$render" ]; then
     exit 0
 fi
 
+# Is "$1" root's alone: owned by root and written by nobody else, it and
+# every directory above it?
+roots_alone() {
+    p=$1
+    while :; do
+        [ ! -L "$p" ] || return 1
+        st=$(stat -c '%u %a' "$p") || return 1
+        [ "${st% *}" = 0 ] || return 1
+        [ $((0${st#* } & 022)) = 0 ] || return 1
+        [ "$p" != / ] || return 0
+        p=$(dirname "$p")
+    done
+}
+
+here=$(cd "$(dirname "$0")" && pwd -P)
+src_bin=${src_bin:-"$here/../../target/release"}
+src_bin=$(cd "$src_bin" 2>/dev/null && pwd -P) || { echo "no directory $src_bin" >&2; exit 1; }
+# What root installs and then runs is taken from files root alone can
+# change. An archive unpacked in the developer's account is a place every
+# program of that account writes: an agent that ran there before this
+# install could have replaced a binary, or this script.
+open=""
+for f in "$here/$(basename "$0")" "$here/uninstall-hardened.sh" "$src_bin/lonca" "$src_bin/lonca-audit"; do
+    [ -e "$f" ] || continue
+    roots_alone "$f" || open="$open
+  $f"
+done
+if [ -n "$open" ]; then
+    if [ -n "$unprotected" ]; then
+        echo "WARNING: installing from files that are not root's alone (--unprotected-source):$open" >&2
+    else
+        cat >&2 <<EOF
+These are not root's alone (owned by root and written by nobody else, with
+every directory above them):$open
+Whatever runs as you could have changed them, and they are about to be
+installed and run as root and as the daemon. Copy the archive to a place of
+root's, check that copy, and unpack and install from there:
+    sudo install -d -m 0755 /usr/local/lonca-release
+    sudo cp lonca-<target>.tar.gz /usr/local/lonca-release/
+    gh attestation verify /usr/local/lonca-release/lonca-<target>.tar.gz --repo selcukgural/lonca
+    sudo tar -xzf /usr/local/lonca-release/lonca-<target>.tar.gz --no-same-owner -C /usr/local/lonca-release
+    sudo /usr/local/lonca-release/install-hardened.sh --bin /usr/local/lonca-release
+(without gh: sha256sum on the copy, against SHA256SUMS of the release page).
+A build of your own from a checkout: --unprotected-source.
+EOF
+        exit 1
+    fi
+fi
+if [ -n "$check_only" ]; then
+    echo "the source is root's alone: $here, $src_bin"
+    exit 0
+fi
+
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 dev_user=${SUDO_USER:-}
 [ -n "$dev_user" ] && [ "$dev_user" != root ] || { echo "run with sudo from the developer's account" >&2; exit 1; }
 dev_uid=$(id -u "$dev_user")
-here=$(cd "$(dirname "$0")" && pwd)
-src_bin=${src_bin:-"$here/../../target/release"}
 [ -x "$src_bin/lonca" ] || { echo "missing $src_bin/lonca (cargo build --release)" >&2; exit 1; }
 # The places the verifier looks in, and no others: PATH is no root's word.
 if [ -z "$unsandboxed" ] && [ ! -x /usr/bin/bwrap ] && [ ! -x /bin/bwrap ] && [ ! -x /usr/local/bin/bwrap ]; then
@@ -147,6 +214,10 @@ install -d -o root -g lonca -m 3770 "$IMPORT_DIR"
 for b in lonca lonca-audit; do
     [ -x "$src_bin/$b" ] && install -o root -g root -m 0755 "$src_bin/$b" "$BIN_DIR/$b"
 done
+# The uninstaller stays where root alone writes: it is run with sudo too.
+if [ -f "$here/uninstall-hardened.sh" ]; then
+    install -o root -g root -m 0755 "$here/uninstall-hardened.sh" "$PREFIX/uninstall-hardened.sh"
+fi
 install -d -o root -g root -m 0755 "$DAEMON_CONFIG_DIR"
 daemon_toml "$(id -u lonca)" > "$DAEMON_CONFIG"
 chown root:root "$DAEMON_CONFIG"

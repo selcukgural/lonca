@@ -4503,6 +4503,18 @@ being refused.
   session (the policy context, `status`, a reviewer's `pending`) then sees
   the same thing, and no check can forget to walk.
 
+## The sudo that is asked is the system's
+
+`sudo_without_password()` (the hook at a session's start, `lonca doctor`)
+ran `sudo -n true` by name. The answer lowers a session to `unobserved`,
+so it is an answer an agent would rather give itself, and a file named
+`sudo` earlier on `PATH` gave it. It is run by path now: `/usr/bin/sudo`,
+`/bin/sudo`, `/run/wrappers/bin/sudo`, the first that is a file; a machine
+with none has no sudo that runs without a password. The hook still runs as
+the developer and reports its own answer: this closes the cheap way, and
+the managed, root-owned hook program of a hardened install is what makes
+the report worth anything.
+
 ## Text for a terminal
 
 A person approves from what `pending`, `diff` and `status` show, and most

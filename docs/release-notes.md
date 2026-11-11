@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### The sudo that is asked is the system's
+
+A session counts as unobserved while `sudo` runs without a password, and
+`lonca hook` and `lonca doctor` find that out by running `sudo -n true`.
+They ran the first `sudo` on `PATH`. They now run the system's
+(`/usr/bin/sudo`, `/bin/sudo`, or NixOS's wrapper), so a file named `sudo`
+earlier on `PATH` can not answer for it.
+
 ### A session's directory is in the log
 
 `lonca session start` now records the workspace directory in the signed

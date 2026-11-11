@@ -117,6 +117,7 @@ last column.
 | A42 | A file has the same symbols on every build, whatever its C library takes for a space or a letter: `lonca symbols` of a TypeScript file with an ideographic space (U+3000) behind a statement gives what the macOS build gives, on the Linux (musl) archives too | `03-agents` |
 | A43 | A critical path is critical under any spelling a file system that folds case reads as it: a proposal of `src/Build.rs` is refused to an unobserved session with `unobserved_critical_path`, as one of `src/build.rs` is | `03-agents` |
 | A44 | `lonca-audit verify` prints the log's `genesis:` and holds a log to what it is told from outside: `--genesis <hash>` fails another log (`anchor`), `--extends <hash>` fails a log that no longer has that entry (replaced, or taken back), and a hash that is not whole is a usage error | `05-audit` |
+| A45 | A value the policy passes to the checks (`env_passthrough`) is not in a check's log: a test command that prints it leaves `***` in what `lonca change --evidence` shows | `11-evidence` |
 
 ## Manual criteria
 

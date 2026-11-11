@@ -192,6 +192,13 @@ impl Verifier {
         let _gone = Gone(&root);
         materialize(store, files, &root.join("tree"))?;
         let identity = self.identify(&root, cfg);
+        // What the log may not hold: it is a blob of the store, read back
+        // by the agent that proposed the change and carried by a push. A
+        // directory is where things are, on every line of a build's
+        // output, and no secret.
+        let passed = passed_through(cfg);
+        let is_dir = |v: &&OsString| !Path::new(v).is_dir();
+        let secrets: Vec<&OsString> = passed.iter().map(|(_, v)| v).filter(is_dir).collect();
         let mut failed = false;
         for (kind, name, cmd) in steps {
             let named = || {
@@ -228,7 +235,7 @@ impl Verifier {
             details.insert("duration_ms".into(), took);
             details.insert("attempts".into(), attempts.to_string());
             details.insert("sandbox".into(), self.sandbox.name().into());
-            let log_id = store.write_blob(log.as_bytes())?;
+            let log_id = store.write_blob(hide(&log, &secrets).as_bytes())?;
             failed = result != CheckResult::Pass;
             out.push(attestation(
                 kind,
@@ -476,7 +483,9 @@ fn passed_through(cfg: &Verification) -> Vec<(String, OsString)> {
 }
 
 /// `text` with each value passed through (`hidden`, four bytes or more)
-/// as `***`: neither the digest nor the details may hold one.
+/// as `***`: neither the digest, the details nor a check's log may hold
+/// one. It hides the value as it is, which is what a tool prints by
+/// accident; a command that means to tell it writes it another way.
 fn hide(text: &str, hidden: &[&OsString]) -> String {
     let mut text = text.to_string();
     for value in hidden {
@@ -1575,6 +1584,38 @@ mod tests {
         assert_eq!(b[0].env, a[0].env, "a passed value is not part of it");
         unsafe { std::env::remove_var("PROBE_IDENTIFY_PASSED") };
         assert_ne!(env_of(&passed)[0].env, a[0].env, "whether it is passed is");
+    }
+
+    /// A check's log is a blob of the store: the agent that proposed the
+    /// change reads it, and a push carries it. A value passed through from
+    /// the daemon's environment is not in it; a directory passed is.
+    #[test]
+    #[allow(unsafe_code, reason = "a test sets the environment the verifier reads")]
+    fn a_passed_value_is_not_in_a_checks_log() {
+        let (dir, store, files, tree) = setup(&[("ok.txt", "yes\n")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let home = dir.path().canonicalize().unwrap();
+        // SAFETY: only this test reads or writes these names.
+        unsafe { std::env::set_var("PROBE_LOG_TOKEN", "tok-1234567890") };
+        unsafe { std::env::set_var("PROBE_LOG_HOME", &home) };
+        let mut c = cfg(
+            Some("echo \"token $PROBE_LOG_TOKEN in $PROBE_LOG_HOME/x\"; exit 3"),
+            None,
+        );
+        c.env_passthrough = vec!["PROBE_LOG_TOKEN".into(), "PROBE_LOG_HOME".into()];
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        unsafe { std::env::remove_var("PROBE_LOG_TOKEN") };
+        unsafe { std::env::remove_var("PROBE_LOG_HOME") };
+        assert_eq!(r[0].result, CheckResult::Fail);
+        let log = store.read_blob(r[0].log.as_ref().unwrap()).unwrap();
+        let log = String::from_utf8(log).unwrap();
+        let line = format!("token *** in {}/x", home.display());
+        assert!(log.contains(&line), "{log}");
+        assert!(!log.contains("tok-1234567890"), "{log}");
+        assert!(
+            log.contains("PROBE_LOG_TOKEN"),
+            "the name is no secret: {log}"
+        );
     }
 
     /// An identify command that fails or takes too long is recorded as such,

@@ -123,7 +123,15 @@ impl Builder {
     }
 
     fn signed(&self, op: &Op) -> Value {
-        json!({"op": op, "sig": sign_ed25519(&self.key, HUMAN, REPO, op, self.now())})
+        let head = Request {
+            id: 0,
+            method: "log.head".into(),
+            repo: Some(REPO.into()),
+            token: None,
+            params: json!({}),
+        };
+        let at = serde_json::from_value(self.svc.handle(head).result["at"].clone()).unwrap_or(None);
+        json!({"op": op, "sig": sign_ed25519(&self.key, HUMAN, REPO, op, self.now(), at)})
     }
 
     fn prepared(&mut self, method: &str, params: Value) -> Value {

@@ -185,23 +185,26 @@ fn security_keys(e: &mut Env) {
             human: (*name).into(),
             key: sk.key(),
         }));
-        let signature = |sig: String, nonce: String, issued_ms: i64| HumanSignature {
-            human: (*name).into(),
-            nonce,
-            issued_ms,
-            sig,
-        };
+        let signature =
+            |sig: String, nonce: String, issued_ms: i64, at: Option<LogPoint>| HumanSignature {
+                human: (*name).into(),
+                nonce,
+                issued_ms,
+                sig,
+                at,
+            };
         let (nonce, now, ttl) = (lonca_core::canonical::nonce(), e.now(), 3_600_000);
         let login = sk.sign(&login_bytes(None, name, ttl, &nonce, now), 1);
-        let login = json!({"sig": signature(login, nonce, now), "ttl_ms": ttl});
+        let login = json!({"sig": signature(login, nonce, now, None), "ttl_ms": ttl});
         let session = e.anon("human.login", None, None, login).unwrap()["token"]
             .as_str()
             .expect("token")
             .to_string();
         let submit = |e: &mut Env, op: Op, flags: u8| {
             let (nonce, now) = (lonca_core::canonical::nonce(), e.now());
-            let sig = sk.sign(&intent_bytes("demo", &op, &nonce, now), flags);
-            let body = json!({"op": op, "sig": signature(sig, nonce, now)});
+            let at = e.head("demo");
+            let sig = sk.sign(&intent_bytes("demo", &op, &nonce, now, at.as_ref()), flags);
+            let body = json!({"op": op, "sig": signature(sig, nonce, now, at)});
             e.anon("human.submit", Some("demo"), Some(&session), body)
                 .unwrap()
         };
@@ -249,7 +252,8 @@ fn lost_mac(e: &mut Env) {
             key: key(&fresh),
         }),
     };
-    let body = json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now())});
+    let body =
+        json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now(), e.head("demo"))});
     allowed(e.anon("human.submit", Some("demo"), None, body).unwrap());
     e.human = fresh;
     e.session("s-mac", &["notes.md"]);
@@ -894,7 +898,7 @@ fn human_keys(e: &mut Env) {
         harness: None,
         workspace: None,
     };
-    let body = json!({"op": start, "sig": sign_ed25519(&bora, "bora", "demo", &start, e.now())});
+    let body = json!({"op": start, "sig": sign_ed25519(&bora, "bora", "demo", &start, e.now(), e.head("demo"))});
     // Bora submits on bora's own session (logins are not log entries).
     let sig = sign_login_ed25519(&bora, "bora", None, 3_600_000, e.now());
     let bora_session = e
@@ -931,7 +935,8 @@ fn human_keys(e: &mut Env) {
         human: "ayse".into(),
         key: key(&recovered),
     };
-    let body = json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now())});
+    let body =
+        json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now(), e.head("demo"))});
     allowed(e.ok("human.submit", Some("demo"), None, body));
     e.human = recovered;
     allowed(e.human(Op::HumanRevoke {
@@ -1336,7 +1341,8 @@ fn golden_v13_log_still_verifies_replays_and_audits() {
 fn forget_harness(e: &Env, x: &mut OpEntry) {
     if let Op::SessionStart { harness, .. } = &mut x.op {
         *harness = None;
-        let sig = lonca_policy::human::sign_ed25519(&e.human, "ayse", "demo", &x.op, x.time_ms);
+        let sig =
+            lonca_policy::human::sign_ed25519(&e.human, "ayse", "demo", &x.op, x.time_ms, None);
         x.human = Some(sig);
     }
 }
@@ -1579,6 +1585,29 @@ fn golden_v30_log_still_verifies_replays_and_audits() {
     assert_eq!(new.level, ObservationLevel::Unobserved);
     let placed = s.sessions.values().filter(|x| x.workspace.is_some());
     assert_eq!(placed.count(), 2, "the others name none");
+}
+
+/// Format 33: every human signature names an entry of the log.
+#[test]
+fn golden_v33_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v33.bundle",
+        "8f677262fd9589f1f467cf0bcc6a728dff686c0c3b79a8675b26578ad644c0a0",
+        33,
+    );
+    let mut signed = 0;
+    for (i, o) in ops.iter().enumerate() {
+        let Some(sig) = &o.entry.human else { continue };
+        if o.entry.seq == 0 {
+            assert_eq!(sig.at, None, "a genesis has no log to name");
+            continue;
+        }
+        let at = sig.at.as_ref().expect("an entry to name");
+        assert!(at.seq < o.entry.seq);
+        assert_eq!(ops[at.seq as usize].hash, at.hash, "entry {i}");
+        signed += 1;
+    }
+    assert!(signed > 20, "{signed}");
 }
 
 /// Format 32: a critical path is critical in any case.

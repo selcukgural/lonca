@@ -481,7 +481,8 @@ fn agents_can_not_forge_human_operations_or_use_other_tokens() {
     // A signature by a key that is not enrolled.
     let op = Op::Freeze { reason: "x".into() };
     let fake = KeyPair::generate();
-    let body = json!({"op": op, "sig": sign_ed25519(&fake, "ayse", "demo", &op, e.now())});
+    let body =
+        json!({"op": op, "sig": sign_ed25519(&fake, "ayse", "demo", &op, e.now(), e.head("demo"))});
     let r = e.ok("human.submit", Some("demo"), None, body);
     assert_eq!(r["decision"]["outcome"], "deny");
     assert_eq!(r["decision"]["reasons"][0], "bad_human_signature");

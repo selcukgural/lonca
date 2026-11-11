@@ -140,6 +140,13 @@ visible. Each becomes a criterion when it is automated.
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
   --secure-enclave`, FIDO2 keys).
 - The advisor (`lonca advise`): needs a model.
+- A human signature made for another log, or before what it approves
+  (`human_signature_of_another_log`, `signed_before_its_target`,
+  `unanchored_human_signature`): `lonca` always signs at the head it was
+  just told, so no command reaches them; the policy's and the daemon's
+  tests cover them (`a_human_signature_is_for_the_log_it_was_made_in`,
+  `a_signature_names_the_head_of_the_log`). Every approval of the
+  scenarios is signed that way.
 - `disk_space` (no caller's files written while the stores' disk has less
   than 1 GiB free): needs a disk that is nearly full; the daemon's tests
   cover it with the floor set (`below_the_floor_a_callers_files_are_not_written`).

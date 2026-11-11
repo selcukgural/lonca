@@ -220,9 +220,13 @@ unknown method: `unknown_method`, whatever the token.
   plus `added_files`, `modified_files`, `import_only_files`,
   `lines_added`, `lines_removed`.
 - **human signature**: `{"human": string, "nonce": string (16–128
-  chars), "issued_ms": time, "sig": hex}`. For operations the signed
-  bytes are the canonical JSON of `{"purpose": "lonca-human-intent-v1",
-  "repo", "op", "nonce", "issued_ms"}`; for logins of `{"purpose":
+  chars), "issued_ms": time, "sig": hex, "at": {"seq": integer, "hash":
+  hex}}`. `at` is the head of the repository's log as the signer saw it
+  (`log.head`), required on an operation from log format 33 and left out
+  of a genesis and of a login. For operations the signed bytes are the
+  canonical JSON of `{"purpose": "lonca-human-intent-v2", "repo", "at",
+  "op", "nonce", "issued_ms"}` (without `at`: `"lonca-human-intent-v1"`
+  and no `at` key, as every signature before format 33); for logins of `{"purpose":
   "lonca-human-login-v1", "repo": string | null, "human", "ttl_ms",
   "nonce", "issued_ms"}`. Canonical JSON: keys sorted, no whitespace,
   UTF-8. Ed25519 signatures are 64 bytes hex; Secure Enclave (`p256-se`)
@@ -305,6 +309,14 @@ holds it, a live one before an ended one, the last started first. Result
 `{"repo", "session", "workspace": absolute path | null, "active": boolean,
 "continued_by": session id | null, "by": "harness" | "path"}`, or `{}` when
 the log knows none. No file of the workspace is read for it.
+
+### `log.head`
+
+*public.* `params: {}`, with `repo`. The last entry of the repository's
+log: `{"at": {"seq": integer, "hash": hex}}`, or `{"at": null}` before the
+genesis. What a human signature names as `at`. It answers for a repository
+whose daemon key this daemon does not hold too (`foreign_key` elsewhere):
+a recovery is signed for that log.
 
 ### `whoami`
 
@@ -1169,6 +1181,11 @@ The `reasons` of a decision. The ones a runner acts on:
 - `bad_human_signature`, `stale_human_signature`, `bad_nonce`,
   `nonce_reused`, `presence_required`, `not_enrolled`,
   `unknown_human`: the signature was refused.
+- `unanchored_human_signature` (no `at`), `human_signature_of_another_log`
+  (this log has no such entry, or the entry is older than a signature
+  lives), `signed_before_its_target` (an `approve` or `reject` of an entry
+  later than `at`): the signature is not for this log as it is. Ask
+  `log.head` and sign again.
 
 Everything else is a policy or key-management reason; show it.
 

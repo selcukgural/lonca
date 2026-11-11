@@ -115,6 +115,7 @@ caused them:
 | `presence_required` | The repository accepts only keys that prove presence: `lonca human rotate --secure-enclave` (Mac) or `--security-key` (a FIDO security key). |
 | `not_enrolled`, `unknown_human` | That key is not enrolled in this repository. |
 | `stale_human_signature` | The signature is older than 10 minutes or more than a minute ahead: check the clock. |
+| `unanchored_human_signature`, `human_signature_of_another_log`, `signed_before_its_target` | The signature does not name this log as it is now: an older `lonca` signed it, or what it approves came after it was made. Run the command again with the `lonca` of the daemon's version. |
 | `bad_human_signature`, `bad_nonce`, `nonce_reused` | The request was refused as signed. Run the command again; if it repeats, report it. |
 
 Anything else is a policy rule's id or a key operation's reason: the rule

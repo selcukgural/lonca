@@ -209,7 +209,7 @@ pub fn propose(
         bail!("human.prepare_change did not return a change")
     };
     let (change, built) = (*change, built.clone());
-    let sig = ctx::sign(human, repo, &op)?;
+    let sig = ctx::sign(c, human, repo, &op)?;
     let mut r = call(c, "human.submit", json!({"op": op, "sig": sig}))?;
     r["change"] = json!(change);
     r["commit"] = json!(built);

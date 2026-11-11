@@ -689,7 +689,7 @@ pub fn run(a: Args) -> Result<i32> {
         sandbox: plan.jail.name(sandbox),
         profile: plan.jail.digest(sandbox).context("no sandbox")?,
     };
-    let sig = ctx::sign(&human, &repo, &op)?;
+    let sig = ctx::sign(&mut c, &human, &repo, &op)?;
     let r = call(
         &mut c,
         "human.submit",

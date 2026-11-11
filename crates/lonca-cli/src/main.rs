@@ -1152,7 +1152,7 @@ fn workspace_human(ws: &Workspace) -> Result<String> {
 /// it, a denial included, for the commands that go over several
 /// repositories and report at the end.
 pub(crate) fn submit_outcome(c: &mut Client, human: &str, repo: &str, op: Op) -> Result<Value> {
-    let sig = ctx::sign(human, repo, &op)?;
+    let sig = ctx::sign(c, human, repo, &op)?;
     let r = call(c, "human.submit", json!({"op": op, "sig": sig}))?;
     print_decision(&r);
     Ok(r)
@@ -1574,7 +1574,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     errln!("warning: {}", w.as_str().unwrap_or_default());
                 }
             }
-            let sig = ctx::sign(&human, &repo, &op)?;
+            let sig = ctx::sign(&mut c, &human, &repo, &op)?;
             let r = call(&mut c, "repo.init", json!({"op": op, "sig": sig}))?;
             if as_json {
                 let Op::RepoInit { trunk, .. } = &op else {
@@ -1688,7 +1688,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 workspace: Some(dir.to_string_lossy().into_owned()),
             };
             let r = if as_json {
-                let sig = ctx::sign(&human, &repo, &op)?;
+                let sig = ctx::sign(&mut c, &human, &repo, &op)?;
                 call(&mut c, "human.submit", json!({"op": op, "sig": sig}))?
             } else {
                 submit(&mut c, &human, &repo, op)?
@@ -2256,7 +2256,7 @@ fn run(cmd: Cmd) -> Result<()> {
                         bail!("human.prepare_change did not return a change")
                     };
                     let (change, commit) = (*change, commit.clone());
-                    let sig = ctx::sign(&human, &repo, &op)?;
+                    let sig = ctx::sign(&mut c, &human, &repo, &op)?;
                     let r = call(&mut c, "human.submit", json!({"op": op, "sig": sig}))?;
                     (change, commit, r)
                 }
@@ -2395,7 +2395,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     .and_then(|a| a.iter().find(|p| p["seq"] == seq))
                     .map(|p| p["change"].clone())
                     .unwrap_or(Value::Null);
-                let sig = ctx::sign(&human, &repo, &op)?;
+                let sig = ctx::sign(&mut c, &human, &repo, &op)?;
                 let r = call(&mut c, "human.submit", json!({"op": op, "sig": sig}))?;
                 ctx::print_json(&json!({
                     "seq": r["seq"], "target_seq": seq, "change": change, "decision": r["decision"],

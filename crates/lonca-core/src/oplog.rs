@@ -61,8 +61,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// continuation name the workspace of the session it continues, and starts
 /// it unobserved; version 31 gives a child session its parent's agent
 /// name; version 32 matches `critical` and `checks_by_path` patterns with
-/// case folded.
-pub const FORMAT_CURRENT: u32 = 32;
+/// case folded; version 33 holds a human signature to the log it was made
+/// for (`at`).
+pub const FORMAT_CURRENT: u32 = 33;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -172,6 +173,13 @@ pub const FORMAT_CHILD_AGENT: u32 = 31;
 /// a file system that folds case opens `Build.rs` as `build.rs`. Before it
 /// the patterns matched the spelling. Older entries replay as they were.
 pub const FORMAT_FOLDED_PATHS: u32 = 32;
+/// The first format in which a human signature names the head of the log
+/// its signer saw (`HumanSignature::at`), and `decide()` refuses one that
+/// names none, names an entry this log does not have, or approves or
+/// rejects an entry later than the one it names. Before it a signature
+/// held for any log of a repository of that name, for ten minutes. Older
+/// entries replay as they were.
+pub const FORMAT_ANCHORED: u32 = 33;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

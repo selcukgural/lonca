@@ -198,7 +198,9 @@ It does not catch:
   line `lonca` prints before it. A process running as the human that asks
   for a signature at the moment a touch is expected can have its own
   request touched instead. The signature still covers one operation, the
-  daemon logs it, and it can not be replayed.
+  daemon logs it, and it can not be replayed: not in this log (the nonce),
+  and not in another one, or in this one rewritten with the daemon's key
+  from before the entry it names (`at`, format 33).
 - **A kind of key is a claim.** The log records `p256-se` or `sk-p256` as
   the enrolling human named it, and checks the device's "user present"
   flag on a security key's signatures; it does not check an attestation

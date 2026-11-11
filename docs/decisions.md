@@ -4270,6 +4270,39 @@ redraw the list it was part of.
   format, and what shows them is the place that must be right either way.
   A program that shows Lonca's JSON to a person has the same duty.
 
+## A request's own work is done without the lock
+
+The daemon has one lock for its state, and the single writer is whoever
+holds it. Three methods kept it through work whose length their caller
+decides, so one session could stop every other answer, for every
+repository (private advisory, 2026-11-11): `facts.preview` built and
+parsed a commit of up to 64 MiB under it, `events` read the whole log,
+and `trunk.bundle` ran git for up to its 600 s. None of the three is
+counted against a session's rate.
+
+- **`facts.preview`** takes the store and the policy, lets the lock go,
+  builds its commit and reads the facts, and takes the lock again for who
+  holds which lease now. The session is asked for again then: it may have
+  ended meanwhile. The policy is the one from before the work, like a
+  proposal's facts would be if the policy changed a moment later.
+- **`events`** copies the state and its next sequence number, lets the
+  lock go, reads the log and leaves out what was appended since: the
+  answer is the log as it stood, and `next` is where the next call
+  starts, so nothing is told twice or skipped.
+- **`trunk.bundle`** makes the bundle without the lock and then asks
+  whether `refs/heads/main` is still the trunk it read before; if not it
+  makes it again, three times, then `busy`. Trunk only moves forward, so
+  a ref that is the same after is the same throughout.
+- **A proposal still holds the lock** while its commit is built and read:
+  it is the writer, and its place in the log is what the lock gives it.
+  The session rate bounds that. `repo.prepare_init` and `repo.restore`
+  fetch under it as before ("No push under the lock").
+- **Tested for the preview** (`a_long_preview_does_not_hold_the_daemon`:
+  a status request is answered while a ten-second preview runs; before, it
+  waited 9.5 s). The other two have no test of the lock itself: nothing in
+  them can be made slow from a test without a hook in the daemon that
+  exists for the test. Their answers are tested as before.
+
 ## What a caller adds to the log is bounded
 
 The log keeps every entry for good, the refused ones too: that is what

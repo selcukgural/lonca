@@ -664,7 +664,8 @@ a git checkout, thin against the commits in `have` that the store knows
 point the ref at `trunk`.
 Errors: `redacted` (a redacted blob is among the objects; git needs
 whole objects, work from a workspace), `too_large` (the bundle does not
-fit one page; fetch from a closer point).
+fit one page; fetch from a closer point), `busy` (trunk moved three
+times while the bundle was made; send it again).
 
 ### `trunk.distance`
 

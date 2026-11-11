@@ -61,6 +61,6 @@ jobs:
       # AppArmor blocks bwrap's unprivileged user namespaces on 24.04.
       - name: Bubblewrap
         run: |
-          sudo apt-get install -y bubblewrap
+          .github/scripts/apt-install.sh bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: cargo test -p lonca --test cli --locked -- a_run_ a_command_ a_sandbox a_scratch what_runs the_network_of stopping_the ps_can

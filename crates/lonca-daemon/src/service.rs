@@ -1271,9 +1271,10 @@ impl Service {
         Ok(json!({"since_ms": since, "counts": counts, "events": latest}))
     }
 
-    /// An isolated session's token works in a sandbox only, but for what
-    /// `lonca run` itself does for it from outside. Refused elsewhere, and
-    /// the session pays: the level no longer says what happened.
+    /// An isolated session's token works in a sandbox only, for reading as
+    /// for anything else, but for what `lonca run` itself does for it from
+    /// outside. Refused elsewhere, and the session pays: the level no
+    /// longer says what happened.
     fn hold_to_sandbox(
         &self,
         req: &Request,
@@ -1367,11 +1368,15 @@ impl Service {
             cred
         };
         let auth = self.authorize(req, cred)?;
-        if cred == Cred::Agent {
+        // Whatever a session's token opens, reading included: a copy of it
+        // outside the sandbox reads the repository as well as it writes.
+        // A public method answers anybody the same, token or not.
+        let by_token = matches!(cred, Cred::Agent | Cred::Read | Cred::Any);
+        if by_token && matches!(auth.caller, Caller::Agent { .. }) {
             self.hold_to_sandbox(req, peer.in_sandbox)?;
-            if !NOT_THROTTLED.contains(&req.method.as_str()) {
-                self.throttle(req)?;
-            }
+        }
+        if cred == Cred::Agent && !NOT_THROTTLED.contains(&req.method.as_str()) {
+            self.throttle(req)?;
         }
         match req.method.as_str() {
             "ping" => Ok(json!({

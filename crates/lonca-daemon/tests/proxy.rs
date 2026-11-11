@@ -711,6 +711,9 @@ fn an_isolated_token_works_in_a_sandbox_only() {
     e.in_sandbox = true;
     let held = e.lease(&token, "src/lib.rs#charge");
     assert_eq!(held["decision"]["outcome"], "allow", "{held}");
+    for read in ["status", "whoami", "log"] {
+        e.ok(read, None, Some(&token), json!({}));
+    }
     assert!(taint_of(&mut e).is_null());
 
     e.in_sandbox = false;
@@ -743,6 +746,50 @@ fn an_isolated_token_works_in_a_sandbox_only() {
 
     // The end of the run comes from outside too.
     e.ok("session.end", None, Some(&token), json!({}));
+}
+
+/// A copied token reads no more from outside than it writes: every method
+/// a session's token opens is held to the sandbox, and the first use
+/// outside is on the session's record.
+#[test]
+fn an_isolated_token_reads_nothing_from_outside_its_sandbox() {
+    let mut e = Env::new();
+    e.init(None);
+    let human = e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    assert_eq!(human["decision"]["outcome"], "allow");
+    e.session("s1", &["src/**"]);
+    let ws = e.root.join("ws1");
+    std::fs::create_dir_all(&ws).unwrap();
+    let token = isolate(&mut e, "s1", &ws);
+    let trunk = e.trunk();
+
+    e.in_sandbox = false;
+    assert!(taint_of(&mut e).is_null());
+    let reads = [
+        ("status", json!({})),
+        ("whoami", json!({})),
+        ("log", json!({})),
+        ("tree", json!({})),
+        ("tree", json!({"with_content": true})),
+        ("blobs", json!({"ids": []})),
+        ("trunk.bundle", json!({})),
+        ("trunk.distance", json!({"base": trunk})),
+        ("change.get", json!({"change": "c1"})),
+        ("change.diff", json!({"change": "c1"})),
+    ];
+    for (method, params) in reads {
+        let refused = e.call(method, None, Some(&token), params).unwrap_err();
+        assert_eq!(refused.0, "not_in_sandbox", "{method}: {refused:?}");
+    }
+    let reason = taint_of(&mut e);
+    assert!(
+        reason.as_str().unwrap().contains("outside its sandbox"),
+        "{reason}"
+    );
+    // What anybody is told, a token does not change.
+    e.ok("ping", None, Some(&token), json!({}));
+    // A human reads as before, wherever they are.
+    e.ok("status", Some("demo"), None, json!({}));
 }
 
 #[test]

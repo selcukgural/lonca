@@ -2660,6 +2660,12 @@ integrates alone and the log says why.
 
 - **`session.heartbeat` and `session.end` are exempt.** The launcher sends them from
   outside, and neither reads nor changes the repository.
+- **Reading is held too.** The check ran for the methods only an agent may
+  call, so a copied token still read the repository from outside (`status`,
+  `log`, `tree`, `blobs`, `change.get`, `change.diff`, `trunk.bundle`,
+  `whoami`) with nothing on the session's record. It now runs for every
+  method a session's token opens. A method that needs no token (`ping`,
+  `session.where`) answers a token's holder what it answers anybody.
 - **A process that exited reads as sandboxed** on macOS, and it can leave its
   connection to a child, so it must also be seen alive after the answer. A zombie
   counts as gone: it has no path.

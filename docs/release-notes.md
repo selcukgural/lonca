@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### The macOS sandbox no longer reads what Homebrew's services keep
+
+`lonca run` and verification on macOS open `/usr` and `/opt` for the
+programs there. Homebrew keeps more under them: databases' data
+(`/opt/homebrew/var`) and services' configuration (`/opt/homebrew/etc`),
+and the same under `/usr/local`. Those four are now closed in the sandbox,
+except the certificate stores (`etc/openssl*`, `etc/ca-certificates`). A
+check that reads something there (a local database's socket directory, a
+tool's configuration) names it in `[verification] read`. Verification, which
+has no network, can also no longer reach the system's certificate service.
+Two limits of the macOS sandbox are written down in the threat model:
+shared memory by name, and what that certificate service fetches for an
+isolated session.
 ### The installer checks where an archive was built
 
 `install.sh` compared the archive with the `SHA256SUMS` of the same

@@ -4517,6 +4517,33 @@ being refused.
   session (the policy context, `status`, a reviewer's `pending`) then sees
   the same thing, and no check can forget to walk.
 
+## The macOS sandbox reads programs, not what services keep
+
+The Seatbelt profile opened `/usr` and `/opt` whole: that is where the
+programs are, Homebrew's included. Homebrew also keeps the data
+directories of local databases under `var` and the configuration of
+services under `etc`, passwords among them, readable by the user and so by
+an agent's code in a sandbox that was meant to see none of the user's data.
+
+- **`/opt/homebrew/var`, `/opt/homebrew/etc`, `/usr/local/var` and
+  `/usr/local/etc` are closed**, after the system's trees open, except the
+  certificate stores a TLS library reads (`etc/openssl*`,
+  `etc/ca-certificates`). A `read` of the policy comes later in the
+  profile and opens what it names. A list of what to open under `/opt`
+  instead (`bin`, `lib`, `Cellar`, …) would miss whatever a formula puts
+  elsewhere, and a build would fail for no reason a person could find.
+- **`trustd` only where there is a way out.** A sandbox with no network
+  has no certificate to judge; verification no longer may ask it. An
+  isolated session may: its TLS goes through the proxy, and the native
+  libraries verify with it. What `trustd` fetches on its own is a limit in
+  the threat model, unmeasured.
+- **Shared memory and semaphores stay open by any name.** Programs choose
+  the names (`multiprocessing`, test runners); a prefix per run can not be
+  given to them, and closing them breaks the suites the sandbox exists to
+  run. Written down as a limit of macOS; Linux has a `/dev/shm` per run.
+- **A test runs the real `sandbox-exec`** with the profile: nothing else
+  reads its regular expression.
+
 ## Text for a terminal
 
 A person approves from what `pending`, `diff` and `status` show, and most

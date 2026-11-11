@@ -493,10 +493,13 @@ pub fn human_public(name: &str) -> Result<HumanKey> {
 }
 
 /// Signs `msg` with the key at `path`. A key that proves presence asks
-/// for it, saying `what` it is for; a file key signs.
+/// for it: a security key only blinks, so `what` it is for is printed
+/// here; the Secure Enclave's helper says it in the Touch ID dialog, in
+/// its own words read from `msg`, never in a caller's (a text handed to
+/// it would be any program's to choose). A file key signs.
 fn sign_with(path: &Path, kind: KeyKind, msg: &[u8], what: &str) -> Result<String> {
     match kind {
-        KeyKind::SecureEnclave => run_helper(&["sign", &path.to_string_lossy(), what], Some(msg)),
+        KeyKind::SecureEnclave => run_helper(&["sign", &path.to_string_lossy()], Some(msg)),
         KeyKind::SecurityKey => sk_sign(path, msg, what),
         KeyKind::File => Ok(KeyPair::load(path, crate::sys::current_uid())
             .map_err(|e| anyhow!("human key {}: {e}", path.display()))?
@@ -504,7 +507,10 @@ fn sign_with(path: &Path, kind: KeyKind, msg: &[u8], what: &str) -> Result<Strin
     }
 }
 
-/// What the Touch ID prompt says: generated from the operation being signed.
+/// What a person is asked to sign, in a line: printed before a security
+/// key's touch. The Touch ID dialog says the same, but `lonca-se` writes
+/// it itself from the bytes it signs (packaging/macos/lonca-se/main.swift);
+/// `the_helper_says_what_lonca_says` holds the two together.
 pub fn describe(repo: &str, op: &Op) -> String {
     let what = match op {
         Op::RepoInit { .. } => "create the repository".to_string(),
@@ -678,7 +684,7 @@ pub fn describe_ms(ms: i64) -> String {
     }
 }
 
-/// What the Touch ID prompt says for a login.
+/// What a login is, in a line; `lonca-se` writes the same from the bytes.
 pub fn describe_login(human: &str, repo: Option<&str>, ttl_ms: i64) -> String {
     let scope = match repo {
         Some(r) => format!(" to {r}"),
@@ -945,6 +951,163 @@ mod tests {
             describe("demo", &continued(true)),
             "Lonca (demo): WIDEN session old as agent claude on src/**, docs/**"
         );
+    }
+
+    /// The Touch ID dialog is written by `lonca-se` from the bytes it is
+    /// given to sign, not by its caller. It says what `describe` says of
+    /// the same operation, for every kind a human signs, and signs nothing
+    /// that is not an intent.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_helper_says_what_lonca_says() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("lonca-se");
+        let source = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packaging/macos/lonca-se/main.swift"
+        );
+        let built = Command::new("swiftc")
+            .args(["-O", source, "-o"])
+            .arg(&helper)
+            .output();
+        let built = match built {
+            Ok(b) => b,
+            // No Swift here (a bare macOS runner): the release job builds it.
+            Err(e) => return eprintln!("skipped: swiftc: {e}"),
+        };
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = |command: &[&str], stdin: &[u8]| {
+            let mut child = Command::new(&helper)
+                .args(command)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(stdin).unwrap();
+            let out = child.wait_with_output().unwrap();
+            let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+            (out.status.success(), text(&out.stdout), text(&out.stderr))
+        };
+
+        let key = json!({"alg": "ed25519", "public": "00"});
+        let id = "0123456789abcdef".repeat(4);
+        let git = &id[..40];
+        let change = lonca_core::ChangeId::random();
+        let scope = json!({"paths": ["src/**", "docs/**"], "symbols": null, "ops": [],
+                           "max_files": null, "max_lines": null});
+        let start = json!({"op": "session.start", "session": "s1", "agent": "claude",
+            "model": null, "task": "", "scope": scope, "expires_ms": 1});
+        let with = |extra: Value| {
+            let mut op = start.clone();
+            for (k, v) in extra.as_object().unwrap() {
+                op[k] = v.clone();
+            }
+            op
+        };
+        let ops = [
+            json!({"op": "repo.init", "repo": "demo", "daemon_key": id, "human": "ayse",
+                   "human_key": key, "policy": git, "trunk": git}),
+            json!({"op": "human.enroll", "human": "bora", "key": key}),
+            json!({"op": "human.rotate", "human": "ayse", "key": key}),
+            json!({"op": "human.revoke", "human": "bora", "reason": "left"}),
+            json!({"op": "human.recovery_key", "human": "ayse", "key": key}),
+            json!({"op": "human.recover", "human": "ayse", "key": key}),
+            json!({"op": "daemon.rotate", "key": id}),
+            json!({"op": "daemon.recover", "key": id}),
+            json!({"op": "daemon.recover", "key": id,
+                   "recover": {"human": "ayse", "key": key}}),
+            json!({"op": "policy.update", "policy": git}),
+            start.clone(),
+            with(json!({"harness": "codex"})),
+            with(json!({"continues": {"session": "old", "widen": false}})),
+            with(json!({"continues": {"session": "old", "widen": true}, "harness": "codex"})),
+            json!({"op": "session.isolate", "session": "s1", "sandbox": "seatbelt",
+                   "profile": "abc"}),
+            json!({"op": "session.end", "session": "s1", "reason": "done"}),
+            json!({"op": "cap.revoke", "session": "s1", "reason": "done"}),
+            json!({"op": "lease.release", "set": "l1"}),
+            json!({"op": "change.propose", "change": change, "commit": git, "base": git,
+                   "claim": lonca_core::ops::Claim::default()}),
+            json!({"op": "change.withdraw", "change": change}),
+            json!({"op": "approve", "target_seq": 101, "note": ""}),
+            json!({"op": "approve", "target_seq": 101, "note": "", "checks": ["api", "e2e"]}),
+            json!({"op": "reject", "target_seq": 18446744073709551615u64, "reason": "no"}),
+            json!({"op": "import.external", "remote": "origin", "commit": git,
+                   "trunk_before": git}),
+            json!({"op": "bridge.push", "remote": "origin", "oplog_seq": 7, "oplog_hash": id}),
+            json!({"op": "freeze", "reason": "x"}),
+            json!({"op": "unfreeze", "reason": "x"}),
+            json!({"op": "redact", "blob": git, "reason": "a secret"}),
+        ];
+        let mut kinds = std::collections::BTreeSet::new();
+        for (purpose, at) in [
+            ("lonca-human-intent-v1", None),
+            ("lonca-human-intent-v2", Some(json!({"seq": 4, "hash": id}))),
+        ] {
+            for value in &ops {
+                let op: Op = serde_json::from_value(value.clone())
+                    .unwrap_or_else(|e| panic!("{value}: {e}"));
+                kinds.insert(op.kind().as_str());
+                let mut intent = json!({"purpose": purpose, "repo": "demo", "op": op,
+                                        "nonce": "n".repeat(16), "issued_ms": 1});
+                if let Some(at) = &at {
+                    intent["at"] = at.clone();
+                }
+                let bytes = lonca_core::canonical::canonical_bytes(&intent);
+                let (ok, said, err) = run(&["describe"], &bytes);
+                assert!(ok, "{value}: {err}");
+                assert_eq!(said, describe("demo", &op), "{value}");
+            }
+        }
+        // Every kind `describe` has words for was asked; the rest are named
+        // by their kind, by both.
+        assert_eq!(kinds.len(), 23, "{kinds:?}");
+
+        for (repo, ttl) in [(Some("demo"), 3_600_000), (None, 90_000), (None, 1_500)] {
+            let bytes = lonca_policy::human::login_bytes(repo, "ayse", ttl, "n", 1);
+            let (ok, said, err) = run(&["describe"], &bytes);
+            assert!(ok, "{err}");
+            assert_eq!(said, describe_login("ayse", repo, ttl));
+        }
+
+        // What a text on a line break or an escape would do to the dialog,
+        // it does not do.
+        let op = json!({"op": "human.enroll", "human": "bo\nra\u{1b}[2K\u{202e}", "key": key});
+        let intent = json!({"purpose": "lonca-human-intent-v1", "repo": "de\rmo", "op": op});
+        let bytes = lonca_core::canonical::canonical_bytes(&intent);
+        let (ok, said, _) = run(&["describe"], &bytes);
+        assert!(ok);
+        assert_eq!(said, "Lonca (demo): enroll bora[2K as a human");
+
+        // Nothing but an intent is signed, and the text of a caller is not
+        // read: the refusal comes before the key is opened.
+        let missing = dir.path().join("no-key").to_string_lossy().into_owned();
+        let not_intents: [&[u8]; 6] = [
+            b"",
+            b"hello",
+            b"[1]",
+            br#"{"purpose":"something-else","repo":"demo","op":{"op":"freeze"}}"#,
+            br#"{"purpose":"lonca-human-intent-v1","repo":"demo"}"#,
+            br#"{"purpose":"lonca-human-intent-v1","repo":"demo","op":{"op":"approve"}}"#,
+        ];
+        for bytes in not_intents {
+            for command in [vec!["describe"], vec!["sign", &missing, "a harmless text"]] {
+                let (ok, said, err) = run(&command, bytes);
+                assert!(!ok && said.is_empty(), "{command:?}: {said}");
+                assert!(err.contains("not an intent"), "{command:?}: {err}");
+            }
+        }
+        // An intent gets as far as the key, which is not there.
+        let bytes = lonca_policy::human::login_bytes(None, "ayse", 1000, "n", 1);
+        let (ok, _, err) = run(&["sign", &missing, "a harmless text"], &bytes);
+        assert!(!ok && !err.contains("not an intent"), "{err}");
     }
 
     #[test]

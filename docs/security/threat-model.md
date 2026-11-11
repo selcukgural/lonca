@@ -193,6 +193,17 @@ It does not catch:
   there. Without one, a hardened repository on Linux is initialised
   `--without-presence`, and a human's file key is readable by the agents
   running as that human.
+- **The Touch ID dialog is the helper's own.** `lonca-se` signs only the
+  bytes of an operation or a login (an *intent*), and writes the dialog
+  from those bytes itself: a program that runs as the human can call it as
+  `lonca` does, but can not have a policy update signed under the words of
+  something harmless. What stays open: such a program can still ask for a
+  true signature of its own at a moment a prompt is expected, and the
+  dialog then says truly what it is (read it); the helper is found beside
+  `lonca` or at `$LONCA_SE`, and a program that can replace either file
+  writes the dialog (hardened mode keeps both out of the developer's
+  account's reach); and the key's access control (`.userPresence`) takes
+  the login password or a paired watch as well as a finger.
 - **A security key shows nothing.** Touch ID names the operation in its
   dialog; a security key only blinks, and what the touch approves is the
   line `lonca` prints before it. A process running as the human that asks

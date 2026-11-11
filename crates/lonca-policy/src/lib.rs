@@ -16,6 +16,7 @@ pub mod chain;
 pub mod config;
 pub mod decide;
 pub mod details;
+pub mod edit;
 pub mod events;
 pub mod harness;
 pub mod human;

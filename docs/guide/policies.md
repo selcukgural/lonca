@@ -27,8 +27,8 @@ come out different:
 1 of 212 entries would be decided differently
 ```
 
-Give `--config`, `--policy` or both; a file left out is taken from the
-policy in force. `--json` prints the same as `{entries, differences,
+Give `--config`, `--policy`, `--value` (below) or any of them together; a
+file left out is taken from the policy in force. `--json` prints the same as `{entries, differences,
 lockouts}`. A file that does not parse is refused with Cedar's message
 (exit code 3).
 
@@ -37,6 +37,28 @@ The check does not follow consequences: a change the new policy would have
 denied is still integrated when the entries after it are decided. Read the
 list as "these requests would have been treated differently", not as an
 alternative history.
+
+One value of `lonca.toml` needs no copy of the file. `--value` sets it in
+the policy in force and leaves every other line, comments too, as it is:
+
+```sh
+lonca policy check --repo demo --value sessions.ops_per_minute=1200
+lonca policy set   --repo demo --value sessions.ops_per_minute=1200
+```
+
+```
+sessions.ops_per_minute: 600 -> 1200
+#57 allow: -
+```
+
+The key is the table and the name, as `lonca policy show` prints them
+(`[sessions]`, `ops_per_minute`). The value is TOML (`1200`, `true`,
+`[80, 443]`); a word that is not is taken as a string, so
+`--value observation.network=deny` works without quotes. `--value` may be
+given more than once, and with `--config` it is applied to that file. A
+key the file leaves out is added under its table. A value that spans
+several lines is for an editor and `--config`. A key `lonca.toml` does not
+have, or a value it does not take, is refused before anything is signed.
 
 `lonca policy set` signs a `policy.update`. It takes as many signatures as
 `[approvals] policy_updates` of the policy in force says, the first being

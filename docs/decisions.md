@@ -4272,6 +4272,31 @@ redraw the list it was part of.
   format, and what shows them is the place that must be right either way.
   A program that shows Lonca's JSON to a person has the same duty.
 
+## One value of the policy from the command line
+
+`lonca policy set --value sessions.ops_per_minute=1200` (and the same on
+`policy check`). Changing one number used to mean `policy show`, two files
+cut out of its output, an editor and `policy set` with both.
+
+- **Any key, not one flag per setting** (`KEY=VALUE`, the table and the
+  name). A flag for the rate would be the first of thirty; the keys are
+  data the policy already names, and `lonca.toml` refuses the ones it does
+  not have.
+- **The file is edited in place, by line** (`lonca_policy::edit`). The
+  file in force is a person's, with their comments, and writing it out
+  again from its values would drop them. No TOML editing crate: after the
+  line is changed, both texts are read as TOML and the new one must be the
+  old one with that key set and nothing else different. What the line
+  edit can not place (a value over several lines, a key written with dots
+  or quotes) fails that comparison and is refused with where to go:
+  an editor and `--config`.
+- **In the CLI, not the daemon.** It reads the files in force, edits, and
+  sends `human.prepare_policy` as before: no method, no protocol change,
+  and what is signed is a whole policy, as always.
+- **The value is TOML when it reads as TOML, a string otherwise**, so
+  `observation.network=deny` needs no quotes inside quotes. `"12"` is the
+  way to say a string of digits.
+
 ## A request's own work is done without the lock
 
 The daemon has one lock for its state, and the single writer is whoever
@@ -4349,6 +4374,15 @@ open (private advisory, 2026-11-11).
   recorded, which keeps the rule that nothing goes through the proxy
   without being on the record. Not a new policy key: the number already
   says how fast one session may grow the log.
+- **The rate has a ceiling the policy can not lift**, 6 000 a minute
+  (`MAX_OPS_PER_MINUTE`, ten times the default; user's rule 2026-11-11: a
+  limit somebody sets is not trusted to be a safe one). The rate is now what
+  bounds the log's growth, and a policy could set it to four thousand
+  million. A new policy above the ceiling is refused, when it is prepared
+  and again when it is submitted (`PolicyBundle::parse_new`). One already
+  in force is not refused, since a repository whose policy does not read
+  does not open, and a policy can only be replaced through one that does:
+  it counts as the ceiling (`Sessions::rate`).
 - **What is left.** A session at its rate with entries at the limit still
   grows the log, by what the policy allows it; and a proposal's files are
   objects in the store whatever the log says. A floor on the store's free

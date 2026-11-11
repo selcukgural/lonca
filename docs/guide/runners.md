@@ -89,7 +89,10 @@ reads it.
 ## How much a session may send
 
 A session may send the log `sessions.ops_per_minute` operations a minute (600
-by default, shared with the sessions made from it). Past that a request is
+by default, shared with the sessions made from it). A human changes it with
+`lonca policy set --value sessions.ops_per_minute=1200`; the most a policy
+may set is 6000, because this number is what bounds how fast one session
+can grow the log. Past that a request is
 `rate_limited`, nothing is logged, and the message says when to try again.
 One operation's JSON may take 64 KiB; a longer one is `invalid` and not
 logged, so keep intents short and lists to what the change needs. A

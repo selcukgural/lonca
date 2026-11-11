@@ -601,6 +601,24 @@ fn with_rate(e: &mut Env, rate: u32) {
     assert_eq!(e.human(op)["decision"]["outcome"], "allow");
 }
 
+/// The rate is the bound on how fast a session grows the log, so a policy
+/// does not get to lift it out of sight.
+#[test]
+fn a_policy_can_not_set_a_rate_past_the_ceiling() {
+    let mut e = Env::new();
+    e.init(None);
+    let most = lonca_policy::config::MAX_OPS_PER_MINUTE;
+    let policy = lonca_policy::config::DEFAULT_POLICY;
+    let config = format!("[sessions]\nops_per_minute = {}\n", most + 1);
+    let p = json!({"config": config, "policy": policy});
+    let (code, why) = e
+        .call("human.prepare_policy", Some("demo"), None, p)
+        .unwrap_err();
+    assert_eq!(code, "invalid");
+    assert!(why.contains(&format!("the most is {most}")), "{why}");
+    with_rate(&mut e, most);
+}
+
 fn next_seq(e: &mut Env) -> u64 {
     let s = e.ok("status", Some("demo"), None, json!({}));
     s["next_seq"].as_u64().unwrap()

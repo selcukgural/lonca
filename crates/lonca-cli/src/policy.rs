@@ -1,5 +1,6 @@
 //! `lonca policy show` and `lonca policy check`: the policy in force, and
 //! what a new one would have decided differently. Neither writes anything.
+//! `lonca policy set` signs what [`texts`] and [`with_values`] make.
 
 use std::path::PathBuf;
 
@@ -35,7 +36,38 @@ fn candidate(
     c: &mut Client,
     config: Option<PathBuf>,
     policy: Option<PathBuf>,
+    values: &[String],
 ) -> Result<PolicyBundle> {
+    let (config, policy) = texts(c, config, policy)?;
+    let (config, _) = with_values(&config, values)?;
+    PolicyBundle::parse_new(&config, &policy).map_err(|e| anyhow!(e))
+}
+
+/// `config` with each `KEY=VALUE` of `values` set in place, and a line per
+/// value saying what it was and what it is.
+pub fn with_values(config: &str, values: &[String]) -> Result<(String, Vec<String>)> {
+    use lonca_policy::edit;
+    let mut text = config.to_string();
+    let mut said = Vec::new();
+    for arg in values {
+        let (path, value) = edit::assignment(arg).map_err(|e| anyhow!(e))?;
+        let name = path.join(".");
+        let read = |e: String| anyhow!("{CONFIG_FILE}: {e}");
+        let before = edit::get(&text, &path).map_err(read)?;
+        text = edit::set(&text, &path, &value).map_err(read)?;
+        let before = before.map_or("the default".to_string(), |v| v.to_string());
+        said.push(format!("{name}: {before} -> {value}"));
+    }
+    Ok((text, said))
+}
+
+/// The texts of a candidate: the files given, and the policy in force for
+/// the one left out.
+pub fn texts(
+    c: &mut Client,
+    config: Option<PathBuf>,
+    policy: Option<PathBuf>,
+) -> Result<(String, String)> {
     let read = |p: &PathBuf| {
         std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))
     };
@@ -55,7 +87,7 @@ fn candidate(
             "the policy in force has no {CONFIG_FILE} or {POLICY_FILE}"
         ));
     };
-    PolicyBundle::parse(&config, &policy).map_err(|e| anyhow!(e))
+    Ok((config, policy))
 }
 
 fn whole_log(c: &mut Client) -> Result<Vec<SignedOp>> {
@@ -71,9 +103,10 @@ pub fn check(
     c: &mut Client,
     config: Option<PathBuf>,
     policy: Option<PathBuf>,
+    values: &[String],
     as_json: bool,
 ) -> Result<()> {
-    let bundle = candidate(c, config, policy)?;
+    let bundle = candidate(c, config, policy, values)?;
     let out = compare(&whole_log(c)?, &bundle);
     if as_json {
         outln!("{}", serde_json::to_string_pretty(&out)?);

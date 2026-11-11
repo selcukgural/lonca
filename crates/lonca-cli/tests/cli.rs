@@ -6485,3 +6485,77 @@ fn session_start_ends_the_session_it_could_not_hand_over() {
         .collect();
     assert!(ops.ends_with(&["session.start", "session.end"]), "{ops:?}");
 }
+
+/// One value of lonca.toml from the command line: the rest of the file in
+/// force stays as it is, the change is a signed policy update, and what
+/// can not be a policy changes nothing.
+#[test]
+fn policy_set_value_changes_one_key_of_the_policy_in_force() {
+    let e = Env::new();
+    let r = &e.root;
+    agent_workspace(&e);
+    let files = |e: &Env| e.run(r, &["policy", "show", "--repo", "demo"]);
+    let before = files(&e);
+    assert!(before.contains("\nops_per_minute = 600\n"), "{before}");
+
+    let set = ["policy", "set", "--repo", "demo", "--value"];
+    let out = e.run(r, &[&set[..], &["sessions.ops_per_minute=1200"]].concat());
+    assert!(
+        out.contains("sessions.ops_per_minute: 600 -> 1200") && out.contains("allow"),
+        "{out}"
+    );
+    let after = files(&e);
+    assert_eq!(
+        after,
+        before.replace("\nops_per_minute = 600\n", "\nops_per_minute = 1200\n"),
+        "one line, and the comments as they were"
+    );
+
+    // Two at once, and a word that is no TOML is a string.
+    let two = [
+        "policy",
+        "set",
+        "--repo",
+        "demo",
+        "--value",
+        "leases.max_items=32",
+        "--value",
+        "observation.network=deny",
+    ];
+    let out = e.run(r, &two);
+    assert!(out.contains("leases.max_items: 64 -> 32"), "{out}");
+    assert!(
+        out.contains("observation.network: \"taint\" -> \"deny\""),
+        "{out}"
+    );
+    let now = files(&e);
+    assert!(now.contains("\nmax_items = 32\n") && now.contains("\nnetwork = \"deny\"\n"));
+
+    // Refused before anything is signed: no such key, a value the policy
+    // does not take, no key at all. The policy stays.
+    let err = fails(&e, r, &[&set[..], &["sessions.ops_a_minute=5"]].concat());
+    assert!(err.contains("ops_a_minute"), "{err}");
+    let err = fails(&e, r, &[&set[..], &["sessions.ops_per_minute=0"]].concat());
+    assert!(err.contains("must be positive"), "{err}");
+    let err = fails(
+        &e,
+        r,
+        &[&set[..], &["sessions.ops_per_minute=6001"]].concat(),
+    );
+    assert!(err.contains("the most is 6000"), "{err}");
+    let err = fails(&e, r, &[&set[..], &["ops_per_minute=5"]].concat());
+    assert!(err.contains("its table and its name"), "{err}");
+    assert_eq!(files(&e), now);
+
+    // `check` takes the same value and writes nothing.
+    let check = [
+        "policy",
+        "check",
+        "--repo",
+        "demo",
+        "--value",
+        "sessions.ops_per_minute=5",
+    ];
+    e.run(r, &check);
+    assert_eq!(files(&e), now);
+}

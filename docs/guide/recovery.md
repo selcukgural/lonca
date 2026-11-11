@@ -48,7 +48,9 @@ The new key is signed by the current one. Give every repository you are
 enrolled in, comma-separated: the key is shared between them, and the new
 one is installed only after all of them accepted it (rerun to resume; the
 ones already moved are skipped). The old key file stays as
-`<name>.key.retired-<ms>`; a retired key is never accepted again.
+`<name>.key.retired-<ms>`; a retired key is never accepted again. A rerun
+says that it found the waiting key file and shows its public key: an
+interrupted run of yours leaves one, and nothing else should.
 
 A rotation **ends everything you set in motion**, as a revocation does:
 every session you started and every session made from them (with their

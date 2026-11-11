@@ -5,8 +5,9 @@ use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_ANCHORED, FORMAT_CHILD_AGENT, FORMAT_CURRENT, FORMAT_FOLDED_PATHS,
-    FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_KEYED, FORMAT_REPLACES, FORMAT_SECURITY_KEYS,
-    FORMAT_SYMBOL_KEYS, FORMAT_TAINT_REACHES, FORMAT_WORKSPACE, SignedOp, verify_chain,
+    FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_KEYED, FORMAT_RELEASE_RECHECK, FORMAT_REPLACES,
+    FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, FORMAT_TAINT_REACHES, FORMAT_WORKSPACE, SignedOp,
+    verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -2171,6 +2172,135 @@ fn presence_does_not_block_recovery() {
     assert!(d.is_allow(), "{d:?}");
     // The policy changed mid-test, so the log is not replayed here (as in
     // `presence_can_be_required_for_human_signatures`).
+}
+
+/// What waited for an approval is checked again for what changed while it
+/// waited (log format 35): a name enrolled meanwhile is not overwritten, a
+/// symbol someone else leased meanwhile is not leased twice.
+#[test]
+fn a_released_operation_is_checked_for_what_changed_while_it_waited() {
+    let policy = PolicyBundle::parse(
+        DEFAULT_CONFIG,
+        &format!(
+            "{DEFAULT_POLICY}\n@id(\"reviewed\")\n@escalate(\"reviewed\")\n\
+             forbid(principal, action in [Lonca::Action::\"human.enroll\", Lonca::Action::\"lease.acquire\"], resource);\n"
+        ),
+    )
+    .unwrap();
+    let mut h = H::with_policy(policy);
+    let ayse = Actor::Human {
+        name: "ayse".into(),
+    };
+    fn before(h: &H) -> Ctx<'_> {
+        Ctx {
+            format: FORMAT_RELEASE_RECHECK - 1,
+            time_ms: h.now + 1,
+            policy: &h.policy,
+            facts: None,
+            evidence: &[],
+            symbols_engine: None,
+        }
+    }
+
+    // Two enrolments of one name wait; the first is released.
+    let (first, second) = (KeyPair::generate(), KeyPair::generate());
+    let enroll = |key: &KeyPair| Op::HumanEnroll {
+        human: "bora".into(),
+        key: file_key(key),
+    };
+    let mut waiting = vec![];
+    for key in [&first, &second] {
+        assert_eq!(h.human("ayse", enroll(key)).outcome, Outcome::Escalate);
+        waiting.push(h.chain.state.next_seq - 1);
+    }
+    assert!(h.human("ayse", approve(waiting[0])).is_allow());
+    assert_eq!(h.chain.state.humans["bora"].public, first.public_hex());
+    // Before the format the second took the name over.
+    let op = approve(waiting[1]);
+    let sig = h.sign("ayse", &op);
+    let d = decide(&h.chain.state, &ayse, &op, Some(&sig), &before(&h));
+    assert!(d.reasons.contains(&"released".to_string()), "{d:?}");
+    let d = h.human("ayse", op);
+    assert!(denied_with(&d, "already_enrolled"), "{d:?}");
+    assert_eq!(h.chain.state.humans["bora"].public, first.public_hex());
+
+    // A key somebody has is nobody else's, when it is asked for already.
+    let mine = Op::HumanEnroll {
+        human: "cem".into(),
+        key: file_key(&first),
+    };
+    let sig = h.sign("ayse", &mine);
+    let d = decide(&h.chain.state, &ayse, &mine, Some(&sig), &before(&h));
+    assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+    assert!(denied_with(&h.human("ayse", mine), "key_reused"));
+
+    // Two sessions ask for one symbol; both wait; one is released.
+    h.start("s1", &["src/**"]);
+    h.start("s2", &["src/**"]);
+    let mut waiting = vec![];
+    for (session, set) in [("s1", "l1"), ("s2", "l2")] {
+        let d = h.lease(session, set, &[(F, LeaseKind::Edit)]);
+        assert_eq!(d.outcome, Outcome::Escalate, "{d:?}");
+        waiting.push(h.chain.state.next_seq - 1);
+    }
+    assert!(h.human("ayse", approve(waiting[0])).is_allow());
+    assert!(h.chain.state.leases.contains_key("l1"));
+    let op = approve(waiting[1]);
+    let sig = h.sign("ayse", &op);
+    let d = decide(&h.chain.state, &ayse, &op, Some(&sig), &before(&h));
+    assert!(d.reasons.contains(&"released".to_string()), "{d:?}");
+    let d = h.human("ayse", op);
+    assert!(
+        denied_with(&d, &format!("lease_held:{F}:s1:work on l1")),
+        "{d:?}"
+    );
+    assert!(!h.chain.state.leases.contains_key("l2"));
+    h.assert_replay();
+}
+
+/// A lease's intent is its session's own words, and a denial gives them
+/// to another agent. The words of a tainted session are not passed on
+/// (log format 35): they may be what it read outside.
+#[test]
+fn a_tainted_holders_intent_is_not_in_another_sessions_denial() {
+    let mut h = H::new();
+    h.start_observed("s1", &["src/**"]);
+    h.start_observed("s2", &["src/**"]);
+    assert!(h.lease("s1", "l1", &[(F, LeaseKind::Edit)]).is_allow());
+    let d = h.lease("s2", "l2", &[(F, LeaseKind::Edit)]);
+    assert_eq!(d.reasons, [format!("lease_held:{F}:s1:work on l1")]);
+
+    let taint = Op::Taint {
+        session: "s1".into(),
+        reason: "read the web".into(),
+    };
+    assert!(h.daemon(taint, vec![]).is_allow());
+    let d = h.lease("s2", "l2", &[(F, LeaseKind::Edit)]);
+    let withheld = lonca_policy::state::INTENT_WITHHELD;
+    assert_eq!(d.reasons, [format!("lease_held:{F}:s1:{withheld}")]);
+    assert!(!withheld.contains(':'), "it is one field of the reason");
+    assert_eq!(h.chain.state.sessions["s2"].taint, None);
+    // What the holder reads of itself, and a person of anyone, is the text.
+    assert_eq!(h.chain.state.leases["l1"].intent, "work on l1");
+    h.assert_replay();
+
+    // Entries from before the format replay with the text in them.
+    let mut old = h.log.clone();
+    for o in &mut old {
+        o.entry.format = FORMAT_RELEASE_RECHECK - 1;
+    }
+    let s = State::replay(&old[..old.len() - 1]);
+    let last = &old[old.len() - 1].entry;
+    let ctx = Ctx {
+        format: last.format,
+        time_ms: last.time_ms,
+        policy: &h.policy,
+        facts: None,
+        evidence: &[],
+        symbols_engine: None,
+    };
+    let d = decide(&s, &last.actor, &last.op, None, &ctx);
+    assert_eq!(d.reasons, [format!("lease_held:{F}:s1:work on l1")]);
 }
 
 #[test]

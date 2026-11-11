@@ -44,6 +44,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # What main has went through a pull request and the required checks. A
+  # tag on any other commit is not a release: the draft job, the only one
+  # that can write or attest, waits for this.
+  on-main:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: The tag is a commit of main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          # How the tagged commit stands to main: behind or identical is on it.
+          status=$(gh api "repos/$REPO/compare/main...$SHA" --jq .status)
+          case "$status" in
+            identical | behind) echo "$SHA is on main ($status)" ;;
+            *) echo "$SHA is not a commit of main ($status): nothing is released from it" >&2; exit 1 ;;
+          esac
+
   build:
     name: build (${{ matrix.target }})
     strategy:
@@ -126,7 +147,8 @@ jobs:
           mkdir -p pack dist
           cp "target/$TARGET/release/lonca" "target/$TARGET/release/lonca-audit" \
             LICENSE README.md pack/
-          # `sudo ./install-hardened.sh --bin .` from the unpacked archive.
+          # install-hardened.sh, run as root from where the archive was unpacked
+          # (a directory of root's: docs/guide/install.md).
           if [ "$RUNNER_OS" = macOS ]; then
             cp "target/$TARGET/release/lonca-se" packaging/macos/install-hardened.sh \
               packaging/macos/uninstall-hardened.sh pack/
@@ -211,7 +233,7 @@ jobs:
 
   draft:
     if: github.ref_type == 'tag'
-    needs: [build, sbom, acceptance]
+    needs: [on-main, build, sbom, acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: release
@@ -271,7 +293,12 @@ jobs:
           cat SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/lonca-*-*.tar.gz
+          # The archives, and what is read beside them: the checksums a
+          # download is compared with and the bill of materials.
+          subject-path: |
+            dist/lonca-*-*.tar.gz
+            dist/lonca-sbom.cdx.tar.gz
+            dist/SHA256SUMS
       - name: The notes, from docs/release-notes.md
         run: |
           version=${TAG#v}

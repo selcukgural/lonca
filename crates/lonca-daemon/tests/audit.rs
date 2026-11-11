@@ -205,6 +205,36 @@ fn forged_merge_is_caught() {
     );
 }
 
+/// What one change says it verified is of the tree that was merged, as a
+/// batch's is: a build and a test run of another tree say nothing of it.
+#[test]
+fn a_change_with_evidence_of_another_tree_is_caught() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/a", "a\n")], "a");
+    assert_eq!(e.svc.process_all(), 1);
+    let options = Options {
+        deep: true,
+        check_refs: false,
+        all_refs: true,
+    };
+    let another = |r: &lonca_audit::Report| {
+        let found =
+            |f: &lonca_audit::Finding| f.kind == "merge" && f.detail.contains("another tree");
+        r.findings.iter().any(found)
+    };
+    let honest = audit(&e.store(), options).unwrap();
+    assert!(honest.ok(), "{:#?}", honest.findings);
+    let other = forge(&e, "other", |entries| {
+        let one =
+            |x: &OpEntry| matches!(x.op, Op::ChangeIntegrate { .. }) && !x.evidence.is_empty();
+        let at = entries.iter().position(one).expect("an integration");
+        entries[at].evidence[0].subject_tree = GitId::of_blob(b"another");
+    });
+    let r = audit(&other, options).unwrap();
+    assert!(another(&r), "{:#?}", r.findings);
+}
+
 /// What a batch says it verified has to be there, and of what trunk became.
 #[test]
 fn a_batch_with_no_evidence_or_another_tree_is_caught() {

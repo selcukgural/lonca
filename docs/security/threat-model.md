@@ -32,7 +32,11 @@ the same pull request, as for the OWASP review.
   answers, text in dependencies. It reaches Lonca through an agent that read
   it, which is what taint tracks.
 - **Code under verification.** The merge queue builds and tests what agents
-  wrote, dependencies included. It runs in a sandbox with no network.
+  wrote, dependencies included. It runs in a sandbox with no network. What
+  the policy gives it (a value in `env_passthrough`, a file under
+  `verification.read`) that code can read, and the check's log brings it
+  back to the agent; Lonca hides a passed value printed as it is, nothing
+  more ([Verification](../guide/verification.md#the-environment-the-commands-see)).
 - **Another local user** may reach the socket only as its mode, group and
   uid list allow, and every method checks a credential on top of that.
 - **A network peer.** Lonca listens on no network port: the daemon speaks over
@@ -61,7 +65,7 @@ system boundary stops that, and each mode puts the boundary somewhere else.
 | Agent runs | as you | as you, with the harness's hooks and sandbox locked by root | in a sandbox Lonca builds |
 | Daemon, store, keys | your account | a system user of their own (`_lonca` / `lonca`) | as the install's |
 | Session level | `unobserved` | `hooks_sandbox` with Claude Code, `unobserved` with others | `isolated` |
-| Setup | none | `install-hardened.sh` from a release archive | the install's, plus a sandbox per run |
+| Setup | none | `install-hardened.sh` from a release archive, checked and unpacked in a directory of root's | the install's, plus a sandbox per run |
 
 What each mode does about each threat:
 
@@ -136,7 +140,8 @@ hold ([Lonca with Claude Code](../guide/claude-code.md#how-much-is-proven)).
   bubblewrap on Linux, reads and writes closed by default, network only
   through the proxy (agents) or none (verification).
 - **The remote and its auditor.** `lonca push` carries the log; `lonca-audit
-  verify` in CI replays it on a machine the agents never touched.
+  verify --genesis … --extends …` in CI replays it on a machine the agents
+  never touched, and holds it to the log it was the last time.
 
 ## What the auditor catches, and what it does not
 
@@ -155,6 +160,13 @@ It does not catch:
   them; a replay can not run them again.
 - **Entries the rules allow, written by whoever holds the daemon key**, which
   in cooperative mode includes the agent (above).
+- **Another log in the place of yours, or yours taken back**, unless it is
+  told which log to expect: `verify --genesis <hash>` holds it to your
+  repository's first entry and `--extends <hash>` to a head seen before.
+  A log proves itself whole, not that it is the one you mean; the example
+  workflow passes both, from a repository variable and from the last run
+  (`docs/ci/lonca-audit.yml`). Without them, whoever can push to the
+  remote can replace the log and the refs together.
 
 ## Known limits
 
@@ -194,6 +206,17 @@ It does not catch:
   there. Without one, a hardened repository on Linux is initialised
   `--without-presence`, and a human's file key is readable by the agents
   running as that human.
+- **The Touch ID dialog is the helper's own.** `lonca-se` signs only the
+  bytes of an operation or a login (an *intent*), and writes the dialog
+  from those bytes itself: a program that runs as the human can call it as
+  `lonca` does, but can not have a policy update signed under the words of
+  something harmless. What stays open: such a program can still ask for a
+  true signature of its own at a moment a prompt is expected, and the
+  dialog then says truly what it is (read it); the helper is found beside
+  `lonca` or at `$LONCA_SE`, and a program that can replace either file
+  writes the dialog (hardened mode keeps both out of the developer's
+  account's reach); and the key's access control (`.userPresence`) takes
+  the login password or a paired watch as well as a finger.
 - **A security key shows nothing.** Touch ID names the operation in its
   dialog; a security key only blinks, and what the touch approves is the
   line `lonca` prints before it. A process running as the human that asks

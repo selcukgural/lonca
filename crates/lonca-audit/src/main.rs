@@ -1,10 +1,16 @@
 //! `lonca-audit`: independent verification of a Lonca repository.
 //!
 //! ```text
-//! lonca-audit verify <git-dir> [--shallow] [--no-refs] [--json] [--freeze-flag <file>]
+//! lonca-audit verify <git-dir> [--genesis <hash>] [--extends <hash>] [--shallow] [--no-refs]
+//!                              [--all-refs] [--json] [--freeze-flag <file>]
 //! lonca-audit compare <local-git-dir> <published-git-dir>
 //! lonca-audit --version
 //! ```
+//!
+//! `--genesis` and `--extends` say which log is expected, from outside
+//! the log: the hash `genesis:` printed the first time, and a `head:` an
+//! earlier run printed. Without them `verify` proves that the log is whole
+//! and signed by its own daemon key, not that it is yours or your latest.
 //!
 //! Exit status: 0 when clean, 1 when findings exist, 2 on usage or I/O errors.
 //! `--freeze-flag` writes a flag file on findings; the daemon freezes the
@@ -15,7 +21,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use lonca_audit::{EnvChange, Options, audit, compare};
+use lonca_audit::{Anchor, EnvChange, Options, audit_anchored, compare};
 use lonca_core::Store;
 use lonca_core::oplog::OpLog;
 use lonca_core::terminal::printable;
@@ -47,7 +53,7 @@ fn env_line(c: &EnvChange) -> String {
 
 fn usage() -> ExitCode {
     complain!(
-        "usage:\n  lonca-audit verify <git-dir> [--shallow] [--no-refs] [--all-refs] [--json] [--freeze-flag <file>]\n  lonca-audit compare <local-git-dir> <published-git-dir>\n  lonca-audit --version"
+        "usage:\n  lonca-audit verify <git-dir> [--genesis <hash>] [--extends <hash>] [--shallow] [--no-refs] [--all-refs] [--json] [--freeze-flag <file>]\n  lonca-audit compare <local-git-dir> <published-git-dir>\n  lonca-audit --version"
     );
     ExitCode::from(2)
 }
@@ -72,6 +78,12 @@ fn verify(args: &[String]) -> ExitCode {
     let mut opts = Options::default();
     let mut json = false;
     let mut freeze_flag: Option<PathBuf> = None;
+    let mut anchor = Anchor::default();
+    // An entry's hash, whole: a prefix would name many.
+    let hash = |h: Option<&String>| {
+        h.filter(|h| h.len() == 64 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+            .cloned()
+    };
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -79,6 +91,14 @@ fn verify(args: &[String]) -> ExitCode {
             "--no-refs" => opts.check_refs = false,
             "--all-refs" => opts.all_refs = true,
             "--json" => json = true,
+            "--genesis" => match hash(it.next()) {
+                Some(h) => anchor.genesis = Some(h),
+                None => return usage(),
+            },
+            "--extends" => match hash(it.next()) {
+                Some(h) => anchor.extends = Some(h),
+                None => return usage(),
+            },
             "--freeze-flag" => match it.next() {
                 Some(p) => freeze_flag = Some(PathBuf::from(p)),
                 None => return usage(),
@@ -95,7 +115,7 @@ fn verify(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let report = match audit(&store, opts) {
+    let report = match audit_anchored(&store, opts, &anchor) {
         Ok(r) => r,
         Err(e) => {
             complain!("lonca-audit: {e}");
@@ -109,6 +129,7 @@ fn verify(args: &[String]) -> ExitCode {
         );
     } else {
         say!("operations: {}", report.ops);
+        say!("genesis:    {}", report.genesis_hash);
         say!("head:       {}", report.head_hash);
         for k in &report.key_switches {
             say!(

@@ -40,6 +40,19 @@ jobs:
             echo "the tag $TAG does not name Cargo.toml's version $version" >&2
             exit 1
           fi
+      - name: The tag is a commit of main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # As release.yml asked before it drafted: what goes to crates.io
+          # went through a pull request and the required checks.
+          sha=$(git rev-parse HEAD)
+          status=$(gh api "repos/$REPO/compare/main...$sha" --jq .status)
+          case "$status" in
+            identical | behind) echo "$sha is on main ($status)" ;;
+            *) echo "$sha is not a commit of main ($status): nothing is published from it" >&2; exit 1 ;;
+          esac
 
   # Packages and builds what would go up, as crates.io would. Building runs
   # every dependency's build scripts, so this job can mint no token.

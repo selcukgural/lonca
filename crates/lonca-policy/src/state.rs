@@ -306,6 +306,10 @@ pub struct Spent {
     pub day_ms: u64,
 }
 
+/// What an agent reads in place of a tainted session's intent
+/// ([`State::intent_for_agents`]). No colon: it is a field of `lease_held:`.
+pub const INTENT_WITHHELD: &str = "(not shown, its session read outside content)";
+
 /// For how long an entry can be the head a human signature names: the life
 /// of a signature and the clock difference it is allowed.
 pub const SEEN_MS: i64 = crate::human::MAX_AGE_MS + crate::human::MAX_SKEW_MS;
@@ -1071,6 +1075,18 @@ impl State {
                 s.unhooked = unhooked.clone();
             }
             s.level = s.level.min(level);
+        }
+    }
+
+    /// A lease's or an interest's intent as another agent may read it. It
+    /// is free text of its session's making; when that session is tainted
+    /// the text may be what it read outside, and reading it would be the
+    /// same content entering the reader unmarked (a `negotiate` taints its
+    /// reader for that). People read the text itself.
+    pub fn intent_for_agents<'a>(&self, session: &str, intent: &'a str) -> &'a str {
+        match self.sessions.get(session) {
+            Some(s) if s.taint.is_some() => INTENT_WITHHELD,
+            _ => intent,
         }
     }
 

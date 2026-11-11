@@ -5,6 +5,19 @@
 # log). The release's archive is checked against its build provenance
 # attestation before it runs; `cargo install --locked lonca-audit --version
 # <V>` builds the same from crates.io instead.
+#
+# A log proves that it is whole and signed by its own daemon key. It can
+# not prove that it is YOUR log, or your latest: whoever can push here
+# could push another log, or an older state of this one, with refs to
+# match. Two things from outside the log close that:
+#   - LONCA_GENESIS, a repository variable (Settings > Secrets and
+#     variables > Actions > Variables) holding the `genesis:` hash that
+#     `lonca-audit verify` prints for your repository. Set it once. A
+#     variable is changed by an administrator, not by a push.
+#   - the `head:` of the last run on this branch, kept in the Actions
+#     cache: the log must still have that entry. A cache written on
+#     another branch is not read here.
+# The job fails while LONCA_GENESIS is not set.
 name: lonca-audit
 
 on:
@@ -32,7 +45,33 @@ jobs:
           gh release download "v$LONCA_VERSION" --repo selcukgural/lonca \
             --pattern "$archive" --dir "$RUNNER_TEMP"
           gh attestation verify "$RUNNER_TEMP/$archive" --repo selcukgural/lonca \
-            --signer-workflow selcukgural/lonca/.github/workflows/release.yml
+            --signer-workflow selcukgural/lonca/.github/workflows/release.yml \
+            --source-ref "refs/tags/v$LONCA_VERSION"
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" lonca-audit
-      - name: Replay and verify every decision
-        run: '"$RUNNER_TEMP/lonca-audit" verify .git'
+      - name: The head the log had at the last run
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: lonca-audit-head
+          key: lonca-audit-head-${{ github.run_id }}
+          restore-keys: lonca-audit-head-
+      - name: Replay and verify every decision of the expected log
+        env:
+          LONCA_GENESIS: ${{ vars.LONCA_GENESIS }}
+        run: |
+          if [ -z "$LONCA_GENESIS" ]; then
+            "$RUNNER_TEMP/lonca-audit" verify .git | grep '^genesis:' || true
+            echo "::error::set the repository variable LONCA_GENESIS to your log's genesis hash (compare the line above with what lonca-audit prints on your own machine)"
+            exit 1
+          fi
+          set -- verify .git --genesis "$LONCA_GENESIS"
+          if [ -s lonca-audit-head ]; then
+            set -- "$@" --extends "$(cat lonca-audit-head)"
+          fi
+          "$RUNNER_TEMP/lonca-audit" "$@" | tee audit.txt
+          sed -n 's/^head: *//p' audit.txt > lonca-audit-head
+      - name: Keep the head for the next run
+        if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: lonca-audit-head
+          key: lonca-audit-head-${{ github.run_id }}

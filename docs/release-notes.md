@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Four small fixes in the command line
+
+- A workspace file with a second hard link was refused, but a link made
+  and removed at the right moment got past the check; the name is now
+  looked at again after the read.
+- `lonca fetch` kept trunk's bundle in the shared temporary directory,
+  readable by other local users while it fetched; it is private to you now.
+- `lonca run` could run out of memory at its end in a workspace with many
+  large changed files, leaving the session open; it now holds one file at
+  a time.
+- `lonca human rotate`, `recover` and `recovery-key` say so when they go on
+  with a key file that was already there (an interrupted run leaves one),
+  and show its public key: if you did not leave it, stop and delete it.
+
+### What waited for approval is checked again when it is released
+
+An operation a policy rule sends to a human (a `human.enroll`, a
+`session.start`, a `lease.acquire` under an `@escalate` rule) was applied
+at its approval as it had been asked, whatever had happened meanwhile. From
+log format 35 the releasing approval checks it again: a name enrolled in
+between is not given another key (`already_enrolled`), a session id is not
+taken twice (`session_exists`), a symbol someone else leased is not leased
+again (`lease_held:…`). `human.enroll` also refuses a key that another name
+uses. Smaller, in the same change: the intent of a lease held by a tainted
+session is no longer shown to other agents (in `lease_held:`, in a denial's
+details, in `status`); `lonca-audit` holds the evidence of a single
+integration to the tree that was merged, as it did for batches; and a log
+entry with a time at the end of the 64-bit range no longer stops the
+auditor.
+
 ### The macOS sandbox no longer reads what Homebrew's services keep
 
 `lonca run` and verification on macOS open `/usr` and `/opt` for the
@@ -15,6 +45,98 @@ has no network, can also no longer reach the system's certificate service.
 Two limits of the macOS sandbox are written down in the threat model:
 shared memory by name, and what that certificate service fetches for an
 isolated session.
+
+### The sudo that is asked is the system's
+
+A session counts as unobserved while `sudo` runs without a password, and
+`lonca hook` and `lonca doctor` find that out by running `sudo -n true`.
+They ran the first `sudo` on `PATH`. They now run the system's
+(`/usr/bin/sudo`, `/bin/sudo`, or NixOS's wrapper), so a file named `sudo`
+earlier on `PATH` can not answer for it.
+
+### The auditor is told which log to expect
+
+`lonca-audit verify` proves that a log is whole and signed by its own
+daemon key. It could not know that the log was yours: somebody able to push
+to the remote could put another log there, or an earlier state of yours,
+with refs to match, and the audit in CI printed `ok`. `verify` now prints
+`genesis:` (the hash of the first entry, which never changes for a
+repository) and takes `--genesis <hash>` and `--extends <hash>`: the log
+must begin with that entry, and must still have an entry seen before (a
+`head:` of an earlier run). A log that is not the expected one is a finding
+(`anchor`) before anything of it is replayed.
+
+**Upgrading.** Copy the new `docs/ci/lonca-audit.yml` over your workflow
+and set the repository variable `LONCA_GENESIS` to the `genesis:` line of
+`lonca-audit verify` on your own machine; the job fails until it is set.
+The JSON report has a new field, `genesis_hash`.
+
+### The Touch ID dialog says what is signed, whoever asks
+
+`lonca-se`, the Secure Enclave helper, used to show the text its caller
+passed and sign its input unread. It now reads what it is asked to sign,
+refuses anything that is not a Lonca operation or login, and writes the
+dialog from those bytes itself. Another program running as you can no
+longer have one operation signed under the name of another. `lonca-se
+describe` prints the dialog's text for an intent on standard input.
+
+**Upgrading.** Install the `lonca-se` of the release beside its `lonca`
+(the archives and Homebrew do). The new helper works with an older `lonca`;
+an older helper beside a new `lonca` fails with a usage error.
+
+### A check's log does not hold a passed value
+
+The output of a build or test command is kept as the check's log, which the
+proposing agent reads back and `lonca push` carries. A value passed to the
+commands with `env_passthrough` is now written `***` wherever it turns up
+in a log (directories such as `HOME` stay readable). This catches a tool
+that prints its environment, not a test written to tell: the guide now says
+plainly that what the verification sandbox can read, the proposing agent
+can read, and its Node starter no longer opens `~/.npmrc`. If your
+`lonca.toml` passes a token or opens a credentials file for the checks,
+take it out and install dependencies before the checks run.
+
+### A hardened install takes nothing from your account
+
+`install-hardened.sh` and `uninstall-hardened.sh` run as root. They found
+their tools through the `PATH` they were called with, and installed `lonca`
+from wherever the archive had been unpacked, usually a directory any
+program running as you could write. Now each script sets its own `PATH`
+first, and the installer refuses to install from files that are not root's
+alone (owned by root, written by nobody else, and so every directory above
+them), listing them and the steps to take.
+
+**Upgrading a hardened install.** The steps changed
+([Install](guide/install.md#hardened-mode)): copy the archive to a
+root-owned directory, check that copy, unpack it there with
+`--no-same-owner`, run the installer from there. The uninstaller is now
+installed too: `sudo /Library/Lonca/uninstall-hardened.sh` (Linux:
+`/opt/lonca/uninstall-hardened.sh`). A build from your own checkout
+installs with `--unprotected-source`.
+
+### A change whose files can not be written out no longer stops the queue
+
+Before its checks run, a change's files are written out on the daemon's
+machine. A file name that machine's file system does not take (longer than
+255 bytes; `A/b` beside `a` on macOS) made that fail, and the change stayed
+at the head of the merge queue for good: nothing behind it integrated, and
+no entry said why. Now the first check is recorded as `error`
+(`unwritable_tree`, with the file named in its log), the change is rejected
+with `verification_error:<check>`, and the queue goes on. A proposal with a
+name over 255 bytes is refused when it is made.
+
+### The installer checks where an archive was built
+
+`install.sh` compared the archive with the `SHA256SUMS` of the same
+release. When the GitHub CLI is installed and signed in, it now also
+verifies the archive's build attestation (made by this repository's release
+workflow, for the tag of the version you asked for) and installs nothing
+when that fails; without `gh` it says that only the checksum was checked.
+`LONCA_ATTESTATION=require` refuses to install unchecked, `skip` does not
+look. With `wget`, only `https://` addresses are fetched. Published
+releases are immutable from now on, and from 0.2.4 `SHA256SUMS` and the
+SBOM are attested as the archives are. In `docs/ci/lonca-audit.yml` the
+attestation check now names the tag (`--source-ref`): copy it over yours.
 
 ### A session's directory is in the log
 

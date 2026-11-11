@@ -35,7 +35,10 @@
    `## Unreleased` above it. Merge it.
 2. Tag main and push the tag: `git tag -a vX.Y.Z -m "Lonca X.Y.Z"`, `git
    push origin vX.Y.Z`. `release.yml` drafts the release; `ci.yml` and
-   `fuzz.yml` run on the tag.
+   `fuzz.yml` run on the tag. The tag must be on a commit of main
+   (`release.yml`'s `on-main` job fails otherwise and nothing is drafted),
+   and once pushed it can be neither moved nor deleted (the repository's
+   tag rulesets): look twice before the push.
 3. `ci.yml` and `fuzz.yml` green on the tag (a fuzz failure is fixed and
    released as a new patch version; a tag is never moved). The draft
    exists only if `release.yml`'s acceptance jobs passed on the archives;
@@ -59,6 +62,10 @@
    --body true`); from then on step 5 publishes them.
 5. Publish the draft (`gh release edit vX.Y.Z --draft=false`).
    `registries.yml` publishes the crates (when `PUBLISH_CRATES` is on).
+   Publishing is final: the repository has immutable releases on, so the
+   files and the tag of a published release can not be changed or
+   replaced. Look at the draft's files and notes before, not after; a
+   mistake is a new patch version.
 6. Homebrew: `gh workflow run update.yml --repo selcukgural/homebrew-lonca`
    (it also runs every day). Then, on a machine that has the tap,
    `brew update && brew upgrade selcukgural/lonca/lonca`, and

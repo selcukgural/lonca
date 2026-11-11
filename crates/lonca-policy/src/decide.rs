@@ -18,7 +18,8 @@ use lonca_core::keyed;
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_ANCHORED, FORMAT_CHILD_AGENT, FORMAT_FOLDED_PATHS, FORMAT_INSERT_NAMES,
     FORMAT_ISOLATE, FORMAT_KEYED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEGACY,
-    FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SESSION_HARNESS, FORMAT_WORKSPACE,
+    FORMAT_RELEASE_RECHECK, FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SESSION_HARNESS,
+    FORMAT_WORKSPACE,
 };
 use lonca_core::ops::OpKind;
 use lonca_core::ops::{
@@ -659,6 +660,62 @@ pub(crate) fn session_context(
     context
 }
 
+/// `lease_held:<symbol>:<holder>:<intent>` for every lease of another
+/// session that stands against `items`. From format 35 the intent of a
+/// tainted holder is not in it: the denial goes to another agent.
+fn held_against(state: &State, own: &str, items: &[LeaseItem], ctx: &Ctx) -> Vec<String> {
+    let mut out = Vec::new();
+    for held in state.active_leases(ctx.time_ms) {
+        if held.holder == own {
+            continue;
+        }
+        let intent = if ctx.format >= FORMAT_RELEASE_RECHECK {
+            state.intent_for_agents(held.holder, &held.lease.intent)
+        } else {
+            &held.lease.intent
+        };
+        for a in items {
+            for b in &held.items {
+                if state.conflict(a, b) {
+                    out.push(format!("lease_held:{}:{}:{intent}", b.symbol, held.holder));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// What may have changed between the asking of an operation that waited
+/// for approval and its release: the checks of its own that look at the
+/// state, made again. Until format 35 only the key operations had theirs.
+fn recheck_released(state: &State, p: &crate::state::Pending, ctx: &Ctx, v: &mut Verdict) {
+    match &p.op {
+        Op::HumanEnroll { human, key } => {
+            if state.humans.contains_key(human) {
+                v.deny("already_enrolled");
+            }
+            if state.key_known(&key.public) {
+                v.deny("key_reused");
+            }
+        }
+        Op::SessionStart { session, .. } | Op::CapAttenuate { child: session, .. }
+            if state.sessions.contains_key(session) =>
+        {
+            v.deny("session_exists")
+        }
+        Op::LeaseAcquire { set, items, .. } => {
+            if state.leases.contains_key(set) {
+                v.deny("invalid_lease_set");
+            }
+            let own = p.actor.session().unwrap_or_default();
+            for reason in held_against(state, own, items, ctx) {
+                v.deny(reason);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A human signature is for this log: it names the head its signer saw,
 /// this log has that entry, and what it approves or rejects is not later.
 /// A hash covers every entry before it, so a log rewritten from an earlier
@@ -838,7 +895,14 @@ pub fn decide(
             if !valid {
                 v.deny("invalid_key");
             }
-            if state.retired_keys.contains(&key.public) {
+            // Any key the log has known, from format 35: a key in use by
+            // another name is one person's two names.
+            let known = if ctx.format >= FORMAT_RELEASE_RECHECK {
+                state.key_known(&key.public)
+            } else {
+                state.retired_keys.contains(&key.public)
+            };
+            if known {
                 v.deny("key_reused");
             }
         }
@@ -1057,20 +1121,8 @@ pub fn decide(
             for i in state.wanted_against(own, items, t) {
                 v.deny(format!("lease_wanted:{}", i.session));
             }
-            for held in state.active_leases(t) {
-                if held.holder == own {
-                    continue;
-                }
-                for a in items {
-                    for b in &held.items {
-                        if state.conflict(a, b) {
-                            v.deny(format!(
-                                "lease_held:{}:{}:{}",
-                                b.symbol, held.holder, held.lease.intent
-                            ));
-                        }
-                    }
-                }
+            for reason in held_against(state, own, items, ctx) {
+                v.deny(reason);
             }
         }
         Op::LeaseInterest { items, intent } => {
@@ -1248,6 +1300,9 @@ pub fn decide(
                             v.deny("key_reused")
                         }
                         _ => {}
+                    }
+                    if ctx.format >= FORMAT_RELEASE_RECHECK {
+                        recheck_released(state, p, ctx, &mut v);
                     }
                 }
             }

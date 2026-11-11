@@ -173,6 +173,11 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   "A human signature is for one log"): `at` in the signature, left out of
   the encoding when absent, so earlier entries keep their bytes. Entries
   of older formats, whose signatures name no entry, replay as they were.
+- **Version 35** checks a pending operation again at the approval that
+  releases it, refuses at `human.enroll` any key the log has known, and
+  leaves a tainted holder's intent out of `lease_held:` (see "What waited
+  is decided for the state it is released into"). No field changes.
+  Entries of older formats replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -1329,7 +1334,8 @@ Enclave. Decided 2026-11-10:
   signatures prove presence, first log format, the form of its public key
   and its verifier. `decide()`, the daemon's `repo.prepare_init` and
   `lonca doctor` ask it; a new kind is a row there and a log format.
-- **The key shows nothing.** Touch ID names the operation; a security key
+- **The key shows nothing.** Touch ID names the operation (in the helper's
+  words, see "The Touch ID dialog is the helper's"); a security key
   blinks. `lonca` prints what the touch is for before it asks. A process
   running as the human can start a signature of its own and hope for the
   touch (threat model, "Humans and approvals"); the signature it gets is
@@ -3630,8 +3636,48 @@ it and what it runs are part of the trust model.
   it also requires the `ci.yml` jobs as status checks ("CI runs on every
   pull request"); from 2026-11-08 to then it required none. `cargo-deny`,
   CodeQL and zizmor run on pull requests and block nothing.
+- **A release is a tag on main, and a tag stays where it was put.**
+  `release.yml` ran on any `v*` tag: a tag on a commit that was never on
+  main, pushed with a token that may write contents, became attested
+  archives, and its published draft went to crates.io. Since 2026-11-12
+  the `on-main` job asks GitHub how the tagged commit stands to main
+  (`compare/main...<sha>`: `behind` or `identical`), and the `draft` job,
+  the only one that can write or attest, needs it; `registries.yml` asks
+  the same before anything is packaged. Two tag rulesets for `v*`: no
+  update and no deletion, for anybody (a tag can not be moved between the
+  draft and its publishing, which would send crates.io another source than
+  the attested archives were built from); creation by a repository
+  administrator only, so no workflow's token tags a release. Not set: a
+  required reviewer on the `release` environment. With one maintainer it
+  is the same person's second click, and a token that can push a tag and
+  publish a release can approve a deployment too.
+- **A published release does not change, and a download is held to where
+  it was built.** `install.sh` compared an archive with the `SHA256SUMS`
+  of the same release: whoever could replace one file of a release could
+  replace both, and no tag, commit or workflow run would show it. Since
+  2026-11-12 the repository has immutable releases on (a published
+  release's files and tag are fixed), `release.yml` attests `SHA256SUMS`
+  and the SBOM with the archives, and `install.sh` runs `gh attestation
+  verify` (this repository, `release.yml`, and the tag when a version was
+  asked for) when `gh` is installed and signed in. Without `gh` it
+  installs on the checksum and says so in two lines: refusing would end
+  `curl … | sh` for most people, and `LONCA_ATTESTATION=require` is there
+  for who wants it refused. With `wget` only an `https://` address is
+  fetched (`--https-only` is about links in pages, not the address
+  given). The example auditor workflow pins `--source-ref` to its version.
+- **The `install.sh` that is served is the one in the repository.** The
+  site is built by Docusaurus, a thousand npm packages, and the build's
+  output is what Pages serves, `install.sh` included: copied from
+  `website/static/` by code that is not ours. `npm ci --ignore-scripts`
+  stops a package's install script, not what a package does when the build
+  runs it. Since 2026-11-12 `docs.yml` has a job with no npm in it,
+  `untouched`, between the build and the deployment: it takes the Pages
+  artifact and compares its `install.sh` with the file in the repository,
+  byte for byte. The site's packages get Dependabot too, with the week's
+  wait the others have. The pages themselves (the command they show) are
+  still what the build made of them.
 - **CODEOWNERS** names the owner of `.github/`, `deny.toml`,
-  `rust-toolchain.toml`, `packaging/`, `lonca-core`, `lonca-policy`,
+  `rust-toolchain.toml`, `packaging/`, `website/static/install.sh`, `lonca-core`, `lonca-policy`,
   `lonca-audit` and `SECURITY.md`; review by the owner is asked, not
   required.
 - **A pinned toolchain**: `rust-toolchain.toml` names the exact version
@@ -3845,8 +3891,8 @@ release (roadmap M2).
 - **A tag drafts the release; a person publishes it.** `release.yml` builds
   `lonca` and `lonca-audit` for macOS arm64 and x86_64 and Linux x86_64 and
   arm64. Linux builds are static (musl), so any distribution runs them. The
-  archives carry the hardened install scripts (`sudo ./install-hardened.sh
-  --bin .`) and, on macOS, `lonca-se`. `SHA256SUMS`, the SBOM and a build
+  archives carry the hardened install scripts (run from a directory of
+  root's, see "A hardened install takes nothing from the caller's account") and, on macOS, `lonca-se`. `SHA256SUMS`, the SBOM and a build
   provenance attestation per archive go with them; the notes are the
   version's section of `docs/release-notes.md` (`## X.Y.Z`), and a tag with
   none fails. `ci.yml` runs on the same tag, and the
@@ -4485,7 +4531,7 @@ replayed it.
 - **What it does not stop.** A log rewritten after the entry a signature
   names keeps that signature where it was: it is still for what it
   approved. Replacing the log wholesale is the auditor's question
-  ("lonca-audit verify has no anchor" is its own item).
+  (see "The auditor is told which log to expect").
 - **`log.head` is public.** A recovery is signed by someone who has no
   session, for a repository whose daemon key may be gone (`foreign`), and
   a hash says nothing of the log's content.
@@ -4545,6 +4591,236 @@ an agent's code in a sandbox that was meant to see none of the user's data.
   run. Written down as a limit of macOS; Linux has a `/dev/shm` per run.
 - **A test runs the real `sandbox-exec`** with the profile: nothing else
   reads its regular expression.
+
+## The sudo that is asked is the system's
+
+`sudo_without_password()` (the hook at a session's start, `lonca doctor`)
+ran `sudo -n true` by name. The answer lowers a session to `unobserved`,
+so it is an answer an agent would rather give itself, and a file named
+`sudo` earlier on `PATH` gave it. It is run by path now: `/usr/bin/sudo`,
+`/bin/sudo`, `/run/wrappers/bin/sudo`, the first that is a file; a machine
+with none has no sudo that runs without a password. The hook still runs as
+the developer and reports its own answer: this closes the cheap way, and
+the managed, root-owned hook program of a hardened install is what makes
+the report worth anything.
+
+## The auditor is told which log to expect
+
+`verify_chain` takes the daemon key from the first entry it is given, and a
+genesis is checked against the human key inside itself: a log vouches for
+its own wholeness and for nothing else. In CI the auditor read whatever the
+remote held. Whoever could push there (an agent outside a sandbox has the
+developer's credentials) could push a log of their own making with any
+trunk, or an earlier prefix of the real one from before a policy was
+tightened or a key revoked, and `verify` printed `ok`. `compare` needs a
+second copy, which a CI job does not have; `bridge.push` entries live in
+the log being replaced.
+
+- **`verify --genesis <hash>`**: the first entry must have this hash. It
+  covers the repository's name, the first daemon key and the owner's key,
+  so it is the name of the log among all logs, and it never changes.
+  `verify` prints it (`genesis:`) for the owner to note where a push does
+  not reach.
+- **`verify --extends <hash>`**: the log must have an entry with this hash,
+  a `head:` printed by an earlier run. A hash covers all before it: the
+  log is the earlier one, grown.
+- **A mismatch is a finding (`anchor`) and the audit stops there**, before
+  a decision is replayed or a fact recomputed. A log that is not the
+  expected one is hostile input, and the symbol engines an old entry may
+  name have fewer bounds than the current one (below 12 no depth limit,
+  below 16 no step budget, below 20 no read budget). Signed by the daemon
+  key they are the repository's own history; unanchored they were anyone's.
+- **Whole hashes only.** A prefix names many entries; a usage error.
+- **The example workflow** (`docs/ci/lonca-audit.yml`) takes the genesis
+  from a repository variable (an administrator's to change, not a push's)
+  and fails until it is set; the last head it keeps in the Actions cache
+  of the default branch, which a workflow run on another branch does not
+  write. Somebody who can change the workflow on the default branch can
+  still remove the check: that is the branch's protection to stop, not the
+  auditor's.
+- **Not the default.** `verify` without them still answers what it always
+  did; a store on the owner's own machine needs no anchor to be theirs.
+
+## The Touch ID dialog is the helper's
+
+`lonca-se sign <keyfile> <reason>` signed its standard input unread under
+whatever text the caller gave. `lonca` gave a true one; any other program
+running as the human could build the bytes of a `policy.update` or an
+`approve` and ask for a touch under "Lonca (demo): end session s3". The
+threat model said the dialog names the operation.
+
+- **`sign` takes no text.** It reads what it is to sign, takes it for
+  signed only if it is an intent (`lonca-human-intent-v1`/`-v2`, or
+  `lonca-human-login-v1`: a JSON object with the fields the kind needs),
+  and writes the dialog from it. A fourth argument, as an older `lonca`
+  passes, is not read. Anything else is refused before the key is opened.
+- **The words are `describe`'s**, written a second time in Swift: the
+  helper can not link the Rust, and a helper that asked `lonca` for the
+  text would be back to trusting a caller. A test builds the helper and
+  asks both about every kind of operation a human signs
+  (`the_helper_says_what_lonca_says`, macOS only: it needs `swiftc`). A
+  new kind without words is named by its kind in both.
+- **Control and format characters are left out of the dialog**: an agent's
+  name or a path with a line break would redraw it.
+- **`lonca-se describe`** prints what `sign` would show, for that test and
+  for anyone who wants to see it without a touch.
+- **Not changed:** `.userPresence` (password and watch count as presence;
+  `.biometryCurrentSet` would lock a key at every new fingerprint and has
+  no fallback when the sensor fails), and `$LONCA_SE` before the helper
+  beside `lonca` (the tests stand a script in for the enclave through it;
+  a program that can set the environment of the human's shell can replace
+  `lonca` itself).
+
+## A check's log does not hold a passed value
+
+A check's log was stored as the command wrote it. The log is a blob of the
+store: `change.get` returns its end to any session of the repository, the
+proposing agent first of all, and a push carries it. The command is the
+change's own code. So a value the agent could not read itself (a name of
+`env_passthrough`, a file under `verification.read`) came back to it
+through a test that printed it.
+
+- **A value of `env_passthrough` is written `***` in the log**, as it
+  already was in what `identify` records. A value that is a directory is
+  left: `HOME` and `CARGO_HOME` are on every line of a build's output and
+  tell nothing.
+- **That is for accidents, and the guide says so.** A command that means
+  to tell a value writes it another way, and a file under `read` has no
+  value to look for. The rule a policy can rely on is the other one: what
+  the verification sandbox can read, the proposing agent can read. The
+  Node starter no longer opens `~/.npmrc`.
+- **Not done:** keeping the log from agents. An agent needs the failure to
+  fix it, and the pass or fail alone already carries a bit per run.
+- Logs written before are as they were.
+
+## A hardened install takes nothing from the caller's account
+
+The path to hardened mode is cooperative first: agents have run as the
+developer before root is asked to install anything. The four scripts
+(`install-hardened.sh`, `uninstall-hardened.sh`, macOS and Linux) found
+`awk`, `install`, `dscl`, `rm` by name, in the `PATH` sudo was called with
+(macOS's sudo keeps the caller's; `install.sh` puts `~/.local/bin` first in
+it), and copied `lonca` from an archive the guide had the user unpack in
+their own directory. A shim named `awk`, or a replaced `lonca`, ran as root
+or became the daemon.
+
+- **`PATH=/usr/bin:/bin:/usr/sbin:/sbin` is the first thing each script
+  does.**
+- **The installer installs only from files that are root's alone**: this
+  script, the uninstaller and each binary, owned by root, written by no
+  group or other, no symbolic link, and the same for every directory above
+  them. Otherwise it lists them and stops. Checking a digest inside the
+  script would not do: the script itself comes from the same directory,
+  and a file can be swapped between a check and a copy. A file root owns
+  in a directory root owns can not.
+- **The guide's order is: copy to root's place, check the copy, unpack,
+  install.** The check (`gh attestation verify`, or `SHA256SUMS`) is the
+  human's, on a file that can no longer change. `tar --no-same-owner`:
+  the archive's files carry the build runner's uid, which on a Mac is the
+  first user's.
+- **`--check-source`** asks the question without sudo; **`--unprotected-source`**
+  is for a build from one's own checkout, with a warning.
+- **The uninstaller is installed** beside `bin`, root's, and run from
+  there: the one in the unpacked archive is as open as the installer was.
+- **Not confirmed by a run:** that sudo on a stock Mac passes the caller's
+  `PATH` on. The scripts no longer depend on the answer.
+
+## A tree that can not be written out is the change's failure
+
+The verifier writes a change's files out before it runs the checks. Where
+that failed (a name longer than the file system takes, `A/b` beside `a` on
+a volume that folds case), the error went up as an error of the daemon:
+no entry was written, the change stayed at the head of the queue, the
+worker tried it again and failed again, and nothing behind it was ever
+integrated. One session could stop a repository, and the log had nothing
+to say why.
+
+- **It is evidence now.** The first check owed gets `error` with
+  `"error": "unwritable_tree"` and a log that names the file; the others
+  are `skipped`. `decide()` refuses the integration as it refuses any
+  errored check (`verification_error:<check>`), the change is rejected,
+  and the queue goes on.
+- **Only the tree.** A scratch directory that can not be made, or a blob
+  that does not read, is still the daemon's error: it would fail every
+  change alike, and rejecting them one by one would empty the queue for a
+  full disk.
+- **A name over 255 bytes is refused when files are proposed**
+  (`paths::validate_writable_path`, in the daemon's intake, not in
+  `decide()`: `validate_repo_path` is replayed and stays). Git and the log
+  have no such limit, so a commit a human proposes can still carry one;
+  it is then rejected by the rule above.
+- **Not refused at intake:** names that collide when case is folded. Linux
+  holds both, a repository imported from Git may have them, and whether
+  they can be written is the verifying machine's to say, which it now
+  does.
+
+## Four small things in the command line
+
+Found together in a review of 2026-11-11, each small.
+
+- **A workspace file is taken only if its name was that file to the end.**
+  `wsfs::read` refuses a file with another hard link (the other name may
+  lie outside the workspace), but read the count after the open: a name
+  linked in from outside and removed in between showed one link on a file
+  that was never the workspace's. After the read the name is looked at
+  again without following links: same device and inode, one link, or
+  nothing is taken.
+- **`lonca fetch` writes trunk's bundle where only its user reads.** It
+  went to the shared temporary directory under the default mode, readable
+  by every local user for the length of a fetch; it is a `tempfile` now
+  (0600, removed when dropped).
+- **The launcher's last look at the workspace holds one file at a time.**
+  `lonca run` counts what a command left unproposed before it ends the
+  session. It read every changed file's content into one list first; a
+  command that left many large files got the launcher killed before
+  `session.end`, and the session and its token outlived the run.
+  `local_files` keeps each file's name and hash and lets the content go.
+- **A key file that was already there is announced.** `human rotate`,
+  `human recover` and `human recovery-key --out` go on with a key file an
+  interrupted run left, which is how they resume. A program running as
+  the same user can leave one too, of a key it knows. The command now
+  says that the file was there and which public key it holds, before the
+  key is signed into a repository. It does not refuse: resuming is the
+  point, and a refusal would need a flag every interrupted run then has
+  to be told about. With a key that proves presence the person reads the
+  note before they touch.
+
+## What waited is decided for the state it is released into
+
+Format 35, with three smaller things found beside it.
+
+- **A released operation is checked again.** An operation that a policy
+  rule sends to a human waits, and the approval that completes it applied
+  it as it was asked. Only the key operations looked at what had changed
+  meanwhile. A second `human.enroll` of a name, released after the first,
+  replaced that person's key; a `session.start` or `cap.attenuate` replaced
+  a session of the same id; a `lease.acquire` was inserted beside a lease
+  another session had taken in between. The releasing approval now makes
+  the operation's own checks of the state again (`already_enrolled`,
+  `key_reused`, `session_exists`, `invalid_lease_set`, `lease_held:…`) and
+  is denied with them; the operation stays pending for a rejection.
+- **`human.enroll` refuses any key the log has known**, in use or retired.
+  It asked only about retired ones, so a key could be two people.
+- **A tainted session's intent is not handed to another agent.** A lease's
+  intent is free text, and `lease_held:<symbol>:<holder>:<intent>` gives
+  it to whoever asks for the same symbol; `negotiate` taints its reader
+  for the same kind of text, a denial did not. From format 35 the fourth
+  field is `(not shown, its session read outside content)` when the holder
+  is tainted; the daemon does the same in the details of a denial and in
+  what `status` gives an agent of another session's leases and interests.
+  People read the text itself. Not covered: the claim and the diff of a
+  tainted session's pending change, which another agent can still read
+  with `change.get`; they are that change's content, and whether agents
+  should read each other's unreviewed work at all is a larger question.
+- **Evidence is of the tree that was merged**, for one change as for a
+  batch: the auditor compared `subject_tree` with what trunk became only
+  for batches, and with `queue.batch_size = 1`, the default, evidence of
+  any tree passed. Every log written so far holds to it (the golden logs
+  of all formats pass), so it has no format.
+- **A signature's freshness is asked with saturating arithmetic.** An
+  entry's time is a number its writer chose; at the ends of the range the
+  check overflowed, and with overflow checks on that stops `lonca-audit
+  verify` without a finding instead of answering.
 
 ## Text for a terminal
 

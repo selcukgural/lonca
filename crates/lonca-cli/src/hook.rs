@@ -32,10 +32,24 @@ fn block(msg: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
+/// Where the system keeps `sudo`. Never the first `sudo` on `PATH`: the
+/// question is what the real one would do, and a file an agent put earlier
+/// on `PATH` answers whatever suits it.
+const SUDO: [&str; 3] = ["/usr/bin/sudo", "/bin/sudo", "/run/wrappers/bin/sudo"];
+
+/// The system's `sudo`, if it has one.
+fn sudo() -> Option<&'static str> {
+    SUDO.into_iter().find(|p| std::path::Path::new(p).is_file())
+}
+
 /// `sudo -n true` succeeds only if sudo would run without asking for a
-/// password right now (cached credentials or NOPASSWD).
+/// password right now (cached credentials or NOPASSWD). A machine with no
+/// `sudo` has none that runs without one.
 pub fn sudo_without_password() -> bool {
-    let Ok(mut child) = Command::new("sudo")
+    let Some(sudo) = sudo() else {
+        return false;
+    };
+    let Ok(mut child) = Command::new(sudo)
         .args(["-n", "true"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

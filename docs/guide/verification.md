@@ -388,3 +388,12 @@ tests: fail (exit 101, 48210 ms, sandbox seatbelt)
   lonca verify: sandbox seatbelt, env PATH HOME TMPDIR LANG LONCA_VERIFY CARGO_HOME RUSTUP_HOME
   ...
 ```
+
+A check that says `error` did not run to an answer: it was killed at its
+timeout, left something running, met a full disk, or (`unwritable_tree`,
+on the first check, the others skipped) the files of the change could not
+be written out on the daemon's machine at all. That last one is a file
+name the file system does not take: two names that differ only in case on
+macOS where one is a directory, or a name it has no room for. The log says
+which file. The change is rejected with `verification_error:<check>`;
+rename the file and propose again.

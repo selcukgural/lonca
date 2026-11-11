@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### A change whose files can not be written out no longer stops the queue
+
+Before its checks run, a change's files are written out on the daemon's
+machine. A file name that machine's file system does not take (longer than
+255 bytes; `A/b` beside `a` on macOS) made that fail, and the change stayed
+at the head of the merge queue for good: nothing behind it integrated, and
+no entry said why. Now the first check is recorded as `error`
+(`unwritable_tree`, with the file named in its log), the change is rejected
+with `verification_error:<check>`, and the queue goes on. A proposal with a
+name over 255 bytes is refused when it is made.
+
 ### A session's directory is in the log
 
 `lonca session start` now records the workspace directory in the signed

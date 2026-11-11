@@ -532,3 +532,23 @@ fn ping_says_whether_the_daemon_is_hardened() {
     e.reopen();
     assert_eq!(e.ok("ping", None, None, json!({}))["hardened"], json!(true));
 }
+
+/// A file name no file system holds is refused when it is proposed, with
+/// the reason: its checks could never run.
+#[test]
+fn a_proposal_with_a_name_too_long_for_a_file_system_is_refused() {
+    let mut e = busy_repo();
+    let token = e.session("s-long", &["src/**"]);
+    let base = e.trunk();
+    let name = format!("src/{}.rs", "n".repeat(300));
+    let claim = Claim {
+        intent: "a long name".into(),
+        ..Default::default()
+    };
+    let args = json!({"base": base, "files": [file(&name, "pub fn f() {}\n")], "claim": claim});
+    let (code, why) = e
+        .call("change.propose", None, Some(&token), args)
+        .unwrap_err();
+    assert_eq!(code, "invalid");
+    assert!(why.contains("303 bytes long") && why.len() < 200, "{why}");
+}

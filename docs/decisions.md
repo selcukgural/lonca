@@ -4472,6 +4472,35 @@ replayed it.
 - **The signer asks the daemon it submits to.** A daemon that lies about
   the head gets a signature it can not use in the real log.
 
+## A tree that can not be written out is the change's failure
+
+The verifier writes a change's files out before it runs the checks. Where
+that failed (a name longer than the file system takes, `A/b` beside `a` on
+a volume that folds case), the error went up as an error of the daemon:
+no entry was written, the change stayed at the head of the queue, the
+worker tried it again and failed again, and nothing behind it was ever
+integrated. One session could stop a repository, and the log had nothing
+to say why.
+
+- **It is evidence now.** The first check owed gets `error` with
+  `"error": "unwritable_tree"` and a log that names the file; the others
+  are `skipped`. `decide()` refuses the integration as it refuses any
+  errored check (`verification_error:<check>`), the change is rejected,
+  and the queue goes on.
+- **Only the tree.** A scratch directory that can not be made, or a blob
+  that does not read, is still the daemon's error: it would fail every
+  change alike, and rejecting them one by one would empty the queue for a
+  full disk.
+- **A name over 255 bytes is refused when files are proposed**
+  (`paths::validate_writable_path`, in the daemon's intake, not in
+  `decide()`: `validate_repo_path` is replayed and stays). Git and the log
+  have no such limit, so a commit a human proposes can still carry one;
+  it is then rejected by the rule above.
+- **Not refused at intake:** names that collide when case is folded. Linux
+  holds both, a repository imported from Git may have them, and whether
+  they can be written is the verifying machine's to say, which it now
+  does.
+
 ## Text for a terminal
 
 A person approves from what `pending`, `diff` and `status` show, and most

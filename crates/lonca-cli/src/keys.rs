@@ -164,7 +164,7 @@ pub fn recover(name: &str, repos: &[String], recovery_key: &Path, new: NewKey) -
     let (rk, open) = KeyPair::load_carried(recovery_key, current_uid())
         .map_err(|e| anyhow::anyhow!("recovery key {}: {e}", recovery_key.display()))?;
     if open {
-        eprintln!(
+        errln!(
             "warning: others may read the recovery key {}; it is spent once this recovery is \
              done, and the new key is private",
             recovery_key.display()

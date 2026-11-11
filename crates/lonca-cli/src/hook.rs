@@ -28,7 +28,7 @@ use crate::workspace::Workspace;
 const MAX_INPUT: u64 = 16 * 1024 * 1024;
 
 fn block(msg: &str) -> ExitCode {
-    eprintln!("{msg}");
+    errln!("{msg}");
     ExitCode::from(2)
 }
 
@@ -87,7 +87,7 @@ pub fn run(harness: &str, fail_open: bool) -> ExitCode {
             Ok(Some(ws)) => ws,
             Ok(None) => return ExitCode::SUCCESS,
             Err(e) if fail_open => {
-                eprintln!("lonca: {e:#}");
+                errln!("lonca: {e:#}");
                 return ExitCode::SUCCESS;
             }
             Err(e) => {
@@ -111,7 +111,7 @@ pub fn run(harness: &str, fail_open: bool) -> ExitCode {
     match answered {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if fail_open => {
-            eprintln!("lonca: {e:#}");
+            errln!("lonca: {e:#}");
             ExitCode::SUCCESS
         }
         Err(e) => block(&format!(
@@ -165,7 +165,7 @@ fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
     if r["phase"] == "stop" {
         // Whatever the flags, a stop that fails here ends the turn.
         return Ok(stop(&mut client, harness, ws).unwrap_or_else(|e| {
-            eprintln!("lonca: {e:#}");
+            errln!("lonca: {e:#}");
             None
         }));
     }

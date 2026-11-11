@@ -62,6 +62,30 @@ cd "$HOME/ws/codex"
 ok lonca sync
 grep -q 'amount <= 0 || amount > self' src/billing.rs || fail "codex did not get claude's change"
 
+criterion A37 "what an agent wrote is shown on the terminal, never obeyed: control characters in an intent or a file are written out"
+ctl=$'tidy\e[2K\e[1A\r#1 change.propose human:ayse'
+ok lonca lease acquire 'src/billing.rs#Client.refund' -i "$ctl"
+edit src/billing.rs 's/(amount\.max\(0\);)/$1 \/\/ \e[8mhidden\r/'
+ok lonca propose -i "$ctl" --accept-facts
+tidy=$(seq_of)
+change=$(change_of)
+cd "$HOME/ws/claude"
+refused lonca lease acquire 'src/billing.rs#Client.refund' -i 'mine now'
+has 'lease_held:src/billing.rs#Client.refund'
+lacks $'[\e\r]'
+cd "$HOME"
+ok lonca pending --repo demo
+lacks $'[\e\r]'
+has "^#$tidy change.propose agent:codex/.*tidy\\\\u\\{1b\\}\\[2K\\\\u\\{1b\\}\\[1A\\\\r#1 change.propose human:ayse"
+[ "$(grep -c '^#' <<<"$OUT")" = 1 ] || fail "one pending entry is not one line"
+ok lonca diff "$change" --repo demo
+lacks $'[\e\r]'
+has '^\+.*// \\u\{1b\}\[8mhidden\\r$'
+ok lonca status --repo demo
+lacks $'[\e\r]'
+ok lonca reject "$tidy" --reason "no" --repo demo
+cd "$HOME/ws/codex"
+
 criterion A11 "an ended session's token is refused"
 ok lonca session end
 refused lonca lease acquire 'src/billing.rs#Client.charge' -i 'after the end'

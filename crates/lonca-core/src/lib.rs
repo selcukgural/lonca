@@ -21,6 +21,7 @@ pub mod ops;
 pub mod paths;
 #[cfg(feature = "store")]
 pub mod store;
+pub mod terminal;
 
 pub use changeid::ChangeId;
 pub use error::{Error, Result};

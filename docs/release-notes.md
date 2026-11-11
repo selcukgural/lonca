@@ -37,6 +37,16 @@ refused (`child_agent_name:<name>`), so a rule on a name holds for every
 session made from that agent's. Nothing Lonca ships calls `cap.attenuate`
 with another name; a runner that does must send the parent's.
 
+### What an agent wrote is shown, not obeyed, by your terminal
+
+`lonca` and `lonca-audit` now write out control characters in everything
+they print for a person: an escape is shown as `\u{1b}`, a carriage return
+as `\r`, a text direction override as `\u{202e}`. An intent, a path, a
+line of a diff or the text of a denial can no longer move the cursor, clear
+a line or hide text on the reviewer's screen. Newlines and tabs are kept;
+`--json` output is unchanged. A CRLF file's lines end in a visible `\r` in
+`lonca diff`.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

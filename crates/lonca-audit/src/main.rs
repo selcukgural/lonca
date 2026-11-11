@@ -18,6 +18,24 @@ use std::process::ExitCode;
 use lonca_audit::{EnvChange, Options, audit, compare};
 use lonca_core::Store;
 use lonca_core::oplog::OpLog;
+use lonca_core::terminal::printable;
+
+/// `println!` for a terminal: a finding quotes paths, names and reasons
+/// from the log, which agents wrote, and nothing of it is obeyed there
+/// (`lonca_core::terminal`). JSON has no raw control character to begin
+/// with.
+macro_rules! say {
+    ($($arg:tt)*) => {
+        println!("{}", printable(&format!($($arg)*)))
+    };
+}
+
+/// `eprintln!`, the same way.
+macro_rules! complain {
+    ($($arg:tt)*) => {
+        eprintln!("{}", printable(&format!($($arg)*)))
+    };
+}
 
 /// A check that ran in another environment, as `verify` prints it.
 fn env_line(c: &EnvChange) -> String {
@@ -28,7 +46,7 @@ fn env_line(c: &EnvChange) -> String {
 }
 
 fn usage() -> ExitCode {
-    eprintln!(
+    complain!(
         "usage:\n  lonca-audit verify <git-dir> [--shallow] [--no-refs] [--all-refs] [--json] [--freeze-flag <file>]\n  lonca-audit compare <local-git-dir> <published-git-dir>\n  lonca-audit --version"
     );
     ExitCode::from(2)
@@ -42,7 +60,7 @@ fn main() -> ExitCode {
         // The same answer as `lonca --version`, so a script can check that
         // the auditor it runs is the release it installed.
         Some("--version" | "-V") if args.len() == 1 => {
-            println!("lonca-audit {}", env!("CARGO_PKG_VERSION"));
+            say!("lonca-audit {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         _ => usage(),
@@ -73,36 +91,39 @@ fn verify(args: &[String]) -> ExitCode {
     let store = match Store::open(&dir) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("lonca-audit: {}", open_error(&dir, &e));
+            complain!("lonca-audit: {}", open_error(&dir, &e));
             return ExitCode::from(2);
         }
     };
     let report = match audit(&store, opts) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("lonca-audit: {e}");
+            complain!("lonca-audit: {e}");
             return ExitCode::from(2);
         }
     };
     if json {
-        println!(
+        say!(
             "{}",
             serde_json::to_string_pretty(&report).expect("serializable")
         );
     } else {
-        println!("operations: {}", report.ops);
-        println!("head:       {}", report.head_hash);
+        say!("operations: {}", report.ops);
+        say!("head:       {}", report.head_hash);
         for k in &report.key_switches {
-            println!(
+            say!(
                 "daemon key {:>6} {:<14} {} by {}",
-                k.seq, k.kind, k.key, k.actor
+                k.seq,
+                k.kind,
+                k.key,
+                k.actor
             );
         }
         for c in &report.env_changes {
-            println!("{}", env_line(c));
+            say!("{}", env_line(c));
         }
         for f in &report.skipped {
-            println!(
+            say!(
                 "skipped  {:>6} {:<9} {}",
                 f.seq.map(|s| s.to_string()).unwrap_or_default(),
                 f.kind,
@@ -110,14 +131,14 @@ fn verify(args: &[String]) -> ExitCode {
             );
         }
         for f in &report.findings {
-            println!(
+            say!(
                 "FINDING  {:>6} {:<9} {}",
                 f.seq.map(|s| s.to_string()).unwrap_or_default(),
                 f.kind,
                 f.detail
             );
         }
-        println!("{}", if report.ok() { "ok" } else { "FAILED" });
+        say!("{}", if report.ok() { "ok" } else { "FAILED" });
     }
     if !report.ok() {
         if let Some(flag) = freeze_flag {
@@ -127,7 +148,7 @@ fn verify(args: &[String]) -> ExitCode {
                 .map(|f| format!("audit: {} {}", f.kind, f.detail))
                 .unwrap_or_default();
             if let Err(e) = std::fs::write(&flag, reason) {
-                eprintln!("lonca-audit: could not write freeze flag: {e}");
+                complain!("lonca-audit: could not write freeze flag: {e}");
             }
         }
         return ExitCode::from(1);
@@ -163,13 +184,13 @@ fn compare_cmd(args: &[String]) -> ExitCode {
     let (l, p) = match (read(local), read(published)) {
         (Ok(l), Ok(p)) => (l, p),
         (Err(e), _) | (_, Err(e)) => {
-            eprintln!("lonca-audit: {e}");
+            complain!("lonca-audit: {e}");
             return ExitCode::from(2);
         }
     };
     let findings = compare(&l, &p);
     for f in &findings {
-        println!(
+        say!(
             "FINDING  {:>6} {:<9} {}",
             f.seq.map(|s| s.to_string()).unwrap_or_default(),
             f.kind,
@@ -177,7 +198,7 @@ fn compare_cmd(args: &[String]) -> ExitCode {
         );
     }
     if findings.is_empty() {
-        println!(
+        say!(
             "ok: published log ({} entries) is a prefix of the local log ({} entries)",
             p.len(),
             l.len()

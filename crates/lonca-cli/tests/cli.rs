@@ -221,6 +221,65 @@ fn agent_workspace(e: &Env) -> PathBuf {
     r.join("ws")
 }
 
+/// A person approves from what the terminal shows. An agent's intent, the
+/// lines of its files and what a denial quotes of them reach the terminal
+/// with their control characters written out, never obeyed: no escape
+/// sequence redraws the list, no carriage return writes over a line.
+#[test]
+fn what_an_agent_wrote_reaches_the_terminal_without_control_characters() {
+    let e = Env::new();
+    let r = e.root.clone();
+    let ws = agent_workspace(&e);
+    // Erase this line, go up one and write another entry over it.
+    let intent = "fix\x1b[2K\x1b[1A\r#1 change.propose human:ayse \u{202E}";
+    std::fs::write(
+        ws.join("src/lib.rs"),
+        "pub fn charge(a: u64) -> u64 {\n    a * 2 // \x1b[8m\x1b[1A\r\n}\n\npub fn refund(a: u64) -> u64 {\n    a\n}\n",
+    )
+    .unwrap();
+    e.run(
+        &ws,
+        &["lease", "acquire", "-i", intent, "src/lib.rs#charge"],
+    );
+    let proposed = parse(&e.run(&ws, &["propose", "-i", intent, "--accept-facts", "--json"]));
+    assert_eq!(proposed["status"], "pending", "{proposed}");
+    // JSON carries the text as it is, escaped as JSON does.
+    assert_eq!(proposed["intent"].as_str().unwrap_or(intent), intent);
+    let change = proposed["change"].as_str().unwrap().to_string();
+    let seq = proposed["seq"].as_u64().unwrap().to_string();
+
+    let shown = |out: &str, what: &str| {
+        let acts = |c: char| c.is_control() && c != '\n' && c != '\t' || c == '\u{202E}';
+        assert!(!out.chars().any(acts), "{what}: {out:?}");
+    };
+    let pending = e.run(&r, &["pending", "--repo", "demo"]);
+    shown(&pending, "pending");
+    assert!(
+        pending.contains("fix\\u{1b}[2K\\u{1b}[1A\\r#1 change.propose human:ayse \\u{202e}"),
+        "{pending}"
+    );
+    assert_eq!(
+        pending.lines().filter(|l| l.starts_with('#')).count(),
+        1,
+        "one entry, on one line: {pending}"
+    );
+    let diff = e.run(&r, &["diff", &change, "--repo", "demo"]);
+    shown(&diff, "diff");
+    assert!(
+        diff.contains("+    a * 2 // \\u{1b}[8m\\u{1b}[1A\\r\n"),
+        "{diff}"
+    );
+    for args in [
+        &["status", "--repo", "demo"][..],
+        &["log", "--repo", "demo"],
+        &["change", &change, "--repo", "demo"],
+        &["approve", &seq, "--repo", "demo"],
+    ] {
+        shown(&e.run(&r, args), args[0]);
+    }
+    shown(&e.run(&ws, &["status"]), "status in the workspace");
+}
+
 #[test]
 fn agent_workflow_through_the_cli() {
     let e = Env::new();

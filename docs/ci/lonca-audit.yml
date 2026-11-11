@@ -32,7 +32,8 @@ jobs:
           gh release download "v$LONCA_VERSION" --repo selcukgural/lonca \
             --pattern "$archive" --dir "$RUNNER_TEMP"
           gh attestation verify "$RUNNER_TEMP/$archive" --repo selcukgural/lonca \
-            --signer-workflow selcukgural/lonca/.github/workflows/release.yml
+            --signer-workflow selcukgural/lonca/.github/workflows/release.yml \
+            --source-ref "refs/tags/v$LONCA_VERSION"
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" lonca-audit
       - name: Replay and verify every decision
         run: '"$RUNNER_TEMP/lonca-audit" verify .git'

@@ -78,7 +78,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 | CICD-SEC-6 Insufficient Credential Hygiene | met | no long-lived secrets in CI; secret scanning with push protection | — |
 | CICD-SEC-7 Insecure System Configuration | met | pinned toolchain, timeouts, actions allowlist and SHA pinning required | — |
 | CICD-SEC-8 Ungoverned 3rd Party Services | met | five named third-party actions, nothing else (`docs/decisions.md`, "CI and the repository's own settings") | — |
-| CICD-SEC-9 Improper Artifact Integrity Validation | met | each release archive has a build provenance attestation (`gh attestation verify`), `SHA256SUMS` and a CycloneDX SBOM (`release.yml`, #7, #60) | — |
+| CICD-SEC-9 Improper Artifact Integrity Validation | met | each release archive, `SHA256SUMS` and the CycloneDX SBOM have a build provenance attestation (`release.yml`, #7, #60); a published release is immutable; the Homebrew tap verifies the attestation, and `install.sh` does when `gh` is there and says so when it is not (`LONCA_ATTESTATION=require` makes it a condition) | a plain `curl … \| sh` on a machine without `gh` trusts the release's own checksum |
 | CICD-SEC-10 Insufficient Logging and Visibility | met | Actions logs, Scorecard, CodeQL; the auditor workflow for pushed repositories (`docs/ci/lonca-audit.yml`) | — |
 
 ## ASVS 5.0, Level 2

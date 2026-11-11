@@ -5,8 +5,9 @@
 #
 # It downloads the release archive for this system (macOS or Linux, x86_64
 # or arm64) from https://github.com/selcukgural/lonca/releases, checks it
-# against the release's SHA256SUMS (nothing is installed when it does not
-# match), puts `lonca`, `lonca-audit` and on macOS `lonca-se` (the Secure
+# against the release's SHA256SUMS and, when the GitHub CLI is here and
+# signed in, against the archive's build provenance attestation (nothing is
+# installed when either does not match), puts `lonca`, `lonca-audit` and on macOS `lonca-se` (the Secure
 # Enclave helper, which lonca finds next to itself) in ~/.local/bin and,
 # when that is not on PATH yet, adds it in your shell's startup file once.
 # Running it again updates.
@@ -21,6 +22,10 @@
 #   LONCA_NO_MODIFY_PATH=1   never touch a startup file
 #   LONCA_DOWNLOAD_URL=URL   where the release files are (a mirror, or a
 #                            file:// directory)
+#   LONCA_ATTESTATION=require|skip
+#                            the attestation must be checked (fails without
+#                            a signed-in `gh`), or is not looked at; default:
+#                            checked when `gh` can, said when it can not
 #
 # Uninstall: rm ~/.local/bin/lonca ~/.local/bin/lonca-audit
 # ~/.local/bin/lonca-se (and the "# lonca" lines it added). The daemon's
@@ -83,6 +88,12 @@ download() {
             --fail --silent --show-error --location --retry 3 \
             --output "$2" "$1" || die "could not download $1"
     elif has wget; then
+        # `--https-only` is about links wget follows in pages; the address
+        # itself is held to https here.
+        case "$1" in
+            https://*) ;;
+            *) die "with wget only https:// is fetched (install curl for a file:// mirror): $1" ;;
+        esac
         wget --https-only --quiet --output-document="$2" "$1" ||
             die "could not download $1"
     else
@@ -98,6 +109,45 @@ sha256() {
     else
         die "sha256sum or shasum is needed to check the download"
     fi
+}
+
+# SHA256SUMS comes from the same release as the archive: whoever can replace
+# one can replace both. The attestation can not be made by them: it is
+# signed for this repository's release workflow and kept by GitHub, apart
+# from the release. Checks the archive $1 against it; $2 is the version
+# asked for, if one was.
+attested() {
+    mode=${LONCA_ATTESTATION:-}
+    case "$mode" in
+        "" | require | skip) ;;
+        *) die "LONCA_ATTESTATION is require or skip, not $mode" ;;
+    esac
+    if [ "$mode" = skip ]; then
+        say "the attestation was not checked (LONCA_ATTESTATION=skip)"
+        return
+    fi
+    how="gh attestation verify <archive> --repo selcukgural/lonca"
+    if ! has gh; then
+        [ "$mode" != require ] || die "LONCA_ATTESTATION=require needs the GitHub CLI (gh)"
+        say "note: checked against the release's own SHA256SUMS only; with the GitHub CLI"
+        say "      its build attestation is checked too ($how)"
+        return
+    fi
+    if ! gh auth status >/dev/null 2>&1; then
+        [ "$mode" != require ] || die "LONCA_ATTESTATION=require needs gh signed in (gh auth login)"
+        say "note: gh is not signed in, so the build attestation was not checked ($how)"
+        return
+    fi
+    set -- "$1" "$2" --repo selcukgural/lonca \
+        --signer-workflow selcukgural/lonca/.github/workflows/release.yml
+    if [ -n "$2" ]; then
+        set -- "$@" --source-ref "refs/tags/v${2#v}"
+    fi
+    archive_file=$1
+    shift 2
+    gh attestation verify "$archive_file" "$@" >/dev/null 2>&1 ||
+        die "the archive has no valid build attestation of selcukgural/lonca's release workflow; nothing installed (to see why: $how)"
+    say "build attestation verified"
 }
 
 # The line that puts $1 on PATH in the startup file of the person's shell,
@@ -164,6 +214,7 @@ main() {
     got=$(sha256 "$tmp/$archive")
     [ "$got" = "$want" ] ||
         die "$archive does not match its SHA256SUMS (got $got, want $want); nothing installed"
+    attested "$tmp/$archive" "${LONCA_VERSION:-}"
 
     mkdir "$tmp/x"
     tar -xzf "$tmp/$archive" -C "$tmp/x" || die "could not unpack $archive"

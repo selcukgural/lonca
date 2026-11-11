@@ -12,8 +12,10 @@ curl -fsSL https://selcukgural.github.io/lonca/install.sh | sh
 
 It downloads the release archive for your machine from
 [GitHub releases](https://github.com/selcukgural/lonca/releases), checks it
-against the release's `SHA256SUMS` (nothing is installed when it does not
-match), puts `lonca`, `lonca-audit` and, on macOS, `lonca-se` (the Secure
+against the release's `SHA256SUMS` and, when the GitHub CLI (`gh`) is
+installed and signed in, against the archive's build attestation (nothing
+is installed when either does not match; without `gh` it says that only
+the checksum was checked), puts `lonca`, `lonca-audit` and, on macOS, `lonca-se` (the Secure
 Enclave helper) in `~/.local/bin`, and adds that directory to your shell's
 `PATH` once. Running it again updates.
 
@@ -22,6 +24,7 @@ Enclave helper) in `~/.local/bin`, and adds that directory to your shell's
 | `LONCA_VERSION=0.2.3` | a version instead of the latest |
 | `LONCA_INSTALL_DIR=DIR` | where the binaries go (default `~/.local/bin`) |
 | `LONCA_NO_MODIFY_PATH=1` | never touch a shell startup file |
+| `LONCA_ATTESTATION=require` | fail unless the build attestation was checked (needs `gh`, signed in); `skip` does not look at it |
 
 Read it before you run it:
 [install.sh](https://github.com/selcukgural/lonca/blob/main/website/static/install.sh).
@@ -66,8 +69,17 @@ Every archive on the releases page has a build provenance attestation,
 signed in the release workflow on the release tag:
 
 ```sh
-gh attestation verify lonca-aarch64-apple-darwin.tar.gz --repo selcukgural/lonca
+gh attestation verify lonca-aarch64-apple-darwin.tar.gz --repo selcukgural/lonca \
+  --signer-workflow selcukgural/lonca/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.2.3
 ```
+
+`--source-ref` holds the archive to the version you mean: without it an
+archive of any release passes. `SHA256SUMS` and the SBOM carry the same
+attestation from 0.2.4 on. A published release can not be changed: its
+files and its tag are fixed at publishing (GitHub's immutable releases).
+The checksum alone says only that the download arrived whole: it comes from
+the same place as the archive.
 
 Each release also carries a CycloneDX SBOM (`lonca-sbom.cdx.tar.gz`).
 

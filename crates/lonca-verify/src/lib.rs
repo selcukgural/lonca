@@ -214,7 +214,8 @@ impl Verifier {
             let mut attempts = 0;
             let (result, details, log) = loop {
                 attempts += 1;
-                let run = self.exec(cmd, &root, Duration::from_secs(cfg.timeout_seconds), cfg);
+                let timeout = Duration::from_secs(cfg.timeout_seconds);
+                let run = self.exec(cmd, &root, (timeout, None), cfg);
                 let done = run.0 == CheckResult::Pass || attempts > cfg.retries;
                 if done {
                     break run;
@@ -300,7 +301,7 @@ impl Verifier {
         let timeout = Duration::from_secs(cfg.timeout_seconds.min(IDENTIFY_SECONDS));
         let mut lines = BTreeMap::new();
         for (n, cmd) in cfg.identify.iter().enumerate() {
-            let (result, details, log) = self.exec(cmd, root, timeout, cfg);
+            let (result, details, log) = self.exec(cmd, root, (timeout, Some(IDENTIFY_BYTES)), cfg);
             // The log starts with the environment header, which is no output.
             let output = log.split_once('\n').map(|(_, o)| o).unwrap_or("");
             let output = hide(output, &secrets);
@@ -336,12 +337,13 @@ impl Verifier {
     /// through (copied from the daemon's environment; absent ones are
     /// skipped) and the fixed values it sets. The log starts with the
     /// names that were set, never their values, so a failure explains
-    /// itself.
+    /// itself. The log keeps the end of the output, or its first `head`
+    /// bytes when there is one.
     fn exec(
         &self,
         cmd: &str,
         root: &Path,
-        timeout: Duration,
+        (timeout, head): (Duration, Option<usize>),
         cfg: &Verification,
     ) -> (CheckResult, BTreeMap<String, String>, String) {
         let tree = root.join("tree");
@@ -397,7 +399,10 @@ impl Verifier {
             return (CheckResult::Error, details, header + &short(cfg));
         }
         let running = match process::start(command, cfg) {
-            Ok(r) => r,
+            Ok(r) => match head {
+                Some(bytes) => r.keep_head(bytes),
+                None => r,
+            },
             Err(e) => {
                 details.insert("error".into(), format!("spawn: {e}"));
                 return (CheckResult::Error, details, header);
@@ -434,6 +439,10 @@ impl Verifier {
 
 /// The longest an identify command may take, if `timeout_seconds` is longer.
 pub const IDENTIFY_SECONDS: u64 = 10;
+
+/// What is kept of an identify command's output: its start. A toolchain
+/// names itself in its first lines; the rest is neither digested nor shown.
+pub const IDENTIFY_BYTES: usize = 4096;
 
 /// The longest line of an identify command's output the details keep.
 const IDENTIFY_LINE_CHARS: usize = 200;
@@ -1608,6 +1617,49 @@ mod tests {
             r[1].details["env.0.error"], "exit 127",
             "a skipped check names it too"
         );
+    }
+
+    /// Only the start of an identify command's output counts: a chatty one
+    /// names itself by its first line, and what it prints past
+    /// [`IDENTIFY_BYTES`] changes neither the line nor the digest.
+    #[test]
+    fn an_identify_command_is_read_from_its_start() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let tools = dir.path().canonicalize().unwrap().join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let tool = tools.join("chatty");
+        let prints = |first: &str, last: &str| {
+            let fill = "x".repeat(IDENTIFY_BYTES + 100_000);
+            fs::write(
+                &tool,
+                format!("#!/bin/sh\necho '{first}'\necho {fill}\necho {last}\n"),
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let mut c = cfg(Some("true"), None);
+        c.path = vec![
+            tools.display().to_string(),
+            "/usr/bin".into(),
+            "/bin".into(),
+        ];
+        c.identify = vec!["chatty".into()];
+        let env = |first: &str, last: &str| {
+            prints(first, last);
+            let r = v.run(&store, &files, &tree, &c).unwrap();
+            assert_eq!(r[0].details["env.0.output"], first, "{:?}", r[0].details);
+            assert!(!r[0].details.contains_key("env.0.error"));
+            r[0].env.clone()
+        };
+        let one = env("tool 3.1", "one");
+        assert_eq!(
+            env("tool 3.1", "two"),
+            one,
+            "past the head counts for nothing"
+        );
+        assert_ne!(env("tool 3.2", "one"), one, "the head counts");
     }
 
     #[test]

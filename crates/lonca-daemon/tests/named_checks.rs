@@ -224,3 +224,59 @@ fn status_lists_the_checks_the_policy_in_force_defines() {
     assert_eq!(st["policy_checks"], json!(["api", "zeta"]), "{st}");
     audited(&e);
 }
+
+/// Evidence written before `identify` (0.2.x) has an `env` of the sandbox
+/// and the command only, and no `env.<n>` lines. It still reads, with an
+/// empty `environment`, and audits; the auditor notes the first run after
+/// it once, since the new digest holds more, and not the next.
+#[test]
+fn evidence_from_before_identify_reads_with_no_environment() {
+    let (mut e, _) = repo("{}", "{}");
+    let old_env = |sandbox: &str, cmd: &str| {
+        lonca_core::canonical::sha256_hex(format!("{sandbox}\0{cmd}").as_bytes())
+    };
+    rewrite_log(&e, |entries| {
+        for a in entries.iter_mut().flat_map(|x| x.evidence.iter_mut()) {
+            if a.check == CheckKind::Tests {
+                a.details.retain(|k, _| !k.starts_with("env."));
+                a.env = old_env(&a.details["sandbox"], "true");
+            }
+        }
+    });
+    e.reopen();
+    let ops = OpLog::new(&e.store()).read_all().unwrap();
+    let integrated = ops.iter().rev().find_map(|o| match &o.entry.op {
+        Op::ChangeIntegrate { change, .. } => Some((o.entry.seq, *change)),
+        _ => None,
+    });
+    let (old_seq, change) = integrated.expect("the seed's integration");
+    let rec = e.ok("change.get", Some("demo"), None, json!({"change": change}));
+    let tests = rec["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["check"] == "tests")
+        .unwrap()
+        .clone();
+    assert_eq!(tests["environment"], json!([]), "{tests}");
+    let sandbox = tests["sandbox"].as_str().unwrap();
+    assert_eq!(tests["env"], old_env(sandbox, "true"), "{tests}");
+    audited(&e);
+
+    let mut run = |intent: &str| {
+        e.human_change(vec![file("notes.md", &format!("{intent}\n"))], intent);
+        assert_eq!(e.svc.process_all(), 1);
+        let ops = OpLog::new(&e.store()).read_all().unwrap();
+        ops.last().unwrap().entry.seq
+    };
+    let first = run("first after the upgrade");
+    run("second");
+    let r = audit(&e.store(), Options::default()).unwrap();
+    assert!(r.ok(), "{:#?}", r.findings);
+    let noted: Vec<_> = r
+        .env_changes
+        .iter()
+        .map(|c| (c.seq, c.check.as_str(), c.since))
+        .collect();
+    assert_eq!(noted, [(first, "tests", old_seq)]);
+}

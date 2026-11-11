@@ -125,8 +125,9 @@ identify = ["rustc --version", "cargo --version"]
 They run once per verification, before the checks, in the same sandbox,
 directory, environment and `PATH`, for at most 10 seconds each (or
 `timeout_seconds`, if that is shorter). At most 8, each at most 1024
-bytes. One that fails or times out does not fail the checks: the evidence
-says how it ended. A value passed through never reaches the evidence: where
+bytes. Only the first 4 KiB of what one prints counts, for the digest and
+for the line: a toolchain names itself at the start. One that fails or
+times out does not fail the checks: the evidence says how it ended. A value passed through never reaches the evidence: where
 an identify command prints one, it stands as `***` in both the digest and
 the lines. Do not name a command that prints a secret of its own.
 

@@ -37,9 +37,9 @@ identify = ["rustc --version", "cargo --version"]
 They run once before the checks, in the same sandbox, and each check's
 `env` becomes a digest of the sandbox, the command, the `PATH`, the
 policy's fixed values, the names passed through (never their values) and
-what the identify commands printed. Their first lines are in the evidence:
-`lonca change CHANGE --evidence` prints them, `change.get` returns them as
-`environment`, and `lonca-audit verify` notes every check whose environment
+what the identify commands printed (the first 4 KiB of it). Their first
+lines are in the evidence: `lonca change CHANGE --evidence` prints them,
+`change.get` returns them as `environment`, and `lonca-audit verify` notes every check whose environment
 changed since it last ran. A failing identify command does not fail a
 check. No log format change; the first integration after the upgrade is
 noted once, since its digest holds more.

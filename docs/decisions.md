@@ -4098,6 +4098,11 @@ changed, or whether the queue ran what CI runs.
   environment and `PATH` (a `rust-toolchain.toml` in the tree picks the
   same toolchain for both), for at most 10 seconds each. A failing or slow
   one is recorded and never fails a check: it is evidence about evidence.
+  Of its output only the first 4 KiB is kept (`Running::keep_head`; the
+  rest is read and dropped, so a full pipe never holds it): the checks keep
+  the end of theirs, where a failure shows, but a toolchain names itself
+  at the start, and a chatty command's tail would otherwise decide both the
+  line and the digest.
 - **What the digest holds.** Length-prefixed parts: the sandbox, the
   command, and an identity of the run (the `PATH`, the policy's `env` names
   and values, which are in the signed policy anyway, the passed-through

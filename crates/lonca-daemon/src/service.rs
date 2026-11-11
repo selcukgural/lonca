@@ -4363,6 +4363,12 @@ impl Service {
     /// Compares refs with the log. A ref the daemon itself left behind
     /// (crash between log append and ref update) is moved forward silently;
     /// anything else is recorded as `import.unmediated` and undone.
+    ///
+    /// Left behind: a trunk the log has had; the policy from before a
+    /// `policy.update` that is the log's last entry; either ref missing
+    /// while `repo.init` is the only entry. The policy's ref is held more
+    /// closely than the trunk's: an older policy under it at any other
+    /// time is somebody's write.
     fn reconcile(r: &mut RepoHandle, now: i64) -> std::result::Result<(), (String, String)> {
         let state = &r.chain.state;
         let (Some(trunk), Some(policy)) = (state.trunk.clone(), state.policy.clone()) else {
@@ -4375,10 +4381,15 @@ impl Service {
             if found.as_ref() == Some(&expected) {
                 continue;
             }
-            let recovering = history
-                && found
+            let state = &r.chain.state;
+            let recovering = match &found {
+                None => state.next_seq == 1,
+                Some(f) if history => state.trunk_history.contains(f),
+                Some(f) => state
+                    .policy_before
                     .as_ref()
-                    .is_some_and(|f| r.chain.state.trunk_history.contains(f));
+                    .is_some_and(|(before, at)| before == f && at + 1 == state.next_seq),
+            };
             if !recovering {
                 let op = Op::ImportUnmediated {
                     refname: refname.into(),

@@ -110,6 +110,16 @@ included. The latest 256 events of each kind now stay through every
 rotation, whatever comes after them; `security.log.1` begins with those
 that would otherwise be gone. Nothing changes in the format of a line.
 
+### A daemon that stops in the middle of a policy update does not freeze
+
+The daemon appends an entry and then moves the ref it is about. Stopped
+between the two by a crash or a power cut during `lonca policy set`, it
+took its own half-done work for a write behind its back at the next start
+and froze the repository (`refs/lonca/policy changed outside Lonca`); the
+same for a `lonca init` cut short. Both are now finished quietly at the
+start, as a trunk left one step back always was. A policy ref changed at
+any other time is still put back, logged and frozen for.
+
 ### One entry of the log has a size, and the proxy a rate
 
 The log keeps every entry, so what goes into one is now bounded before it

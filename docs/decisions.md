@@ -4463,7 +4463,7 @@ replayed it.
 - **What it does not stop.** A log rewritten after the entry a signature
   names keeps that signature where it was: it is still for what it
   approved. Replacing the log wholesale is the auditor's question
-  ("lonca-audit verify has no anchor" is its own item).
+  (see "The auditor is told which log to expect").
 - **`log.head` is public.** A recovery is signed by someone who has no
   session, for a repository whose daemon key may be gone (`foreign`), and
   a hash says nothing of the log's content.
@@ -4471,6 +4471,7 @@ replayed it.
   login is not an entry.
 - **The signer asks the daemon it submits to.** A daemon that lies about
   the head gets a signature it can not use in the real log.
+
 ## The auditor is told which log to expect
 
 `verify_chain` takes the daemon key from the first entry it is given, and a

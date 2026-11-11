@@ -79,43 +79,32 @@ acceptance/run.sh --check              # catalogue and scenarios agree
 
 ## Mutation testing
 
+By hand only, when we decide a change needs it (user's decision
+2026-11-11): nothing runs it, not CI, not a release, not a rule here.
 cargo-mutants checks that the tests would catch a wrong `>=`, a dropped `!`
 or a `decide()` arm replaced with `Ok(Allow)`. Config: `.cargo/mutants.toml`
-(whole-workspace tests per mutant, timeouts); policy: `docs/decisions.md`.
+(whole-workspace tests per mutant, timeouts, the equivalent mutants left
+out with their reasons); history: `docs/decisions.md`, "Mutation testing".
 
 ```sh
 cargo install --locked cargo-mutants@27.1.0 cargo-nextest@0.9.151
-cargo mutants --list -p lonca-policy        # what would be mutated
-cargo mutants -p lonca-policy -j 4          # one crate
+cargo mutants --list -p lonca-policy                # what would be mutated
+cargo mutants -p lonca-policy -j 4                  # one crate
+cargo mutants --in-diff <(git diff v0.2.2...) -j 4  # what changed since a tag
+cargo mutants -f crates/lonca-audit/src/lib.rs -j 4 # one file
 ```
 
 - Results are in `mutants.out/`: `missed.txt` lists survivors (tests still
   pass with the mutant: a gap), `timeout.txt` hangs (counted as caught, so
-  read it: many mean the tests never ran, and CI fails a shard with more
-  timeouts than caught), `unviable.txt` mutants that do not compile
-  (ignored), `caught.txt` the rest; `diff/` has each mutant as a patch.
-- The gated files (`.cargo/mutants-gated.txt`: `decide.rs`, `chain.rs`,
-  `state.rs`, `human.rs`, `oplog.rs`, `canonical.rs`, `changeid.rs`,
-  `keys.rs`, `paths.rs`, `keyed.rs`, the auditor, the merge) may have no missed and no
-  timed-out mutant. A survivor there is fixed with a test, or listed in
-  `exclude_re` with a written reason why it is equivalent and added to
-  `.cargo/mutants-gated-exclusions.txt`
-  (`.github/scripts/mutants-gate.sh exclusions --write`; plain `exclusions`
-  checks, in seconds). A new operation type (`ops.rs`, `decide.rs`,
-  `state.rs`, the auditor) arrives with tests that kill its mutants.
+  read it: many mean the tests never ran), `unviable.txt` mutants that do
+  not compile (ignored), `caught.txt` the rest; `diff/` has each mutant as
+  a patch.
+- A survivor is fixed with a test, or added to `exclude_re` with a written
+  reason why it is equivalent. "Hard to test" is not a reason.
 - `exclude_re` and `--re` do not filter "delete field … from struct"
   mutants (cargo-mutants 27.1.0); use file globs or a test.
 - Tests must stay hermetic: own temp dir, `127.0.0.1:0` ports, short socket
   paths, no writes to `$HOME`. Parallel jobs (`-j`) run copies at once.
-- CI (`.github/workflows/mutants.yml`) runs only on demand and blocks
-  nothing: no release, PR or merge waits for it (decided 2026-11-09,
-  docs/decisions.md). It mutates only the gated files, only what changed in
-  them since the last `v*` tag, each mutant against the whole workspace
-  (minutes, not hours). Run it after changing a gated file:
-  `gh workflow run mutants.yml --ref main` (`-f base=<tag>` for another
-  base). A survivor or a gated timeout makes the run red; `exclusions`
-  fails on an unlisted exclusion in a gated file. Elsewhere, run
-  cargo-mutants locally on what you changed when it is worth it.
 
 ## Fuzzing
 
@@ -142,8 +131,8 @@ cd fuzz && cargo fuzz run -s none <target> corpus/<target> seeds/<target> -- -ma
 
 The tests (`ci.yml`: `test (ubuntu-latest)`, `test (macos-latest)`,
 `sandbox`; the `test` jobs end with the acceptance tests) run on every pull request, every merge to main, a pushed `v*`
-tag, and on demand (`gh workflow run ci.yml --ref main`). Only the mutants
-run on demand alone (see "Mutation testing"). The main ruleset requires a
+tag, and on demand (`gh workflow run ci.yml --ref main`). Mutation testing
+is not in CI (see "Mutation testing"). The main ruleset requires a
 pull request (no direct push) and those three jobs as status checks. `cargo-deny`, CodeQL and zizmor (workflow changes)
 run on pull requests; they block nothing. The toolchain is pinned in
 `rust-toolchain.toml`; Actions are GitHub's own plus five named ones

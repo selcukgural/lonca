@@ -1,6 +1,6 @@
 # The tests run on every pull request, on every merge to main, on a pushed
-# `v*` tag and on demand. Only the mutants run on demand alone
-# (docs/decisions.md, "CI runs on every pull request").
+# `v*` tag and on demand (docs/decisions.md, "CI runs on every pull
+# request"). Mutation testing is not in CI: it runs by hand.
 name: ci
 
 on:

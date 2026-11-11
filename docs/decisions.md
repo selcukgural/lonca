@@ -2204,8 +2204,8 @@ main ruleset requires the three jobs (`test (ubuntu-latest)`,
 `test (macos-latest)`, `sandbox`, from GitHub Actions) as status checks, so a
 pull request merges only once they are green, and `gh pr merge --auto` waits
 for them. The branch need not be up to date with main first (no strict
-policy): a rebase per merge would cost a full run each time. The mutants
-alone run only on demand (since 2026-11-09, "Mutation testing").
+policy): a rebase per merge would cost a full run each time. Mutation
+testing is not in CI at all (since 2026-11-11, "Mutation testing").
 `cargo-deny`, CodeQL and zizmor still run on pull requests and block nothing.
 
 History: from 2026-11-08 (#172) to 2026-11-09 the tests too ran only for a
@@ -2217,6 +2217,17 @@ mutants, not the tests, off pull requests. It is reverted here.
 Passing tests do not show that they would catch a flipped `>=` or a
 `decide()` arm replaced with `Ok(Allow)`. Mutation testing measures that.
 
+- **By hand only (2026-11-11, user's decision).** Nothing runs mutants any
+  more: `mutants.yml`, its runner action, `mutants-gate.sh`, the list of
+  gated files with its list of exclusions, and `lonca-mutants` are gone, and
+  no rule asks for a run after a change to a given file. We run
+  `cargo mutants` locally, on a file or a diff, when a change calls for it
+  (CLAUDE.md has the commands). `.cargo/mutants.toml` stays: its timeouts
+  and its reasoned exclusions are what a run by hand needs. Even on demand
+  the workflow was a habit, run after every change to a gated file, and it
+  waited on a runner for what a local run on one file tells in minutes. The
+  bullets below are the history: the on-demand workflow of 2026-11-09 and
+  the gate of #35.
 - **Tool: cargo-mutants** (27.1.0, pinned with `--locked` and an explicit
   version). It needs no code changes or annotations, reads
   `.cargo/mutants.toml`, and supports `--shard` for splitting a full run.

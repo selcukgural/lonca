@@ -1,13 +1,13 @@
-# cargo-mutants configuration (https://mutants.rs/). How to run it and how to
-# read the results: CLAUDE.md, "Mutation testing". Policy: docs/decisions.md.
+# cargo-mutants configuration (https://mutants.rs/). It runs by hand only,
+# never in CI. How to run it and read the results: CLAUDE.md, "Mutation
+# testing". History: docs/decisions.md.
 
 # Run the whole workspace's tests for every mutant. Many modules are tested
 # from other crates (lonca-audit only from lonca-daemon/tests/audit.rs,
 # lonca-policy chain/state from tests/decide.rs, most of lonca-core from
 # downstream crates), so per-package testing reports false survivors. A
 # workspace run is about 200 s on a CI runner, which a mutant pays in full if
-# it survives. That is why CI mutates only the gated files' changes since the
-# last release (docs/decisions.md, "Mutation testing").
+# it survives: run it on a file or a diff, not the whole workspace.
 test_workspace = true
 
 # `cargo test` runs one crate after another, so a mutant in a crate late in the

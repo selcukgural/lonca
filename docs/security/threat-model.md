@@ -198,9 +198,15 @@ It does not catch:
   device.** The verifier agrees with `ssh-keygen -Y verify` of OpenSSH
   10.5 on signatures in the security-key format; signing with a physical
   key through `lonca` has not been exercised by the project yet.
-- **A two-signature rule needs two people.** The approval count is capped at
-  the number of enrolled humans; a signature plus a waiting period for a
-  single developer is [#19](https://github.com/selcukgural/lonca/issues/19).
+- **A two-signature rule is not a two-person rule.** An operation that
+  waits for approval (`[approvals] policy_updates` above 1, an `@escalate`
+  on a human's operation) is released by `approve` signatures, and the one
+  who asked for it may give one: only a second approval by the same human
+  is refused (`already_approved`). It asks for a second, deliberate
+  signature, with presence where the policy requires it; it does not show
+  that two people agreed. The count is capped at the number of enrolled
+  humans; a signature plus a waiting period for a single developer is
+  [#19](https://github.com/selcukgural/lonca/issues/19).
 - **The recovery key** can replace the human's key, and with a copy of the
   log re-anchor that copy on a daemon of its own. Keep it off the machine and
   replace it after use ([Recovery](../guide/recovery.md)).

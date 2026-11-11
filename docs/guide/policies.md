@@ -38,9 +38,11 @@ denied is still integrated when the entries after it are decided. Read the
 list as "these requests would have been treated differently", not as an
 alternative history.
 
-`lonca policy set` signs a `policy.update`. It takes as many humans as
-`[approvals] policy_updates` of the policy in force says, the one who sets
-it included (above 1, the others approve it), and it can be undone
+`lonca policy set` signs a `policy.update`. It takes as many signatures as
+`[approvals] policy_updates` of the policy in force says, the first being
+that of the one who sets it. Above 1 it waits, and each `lonca approve`
+adds one; the one who set it may approve it too, so the number is of
+deliberate acts, not of different people. It can be undone
 (`lonca undo <seq>`), which is a `policy.update` too.
 
 ## How a request meets the rules

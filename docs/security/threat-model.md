@@ -65,7 +65,7 @@ system boundary stops that, and each mode puts the boundary somewhere else.
 | Agent runs | as you | as you, with the harness's hooks and sandbox locked by root | in a sandbox Lonca builds |
 | Daemon, store, keys | your account | a system user of their own (`_lonca` / `lonca`) | as the install's |
 | Session level | `unobserved` | `hooks_sandbox` with Claude Code, `unobserved` with others | `isolated` |
-| Setup | none | `install-hardened.sh` from a release archive | the install's, plus a sandbox per run |
+| Setup | none | `install-hardened.sh` from a release archive, checked and unpacked in a directory of root's | the install's, plus a sandbox per run |
 
 What each mode does about each threat:
 

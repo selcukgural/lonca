@@ -65,6 +65,24 @@ can read, and its Node starter no longer opens `~/.npmrc`. If your
 `lonca.toml` passes a token or opens a credentials file for the checks,
 take it out and install dependencies before the checks run.
 
+### A hardened install takes nothing from your account
+
+`install-hardened.sh` and `uninstall-hardened.sh` run as root. They found
+their tools through the `PATH` they were called with, and installed `lonca`
+from wherever the archive had been unpacked, usually a directory any
+program running as you could write. Now each script sets its own `PATH`
+first, and the installer refuses to install from files that are not root's
+alone (owned by root, written by nobody else, and so every directory above
+them), listing them and the steps to take.
+
+**Upgrading a hardened install.** The steps changed
+([Install](guide/install.md#hardened-mode)): copy the archive to a
+root-owned directory, check that copy, unpack it there with
+`--no-same-owner`, run the installer from there. The uninstaller is now
+installed too: `sudo /Library/Lonca/uninstall-hardened.sh` (Linux:
+`/opt/lonca/uninstall-hardened.sh`). A build from your own checkout
+installs with `--unprotected-source`.
+
 ### A session's directory is in the log
 
 `lonca session start` now records the workspace directory in the signed

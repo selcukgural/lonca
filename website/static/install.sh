@@ -12,8 +12,9 @@
 # Running it again updates.
 #
 # This is cooperative mode: the binaries live where your account can write.
-# For hardened mode, unpack the archive and run `sudo ./install-hardened.sh
-# --bin .` from it instead (docs/guide/install.md, "Hardened mode").
+# For hardened mode, copy the archive to a directory of root's, check it,
+# unpack it there and run its install-hardened.sh with sudo instead
+# (docs/guide/install.md, "Hardened mode").
 #
 # Settings, from the environment:
 #   LONCA_VERSION=0.2.3      a version instead of the latest

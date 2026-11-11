@@ -75,15 +75,28 @@ Each release also carries a CycloneDX SBOM (`lonca-sbom.cdx.tar.gz`).
 
 Hardened mode runs the daemon as its own system user, with root-owned
 binaries, so nothing running as you (agents included) can write the store,
-the key or the binaries. Unpack the release archive for your machine and run
-the installer it carries, as root:
+the key or the binaries. The installer runs as root and installs what the
+daemon will run, so it takes both from a place only root can write. Copy
+the release archive for your machine there, check that copy, unpack it and
+run the installer it carries:
 
 ```sh
-mkdir lonca-0.2.3
-tar -xzf lonca-aarch64-apple-darwin.tar.gz -C lonca-0.2.3
-cd lonca-0.2.3
-sudo ./install-hardened.sh --bin .
+sudo install -d -m 0755 /usr/local/lonca-release
+sudo cp lonca-aarch64-apple-darwin.tar.gz /usr/local/lonca-release/
+gh attestation verify /usr/local/lonca-release/lonca-aarch64-apple-darwin.tar.gz --repo selcukgural/lonca
+sudo tar -xzf /usr/local/lonca-release/lonca-aarch64-apple-darwin.tar.gz --no-same-owner -C /usr/local/lonca-release
+sudo /usr/local/lonca-release/install-hardened.sh --bin /usr/local/lonca-release
 ```
+
+The order matters. An archive in your downloads, or unpacked in your home,
+is a file every program running as you can replace, an agent included,
+between the moment you check it and the moment root runs it. Once it is
+root's it stays what you checked. Without `gh`, compare `shasum -a 256` (on
+Linux `sha256sum`) of the copy with `SHA256SUMS` on the release page. The
+installer refuses to install from files that are not root's alone and
+lists them; `./install-hardened.sh --check-source --bin DIR` asks that
+without sudo, and `--unprotected-source` installs a build of your own from
+your checkout all the same.
 
 `--render DIR` writes the generated files (launchd or systemd unit, managed
 Claude Code settings) to `DIR` without installing anything. Log out and in
@@ -127,12 +140,15 @@ enrolled human (see [Backup and moving](quick-start.md#backup-and-moving)).
 The audit of a hardened store goes through a backup, since your account
 can not read the store: `lonca backup`, then verify the bundle as below.
 
-**Upgrade.** Unpack the newer archive and run its installer the same way.
+**Upgrade.** Copy, check and unpack the newer archive and run its installer
+the same way.
 It stops the daemon, replaces the binaries and the generated files, starts
 the daemon again and prints the version that runs; the stores, the key
 and the backups stay. Then `lonca doctor`.
 
-**Uninstall.** `sudo ./uninstall-hardened.sh` from the archive removes the
+**Uninstall.** The installer leaves the uninstaller beside the binaries'
+directory, root's like them: `sudo /Library/Lonca/uninstall-hardened.sh`
+(Linux: `sudo /opt/lonca/uninstall-hardened.sh`). It removes the
 daemon, the binaries, `daemon.toml` and the managed settings it wrote; the
 stores, backups and imports stay for a later install. `--purge` removes
 them and the daemon's user as well: `lonca backup` first and copy the

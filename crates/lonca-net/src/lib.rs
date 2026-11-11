@@ -10,6 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+pub mod hello;
+
+use hello::Hello;
+
 const MAX_HEAD: usize = 16 * 1024;
 
 /// Connections served at once, by every client together. One past it is
@@ -97,6 +101,10 @@ pub enum Outcome {
     Cut,
     /// Nothing moved through it for [`Limits::idle`].
     Idle,
+    /// Its TLS client asked for another server name than the host the
+    /// tunnel was let through for, or in a way that can not be read: cut
+    /// before a byte of the client's reached the host.
+    Misnamed,
     /// Bytes flowed both ways until one side closed.
     Tunneled,
 }
@@ -380,6 +388,46 @@ fn parse_authority(a: &str, default_port: u16) -> Option<(String, u16)> {
     ok.then_some((host.to_ascii_lowercase(), port))
 }
 
+/// The head of a plain request for `host:port`, as it goes to the host:
+/// `target` cut to `path`, and the connection said to end with this one
+/// request. `None` if the head names another host than its target, names
+/// one twice, or has a folded line (which servers read differently).
+///
+/// What follows a request on its connection is relayed unread, so a second
+/// request could name any host the address serves; a server that is told
+/// `Connection: close` reads none.
+fn one_request(head: &str, target: &str, path: &str, host: &str, port: u16) -> Option<String> {
+    let (first, headers) = head.split_once('\n')?;
+    let mut out = first.replacen(target, path, 1);
+    out.push('\n');
+    let mut hosts = 0;
+    for line in headers.split_inclusive('\n') {
+        if line.starts_with([' ', '\t']) {
+            return None;
+        }
+        if line.trim().is_empty() {
+            // The line that ends the head.
+            out.push_str("Connection: close\r\n");
+            out.push_str(line);
+            continue;
+        }
+        let (name, value) = line.split_once(':')?;
+        let is = |n: &str| name.trim().eq_ignore_ascii_case(n);
+        if is("host") {
+            hosts += 1;
+            let named = parse_authority(value.trim(), 80)?;
+            if hosts > 1 || !hello::names(&named.0, host) || named.1 != port {
+                return None;
+            }
+        }
+        if is("connection") || is("proxy-connection") || is("keep-alive") {
+            continue;
+        }
+        out.push_str(line);
+    }
+    Some(out)
+}
+
 /// The process on the other end of `peer`, if the operating system tells
 /// us (same user only): the one whose end of a connection to `local`, our
 /// listener, is `peer`.
@@ -490,8 +538,19 @@ fn handle(
     } else if let Some(url) = target.strip_prefix("http://") {
         let (auth, path) = url.split_at(url.find('/').unwrap_or(url.len()));
         let path = if path.is_empty() { "/" } else { path };
-        let rewritten = head_text.replacen(target, path, 1);
-        (parse_authority(auth, 80), Some(rewritten))
+        let authority = parse_authority(auth, 80);
+        let rewritten = authority
+            .as_ref()
+            .and_then(|(host, port)| one_request(&head_text, target, path, host, *port));
+        if authority.is_some() && rewritten.is_none() {
+            respond(
+                &client,
+                400,
+                "the Host header names another host than the request",
+            );
+            return Ok(());
+        }
+        (authority, rewritten)
     } else {
         respond(&client, 400, "only CONNECT and absolute http:// requests");
         return Ok(());
@@ -549,6 +608,9 @@ fn handle(
     // Bytes already buffered after the head belong to the tunnel.
     let buffered = reader.buffer().to_vec();
     drop(reader);
+    // A tunnel to a name is held to it; one to an address is for whatever
+    // that address serves, and a plain request has said its host already.
+    let named = (rest_of_request.is_none() && host.parse::<IpAddr>().is_err()).then_some(&*host);
     let (client, upstream, buffered) = match rest_of_request {
         None => {
             let mut c = &client;
@@ -584,14 +646,7 @@ fn handle(
             }
         }
     };
-    let mut up_w = upstream.try_clone()?;
-    if !buffered.is_empty() {
-        if !gate.carried(&request, buffered.len() as u64) {
-            gate.finished(&request, Outcome::Cut);
-            return Ok(());
-        }
-        up_w.write_all(&buffered)?;
-    }
+    let up_w = upstream.try_clone()?;
     // A read wakes often enough to see the silence of both ways together;
     // a side that takes nothing for as long is as silent.
     let wake = (limits.idle / 4).max(Duration::from_millis(1));
@@ -604,13 +659,14 @@ fn handle(
         request: &request,
         idle: limits.idle,
         moved: Mutex::new(Instant::now()),
+        named,
     };
     // The worst of what the two directions ended with.
     let end = Mutex::new(Outcome::Tunneled);
     let ended = |how: Outcome, a: &TcpStream, b: &TcpStream| {
         if how != Outcome::Tunneled {
             let mut end = end.lock().unwrap();
-            if *end != Outcome::Cut {
+            if !matches!(*end, Outcome::Cut | Outcome::Misnamed) {
                 *end = how;
             }
             let _ = a.shutdown(std::net::Shutdown::Both);
@@ -621,7 +677,7 @@ fn handle(
     let (up_r, client_w) = (upstream.try_clone()?, client.try_clone()?);
     std::thread::scope(|scope| {
         scope.spawn(|| ended(way.carry(&up_r, &client_w), &up_r, &client_w));
-        ended(way.carry(&client, &up_w), &client, &up_w);
+        ended(way.client_side(&client, &up_w, buffered), &client, &up_w);
     });
     let how = *end.lock().unwrap();
     gate.finished(&request, how);
@@ -660,31 +716,81 @@ struct Way<'a> {
     idle: Duration,
     /// When a byte last moved, either way.
     moved: Mutex<Instant>,
+    /// The host a TLS client in the tunnel has to ask for, if it is held to
+    /// one.
+    named: Option<&'a str>,
 }
 
 impl Way<'_> {
     /// Copies `from` to `to` until the end, telling the gate of every chunk
     /// first: [`Outcome::Cut`] when the gate stopped it, [`Outcome::Idle`]
     /// when nothing moved either way for too long.
-    fn carry(&self, mut from: &TcpStream, mut to: &TcpStream) -> Outcome {
+    fn carry(&self, from: &TcpStream, mut to: &TcpStream) -> Outcome {
         let mut buf = vec![0u8; CHUNK];
         loop {
-            let n = match from.read(&mut buf) {
-                Err(e) if timed_out(&e) => {
-                    if self.moved.lock().unwrap().elapsed() >= self.idle {
-                        return Outcome::Idle;
-                    }
-                    continue;
-                }
-                Ok(0) | Err(_) => return Outcome::Tunneled,
+            let n = match self.read(from, &mut buf) {
                 Ok(n) => n,
+                Err(end) => return end,
             };
-            *self.moved.lock().unwrap() = Instant::now();
             if !self.gate.carried(self.request, n as u64) {
                 return Outcome::Cut;
             }
             if to.write_all(&buf[..n]).is_err() {
                 return Outcome::Tunneled;
+            }
+        }
+    }
+
+    /// The client's direction: what it sends first, `early` being the start
+    /// of it, is held back until it is seen not to be TLS, or to be a TLS
+    /// client's first message for the host the tunnel is held to. For
+    /// another name, or one that can not be read, nothing of it is passed
+    /// on ([`Outcome::Misnamed`]). The other direction does not wait: a
+    /// server that speaks first is heard meanwhile.
+    fn client_side(&self, from: &TcpStream, mut to: &TcpStream, early: Vec<u8>) -> Outcome {
+        let mut first = early;
+        if let Some(host) = self.named {
+            let mut buf = vec![0u8; CHUNK];
+            loop {
+                match hello::read(&first) {
+                    Hello::More if first.len() < hello::MAX_HELLO + CHUNK => {}
+                    Hello::Other | Hello::Named(None) => break,
+                    Hello::Named(Some(name)) if hello::names(&name, host) => break,
+                    Hello::More | Hello::Named(Some(_)) | Hello::Unreadable => {
+                        return Outcome::Misnamed;
+                    }
+                }
+                match self.read(from, &mut buf) {
+                    Ok(n) => first.extend_from_slice(&buf[..n]),
+                    Err(end) => return end,
+                }
+            }
+        }
+        if !first.is_empty() {
+            if !self.gate.carried(self.request, first.len() as u64) {
+                return Outcome::Cut;
+            }
+            if to.write_all(&first).is_err() {
+                return Outcome::Tunneled;
+            }
+        }
+        self.carry(from, to)
+    }
+
+    /// One read of a direction: how the direction ended, if it did.
+    fn read(&self, mut from: &TcpStream, buf: &mut [u8]) -> Result<usize, Outcome> {
+        loop {
+            match from.read(buf) {
+                Err(e) if timed_out(&e) => {
+                    if self.moved.lock().unwrap().elapsed() >= self.idle {
+                        return Err(Outcome::Idle);
+                    }
+                }
+                Ok(0) | Err(_) => return Err(Outcome::Tunneled),
+                Ok(n) => {
+                    *self.moved.lock().unwrap() = Instant::now();
+                    return Ok(n);
+                }
             }
         }
     }

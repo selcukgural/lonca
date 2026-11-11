@@ -264,6 +264,16 @@ often that happened since the daemon started (`PROXY …`, `proxy_unattributed` 
 `--json`). The proxy gives a client 10 seconds to send its request, and closes a
 tunnel through which nothing has moved for 10 minutes.
 
+A connection is for the host it was asked for. A TLS client that asks the proxy
+for one host and the server for another (`curl --connect-to`, a server name
+set by hand) has its tunnel closed before anything of it reaches the host; to
+the command it looks like a connection that was dropped during the handshake.
+A plain `http://` request whose `Host` header is not its URL's host is answered
+`400`, and each plain request goes on its own connection. An address in place
+of a name (`https://10.0.0.5/`) is not held to a name. Inside TLS the proxy
+reads nothing, so the `Host` header of an HTTPS request is the server's to
+check.
+
 **Requiring it.** Cedar sees the level, so a policy can ask for a sandbox by path or
 by task:
 

@@ -8,8 +8,12 @@ connection (`CONNECT host:port` or an absolute `http://` request) is put
 to a `Gate`, which decides whether it goes through. Loopback, private and
 link-local destinations are refused unless the gate allows them, and the
 proxy connects to the address it checked, so DNS cannot swap in a private
-address after the check. The proxy never looks inside TLS itself; a gate
-may serve a tunnel it let through (`Gate::relay`).
+address after the check. That address may serve other names too, so a
+connection is held to the host it was asked for: a tunnel whose TLS client
+asks for another server name is cut before a byte of it gets there, and a
+plain request has to name its host in `Host` and is the only one on its
+connection. The proxy never looks inside TLS itself; a gate may serve a
+tunnel it let through (`Gate::relay`).
 
 It has no dependencies and knows nothing about who uses it: the gate
 holds all the policy.

@@ -81,6 +81,26 @@ run`.
 For `lonca-net` users: `Limits`, `spawn_with` and `serve_with` are new,
 `Outcome::Idle` is a new variant, and `peer_cwd` is replaced by `peer_pid`.
 
+### A connection through the proxy is for the host it was asked for
+
+An address often serves many names. The proxy now holds a connection to
+the one it let through:
+
+- A TLS client that asks the proxy for one host and the server for another
+  (a server name that is not the `CONNECT` host) has its tunnel closed
+  before a byte of it reaches the host. To the command this is a
+  connection dropped during the handshake. A tunnel asked for by address
+  is not held to a name.
+- A plain `http://` request whose `Host` header is not its URL's host and
+  port is answered `400`. Each plain request now goes to the host on its
+  own connection (`Connection: close`); requests for several hosts over
+  one proxy connection used to reach the first one's host.
+- Inside TLS nothing is read, as before: the `Host` header of an HTTPS
+  request is the server's to check.
+
+`lonca-net`: `Outcome::Misnamed` is new (an `Outcome` match needs an arm
+for it), and the `hello` module reads a TLS client's server name.
+
 ### One entry of the log has a size, and the proxy a rate
 
 The log keeps every entry, so what goes into one is now bounded before it

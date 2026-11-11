@@ -113,6 +113,7 @@ last column.
 | A38 | An operation longer than one log entry holds (64 KiB: a very long intent or list) is refused with its name, its size and what to do, and the log does not grow; the same request with a short intent is logged | `13-log` |
 | A39 | `lonca policy set --value sessions.ops_per_minute=N` changes that one line of the `lonca.toml` in force (the comments and every other line stay), as a signed policy update that takes effect: a session is `rate_limited` at the new rate; a rate above 6000, or a key the file does not have, is refused and the policy stays | `13-log` |
 | A40 | In a session's workspace, the hook denies a write through a symbolic link that leads out of the workspace and names where it leads; a write through a link to a directory of the workspace is not denied | `08-harness` |
+| A41 | A file its grammar would read over and over (200 KB of `/*` in Swift, which held the daemon for minutes) is answered at once: `lonca symbols` lists nothing of it and names `<file>` as what a change of it needs, and a proposal that adds it under that lease is taken | `03-agents` |
 
 ## Manual criteria
 

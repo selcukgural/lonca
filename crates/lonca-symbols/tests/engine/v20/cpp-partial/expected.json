@@ -1,0 +1,305 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cpp#Counter.twice"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cpp"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": [
+        "src/sample.cpp"
+      ]
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cpp#<file>"
+        ],
+        "import_only_files": [],
+        "lines_added": 2,
+        "lines_removed": 2,
+        "modified_files": [
+          "src/sample.cpp"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        },
+        "unparsed_files": [
+          "src/sample.cpp"
+        ]
+      },
+      "syntax_errors": [
+        "src/sample.cpp"
+      ]
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "struct Counter {\n    int value = 0;\n\n    int get(this const Counter& self) {\n        return self.value + 0;\n    }\n\n    int twice() const {\n        return value + value;\n    }\n};\n\nint total(const Counter& c) {\n    return c.value + 0;\n}\n"
+  },
+  "path": "src/sample.cpp",
+  "symbols": {
+    "base": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "translation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.value",
+              "own": "",
+              "signature": "int value =",
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                35
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.get",
+              "own": "",
+              "signature": "int get(this const Counter& self)",
+              "skipped": false,
+              "span": [
+                41,
+                41,
+                109
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.twice",
+              "own": "",
+              "signature": "int twice() const",
+              "skipped": false,
+              "span": [
+                115,
+                115,
+                166
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Counter",
+          "own": "struct_specifier(struct\u001fCounter\u001ffield_declaration_list({\u001f}\u001f))",
+          "signature": "struct Counter",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            169
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "total",
+          "own": "",
+          "signature": "int total(const Counter& c)",
+          "skipped": false,
+          "span": [
+            171,
+            171,
+            222
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "translation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.value",
+              "own": "",
+              "signature": "int value =",
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                35
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.get",
+              "own": "",
+              "signature": "int get(this const Counter& self)",
+              "skipped": false,
+              "span": [
+                41,
+                41,
+                109
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.twice",
+              "own": "",
+              "signature": "int twice() const",
+              "skipped": false,
+              "span": [
+                115,
+                115,
+                170
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Counter",
+          "own": "struct_specifier(struct\u001fCounter\u001ffield_declaration_list({\u001f}\u001f))",
+          "signature": "struct Counter",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            173
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "total",
+          "own": "",
+          "signature": "int total(const Counter& c)",
+          "skipped": false,
+          "span": [
+            175,
+            175,
+            226
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "translation_unit()",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.value",
+              "own": "",
+              "signature": "int value =",
+              "skipped": false,
+              "span": [
+                21,
+                21,
+                35
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.get",
+              "own": "",
+              "signature": "int get(this const Counter& self)",
+              "skipped": false,
+              "span": [
+                41,
+                41,
+                113
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Counter.twice",
+              "own": "",
+              "signature": "int twice() const",
+              "skipped": false,
+              "span": [
+                119,
+                119,
+                170
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Counter",
+          "own": "struct_specifier(struct\u001fCounter\u001ffield_declaration_list({\u001f}\u001f))",
+          "signature": "struct Counter",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            173
+          ]
+        },
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "total",
+          "own": "",
+          "signature": "int total(const Counter& c)",
+          "skipped": false,
+          "span": [
+            175,
+            175,
+            230
+          ]
+        }
+      ]
+    }
+  }
+}

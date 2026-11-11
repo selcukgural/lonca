@@ -153,6 +153,9 @@ unknown method: `unknown_method`, whatever the token.
   `unparsed_files`.
   From engine 9 only edits of lines are listed: the mode stays and is that of a
   plain file, no NUL, and at least half of the old text's lines stay.
+  A file its grammar is not let through is such a file: one over 2 MiB (engine
+  13), one that takes more parse steps than its length earns (engine 16), and
+  one whose grammar reads more than 1 MiB and 64 times its length (engine 20).
 - **`unread_files`** in facts, from log format 16: files that a grammar read
   until this change and can not read after it, or that a change adds and it can
   not read. Such a proposal escalates with the reason `unread_file:<path>`. From
@@ -165,7 +168,9 @@ unknown method: `unknown_method`, whatever the token.
   not read, the definitions it is in, the code outside definitions) has the
   same lines on both sides, the facts name those symbols as for any file and
   `unparsed_files` does not list it. Otherwise it is an edit of `path#<file>`
-  as before.
+  as before. Up to engine 19 blank lines and the ends of lines did not count
+  in that rest; from engine 20 they do, but for the blank lines beside a
+  symbol.
 - **`affected`** and **`affected_more`** in facts, from log format 18: symbols
   of the base that mention by name what the change gives a new signature, renames
   or deletes, at most 1000, and how many more there were. A guess, not a call

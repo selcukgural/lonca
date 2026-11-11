@@ -15,7 +15,7 @@ use lonca_core::ops::DEF;
 
 use crate::engine::{
     ENGINE_CURRENT, ENGINE_DEFS, ENGINE_EXACT, ENGINE_GROUPS, ENGINE_KEYS, ENGINE_LEVELS,
-    ENGINE_LIMITS, ENGINE_SIGNATURES,
+    ENGINE_LIMITS, ENGINE_REST, ENGINE_SIGNATURES,
 };
 use crate::lang::{
     CallTests, DefHow, DefRule, GroupHow, GroupRule, ImportCalls, Lang, Marked, Partial, Rules,
@@ -277,9 +277,32 @@ pub struct ReadParts {
     /// file; a container with an error gives its members instead of itself.
     pub syms: Vec<Sym>,
     /// The file without those symbols, line by line: what the grammar did
-    /// not read and everything nothing vouches for. Indentation is kept,
-    /// blank lines and the ends of lines are not.
+    /// not read and everything nothing vouches for. From [`ENGINE_REST`] the
+    /// lines are as they stand in the file, without only the blank ones that
+    /// touch a symbol taken out: those come and go with the symbol. Before
+    /// it no blank line and no end of a line was kept, so one that changed
+    /// inside a text of several lines was no change.
     pub rest: Vec<String>,
+}
+
+/// `piece` of a file, which stands `behind` a symbol taken out of it,
+/// `before` one or both, without the blank lines on those sides. `None` when
+/// nothing else is in it.
+fn beside(mut piece: &str, behind: bool, before: bool) -> Option<&str> {
+    let blank = |line: &str| line.bytes().all(|b| b.is_ascii_whitespace());
+    while behind && let Some((line, more)) = piece.split_once('\n') {
+        if !blank(line) {
+            break;
+        }
+        piece = more;
+    }
+    while before && let Some((more, line)) = piece.rsplit_once('\n') {
+        if !blank(line) {
+            break;
+        }
+        piece = more;
+    }
+    Some(piece).filter(|p| !((behind || before) && blank(p)))
 }
 
 impl Parsed {
@@ -289,24 +312,38 @@ impl Parsed {
         !self.errors.iter().any(touches)
     }
 
+    /// The parts of `src` that were read, as the current engine gives them.
+    pub fn read_parts(&self, src: &str) -> Option<ReadParts> {
+        self.read_parts_at(ENGINE_CURRENT, src)
+    }
+
     /// The parts of `src` that were read. `None` when a span does not stand
     /// in `src` as text, which then goes whole.
-    pub fn read_parts(&self, src: &str) -> Option<ReadParts> {
+    pub fn read_parts_at(&self, engine: u32, src: &str) -> Option<ReadParts> {
         let mut syms = Vec::new();
         self.read_of(&self.syms, &mut syms);
-        let mut rest = String::new();
+        let mut pieces = Vec::new();
         let mut at = 0;
         for s in &syms {
             // Symbols of one level do not overlap; one that does is left in.
             if s.start < at {
                 return None;
             }
-            rest.push_str(src.get(at..s.start)?);
+            pieces.push(src.get(at..s.start)?);
             at = s.end;
         }
-        rest.push_str(src.get(at..)?);
-        let lines = rest.lines().map(str::trim_end).filter(|l| !l.is_empty());
-        let rest = lines.map(String::from).collect();
+        pieces.push(src.get(at..)?);
+        if engine < ENGINE_REST {
+            let rest = pieces.concat();
+            let lines = rest.lines().map(str::trim_end).filter(|l| !l.is_empty());
+            let rest = lines.map(String::from).collect();
+            return Some(ReadParts { syms, rest });
+        }
+        let last = pieces.len() - 1;
+        let kept = pieces.iter().enumerate();
+        let kept = kept.filter_map(|(i, piece)| beside(piece, i > 0, i < last));
+        let rest = kept.flat_map(|piece| piece.split('\n').map(String::from));
+        let rest = rest.collect();
         Some(ReadParts { syms, rest })
     }
 
@@ -3704,7 +3741,9 @@ mod tests {
         assert!(p.errors.is_empty());
         let parts = p.read_parts(src).unwrap();
         assert_eq!(parts.syms.len(), 1);
-        assert_eq!(parts.rest, ["use b;"]);
+        assert_eq!(parts.rest, ["use b;", ""]);
+        let old = p.read_parts_at(ENGINE_REST - 1, src).unwrap();
+        assert_eq!(old.rest, ["use b;"]);
         let none = Parsed {
             syms: vec![],
             errors: vec![(0, src.len())],
@@ -3713,6 +3752,8 @@ mod tests {
         };
         let parts = none.read_parts(src).unwrap();
         assert!(parts.syms.is_empty());
-        assert_eq!(parts.rest, ["fn a() {}", "use b;"]);
+        assert_eq!(parts.rest, ["fn a() {}", "", "use b;", ""]);
+        let old = none.read_parts_at(ENGINE_REST - 1, src).unwrap();
+        assert_eq!(old.rest, ["fn a() {}", "use b;"]);
     }
 }

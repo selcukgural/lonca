@@ -1,5 +1,5 @@
 //! The tree-sitter Ruby grammar 0.23.1 with its heredoc serialization fixed
-//! (README.md). [`LANGUAGE`] goes to a tree-sitter `Parser`:
+//! and a heredoc's word read the same on every target (README.md). [`LANGUAGE`] goes to a tree-sitter `Parser`:
 //!
 //! ```
 //! let mut parser = tree_sitter::Parser::new();

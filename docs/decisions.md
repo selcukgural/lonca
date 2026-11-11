@@ -4501,6 +4501,7 @@ being refused.
 - **Why in `apply` and not a walk in `decide()`.** Every reader of a
   session (the policy context, `status`, a reviewer's `pending`) then sees
   the same thing, and no check can forget to walk.
+
 ## The Touch ID dialog is the helper's
 
 `lonca-se sign <keyfile> <reason>` signed its standard input unread under

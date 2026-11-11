@@ -100,6 +100,12 @@ slow=$(seq_of)
 [ "$SECONDS" -lt 20 ] || fail "symbols and propose took $SECONDS s"
 ok lonca reject "$slow" --reason "no" --repo demo
 
+criterion A42 "a file has the same symbols on every build: a space past ASCII is no space to a grammar, whatever the C library"
+printf 'let a = 1\xe3\x80\x80\nfunction f() {}\n' >src/wide.ts
+ok lonca symbols src/wide.ts
+has '^a  \(not read\)$'
+lacks '^f'
+
 criterion A11 "an ended session's token is refused"
 ok lonca session end
 refused lonca lease acquire 'src/billing.rs#Client.charge' -i 'after the end'

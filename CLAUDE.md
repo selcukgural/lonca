@@ -20,6 +20,10 @@ the design: `docs/decisions.md`.
   paths are refused; Cedar evaluation errors deny.
 - Hardened mode: daemon, hook program and stores never live where the
   developer's account can write.
+- A parse is a function of the file, not of the machine: nothing in a
+  process with the symbol engine calls `setlocale`, and the grammars'
+  character classes are ASCII's on every target
+  (`crates/lonca-symbols/c/wctype.c`, docs/decisions.md "Engine 20").
 
 ## Working on the code
 

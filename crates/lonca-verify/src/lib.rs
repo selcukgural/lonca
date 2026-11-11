@@ -22,6 +22,7 @@ use lonca_symbols::{Lang, parse};
 
 pub mod jail;
 mod process;
+pub use process::free_bytes;
 pub mod sweep;
 
 use jail::Jail;

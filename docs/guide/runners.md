@@ -94,6 +94,10 @@ by default, shared with the sessions made from it). A human changes it with
 may set is 6000, because this number is what bounds how fast one session
 can grow the log. Past that a request is
 `rate_limited`, nothing is logged, and the message says when to try again.
+`change.propose` and `facts.preview` answer `disk_space` while the disk of
+the daemon's stores has less than 1 GiB free: nothing was written or
+logged, and trying again does not help until a human has freed space, so
+report it and stop proposing.
 One operation's JSON may take 64 KiB; a longer one is `invalid` and not
 logged, so keep intents short and lists to what the change needs. A
 connection that stays quiet is closed with a `closed` line; `docs/protocol.md`,

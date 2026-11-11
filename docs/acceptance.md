@@ -136,6 +136,9 @@ visible. Each becomes a criterion when it is automated.
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
   --secure-enclave`, FIDO2 keys).
 - The advisor (`lonca advise`): needs a model.
+- `disk_space` (no caller's files written while the stores' disk has less
+  than 1 GiB free): needs a disk that is nearly full; the daemon's tests
+  cover it with the floor set (`below_the_floor_a_callers_files_are_not_written`).
 - Policy changes (`lonca policy`), human enrollment and revocation,
   negotiation between agents beyond a handover, `lonca revert`, `lonca redact`, `lonca pull`,
   session rotation.

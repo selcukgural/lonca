@@ -95,6 +95,19 @@ answers `too_large` when the contents are past one page (three quarters
 of the line limit, as for `blobs`), instead of reading the whole commit
 first. Ask without contents and page them with `blobs`, as `lonca` does.
 
+### The stores' disk keeps room for the log
+
+- `lonca facts` (the socket's `facts.preview`) no longer leaves the files
+  it was sent in the repository's store: they are written beside it and
+  removed with the answer. They used to stay for good.
+- While the disk of the daemon's home has less than 1 GiB free, the files
+  of a proposal or a preview are not written (`change.propose`,
+  `facts.preview`, `human.prepare_change`, `human.prepare_policy`): the
+  answer is the new error `disk_space`, and nothing is logged. Leases,
+  approvals, merges of what is already proposed, freezes and revocations
+  go on; that is what the room is kept for. Free space on that disk to
+  propose again. The number is not a policy key.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

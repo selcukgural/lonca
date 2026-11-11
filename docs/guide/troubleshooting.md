@@ -133,6 +133,7 @@ An error means the request never reached the log.
 | `invalid: lonca.toml: sessions.ops_per_minute is …; the most is 6000` | A policy may not set a rate above 6000 a minute. |
 | `invalid: change.propose is … bytes; an entry of the log holds 65536` (or another operation's name) | The operation's text and lists are longer than one log entry holds. Write a shorter intent, or lease or propose in smaller parts. Nothing was logged. |
 | `forbidden: denied, and not logged: bad_human_signature` | A `lonca human recover` whose recovery key is not the one the repository has for that human. Such a refusal is in the security log, not in the operation log. |
+| `disk_space: the disk of the daemon's stores has less than … bytes free` | The disk that holds the daemon's home (`~/.lonca`, or the hardened install's directory) is below 1 GiB free. Lonca keeps that for the log, so a proposal's or a preview's files are not written; leases, approvals and merges of what is already proposed go on. Free space on that disk; sending it again does not help before that. |
 | `busy`, `closed` | Send it again. |
 | `foreign_key` | The repository is on a daemon key this daemon does not hold: `lonca daemon-key recover --repo <name>`, or, when your key was lost with it, `lonca human recover --repo <name> --recovery-key <file>` ([Recovery](recovery.md#a-lost-mac)). |
 | `integrity` | The log does not verify or replay. Do not write to the store; audit it and restore from a backup or a pushed remote. |

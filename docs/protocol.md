@@ -906,7 +906,9 @@ would have, without logging: `{"facts": facts, "syntax_errors":
 [string], "leases": [detail], "acquire": [lease item]}`. `leases` says
 where each lease the facts need stands: `held_by_you`, `free`, or one
 `lease_held` per holder. `acquire` is the free ones, ready for
-`lease.acquire`.
+`lease.acquire`. Nothing of the files stays with the daemon: they are
+written beside the store and removed with the answer. `disk_space` when
+the stores' disk is below what it keeps free.
 
 ### `negotiate`
 
@@ -1076,6 +1078,7 @@ the queue itself, and stays 0 under protocol 1.
 | `too_large` | a request line over its method's limit; a `blobs` page, one file, or a `tree` with contents does not fit the line cap |
 | `invalid` | parameters that do not read, or do not fit the method. Also an operation whose JSON, with its human signature, is past 64 KiB: the message names the operation and its size; nothing is logged. Shorten its text and lists, or split it |
 | `rate_limited` | the session and those made from it are past `[sessions] ops_per_minute`; nothing is logged, and the message says when to try again. `session.end` and the methods that write nothing to the log are exempt |
+| `disk_space` | the disk of the daemon's stores has less than 1 GiB free, which it keeps for the log: the files of `change.propose`, `facts.preview`, `human.prepare_change` or `human.prepare_policy` were not written and nothing is logged. Not transient: a human frees space on that disk |
 | `busy` | no room for this connection or long line; nothing ran, send it again |
 | `verifying` | `change.withdraw` of a change whose checks are running; nothing is logged. Send it again once they end, if the change is still queued |
 | `closed` | id 0: the connection was closed while quiet; nothing sent after this ran, send it again on a new connection |

@@ -32,6 +32,13 @@ pub const MAX_PROPOSAL_BYTES: usize = 64 * 1024 * 1024;
 /// policy counts (a lease's items, a change's files) fit many times over.
 pub const MAX_OP_BYTES: usize = 64 * 1024;
 
+/// What the disk of the stores keeps free for the log. A caller's files are
+/// not written below it: the objects of a proposal stay for good, refused or
+/// not, and a log that can not be appended to records no freeze and no
+/// revocation either. Not a policy key: the policy is in the store it would
+/// protect, and a number somebody sets is not a floor.
+pub const KEEP_FREE_BYTES: u64 = 1 << 30;
+
 pub struct RepoHandle {
     pub name: String,
     pub store: Arc<Store>,

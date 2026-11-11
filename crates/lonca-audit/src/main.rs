@@ -15,9 +15,17 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use lonca_audit::{Options, audit, compare};
+use lonca_audit::{EnvChange, Options, audit, compare};
 use lonca_core::Store;
 use lonca_core::oplog::OpLog;
+
+/// A check that ran in another environment, as `verify` prints it.
+fn env_line(c: &EnvChange) -> String {
+    format!(
+        "env       {:>6} {:<9} changed since {}",
+        c.seq, c.check, c.since
+    )
+}
 
 fn usage() -> ExitCode {
     eprintln!(
@@ -89,6 +97,9 @@ fn verify(args: &[String]) -> ExitCode {
                 "daemon key {:>6} {:<14} {} by {}",
                 k.seq, k.kind, k.key, k.actor
             );
+        }
+        for c in &report.env_changes {
+            println!("{}", env_line(c));
         }
         for f in &report.skipped {
             println!(
@@ -174,5 +185,20 @@ fn compare_cmd(args: &[String]) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_environment_change_is_one_line() {
+        let c = EnvChange {
+            seq: 12,
+            check: "tests".into(),
+            since: 7,
+        };
+        assert_eq!(env_line(&c), "env           12 tests     changed since 7");
     }
 }

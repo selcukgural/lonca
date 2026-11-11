@@ -137,6 +137,12 @@ read = []
 # The commands' PATH, as absolute directories; empty means the daemon's own.
 # path = ["/usr/bin", "/bin"]
 path = []
+# Commands whose output names the environment the checks ran in, run once
+# before them in the same sandbox: each check's evidence records a digest
+# of their output and their first lines. A failing one does not fail the
+# checks. See docs/guide/verification.md.
+# identify = ["rustc --version", "cargo --version"]
+identify = []
 # What each process of a command may use; 0 means no limit. A limit the
 # daemon runs under already is never raised, and the account keeps 256
 # processes of its own. Address space holds on Linux only. See
@@ -516,6 +522,11 @@ pub struct Verification {
     pub read: Vec<String>,
     /// The commands' `PATH`; empty means the daemon's own.
     pub path: Vec<String>,
+    /// Commands whose output names the environment the checks ran in
+    /// (`rustc --version`): run once per verification, in the checks'
+    /// sandbox, before them. Their output goes into each check's `env`
+    /// digest and their first lines into its details (`env.<n>.*`).
+    pub identify: Vec<String>,
     /// `RLIMIT_CPU`; each `limit_` key: 0 means no limit. Off by default: it
     /// adds up a process's threads, so a test run on many cores meets it
     /// long before `timeout_seconds`, which is what holds the time.
@@ -613,6 +624,10 @@ pub const FORBIDDEN_ENV: &[&str] = &[
 /// The most named checks a policy defines, and the most one approval names.
 pub const MAX_CHECKS: usize = 32;
 
+/// The most `verification.identify` commands, and the longest one.
+pub const MAX_IDENTIFY: usize = 8;
+pub const MAX_IDENTIFY_BYTES: usize = 1024;
+
 /// Words a named check can not take: the checks Lonca runs itself, whose
 /// names are in the same denial words (`verification_failed:build`).
 pub const RESERVED_CHECKS: &[&str] = &[
@@ -674,6 +689,22 @@ fn check_named(v: &Verification) -> Result<(), String> {
                 "{CONFIG_FILE}: verification.checks_by_path: {pattern}: unknown check {n}"
             ));
         }
+    }
+    Ok(())
+}
+
+fn check_identify(commands: &[String]) -> Result<(), String> {
+    if commands.len() > MAX_IDENTIFY {
+        return Err(format!(
+            "{CONFIG_FILE}: verification: at most {MAX_IDENTIFY} identify commands"
+        ));
+    }
+    let bad = |c: &String| c.trim().is_empty() || c.len() > MAX_IDENTIFY_BYTES || c.contains('\0');
+    if commands.iter().any(bad) {
+        return Err(format!(
+            "{CONFIG_FILE}: verification.identify: a command is empty, has NUL \
+             or is longer than {MAX_IDENTIFY_BYTES} bytes"
+        ));
     }
     Ok(())
 }
@@ -927,6 +958,7 @@ impl Default for Verification {
             env: std::collections::BTreeMap::new(),
             read: vec![],
             path: vec![],
+            identify: vec![],
             limit_cpu_seconds: 0,
             limit_address_bytes: 0,
             limit_processes: 16384,
@@ -1206,6 +1238,7 @@ impl PolicyBundle {
             }
         }
         check_named(v)?;
+        check_identify(&v.identify)?;
         let cedar = PolicySet::from_str(policy_text).map_err(|e| format!("{POLICY_FILE}: {e}"))?;
         for p in cedar.policies() {
             if let Some(n) = p.annotation("approvals") {
@@ -1981,6 +2014,38 @@ mod env_tests {
             ["HOME", "CARGO_HOME"]
         );
         assert_eq!(b.config.verification.env["CARGO_NET_OFFLINE"], "true");
+    }
+
+    #[test]
+    fn identify_commands_are_few_short_and_not_blank() {
+        let parse = |list: &str| {
+            let config =
+                DEFAULT_CONFIG.replace("\nidentify = []\n", &format!("\nidentify = {list}\n"));
+            assert_ne!(config, DEFAULT_CONFIG, "the default line must be there");
+            PolicyBundle::parse(&config, DEFAULT_POLICY).map(|b| b.config.verification.identify)
+        };
+        assert!(
+            PolicyBundle::default_bundle()
+                .config
+                .verification
+                .identify
+                .is_empty()
+        );
+        assert_eq!(
+            parse(r#"["rustc --version", "node --version"]"#).unwrap(),
+            ["rustc --version", "node --version"]
+        );
+        let eight = format!("[{}]", ["\"true\""; MAX_IDENTIFY].join(", "));
+        assert_eq!(parse(&eight).unwrap().len(), MAX_IDENTIFY);
+        let nine = format!("[{}]", ["\"true\""; MAX_IDENTIFY + 1].join(", "));
+        assert!(parse(&nine).unwrap_err().contains("at most 8 identify"));
+        let longest = format!("[\"{}\"]", "x".repeat(MAX_IDENTIFY_BYTES));
+        assert!(parse(&longest).is_ok());
+        let long = format!("[\"{}\"]", "x".repeat(MAX_IDENTIFY_BYTES + 1));
+        for bad in [r#"[" "]"#, r#"[""]"#, r#"["a\u0000b"]"#, long.as_str()] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains("verification.identify"), "{bad}: {e}");
+        }
     }
 
     #[test]

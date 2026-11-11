@@ -245,7 +245,7 @@ queue and:
    signature, and the named checks the change owes;
 3. moves trunk only when they pass. A failure is `rejected` with
    `verification_failed:<check>`, and the evidence (exit code, duration,
-   the tail of the log) is in the log.
+   the tail of the log, the toolchain it ran with) is in the log.
 
 `[queue] batch_size` above 1 verifies several changes as one and bisects a
 failure. Each check's result is recorded as evidence and never recomputed;

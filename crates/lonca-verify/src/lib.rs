@@ -190,11 +190,14 @@ impl Verifier {
         let root = work.path().canonicalize()?;
         let _gone = Gone(&root);
         materialize(store, files, &root.join("tree"))?;
+        let identity = self.identify(&root, cfg);
         let mut failed = false;
         for (kind, name, cmd) in steps {
             let named = || {
                 let name = name.map(|n| ("name".to_string(), n.clone()));
-                name.into_iter().collect::<BTreeMap<_, _>>()
+                let mut d: BTreeMap<_, _> = name.into_iter().collect();
+                d.extend(identity.lines.clone());
+                d
             };
             if failed {
                 out.push(attestation(
@@ -202,7 +205,7 @@ impl Verifier {
                     CheckResult::Skipped,
                     subject,
                     named(),
-                    self.env(cmd),
+                    self.env(cmd, &identity),
                     None,
                 ));
                 continue;
@@ -230,7 +233,7 @@ impl Verifier {
                 result,
                 subject,
                 details,
-                self.env(cmd),
+                self.env(cmd, &identity),
                 Some(log_id),
             ));
         }
@@ -260,8 +263,72 @@ impl Verifier {
         held_jail(tree, writable, &closed, &path, &passed, cfg)
     }
 
-    fn env(&self, cmd: &str) -> String {
-        sha256_hex(format!("{}\0{cmd}", self.sandbox.name()).as_bytes())
+    /// The digest of the environment a command ran in: the sandbox, the
+    /// command, and what [`Self::identify`] found.
+    fn env(&self, cmd: &str, identity: &Identity) -> String {
+        let mut bytes = Vec::new();
+        for part in [
+            self.sandbox.name().as_bytes(),
+            cmd.as_bytes(),
+            identity.digest.as_bytes(),
+        ] {
+            field(&mut bytes, part);
+        }
+        sha256_hex(&bytes)
+    }
+
+    /// What names the environment of this run's commands: their `PATH`, the
+    /// policy's fixed values, the names passed through that the daemon has
+    /// (never their values: they may be secrets), and each
+    /// `verification.identify` command with what it printed and how it
+    /// ended. Each runs once, as the checks do, for at most
+    /// [`IDENTIFY_SECONDS`]; one that fails is recorded, and the checks run
+    /// all the same.
+    fn identify(&self, root: &Path, cfg: &Verification) -> Identity {
+        let mut bytes = Vec::new();
+        field(&mut bytes, command_path(cfg).as_bytes());
+        for (name, value) in &cfg.env {
+            if !lonca_policy::config::env_name_forbidden(name) {
+                field(&mut bytes, format!("env {name}={value}").as_bytes());
+            }
+        }
+        let passed = passed_through(cfg);
+        for (name, _) in &passed {
+            field(&mut bytes, format!("passed {name}").as_bytes());
+        }
+        let secrets: Vec<&OsString> = passed.iter().map(|(_, v)| v).collect();
+        let timeout = Duration::from_secs(cfg.timeout_seconds.min(IDENTIFY_SECONDS));
+        let mut lines = BTreeMap::new();
+        for (n, cmd) in cfg.identify.iter().enumerate() {
+            let (result, details, log) = self.exec(cmd, root, timeout, cfg);
+            // The log starts with the environment header, which is no output.
+            let output = log.split_once('\n').map(|(_, o)| o).unwrap_or("");
+            let output = hide(output, &secrets);
+            let error = match result {
+                CheckResult::Pass => None,
+                CheckResult::Fail => {
+                    Some(format!("exit {}", details.get("exit").map_or("?", |e| e)))
+                }
+                _ => Some(
+                    details
+                        .get("error")
+                        .cloned()
+                        .unwrap_or_else(|| "error".into()),
+                ),
+            };
+            field(&mut bytes, cmd.as_bytes());
+            field(&mut bytes, error.as_deref().unwrap_or("").as_bytes());
+            field(&mut bytes, output.as_bytes());
+            lines.insert(format!("env.{n}.command"), readable(cmd));
+            lines.insert(format!("env.{n}.output"), readable(&output));
+            if let Some(error) = error {
+                lines.insert(format!("env.{n}.error"), error);
+            }
+        }
+        Identity {
+            digest: sha256_hex(&bytes),
+            lines,
+        }
     }
 
     /// Runs one command. The environment is cleared and rebuilt: PATH, a
@@ -303,15 +370,9 @@ impl Verifier {
             .env("LANG", "C.UTF-8")
             .env("LONCA_VERIFY", "1");
         let mut passed: Vec<String> = Vec::new();
-        for name in &cfg.env_passthrough {
-            // The sandbox's own: nothing else can be written.
-            if lonca_policy::config::env_name_forbidden(name) || name == "TMPDIR" {
-                continue;
-            }
-            if let Some(v) = std::env::var_os(name) {
-                command.env(name, v);
-                passed.push(name.clone());
-            }
+        for (name, v) in passed_through(cfg) {
+            command.env(&name, v);
+            passed.push(name);
         }
         for (name, value) in &cfg.env {
             if lonca_policy::config::env_name_forbidden(name) {
@@ -369,6 +430,65 @@ impl Verifier {
         };
         (result, details, log)
     }
+}
+
+/// The longest an identify command may take, if `timeout_seconds` is longer.
+pub const IDENTIFY_SECONDS: u64 = 10;
+
+/// The longest line of an identify command's output the details keep.
+const IDENTIFY_LINE_CHARS: usize = 200;
+
+/// What `verification.identify` found for a run: a digest for every
+/// check's `env`, and the readable lines for its details.
+struct Identity {
+    digest: String,
+    lines: BTreeMap<String, String>,
+}
+
+/// One part of a digest's input, its length first so no two lists of
+/// parts run together into the same bytes.
+fn field(out: &mut Vec<u8>, part: &[u8]) {
+    out.extend_from_slice(part.len().to_string().as_bytes());
+    out.push(b':');
+    out.extend_from_slice(part);
+}
+
+/// The names of `env_passthrough` the daemon has, with their values: what
+/// reaches the commands. The sandbox's own names are never passed (nothing
+/// else can be written to `TMPDIR`), nor the forbidden ones, even from a
+/// config that skipped the parser.
+fn passed_through(cfg: &Verification) -> Vec<(String, OsString)> {
+    let allowed = |n: &&String| !lonca_policy::config::env_name_forbidden(n) && *n != "TMPDIR";
+    let named = cfg.env_passthrough.iter().filter(allowed);
+    named
+        .filter_map(|n| std::env::var_os(n).map(|v| (n.clone(), v)))
+        .collect()
+}
+
+/// `text` with each value passed through (`hidden`, four bytes or more)
+/// as `***`: neither the digest nor the details may hold one.
+fn hide(text: &str, hidden: &[&OsString]) -> String {
+    let mut text = text.to_string();
+    for value in hidden {
+        let value = value.to_string_lossy();
+        if value.len() >= 4 {
+            text = text.replace(value.as_ref(), "***");
+        }
+    }
+    text
+}
+
+/// The first line of `text` that has something on it, for a person to
+/// read in the log: control characters become `?`, and it is cut at
+/// [`IDENTIFY_LINE_CHARS`].
+fn readable(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    let shown = line.chars().map(|c| if c.is_control() { '?' } else { c });
+    shown.take(IDENTIFY_LINE_CHARS).collect()
 }
 
 /// Removes a run's directory when the run ends, however it ends, before its
@@ -1365,6 +1485,152 @@ mod tests {
         c.env_passthrough = vec!["CARGO_BUILD_RUSTC".into(), "TMPDIR".into()];
         let r = v.run(&store, &files, &tree, &c).unwrap();
         assert_eq!(r[0].result, CheckResult::Pass, "{:?}", r[0]);
+    }
+
+    /// `env` follows what the identify commands print, the `PATH` and the
+    /// policy's fixed values, and not a value passed through; the details
+    /// name each command with its first line.
+    #[test]
+    #[allow(unsafe_code, reason = "a test sets the environment the verifier reads")]
+    fn the_environment_digest_follows_the_toolchain_and_not_a_passed_value() {
+        let (dir, store, files, tree) = setup(&[("a", "")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let tools = dir.path().canonicalize().unwrap().join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let tool = tools.join("mytool");
+        let version = |n: &str| {
+            let text = format!("#!/bin/sh\necho \"mytool {n} (built today)\"\necho second line\n");
+            fs::write(&tool, text).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        version("1.0");
+        let mut c = cfg(Some("true"), Some("test -f a"));
+        c.path = vec![
+            tools.display().to_string(),
+            "/usr/bin".into(),
+            "/bin".into(),
+        ];
+        c.identify = vec!["mytool --version".into()];
+        let env_of = |c: &Verification| {
+            let r = v.run(&store, &files, &tree, c).unwrap();
+            assert!(r.iter().all(|a| a.result == CheckResult::Pass), "{r:?}");
+            assert_ne!(r[0].env, r[1].env, "the command is part of it");
+            r
+        };
+        let first = env_of(&c);
+        let d = &first[0].details;
+        assert_eq!(d["env.0.command"], "mytool --version");
+        assert_eq!(d["env.0.output"], "mytool 1.0 (built today)");
+        assert!(!d.contains_key("env.0.error"));
+        assert_eq!(
+            first[1].details["env.0.output"], d["env.0.output"],
+            "on every check"
+        );
+        assert_eq!(
+            env_of(&c)[0].env,
+            first[0].env,
+            "the same environment, the same digest"
+        );
+
+        version("2.0");
+        let r = env_of(&c);
+        assert_eq!(r[0].details["env.0.output"], "mytool 2.0 (built today)");
+        assert_ne!(r[0].env, first[0].env, "another toolchain");
+        version("1.0");
+
+        let mut moved = c.clone();
+        moved.path.push("/usr/sbin".into());
+        assert_ne!(env_of(&moved)[0].env, first[0].env, "another PATH");
+
+        let mut fixed = c.clone();
+        fixed.env.insert("FIXED_FOR_IDENTIFY".into(), "a".into());
+        let a = env_of(&fixed)[0].env.clone();
+        fixed.env.insert("FIXED_FOR_IDENTIFY".into(), "b".into());
+        assert_ne!(env_of(&fixed)[0].env, a, "another fixed value");
+        assert_ne!(a, first[0].env, "a fixed value is part of it");
+
+        // SAFETY: only this test reads or writes this name.
+        unsafe { std::env::set_var("PROBE_IDENTIFY_PASSED", "first-secret") };
+        let mut passed = c.clone();
+        passed.env_passthrough = vec!["PROBE_IDENTIFY_PASSED".into()];
+        passed.identify = vec!["echo \"key $PROBE_IDENTIFY_PASSED\"".into()];
+        let a = env_of(&passed);
+        assert_eq!(
+            a[0].details["env.0.output"], "key ***",
+            "a passed value is never shown"
+        );
+        unsafe { std::env::set_var("PROBE_IDENTIFY_PASSED", "other-secret") };
+        let b = env_of(&passed);
+        assert_eq!(b[0].env, a[0].env, "a passed value is not part of it");
+        unsafe { std::env::remove_var("PROBE_IDENTIFY_PASSED") };
+        assert_ne!(env_of(&passed)[0].env, a[0].env, "whether it is passed is");
+    }
+
+    /// An identify command that fails or takes too long is recorded as such,
+    /// and the checks run all the same.
+    #[test]
+    fn a_failing_identify_command_is_recorded_and_the_checks_run() {
+        let (dir, store, files, tree) = setup(&[("ok.txt", "yes\n")]);
+        let v = Verifier::new(dir.path().join("scratch"));
+        let mut c = cfg(Some("test -f ok.txt"), Some("exit 3"));
+        c.timeout_seconds = 1;
+        c.identify = vec![
+            "echo 'no such tool' >&2; exit 127".into(),
+            "sleep 5".into(),
+            "printf 'tool\\033[31m 1\\n'".into(),
+        ];
+        let started = Instant::now();
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the timeout holds"
+        );
+        assert_eq!(
+            (r[0].result, r[1].result),
+            (CheckResult::Pass, CheckResult::Fail)
+        );
+        let d = &r[1].details;
+        assert_eq!(d["env.0.error"], "exit 127");
+        assert_eq!(d["env.0.output"], "no such tool");
+        assert_eq!(d["env.1.error"], "timeout");
+        assert_eq!(d["env.1.output"], "");
+        assert_eq!(
+            d["env.2.output"], "tool?[31m 1",
+            "no terminal control reaches a reader"
+        );
+        assert!(!d.contains_key("env.2.error"));
+        assert_eq!(d["exit"], "3", "the check's own details stay");
+        c.build = Some("false".into());
+        let r = v.run(&store, &files, &tree, &c).unwrap();
+        assert_eq!(r[1].result, CheckResult::Skipped);
+        assert_eq!(
+            r[1].details["env.0.error"], "exit 127",
+            "a skipped check names it too"
+        );
+    }
+
+    #[test]
+    fn a_readable_line_is_the_first_one_short_and_hides_passed_values() {
+        let secret = OsString::from("hunter22");
+        let short = OsString::from("abc");
+        assert_eq!(readable("\n  \n  v22.1.0  \nmore"), "v22.1.0");
+        assert_eq!(readable(""), "");
+        assert_eq!(readable("a\tb"), "a?b");
+        assert_eq!(
+            hide("k=hunter22 abc\nhunter22", &[&secret, &short]),
+            "k=*** abc\n***"
+        );
+        let long = "é".repeat(IDENTIFY_LINE_CHARS + 5);
+        assert_eq!(readable(&long).chars().count(), IDENTIFY_LINE_CHARS);
+        let mut a = Vec::new();
+        field(&mut a, b"ab");
+        field(&mut a, b"c");
+        let mut b = Vec::new();
+        field(&mut b, b"a");
+        field(&mut b, b"bc");
+        assert_ne!(a, b, "parts do not run together");
+        assert_eq!(a, b"2:ab1:c");
     }
 
     fn dirs_home() -> PathBuf {

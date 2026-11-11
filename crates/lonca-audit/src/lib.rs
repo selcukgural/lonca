@@ -16,6 +16,9 @@
 //! 6. (`compare`) a pushed log is a prefix of the local one, so history that
 //!    was published can not be rewritten unnoticed.
 //!
+//! It also notes, without finding fault, every daemon key switch and every
+//! check that ran in another environment than the last time it ran.
+//!
 //! It contains no AI and calls no network.
 
 #![forbid(unsafe_code)]
@@ -28,10 +31,10 @@ use std::sync::Arc;
 
 use lonca_core::keyed::KeyedDirs;
 use lonca_core::oplog::{FORMAT_KEYED, OpLog, SignedOp, verify_chain};
-use lonca_core::ops::Op;
+use lonca_core::ops::{Attestation, Op};
 use lonca_core::{ChangeId, GitId, Result, Store};
 use lonca_policy::config::{CONFIG_FILE, Config, POLICY_FILE, PolicyBundle};
-use lonca_policy::decide::{Ctx, decide};
+use lonca_policy::decide::{Ctx, decide, evidence_name};
 use lonca_policy::state::State;
 use lonca_symbols::engine;
 use lonca_symbols::integrate::{facts_keyed, integrate_joining};
@@ -56,6 +59,45 @@ pub struct Report {
     pub skipped: Vec<Finding>,
     /// Every daemon key switch along the log, for the reader to see.
     pub key_switches: Vec<KeySwitch>,
+    /// Every check whose environment changed since it last ran, for the
+    /// reader to see: evidence is recorded, never recomputed, so a new
+    /// toolchain is no fault, only worth knowing.
+    pub env_changes: Vec<EnvChange>,
+}
+
+/// A check whose `env` digest differs from the one it had at the last
+/// entry that ran it: another toolchain, `PATH`, sandbox or command.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct EnvChange {
+    pub seq: u64,
+    /// `build`, `tests`, `extended`, or a named check's name.
+    pub check: String,
+    /// The entry where it last ran.
+    pub since: u64,
+}
+
+/// The checks of each entry's evidence, in log order, whose environment
+/// differs from the last entry that had them.
+pub fn env_changes<'a>(
+    entries: impl IntoIterator<Item = (u64, &'a [Attestation])>,
+) -> Vec<EnvChange> {
+    let mut last: BTreeMap<&str, (u64, &str)> = BTreeMap::new();
+    let mut out = Vec::new();
+    for (seq, evidence) in entries {
+        for a in evidence {
+            let check = evidence_name(a);
+            if let Some((since, env)) = last.insert(check, (seq, &a.env))
+                && env != a.env
+            {
+                out.push(EnvChange {
+                    seq,
+                    check: check.to_string(),
+                    since,
+                });
+            }
+        }
+    }
+    out
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -142,6 +184,10 @@ pub fn audit_ops(store: &Store, ops: &[SignedOp], opts: Options) -> Report {
             return rep;
         }
     }
+    rep.env_changes = env_changes(
+        ops.iter()
+            .map(|o| (o.entry.seq, o.entry.evidence.as_slice())),
+    );
     let default_policy = Arc::new(PolicyBundle::default_bundle());
     let mut policies: BTreeMap<GitId, Arc<PolicyBundle>> = BTreeMap::new();
     let mut state = State::new();
@@ -419,4 +465,53 @@ pub fn compare(local: &[SignedOp], published: &[SignedOp]) -> Vec<Finding> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lonca_core::ops::{CheckKind, CheckResult};
+
+    fn check(kind: CheckKind, name: Option<&str>, env: &str) -> Attestation {
+        Attestation {
+            check: kind,
+            result: CheckResult::Pass,
+            subject_tree: GitId::of_blob(b"tree"),
+            details: name
+                .map(|n| ("name".to_string(), n.to_string()))
+                .into_iter()
+                .collect(),
+            env: env.into(),
+            log: None,
+            producer: "test".into(),
+        }
+    }
+
+    #[test]
+    fn a_check_in_another_environment_than_its_last_run_is_noted() {
+        let build = |env| check(CheckKind::Build, None, env);
+        let tests = |env| check(CheckKind::Tests, None, env);
+        let api = |env| check(CheckKind::Named, Some("api"), env);
+        let e3 = [build("a"), tests("t")];
+        let e5 = [build("a"), tests("t2"), api("x")];
+        let e6: [Attestation; 0] = [];
+        let e8 = [build("b"), api("y")];
+        let e9 = [build("b"), check(CheckKind::Named, Some("e2e"), "y")];
+        let entries: [(u64, &[Attestation]); 5] =
+            [(3, &e3), (5, &e5), (6, &e6), (8, &e8), (9, &e9)];
+        let note = |seq, check: &str, since| EnvChange {
+            seq,
+            check: check.into(),
+            since,
+        };
+        assert_eq!(
+            env_changes(entries),
+            [note(5, "tests", 3), note(8, "build", 5), note(8, "api", 5)]
+        );
+        assert!(env_changes([(1, &e3[..]), (2, &e3[..])]).is_empty());
+        // The last run, not the first: back to "a" after "b" is a change too.
+        let back = [build("a")];
+        let notes = env_changes([(1, &e3[..]), (2, &e8[..]), (4, &back[..])]);
+        assert_eq!(notes, [note(2, "build", 1), note(4, "build", 2)]);
+    }
 }

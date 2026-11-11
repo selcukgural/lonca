@@ -104,6 +104,8 @@ last column.
 | A29 | A key a file on trunk already has is refused (`key_taken`); a person's change and an agent's that would land one key: the second is conflicted on the key, and the log audits | `09-keyed` |
 | A30 | A runner's `lonca events --watch`, with the human session, wakes when a lease is handed over between two sessions, with the sender but no message text, and the receiving agent still reads it in `lonca events` | `10-watch` |
 | A31 | `lonca events --watch --follow` prints one JSON line per event and stops by itself when every session it watches by name has ended | `10-watch` |
+| A32 | With `identify` in `[verification]`, `lonca change --evidence` of an integrated change names the toolchain each check ran with (a digest and each command's first line), and an identify command that fails is shown as failed while the check passes | `11-evidence` |
+| A33 | `lonca-audit verify` notes a check that ran with another toolchain than the last time it ran (`env … changed since …`), and the log still verifies | `11-evidence` |
 
 ## Manual criteria
 

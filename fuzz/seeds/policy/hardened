@@ -73,6 +73,15 @@ critical = [
 # Reading these taints a session.
 untrusted = ["vendor/**", "third_party/**", "node_modules/**"]
 
+# Keyed directories: a file's key comes from its name (a migration's
+# version), and no two files there may have one. An agent reserves a key
+# with an insert lease on "dir#<dir>". See docs/guide/concepts.md, "Keyed
+# directories".
+# [paths.keyed]
+# "db/migration" = '^V(\d+)__'                          # Flyway
+# "app/migrations" = '^(\d+)_'                          # Django
+# "docs/adr" = { pattern = '^([a-z-]+)\.md$', compare = "text" }
+
 [verification]
 # Commands run by the verifier in a sandbox on the merged tree.
 # build = "cargo build --offline"
@@ -109,6 +118,12 @@ read = []
 # The commands' PATH, as absolute directories; empty means the daemon's own.
 # path = ["/usr/bin", "/bin"]
 path = []
+# Commands whose output names the environment the checks ran in, run once
+# before them in the same sandbox: each check's evidence records a digest
+# of their output and their first lines. A failing one does not fail the
+# checks. See docs/guide/verification.md.
+# identify = ["rustc --version", "cargo --version"]
+identify = []
 # What each process of a command may use; 0 means no limit. A limit the
 # daemon runs under already is never raised, and the account keeps 256
 # processes of its own. Address space holds on Linux only. See

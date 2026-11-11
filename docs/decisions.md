@@ -4080,6 +4080,52 @@ inbox.
   it to shell runners, `--follow` as one JSON line per event;
   `lonca_client::Client::watch` and `Watch::after` to Rust ones.
 
+## Evidence names its environment (#263)
+
+`Attestation.env` was documented as a digest of "sandbox profile, commands,
+tool versions", but the verifier hashed the sandbox name and the command
+only. Two passes of one command under different compilers carried one
+`env`, so neither a reviewer nor the auditor could tell that the toolchain
+changed, or whether the queue ran what CI runs.
+
+- **Recorded, not run in.** The issue is about saying which environment
+  produced a result; running checks in a container image, pulling images or
+  any network stays out. A runner that wants CI's image makes its commands
+  run in it, and `identify` names it.
+- **`identify` is policy.** The commands that name the toolchain come from
+  the signed policy, like the checks (at most 8, 1024 bytes each). They run
+  once per verification, before the checks, in the same sandbox, tree,
+  environment and `PATH` (a `rust-toolchain.toml` in the tree picks the
+  same toolchain for both), for at most 10 seconds each. A failing or slow
+  one is recorded and never fails a check: it is evidence about evidence.
+- **What the digest holds.** Length-prefixed parts: the sandbox, the
+  command, and an identity of the run (the `PATH`, the policy's `env` names
+  and values, which are in the signed policy anyway, the passed-through
+  names the daemon had, and each identify command with how it ended and its
+  output). Passed-through values never: they may be secrets, so where an
+  identify command prints one it becomes `***` before the digest and the
+  lines.
+- **Readable lines in `details`.** `env.<n>.command`, `.output` (the first
+  non-empty line, 200 characters, control characters as `?`) and `.error`
+  on every check of the run, skipped ones too, so a person sees
+  `rustc 1.91.0` and not only a hash. `change.get` gathers them as
+  `environment`, `lonca change --evidence` prints them.
+- **No log format change.** `Attestation` keeps its fields: `env` is a
+  string and `details` a map, and neither is ever recomputed. Entries from
+  before hold the old digest and no lines; they replay and audit as they
+  did. The first integration after an upgrade has a new digest, which the
+  auditor notes once.
+- **The auditor notes, never finds.** It can not recompute evidence, so a
+  changed `env` is no fault. `Report.env_changes` lists each check (by its
+  evidence name: `build`, `tests`, `extended` or a named check's name) whose
+  `env` differs from the last entry that ran it, with both sequence numbers;
+  `lonca-audit verify` prints one line each, beside the daemon key switches.
+  Every entry with evidence counts, denied attempts too: each says what ran.
+- **Reused evidence.** A tree verified within the hour is not run again
+  (`VERIFIED_FOR_MS`); its evidence, identify lines included, is that run's.
+  The cache key is a digest of the whole `[verification]`, so a new
+  `identify` list runs again.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

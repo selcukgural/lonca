@@ -119,7 +119,10 @@ lonca log --repo demo
 ```
 
 `--evidence` prints each check of the last integration attempt: result,
-exit code, duration, sandbox, and the tail of its log. The log shows the
+exit code, duration, sandbox, the environment it ran in (a digest and the
+toolchain lines of `identify`,
+[Verification](verification.md#the-environment-the-evidence-names)), and
+the tail of its log. The log shows the
 `approve` entry, then `change.integrate` by `daemon`:
 
 ```text

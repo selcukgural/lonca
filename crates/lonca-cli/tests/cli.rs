@@ -1981,10 +1981,12 @@ fn diff_and_evidence_of_a_change_through_the_cli() {
     std::fs::write(hws.join("check.sh"), "echo checked; exit 0\n").unwrap();
     assert!(e.run(&hws, &["propose", "-i", "seed"]).contains("allow"));
     e.settle();
-    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
-        "# test = \"cargo test --offline\"",
-        "test = \"sh check.sh\"",
-    );
+    let config = lonca_policy::config::DEFAULT_CONFIG
+        .replace(
+            "# test = \"cargo test --offline\"",
+            "test = \"sh check.sh\"",
+        )
+        .replace("\nidentify = []\n", "\nidentify = [\"echo tool 1.2.3\"]\n");
     std::fs::write(r.join("lonca.toml"), config).unwrap();
     std::fs::write(r.join("policy.cedar"), lonca_policy::config::DEFAULT_POLICY).unwrap();
     assert!(
@@ -2022,6 +2024,8 @@ fn diff_and_evidence_of_a_change_through_the_cli() {
     let ev = e.run(r, &["change", short, "--repo", "demo", "--evidence"]);
     assert!(ev.contains("tests: pass (exit 0,"), "{ev}");
     assert!(ev.contains("  checked"), "{ev}");
+    assert!(ev.contains("\n  environment "), "{ev}");
+    assert!(ev.contains("\n    echo tool 1.2.3: tool 1.2.3\n"), "{ev}");
     assert!(!ev.contains("[log tail]"), "{ev}");
     let j: serde_json::Value =
         serde_json::from_str(&e.run(r, &["diff", &change, "--repo", "demo", "--json"])).unwrap();

@@ -257,7 +257,7 @@ enum Cmd {
         json: bool,
     },
     /// Show a change (with --evidence, the checks of its last integration
-    /// attempt and their logs).
+    /// attempt, the environment they ran in and their logs).
     Change {
         /// A change id, or its first letters (at least 4) when they name one change.
         change: String,
@@ -2236,6 +2236,9 @@ fn run(cmd: Cmd) -> Result<()> {
                     a["duration_ms"].as_i64().unwrap_or(0),
                     a["sandbox"].as_str().unwrap_or("-")
                 );
+                for line in environment_lines(&a) {
+                    outln!("{line}");
+                }
                 if let Some(log) = a["log"].as_str().filter(|l| !l.is_empty()) {
                     if a["log_truncated"] == true {
                         outln!("  [log tail]");
@@ -2587,6 +2590,25 @@ fn run(cmd: Cmd) -> Result<()> {
 
 /// A session that stopped with work nobody proposed: "done" and "stopped"
 /// read differently here, for a session that has ended too.
+/// What `change --evidence` prints of a check's environment: its digest,
+/// then what each identify command printed, or how it failed.
+fn environment_lines(check: &Value) -> Vec<String> {
+    let Some(env) = check["env"].as_str().filter(|e| !e.is_empty()) else {
+        return vec![];
+    };
+    let mut out = vec![format!("  environment {}", env.get(..12).unwrap_or(env))];
+    for id in check["environment"].as_array().into_iter().flatten() {
+        let command = id["command"].as_str().unwrap_or("");
+        let output = id["output"].as_str().unwrap_or("");
+        out.push(match id["error"].as_str() {
+            Some(error) if output.is_empty() => format!("    {command}: error: {error}"),
+            Some(error) => format!("    {command}: error: {error}: {output}"),
+            None => format!("    {command}: {output}"),
+        });
+    }
+    out
+}
+
 fn left_unproposed(session: &Value) -> Option<String> {
     let left = session
         .get("unproposed")
@@ -2775,9 +2797,32 @@ fn pin_note(lease: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn evidence_names_its_environment_in_lines() {
+        assert!(environment_lines(&json!({"check": "syntax"})).is_empty());
+        assert_eq!(
+            environment_lines(&json!({"env": "tree-sitter"})),
+            ["  environment tree-sitter"]
+        );
+        let check = json!({"env": "0123456789abcdef", "environment": [
+            {"command": "rustc --version", "output": "rustc 1.91.0", "error": null},
+            {"command": "node --version", "output": "", "error": "exit 127"},
+            {"command": "cat v", "output": "no such file", "error": "exit 1"},
+        ]});
+        assert_eq!(
+            environment_lines(&check),
+            [
+                "  environment 0123456789ab",
+                "    rustc --version: rustc 1.91.0",
+                "    node --version: error: exit 127",
+                "    cat v: error: exit 1: no such file",
+            ]
+        );
+    }
+
     use super::{
-        audit_hint, claim_of, lease_items, lease_need_lines, log_pages, no_lease_lines, pin_note,
-        source, split_ids, status_text, unparsed_note,
+        audit_hint, claim_of, environment_lines, lease_items, lease_need_lines, log_pages,
+        no_lease_lines, pin_note, source, split_ids, status_text, unparsed_note,
     };
     use lonca_core::ops::LeaseKind;
 

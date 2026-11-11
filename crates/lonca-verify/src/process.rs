@@ -51,7 +51,9 @@ pub struct Ended {
     pub status: Option<ExitStatus>,
     /// Stopped because the disk came down to what it must keep free.
     pub out_of_room: bool,
-    /// The end of its output, stdout and stderr as they were written.
+    /// The end of its output, stdout and stderr as they were written; the
+    /// start of it for a command that keeps its head
+    /// ([`Running::keep_head`]).
     pub output: Vec<u8>,
     /// For the evidence, when something of it would not end.
     pub left: Option<(String, String)>,
@@ -61,6 +63,17 @@ pub struct Ended {
 pub struct Running {
     child: Child,
     output: File,
+    head: Option<usize>,
+}
+
+impl Running {
+    /// Keeps the first `bytes` of the output instead of the end: for a
+    /// command whose first lines are what is wanted. The rest is still read,
+    /// so the command is never held by a full pipe.
+    pub fn keep_head(mut self, bytes: usize) -> Self {
+        self.head = Some(bytes);
+        self
+    }
 }
 
 /// The disk a command writes to, and what it must leave free there.
@@ -183,6 +196,7 @@ pub fn start(mut command: Command, cfg: &Verification) -> io::Result<Running> {
     Ok(Running {
         child,
         output: reader(output),
+        head: None,
     })
 }
 
@@ -296,10 +310,17 @@ pub fn watch(
     mark: Option<&str>,
 ) -> Ended {
     let started = Instant::now();
-    let Running { mut child, output } = running;
+    let Running {
+        mut child,
+        output,
+        head,
+    } = running;
     let pid = child.id();
     let mut pipe = Some(output);
-    let mut tail = Tail::default();
+    let mut tail = Tail {
+        head,
+        ..Tail::default()
+    };
     let mut stopped = false;
     let mut out_of_room = false;
     let mut left = None;
@@ -414,19 +435,28 @@ fn kill_group(pid: u32) {
     unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
 }
 
-/// The end of the output, however much of it there is.
+/// The end of the output, however much of it there is, or its first
+/// `head` bytes.
 #[derive(Default)]
-struct Tail(VecDeque<u8>);
+struct Tail {
+    bytes: VecDeque<u8>,
+    head: Option<usize>,
+}
 
 impl Tail {
     fn push(&mut self, bytes: &[u8]) {
-        self.0.extend(bytes);
-        let over = self.0.len().saturating_sub(OUTPUT_TAIL);
-        self.0.drain(..over);
+        if let Some(head) = self.head {
+            let room = head.saturating_sub(self.bytes.len());
+            self.bytes.extend(bytes.iter().take(room));
+            return;
+        }
+        self.bytes.extend(bytes);
+        let over = self.bytes.len().saturating_sub(OUTPUT_TAIL);
+        self.bytes.drain(..over);
     }
 
     fn into_bytes(self) -> Vec<u8> {
-        self.0.into()
+        self.bytes.into()
     }
 }
 
@@ -594,6 +624,29 @@ mod tests {
         assert_eq!(bytes.len(), OUTPUT_TAIL);
         assert_eq!(bytes[0], 1);
         assert_eq!(bytes[OUTPUT_TAIL - 2..], [2, 3]);
+    }
+
+    #[test]
+    fn a_head_keeps_the_start_and_no_more() {
+        let mut head = Tail {
+            head: Some(4),
+            ..Tail::default()
+        };
+        head.push(b"abc");
+        head.push(b"def");
+        head.push(b"g");
+        assert_eq!(head.into_bytes(), b"abcd");
+        let mut big = Tail {
+            head: Some(OUTPUT_TAIL + 1),
+            ..Tail::default()
+        };
+        big.push(&[1; OUTPUT_TAIL]);
+        big.push(&[2, 3]);
+        assert_eq!(
+            big.into_bytes().len(),
+            OUTPUT_TAIL + 1,
+            "a head is not cut to the tail"
+        );
     }
 
     #[test]

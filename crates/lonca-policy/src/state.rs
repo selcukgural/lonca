@@ -263,9 +263,10 @@ impl ChangeRecord {
     }
 
     /// The named checks this change owes under `vc`: those asked of it, and
-    /// those `checks_by_path` names for a file it touches.
-    pub fn owed_checks(&self, vc: &crate::config::Verification) -> BTreeSet<String> {
-        vc.owed(&self.checks, self.files())
+    /// those `checks_by_path` names for a file it touches (`folds`: with
+    /// case folded, log format 32 on).
+    pub fn owed_checks(&self, vc: &crate::config::Verification, folds: bool) -> BTreeSet<String> {
+        vc.owed(&self.checks, self.files(), folds)
     }
 }
 

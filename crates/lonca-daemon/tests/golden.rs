@@ -94,6 +94,7 @@ fn golden_repo() -> Env {
     insert_names(&mut e);
     give_back(&mut e);
     unhooked(&mut e);
+    folded_paths(&mut e);
     named_checks(&mut e);
     replaces(&mut e);
     lost_mac(&mut e);
@@ -340,6 +341,33 @@ fn unhooked(e: &mut Env) {
     assert_eq!(r["decision"]["outcome"], "escalate", "{r}");
     let reasons = r["decision"]["reasons"].to_string();
     assert!(reasons.contains("unhooked_session"), "{r}");
+}
+
+/// From format 32: a critical path is critical under any spelling a file
+/// system that folds case reads as it.
+fn folded_paths(e: &mut Env) {
+    let fresh = "src/Build.rs";
+    let t = e.session("s-fold", &["src/**"]);
+    e.bind(&t);
+    e.wrote(&t, fresh);
+    let items = json!([{"symbol": "src/Build.rs#<file>", "kind": "edit"}]);
+    let args = json!({"items": items, "intent": "a build script", "ttl_ms": 600_000});
+    let r = e.ok("lease.acquire", None, Some(&t), args);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let base = e.trunk();
+    let files = vec![file(fresh, "pub fn main() {}\n")];
+    let preview = json!({"base": base, "files": files});
+    let r = e.ok("facts.preview", None, Some(&t), preview);
+    let adds: Vec<String> = serde_json::from_value(r["facts"]["adds"].clone()).unwrap();
+    let claim = Claim {
+        intent: "a build script".into(),
+        adds,
+        ..Default::default()
+    };
+    let args = json!({"base": base, "files": files, "claim": claim});
+    let r = e.ok("change.propose", None, Some(&t), args);
+    let reasons = r["decision"]["reasons"].to_string();
+    assert!(reasons.contains("critical_path:src/Build.rs"), "{r}");
 }
 
 /// From format 23: a child whose time runs out gives the set it was handed
@@ -1551,6 +1579,19 @@ fn golden_v30_log_still_verifies_replays_and_audits() {
     assert_eq!(new.level, ObservationLevel::Unobserved);
     let placed = s.sessions.values().filter(|x| x.workspace.is_some());
     assert_eq!(placed.count(), 2, "the others name none");
+}
+
+/// Format 32: a critical path is critical in any case.
+#[test]
+fn golden_v32_log_still_verifies_replays_and_audits() {
+    let ops = check_golden(
+        "oplog-v32.bundle",
+        "8ea8985602f6ce5f5d35cf7ffbac341c18b4c38acd87d067495aa7bcec6652f6",
+        32,
+    );
+    let folded = "critical_path:src/Build.rs".to_string();
+    let mut reasons = ops.iter().flat_map(|o| o.entry.decision.reasons.iter());
+    assert!(reasons.any(|r| *r == folded));
 }
 
 /// Format 31: a child session has its parent's agent name.

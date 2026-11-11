@@ -60,8 +60,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// directories; version 30 adds `workspace` to `session.start`, makes a
 /// continuation name the workspace of the session it continues, and starts
 /// it unobserved; version 31 gives a child session its parent's agent
-/// name.
-pub const FORMAT_CURRENT: u32 = 31;
+/// name; version 32 matches `critical` and `checks_by_path` patterns with
+/// case folded.
+pub const FORMAT_CURRENT: u32 = 32;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -166,6 +167,11 @@ pub const FORMAT_WORKSPACE: u32 = 30;
 /// it the child's agent name was the parent's choice. Older entries replay
 /// as they were.
 pub const FORMAT_CHILD_AGENT: u32 = 31;
+/// The first format in which `[paths] critical` and `checks_by_path`
+/// patterns match a path with case folded (`lonca_core::paths::folded`):
+/// a file system that folds case opens `Build.rs` as `build.rs`. Before it
+/// the patterns matched the spelling. Older entries replay as they were.
+pub const FORMAT_FOLDED_PATHS: u32 = 32;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

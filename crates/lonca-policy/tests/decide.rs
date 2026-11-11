@@ -4,9 +4,9 @@
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CHILD_AGENT, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES,
-    FORMAT_KEYED, FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE,
-    SignedOp, verify_chain,
+    FORMAT_AFFECTED, FORMAT_CHILD_AGENT, FORMAT_CURRENT, FORMAT_FOLDED_PATHS, FORMAT_GIVE_BACK,
+    FORMAT_INSERT_NAMES, FORMAT_KEYED, FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS,
+    FORMAT_WORKSPACE, SignedOp, verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -1394,6 +1394,7 @@ fn a_hardened_policy_lists_what_agents_do_and_nothing_else() {
     let allowed = |who: &Actor, action: &str| {
         let context = vec![
             ("path", CVal::Str("src/a.rs".into())),
+            ("folded", CVal::Str("src/a.rs".into())),
             ("recent_reverts", CVal::Long(0)),
             ("files", CVal::Long(1)),
             ("lines", CVal::Long(1)),
@@ -5475,6 +5476,112 @@ when { context.critical };
     }
 }
 
+/// macOS opens `Build.rs` as `build.rs`: a critical path is critical under
+/// every spelling a file system that folds case reads as it, and a tainted
+/// session does not reach it by one.
+#[test]
+fn a_critical_path_is_critical_in_any_case() {
+    for path in [
+        "crates/x/Build.rs",
+        ".Cargo/config.toml",
+        "sub/claude.md",
+        ".Claude/settings.json",
+        ".GITHUB/Workflows/ci.yml",
+        "CARGO.LOC\u{212A}",
+        "app/App.CSPROJ",
+    ] {
+        let mut h = H::new();
+        h.start_observed("s1", &["**"]);
+        h.wrote("s1", path);
+        let sym = format!("{path}#<file>");
+        assert!(h.lease("s1", "l1", &[(&sym, LeaseKind::Edit)]).is_allow());
+        let facts = edit(&sym);
+
+        // Entries from before the format replay as they were decided.
+        let before = Ctx {
+            format: FORMAT_FOLDED_PATHS - 1,
+            time_ms: h.now,
+            policy: &h.policy,
+            facts: Some(&facts),
+            evidence: &[],
+            symbols_engine: Some(h.engine),
+        };
+        let s1 = Actor::Agent {
+            name: "bot-s1".into(),
+            session: "s1".into(),
+        };
+        let op = Op::ChangePropose {
+            change: ChangeId::random(),
+            commit: gid('c'),
+            base: h.chain.state.trunk.clone().unwrap(),
+            claim: claim_of(&facts),
+        };
+        let d = decide(&h.chain.state, &s1, &op, None, &before);
+        assert!(d.is_allow(), "{path}: {d:?}");
+
+        let d = h.propose("s1", ChangeId::random(), facts.clone());
+        assert_eq!(d.outcome, Outcome::Escalate, "{path}: {d:?}");
+        assert!(
+            d.reasons.contains(&format!("critical_path:{path}")),
+            "{path}: {d:?}"
+        );
+        let taint = Op::Taint {
+            session: "s1".into(),
+            reason: "read the web".into(),
+        };
+        assert!(h.daemon(taint, vec![]).is_allow());
+        let d = h.propose("s1", ChangeId::random(), facts);
+        assert!(denied_with(&d, "tainted_critical_path"), "{path}: {d:?}");
+        h.assert_replay();
+    }
+}
+
+/// A rule that forbids by name reads `context.folded`: the path as a file
+/// system that folds case opens it.
+#[test]
+fn a_policy_reads_a_path_with_its_case_folded() {
+    let rule = r#"
+@id("no-lockfiles")
+forbid(principal is Lonca::Agent, action in [Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
+when { context.folded like "*package-lock.json" };
+"#;
+    let source = format!("{DEFAULT_POLICY}\n{rule}");
+    for (path, denied) in [
+        ("web/package-lock.json", true),
+        ("web/Package-Lock.JSON", true),
+        ("web/package.json", false),
+    ] {
+        let policy = PolicyBundle::parse(DEFAULT_CONFIG, &source).unwrap();
+        let mut h = H::with_policy(policy);
+        h.start_observed("a", &["**"]);
+        let symbol = format!("{path}#<file>");
+        let lease = [(symbol.as_str(), LeaseKind::Edit)];
+        assert!(h.lease("a", "l", &lease).is_allow());
+        h.wrote("a", path);
+        let d = h.propose("a", ChangeId::random(), edit(&symbol));
+        assert_eq!(
+            denied_with(&d, "policy:no-lockfiles"),
+            denied,
+            "{path}: {d:?}"
+        );
+        h.assert_replay();
+    }
+}
+
+/// `checks_by_path` names a check for a path under any spelling of it.
+#[test]
+fn a_check_by_path_is_owed_in_any_case() {
+    let h = H::with_policy(named_checks_policy());
+    let vc = &h.policy.config.verification;
+    let none = BTreeSet::new();
+    let path = vec!["SRC/Web/app.ts".to_string()];
+    assert_eq!(
+        vc.owed(&none, &path, true),
+        BTreeSet::from(["e2e".to_string()])
+    );
+    assert_eq!(vc.owed(&none, &path, false), none);
+}
+
 /// A rule that names a symbol goes on working when it gets a key.
 #[test]
 fn a_policy_on_a_name_reaches_its_keyed_symbols() {
@@ -8448,7 +8555,10 @@ fn a_check_named_at_approval_is_owed_by_the_change() {
     let rec = &h.chain.state.changes[&c];
     assert_eq!(rec.checks, BTreeSet::from(["api".to_string()]));
     let vc = &h.policy.config.verification;
-    assert_eq!(rec.owed_checks(vc), BTreeSet::from(["api".to_string()]));
+    assert_eq!(
+        rec.owed_checks(vc, true),
+        BTreeSet::from(["api".to_string()])
+    );
     let d = integrate_named(&mut h, c, vec![]);
     assert!(denied_with(&d, "verification_missing:api"), "{d:?}");
     assert_eq!(d.reasons.len(), 1, "{d:?}");
@@ -8608,7 +8718,11 @@ fn the_policy_names_the_checks_a_path_owes() {
         assert!(h.propose("s1", c, edit(sym)).is_allow());
         let vc = h.policy.config.verification.clone();
         let want: BTreeSet<String> = owed.then(|| "e2e".to_string()).into_iter().collect();
-        assert_eq!(h.chain.state.changes[&c].owed_checks(&vc), want, "{sym}");
+        assert_eq!(
+            h.chain.state.changes[&c].owed_checks(&vc, true),
+            want,
+            "{sym}"
+        );
         let d = integrate_named(&mut h, c, vec![]);
         assert_eq!(
             denied_with(&d, "verification_missing:e2e"),

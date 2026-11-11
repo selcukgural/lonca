@@ -16,8 +16,8 @@ use std::collections::BTreeSet;
 
 use lonca_core::keyed;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CHILD_AGENT, FORMAT_INSERT_NAMES, FORMAT_ISOLATE, FORMAT_KEYED,
-    FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEGACY, FORMAT_REPLACES,
+    FORMAT_AFFECTED, FORMAT_CHILD_AGENT, FORMAT_FOLDED_PATHS, FORMAT_INSERT_NAMES, FORMAT_ISOLATE,
+    FORMAT_KEYED, FORMAT_LEASE_INTENT, FORMAT_LEASE_LIVENESS, FORMAT_LEGACY, FORMAT_REPLACES,
     FORMAT_SECURITY_KEYS, FORMAT_SESSION_HARNESS, FORMAT_WORKSPACE,
 };
 use lonca_core::ops::OpKind;
@@ -1375,7 +1375,10 @@ fn verify_evidence<'a>(
         .collect();
     let reaches = records.iter().any(|c| c.facts.reaches_others());
     let vc = &ctx.policy.config.verification;
-    let named = records.iter().flat_map(|c| c.owed_checks(vc)).collect();
+    let named = records
+        .iter()
+        .flat_map(|c| c.owed_checks(vc, ctx.format >= FORMAT_FOLDED_PATHS))
+        .collect();
     let owed = vc.for_change(reaches, &named);
     for problem in evidence_problems(&owed, ctx.evidence) {
         v.deny(problem);
@@ -1585,7 +1588,7 @@ fn propose(
     let critical: Vec<&String> = files
         .iter()
         .copied()
-        .filter(|p| policy.is_critical(p))
+        .filter(|p| policy.is_critical(p, ctx.format >= FORMAT_FOLDED_PATHS))
         .collect();
 
     match actor {
@@ -1742,6 +1745,11 @@ fn propose(
         for p in list {
             let mut c = base_ctx.clone();
             c.push(("path", CVal::Str(p.clone())));
+            // The path as macOS would open it, for a rule that forbids by
+            // name: `context.folded like "*cargo.lock"`. In every format:
+            // a candidate policy is tried on older entries too, and no
+            // policy that worked read a key that was not there.
+            c.push(("folded", CVal::Str(lonca_core::paths::folded(p))));
             v.cedar(policy.evaluate(actor, action, c));
         }
     }

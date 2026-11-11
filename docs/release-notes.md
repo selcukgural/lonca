@@ -36,6 +36,18 @@ daemon's git takes each path as the file it names
 (`GIT_LITERAL_PATHSPECS=1`). What is integrated was never affected, only
 the text shown for review.
 
+### A critical path is critical in any case
+
+macOS opens `Build.rs` as `build.rs`. `[paths] critical`, `[paths]
+untrusted` and `checks_by_path` matched a path by its spelling, so a change
+to `crates/x/Build.rs` or `.Cargo/config.toml` was not critical, and a read
+of `Vendor/lib.c` did not taint. From log format 32 these lists read a path
+with its case folded, on every platform. A policy rule that forbids by name
+should read the new `context.folded` with a lower-case pattern
+(`context.folded like "*cargo.lock"`): `context.path` is the path as
+written, as before. Look at your own `policy.cedar` for `forbid` rules on
+`context.path`; the shipped ones are changed in new repositories only.
+
 ### A child session has its parent's agent name
 
 The policy knows an agent by its name (`Lonca::Agent::"docs-bot"`), and a

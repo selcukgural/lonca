@@ -4654,7 +4654,7 @@ impl Service {
             };
             let reach = |c: &ChangeId| {
                 let rec = &state.changes[c];
-                (rec.facts.reaches_others(), rec.owed_checks(&vcfg))
+                (rec.facts.reaches_others(), rec.owed_checks(&vcfg, true))
             };
             let held: Vec<ChangeId> = state
                 .queue
@@ -4791,7 +4791,8 @@ impl Service {
             let reaches = rec.facts.reaches_others();
             let trunk = r.chain.state.trunk.clone().expect("initialized");
             let policy = r.policy()?;
-            let named = r.chain.state.changes[&change].owed_checks(&policy.config.verification);
+            let named =
+                r.chain.state.changes[&change].owed_checks(&policy.config.verification, true);
             let vcfg = policy.config.verification.for_change(reaches, &named);
             let reuse = policy.config.queue.batch_size > 1;
             let t = r.chain.entry_time(self.now());
@@ -4974,7 +4975,7 @@ fn truncate_at_line(mut text: String, cap: usize) -> (String, bool) {
 /// evidence and denials use: `build`, `tests`, `extended`, then the named
 /// checks it owes. Pending ones too: the human sees it before the yes.
 fn runs_for(vc: &Verification, c: &ChangeRecord) -> Vec<String> {
-    let owed = vc.for_change(c.facts.reaches_others(), &c.owed_checks(vc));
+    let owed = vc.for_change(c.facts.reaches_others(), &c.owed_checks(vc, true));
     let builtin = [
         ("build", &owed.build),
         ("tests", &owed.test),

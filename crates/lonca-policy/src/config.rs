@@ -71,6 +71,7 @@ max_file_bytes = 2097152
 # configure the agents themselves: they always need a human approval, and
 # tainted sessions may not touch them at all. An agent reads CLAUDE.md after
 # its next sync, so a change to it is a prompt to every agent that follows.
+# Case is folded here and in `untrusted`: macOS opens Build.rs as build.rs.
 critical = [
   ".github/**", ".gitlab-ci.yml", ".lonca/**", ".imece/**",
   # Build and packaging.
@@ -260,13 +261,13 @@ permit(principal, action, resource);
 
 @id("migrations-no-agent-delete")
 forbid(principal is Lonca::Agent, action == Lonca::Action::"file.delete", resource)
-when { context.path like "migrations/*" };
+when { context.folded like "migrations/*" };
 
 @id("auth-needs-two-humans")
 @escalate("auth")
 @approvals("2")
 forbid(principal is Lonca::Agent, action in [Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
-when { context.path like "auth/*" || context.path like "*/auth/*" };
+when { context.folded like "auth/*" || context.folded like "*/auth/*" };
 
 @id("revert-storm")
 @escalate("revert-storm")
@@ -577,11 +578,12 @@ impl Verification {
         &self,
         asked: &BTreeSet<String>,
         paths: impl IntoIterator<Item = &'a String>,
+        folds: bool,
     ) -> BTreeSet<String> {
         let mut owed = asked.clone();
         for path in paths {
             for (pattern, names) in &self.checks_by_path {
-                if config_pattern_matches(pattern, path) {
+                if config_pattern_reads(pattern, path, folds) {
                     owed.extend(names.iter().cloned());
                 }
             }
@@ -1065,6 +1067,17 @@ pub fn config_pattern_matches(pattern: &str, path: &str) -> bool {
     lonca_core::paths::path_matches(pattern, path)
 }
 
+/// [`config_pattern_matches`] as a file system that folds case reads the
+/// two (`folds`, log format 32 on), or by their spelling.
+pub fn config_pattern_reads(pattern: &str, path: &str, folds: bool) -> bool {
+    if folds {
+        use lonca_core::paths::folded;
+        config_pattern_matches(&folded(pattern), &folded(path))
+    } else {
+        config_pattern_matches(pattern, path)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum CVal {
     Str(String),
@@ -1294,20 +1307,24 @@ impl PolicyBundle {
         })
     }
 
-    pub fn is_critical(&self, path: &str) -> bool {
+    /// Is `path` one of `[paths] critical`? `folds`: with case folded
+    /// (log format 32 on), since `Build.rs` is `build.rs` on macOS.
+    pub fn is_critical(&self, path: &str, folds: bool) -> bool {
         self.config
             .paths
             .critical
             .iter()
-            .any(|p| config_pattern_matches(p, path))
+            .any(|p| config_pattern_reads(p, path, folds))
     }
 
+    /// Is `path` one of `[paths] untrusted`? Case is folded: what a read
+    /// brought in is recorded once, by the hook, and never recomputed.
     pub fn is_untrusted(&self, path: &str) -> bool {
         self.config
             .paths
             .untrusted
             .iter()
-            .any(|p| config_pattern_matches(p, path))
+            .any(|p| config_pattern_reads(p, path, true))
     }
 
     /// Where this repository stands below the hardened profile, for a
@@ -1774,10 +1791,16 @@ mod tests {
             ".gitattributes",
             ".gitmodules",
         ] {
-            assert!(bundle.is_critical(path), "{path}");
+            assert!(bundle.is_critical(path, true), "{path}");
         }
         for path in ["src/lib.rs", "docs/CLAUDE.txt", "README.md", ".claude"] {
-            assert!(!bundle.is_critical(path), "{path}");
+            assert!(!bundle.is_critical(path, true), "{path}");
+        }
+        // A file system that folds case opens these as critical files;
+        // before log format 32 the patterns matched the spelling.
+        for path in ["crates/x/Build.rs", ".CARGO/config.toml", "claude.MD"] {
+            assert!(bundle.is_critical(path, true), "{path}");
+            assert!(!bundle.is_critical(path, false), "{path}");
         }
     }
 
@@ -1792,12 +1815,13 @@ mod tests {
     fn defaults_parse() {
         let b = PolicyBundle::default_bundle();
         assert_eq!(b.config.leases.max_ttl_minutes, 30);
-        assert!(b.is_critical("Cargo.toml"));
-        assert!(b.is_critical("crates/x/Cargo.toml"));
-        assert!(b.is_critical(".github/workflows/ci.yml"));
-        assert!(b.is_critical("app/app.csproj"));
-        assert!(!b.is_critical("src/main.rs"));
+        assert!(b.is_critical("Cargo.toml", true));
+        assert!(b.is_critical("crates/x/Cargo.toml", true));
+        assert!(b.is_critical(".github/workflows/ci.yml", true));
+        assert!(b.is_critical("app/app.csproj", true));
+        assert!(!b.is_critical("src/main.rs", true));
         assert!(b.is_untrusted("vendor/lib/a.c"));
+        assert!(b.is_untrusted("Vendor/lib/a.c"));
     }
 
     #[test]
@@ -1818,8 +1842,8 @@ mod tests {
     #[test]
     fn a_policy_without_critical_paths_keeps_the_old_meaning() {
         let b = PolicyBundle::parse("[leases]\nmax_ttl_minutes = 10\n", DEFAULT_POLICY).unwrap();
-        assert!(b.is_critical("Cargo.toml"));
-        assert!(!b.is_critical("CLAUDE.md"));
+        assert!(b.is_critical("Cargo.toml", true));
+        assert!(!b.is_critical("CLAUDE.md", true));
     }
 
     #[test]
@@ -1835,7 +1859,12 @@ mod tests {
     #[test]
     fn forbid_and_escalate() {
         let b = PolicyBundle::default_bundle();
-        let file = |p: &str| vec![("path", CVal::Str(p.into()))];
+        let file = |p: &str| {
+            vec![
+                ("path", CVal::Str(p.into())),
+                ("folded", CVal::Str(lonca_core::paths::folded(p))),
+            ]
+        };
         assert_eq!(
             b.evaluate(&agent(), "file.delete", file("src/a.rs")),
             CedarOutcome::Allow
@@ -1889,7 +1918,10 @@ mod tests {
                 b.evaluate(
                     &agent(),
                     "file.delete",
-                    vec![("path", CVal::Str("src/a.rs".into()))],
+                    vec![
+                        ("path", CVal::Str("src/a.rs".into())),
+                        ("folded", CVal::Str("src/a.rs".into())),
+                    ],
                 )
             })
             .unwrap()
@@ -1994,14 +2026,16 @@ mod env_tests {
         let asked = BTreeSet::new();
         let owed = |paths: &[&str]| {
             let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
-            vc.owed(&asked, &paths).into_iter().collect::<Vec<_>>()
+            vc.owed(&asked, &paths, true)
+                .into_iter()
+                .collect::<Vec<_>>()
         };
         assert_eq!(owed(&["api/x.rs"]), ["api"]);
         assert_eq!(owed(&["web/a.tsx", "api/x.rs"]), ["api", "e2e-web_2"]);
         assert!(owed(&["src/a.rs"]).is_empty());
         let asked = BTreeSet::from(["e2e-web_2".to_string()]);
         let none: [String; 0] = [];
-        assert_eq!(vc.owed(&asked, &none), asked);
+        assert_eq!(vc.owed(&asked, &none, true), asked);
         for (checks, by_path, word) in [
             ("{ API = \"x\" }", "{}", "bad name"),
             ("{ \"a b\" = \"x\" }", "{}", "bad name"),

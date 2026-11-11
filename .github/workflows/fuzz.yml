@@ -91,7 +91,7 @@ jobs:
       - name: cargo-fuzz and age
         run: |
           cargo install --locked cargo-fuzz@0.13.2
-          sudo apt-get install -y age
+          .github/scripts/apt-install.sh age
       # What earlier runs found worth keeping, one corpus per target. Not on
       # a tag: neither restored nor saved there. zizmor's cache-poisoning
       # does not read the `if:`, and this workflow publishes nothing.

@@ -44,6 +44,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # What main has went through a pull request and the required checks. A
+  # tag on any other commit is not a release: the draft job, the only one
+  # that can write or attest, waits for this.
+  on-main:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: The tag is a commit of main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          # How the tagged commit stands to main: behind or identical is on it.
+          status=$(gh api "repos/$REPO/compare/main...$SHA" --jq .status)
+          case "$status" in
+            identical | behind) echo "$SHA is on main ($status)" ;;
+            *) echo "$SHA is not a commit of main ($status): nothing is released from it" >&2; exit 1 ;;
+          esac
+
   build:
     name: build (${{ matrix.target }})
     strategy:
@@ -196,7 +217,7 @@ jobs:
 
   draft:
     if: github.ref_type == 'tag'
-    needs: [build, sbom, acceptance]
+    needs: [on-main, build, sbom, acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: release

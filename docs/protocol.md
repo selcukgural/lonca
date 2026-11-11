@@ -778,7 +778,10 @@ item however many requested items run into it, empty when nothing is
 in the way. `"advice"` says the same in a sentence for a model: who is on
 it, and to settle it with `negotiate` or wait with `lease.interest`; `null`
 when nothing is in the way. Answers with `details` of holders carry it too:
-`change.propose`, `facts.preview`.
+`change.propose`, `facts.preview`. From log format 35 `<intent>` is `(not shown, its session read
+outside content)` when the holder is tainted, here, in a denial's details
+and in what `status` gives an agent of another session's leases and
+interests: the text is the holder's own, and may be what it read.
 
 ### `lease.release`
 

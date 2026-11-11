@@ -1993,6 +1993,21 @@ impl Service {
                 })
             })
             .collect();
+        // An agent reads another session's intent as a denial would give
+        // it: not at all when that session is tainted. People, and the
+        // session itself, read what was written.
+        let reader = match &auth.caller {
+            Caller::Agent { actor, .. } => actor.session().map(str::to_string),
+            _ => None,
+        };
+        let agent = matches!(auth.caller, Caller::Agent { .. });
+        let shown = |session: &str, intent: &str| -> String {
+            if agent && reader.as_deref() != Some(session) {
+                s.intent_for_agents(session, intent).to_string()
+            } else {
+                intent.to_string()
+            }
+        };
         let leases: Vec<Value> = s
             .active_leases(now)
             .map(|a| {
@@ -2002,7 +2017,7 @@ impl Service {
                     .iter()
                     .map(|(change, items)| json!({"change": change, "items": items}))
                     .collect();
-                json!({"set": l.set, "session": a.holder, "items": a.items, "intent": l.intent, "expires_ms": l.expires_ms, "pinned": pinned})
+                json!({"set": l.set, "session": a.holder, "items": a.items, "intent": shown(a.holder, &l.intent), "expires_ms": l.expires_ms, "pinned": pinned})
             })
             .collect();
         let changes: Vec<Value> = s
@@ -2056,7 +2071,7 @@ impl Service {
         let interests: Vec<Value> = s
             .interests
             .iter()
-            .map(|(seq, i)| json!({"seq": seq, "session": i.session, "items": i.items, "intent": i.intent, "blocks_until_ms": i.blocks_until_ms}))
+            .map(|(seq, i)| json!({"seq": seq, "session": i.session, "items": i.items, "intent": shown(&i.session, &i.intent), "blocks_until_ms": i.blocks_until_ms}))
             .collect();
         Ok(json!({
             "interests": interests, "reservations": s.reservations_at(now),

@@ -173,6 +173,11 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   "A human signature is for one log"): `at` in the signature, left out of
   the encoding when absent, so earlier entries keep their bytes. Entries
   of older formats, whose signatures name no entry, replay as they were.
+- **Version 35** checks a pending operation again at the approval that
+  releases it, refuses at `human.enroll` any key the log has known, and
+  leaves a tainted holder's intent out of `lease_held:` (see "What waited
+  is decided for the state it is released into"). No field changes.
+  Entries of older formats replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -4763,6 +4768,43 @@ Found together in a review of 2026-11-11, each small.
   point, and a refusal would need a flag every interrupted run then has
   to be told about. With a key that proves presence the person reads the
   note before they touch.
+
+## What waited is decided for the state it is released into
+
+Format 35, with three smaller things found beside it.
+
+- **A released operation is checked again.** An operation that a policy
+  rule sends to a human waits, and the approval that completes it applied
+  it as it was asked. Only the key operations looked at what had changed
+  meanwhile. A second `human.enroll` of a name, released after the first,
+  replaced that person's key; a `session.start` or `cap.attenuate` replaced
+  a session of the same id; a `lease.acquire` was inserted beside a lease
+  another session had taken in between. The releasing approval now makes
+  the operation's own checks of the state again (`already_enrolled`,
+  `key_reused`, `session_exists`, `invalid_lease_set`, `lease_held:…`) and
+  is denied with them; the operation stays pending for a rejection.
+- **`human.enroll` refuses any key the log has known**, in use or retired.
+  It asked only about retired ones, so a key could be two people.
+- **A tainted session's intent is not handed to another agent.** A lease's
+  intent is free text, and `lease_held:<symbol>:<holder>:<intent>` gives
+  it to whoever asks for the same symbol; `negotiate` taints its reader
+  for the same kind of text, a denial did not. From format 35 the fourth
+  field is `(not shown, its session read outside content)` when the holder
+  is tainted; the daemon does the same in the details of a denial and in
+  what `status` gives an agent of another session's leases and interests.
+  People read the text itself. Not covered: the claim and the diff of a
+  tainted session's pending change, which another agent can still read
+  with `change.get`; they are that change's content, and whether agents
+  should read each other's unreviewed work at all is a larger question.
+- **Evidence is of the tree that was merged**, for one change as for a
+  batch: the auditor compared `subject_tree` with what trunk became only
+  for batches, and with `queue.batch_size = 1`, the default, evidence of
+  any tree passed. Every log written so far holds to it (the golden logs
+  of all formats pass), so it has no format.
+- **A signature's freshness is asked with saturating arithmetic.** An
+  entry's time is a number its writer chose; at the ends of the range the
+  check overflowed, and with overflow checks on that stops `lonca-audit
+  verify` without a finding instead of answering.
 
 ## Text for a terminal
 

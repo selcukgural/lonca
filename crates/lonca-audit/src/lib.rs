@@ -448,6 +448,15 @@ fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp,
                 }
                 Err(err) => rep.find(Some(e.seq), "merge", err.to_string()),
             }
+            // What was verified is what was merged: a build and a test run
+            // of some other tree say nothing of this one.
+            if let Some(m) = merged.as_ref().filter(|_| !e.evidence.is_empty()) {
+                match store.read_commit(m) {
+                    Ok(tip) if e.evidence.iter().all(|a| a.subject_tree == tip.tree) => {}
+                    Ok(_) => rep.find(Some(e.seq), "merge", "evidence of another tree".to_string()),
+                    Err(err) => rep.find(Some(e.seq), "merge", err.to_string()),
+                }
+            }
         }
         Op::ChangeIntegrateBatch {
             trunk_before,

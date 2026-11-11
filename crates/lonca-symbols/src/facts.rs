@@ -177,7 +177,7 @@ pub fn analyze(
                 if engine >= ENGINE_PARTIAL
                     && pb.has_error
                     && pn.has_error
-                    && let Some((rb, rn)) = read_alike((&pb, old), (&pn, newt))
+                    && let Some((rb, rn)) = read_alike(engine, (&pb, old), (&pn, newt))
                 {
                     compare_file(engine, path, (&rb, old), (&rn, newt), &mut f);
                     continue;
@@ -321,8 +321,13 @@ fn compare_sections(path: &str, format: Format, old: &str, new: &str, f: &mut Fa
 /// it did read, when nothing else of the file changed: what was not read and
 /// the code outside those symbols stand in both as the same lines. `None`
 /// when they do not, and the file is then compared whole.
-fn read_alike((pb, old): (&Parsed, &str), (pn, new): (&Parsed, &str)) -> Option<(Parsed, Parsed)> {
-    let (b, n) = (pb.read_parts(old)?, pn.read_parts(new)?);
+fn read_alike(
+    engine: u32,
+    (pb, old): (&Parsed, &str),
+    (pn, new): (&Parsed, &str),
+) -> Option<(Parsed, Parsed)> {
+    let b = pb.read_parts_at(engine, old)?;
+    let n = pn.read_parts_at(engine, new)?;
     if b.rest != n.rest {
         return None;
     }
@@ -548,8 +553,11 @@ fn diff_level(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{ENGINE_BUDGET, ENGINE_LIMITS, ENGINE_PARTIAL, MAX_READ};
-    use crate::lang::past_budget;
+    use crate::engine::{
+        ENGINE_BUDGET, ENGINE_CURRENT, ENGINE_LIMITS, ENGINE_PARTIAL, ENGINE_READS, ENGINE_REST,
+        MAX_READ,
+    };
+    use crate::lang::{past_budget, read_over_and_over};
 
     /// `text`, filled to `len` bytes with a comment.
     fn filled(text: &str, len: usize) -> String {
@@ -630,6 +638,47 @@ mod tests {
             assert_eq!(f.edits, ["a.cs#<file>"], "{new}");
             assert_eq!(f.unparsed_files, ["a.cs"], "{new}");
         }
+    }
+
+    #[test]
+    fn a_blank_line_in_what_was_not_read_is_a_change_of_the_file() {
+        let unread = "    extension<T>(IEnumerable<T> source)\n";
+        for new in [
+            // What a grammar did not read may be a text of several lines,
+            // where a blank line and the end of a line are part of it.
+            PARTLY.replace(unread, &format!("{unread}\n")),
+            PARTLY.replace(unread, &format!("{}  \n", unread.trim_end())),
+            format!("\n{PARTLY}"),
+        ] {
+            let f = partly(ENGINE_REST, &new);
+            assert_eq!(f.edits, ["a.cs#<file>"], "{new}");
+            assert_eq!(f.unparsed_files, ["a.cs"], "{new}");
+            assert_eq!(partly(ENGINE_CURRENT, &new).edits, f.edits);
+            // Before, such a change was no change at all.
+            let f = partly(ENGINE_REST - 1, &new);
+            assert!(f.edits.is_empty() && f.unparsed_files.is_empty(), "{new}");
+        }
+        // A blank line that touches a symbol comes and goes with it.
+        let meter = "public class Meter\n";
+        let apart = PARTLY.replace(meter, &format!("\n\n{meter}"));
+        assert!(partly(ENGINE_REST, &apart).edits.is_empty());
+        let twice = "    public int Twice() => Value * 2;\n";
+        let added = format!("{twice}\n    public int Thrice() => Value * 3;\n");
+        let f = partly(ENGINE_REST, &PARTLY.replace(twice, &added));
+        assert_eq!(
+            (f.adds, f.edits),
+            (vec!["a.cs#Meter.Thrice".into()], vec![])
+        );
+        let f = partly(ENGINE_REST, &PARTLY.replace(twice, ""));
+        assert_eq!(
+            (f.deletes, f.edits),
+            (vec!["a.cs#Meter.Twice".into()], vec![])
+        );
+        let edited = PARTLY.replace("source.Count();", "source.Count() + 0;");
+        assert_eq!(
+            partly(ENGINE_REST, &edited).edits,
+            ["a.cs#Sequences.Length"]
+        );
     }
 
     #[test]
@@ -752,6 +801,24 @@ mod tests {
             analysis(e, "a.rs", None, Some(&small)).syntax_errors,
             ["a.rs"]
         );
+    }
+
+    #[test]
+    fn a_file_its_grammar_reads_over_and_over_goes_by_its_lines() {
+        let e = ENGINE_READS;
+        let old = read_over_and_over("func a() -> Int { 1 }\n");
+        let new = read_over_and_over("func a() -> Int { 3 }\n");
+        let a = analysis(e, "a.swift", Some(&old), Some(&new));
+        assert_eq!(a.facts.edits, ["a.swift#<file>"]);
+        assert_eq!(a.facts.unparsed_files, ["a.swift"]);
+        assert!(a.syntax_errors.is_empty());
+        assert_eq!(
+            analysis(ENGINE_CURRENT, "a.swift", Some(&old), Some(&new)).facts,
+            a.facts
+        );
+        // Before, the grammar was let through it.
+        let a = analysis(e - 1, "a.swift", Some(&old), Some(&new));
+        assert_eq!(a.syntax_errors, ["a.swift"]);
     }
 
     #[test]

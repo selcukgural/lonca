@@ -1,0 +1,19 @@
+pub struct Ledger {
+    entries: Vec<u64>,
+}
+
+impl Ledger {
+    /// Adds up what is due.
+    pub fn total(&self, fee: u64) -> u64 {
+        let mut sum: u64 = 0;
+        for e in &self.entries {
+            sum += e;
+        }
+        let fee = fee;
+        sum + fee
+    }
+
+    pub fn count(&self) -> usize {
+        self.entries.len()
+    }
+}

@@ -4,6 +4,7 @@
 //! and which nodes are definitions, imports and tests. The one thing that can
 //! not be data is the grammar, which is compiled code: see [`grammar`].
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::ControlFlow;
@@ -12,7 +13,7 @@ use std::sync::LazyLock;
 use serde::Deserialize;
 use tree_sitter::{Language, ParseOptions, ParseState, Parser, Tree};
 
-use crate::engine::{ENGINE_BUDGET, parse_budget};
+use crate::engine::{ENGINE_BUDGET, ENGINE_READS, READ_CHUNK, parse_budget, read_budget};
 
 /// Every grammar in this build, one line each. A grammar is native code, so
 /// it can not come from a table, and a new one needs a release.
@@ -436,30 +437,43 @@ impl Lang {
     }
 
     /// `text` parsed as `engine` parses it: from [`ENGINE_BUDGET`] within
-    /// [`parse_budget`] of its length, and `None` past it.
+    /// [`parse_budget`] of its length, from [`ENGINE_READS`] within
+    /// [`read_budget`] of it too, and `None` past either.
     pub fn parse_at(self, engine: u32, text: &str) -> Option<Tree> {
-        let budget = if engine < ENGINE_BUDGET {
+        let steps = if engine < ENGINE_BUDGET {
             u64::MAX
         } else {
             parse_budget(text.len())
         };
-        self.parse_within(text, budget).0
+        let reads = (engine >= ENGINE_READS).then(|| read_budget(text.len()));
+        self.parse_within(text, steps, reads).0
     }
 
-    /// `text` parsed in at most `budget` steps, and the steps it took; `None`
-    /// once it would take one more.
-    pub(crate) fn parse_within(self, text: &str, budget: u64) -> (Option<Tree>, u64) {
+    /// `text` parsed in at most `budget` steps and, with `reads`, handed to
+    /// the grammar in pieces of [`READ_CHUNK`] that come to at most that many
+    /// bytes; the steps it took and the bytes it was handed. `None` once it
+    /// would take one more of either. Without `reads` the text is handed
+    /// whole and nothing is counted, as the engines before [`ENGINE_READS`]
+    /// parsed.
+    pub(crate) fn parse_within(
+        self,
+        text: &str,
+        budget: u64,
+        reads: Option<u64>,
+    ) -> (Option<Tree>, u64, u64) {
         let mut steps = 0u64;
+        let handed = Cell::new(0u64);
         let Some(language) = grammar(&self.entry.grammar) else {
-            return (None, steps);
+            return (None, steps, 0);
         };
         let mut p = Parser::new();
         if p.set_language(&language).is_err() {
-            return (None, steps);
+            return (None, steps, 0);
         }
+        let read_out = || reads.is_some_and(|most| handed.get() > most);
         let mut step = |_: &ParseState| {
             steps += 1;
-            if steps > budget {
+            if steps > budget || read_out() {
                 ControlFlow::Break(())
             } else {
                 ControlFlow::Continue(())
@@ -467,9 +481,24 @@ impl Lang {
         };
         let options = ParseOptions::new().progress_callback(&mut step);
         let bytes = text.as_bytes();
-        let mut read = |at: usize, _| bytes.get(at..).unwrap_or_default();
+        let mut read = |at: usize, _| {
+            let rest = bytes.get(at..).unwrap_or_default();
+            if reads.is_none() {
+                return rest;
+            }
+            // Past the budget the file ends here for the grammar: a scanner
+            // on its way to the end of the file has nothing left to read,
+            // and the next step stops the parse.
+            if read_out() {
+                return &rest[..0];
+            }
+            let piece = &rest[..rest.len().min(READ_CHUNK)];
+            let len = u64::try_from(piece.len()).unwrap_or(u64::MAX);
+            handed.set(handed.get().saturating_add(len));
+            piece
+        };
         let tree = p.parse_with_options(&mut read, None, Some(options));
-        (tree, steps)
+        (tree.filter(|_| !read_out()), steps, handed.get())
     }
 }
 
@@ -481,24 +510,33 @@ pub(crate) fn past_budget(code: &str) -> String {
     format!("{code}fn filler() {{ {} }}\n", "-!-a;".repeat(30_000))
 }
 
+/// `code` with Swift behind it that the grammar reads about a hundred times
+/// over: its scanner looks for the end of a comment from every `/*`, and
+/// with none it reads to the end of the file each time. The parse takes 61
+/// steps of the 8192 it may.
+#[cfg(test)]
+pub(crate) fn read_over_and_over(code: &str) -> String {
+    format!("{code}{}\n//{}", "/*".repeat(100), "a".repeat(200_000))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::engine::{ENGINE_CURRENT, PARSE_MAX};
+    use crate::engine::{ENGINE_CURRENT, PARSE_MAX, READ_BASE, READ_PER_BYTE};
 
     #[test]
     fn a_parse_stops_at_the_step_past_its_budget() {
         let rust = Lang::named("rust");
         let text = "fn f() { -!-a; }\n".repeat(200);
-        let (tree, steps) = rust.parse_within(&text, u64::MAX);
+        let (tree, steps, _) = rust.parse_within(&text, u64::MAX, None);
         assert!(tree.is_some_and(|t| !t.root_node().has_error()));
         assert!(steps > 10, "{steps}");
-        let (whole, taken) = rust.parse_within(&text, steps);
+        let (whole, taken, _) = rust.parse_within(&text, steps, None);
         assert!(whole.is_some());
         assert_eq!(taken, steps);
-        let (cut, taken) = rust.parse_within(&text, steps - 1);
+        let (cut, taken, _) = rust.parse_within(&text, steps - 1, None);
         assert!(cut.is_none());
         assert_eq!(taken, steps);
     }
@@ -507,13 +545,83 @@ mod tests {
     fn the_budget_holds_from_its_engine_on() {
         let rust = Lang::named("rust");
         let large = past_budget("");
-        let (_, steps) = rust.parse_within(&large, u64::MAX);
+        let (_, steps, _) = rust.parse_within(&large, u64::MAX, None);
         assert!(steps > PARSE_MAX && steps < PARSE_MAX * 2, "{steps}");
         assert!(rust.parse_at(ENGINE_BUDGET, &large).is_none());
         assert!(rust.parse_at(ENGINE_CURRENT, &large).is_none());
         assert!(rust.parse(&large).is_none());
         assert!(rust.parse_at(ENGINE_BUDGET - 1, &large).is_some());
         assert!(rust.parse_at(ENGINE_BUDGET, "fn f() {}\n").is_some());
+    }
+
+    #[test]
+    fn a_parse_stops_at_the_byte_past_what_it_may_read() {
+        let swift = Lang::named("swift");
+        let text = read_over_and_over("");
+        let len = u64::try_from(text.len()).unwrap();
+        let (tree, _, read) = swift.parse_within(&text, u64::MAX, Some(u64::MAX));
+        assert!(tree.is_some());
+        assert!(read > len * 300, "{read}");
+        let (whole, _, taken) = swift.parse_within(&text, u64::MAX, Some(read));
+        assert!(whole.is_some());
+        assert_eq!(taken, read);
+        let (cut, _, taken) = swift.parse_within(&text, u64::MAX, Some(read - 1));
+        assert!(cut.is_none());
+        assert_eq!(taken, read);
+        // Past its budget a parse is handed the piece that crossed it and
+        // no more.
+        let most = read_budget(text.len());
+        assert_eq!(most, READ_BASE + len * READ_PER_BYTE);
+        let (cut, _, taken) = swift.parse_within(&text, u64::MAX, Some(most));
+        assert!(cut.is_none());
+        let chunk = u64::try_from(READ_CHUNK).unwrap();
+        assert!(taken > most && taken <= most + chunk, "{taken}");
+    }
+
+    #[test]
+    fn what_a_parse_may_read_holds_from_its_engine_on() {
+        let swift = Lang::named("swift");
+        let text = read_over_and_over("");
+        let (_, steps, _) = swift.parse_within(&text, u64::MAX, None);
+        assert!(steps < parse_budget(text.len()) / 8, "{steps}");
+        assert!(swift.parse_at(ENGINE_READS, &text).is_none());
+        assert!(swift.parse_at(ENGINE_CURRENT, &text).is_none());
+        assert!(swift.parse(&text).is_none());
+        assert!(swift.parse_at(ENGINE_READS - 1, &text).is_some());
+        assert!(swift.parse_at(ENGINE_READS, "func f() {}\n").is_some());
+    }
+
+    #[test]
+    fn a_text_handed_in_pieces_parses_as_the_whole_text() {
+        // Characters of two, three and four bytes across the ends of pieces.
+        let wide = "\u{e9}\u{20ac}\u{1f600}".repeat(1_500);
+        for (name, text) in [
+            (
+                "rust",
+                format!("// x{wide}\nfn a() {{ let s = \"{wide}\"; }}\n"),
+            ),
+            (
+                "python",
+                format!("# {wide}\ndef a():\n    return '{wide}'\n"),
+            ),
+            (
+                "swift",
+                format!("/* xy{wide} */\nfunc a() {{ let s = \"{wide}\" }}\n"),
+            ),
+            ("ruby", format!("x = <<~E\n  {wide}\nE\ndef a; end\n")),
+        ] {
+            let lang = Lang::named(name);
+            assert!(text.len() > READ_CHUNK * 3);
+            let (whole, steps, none) = lang.parse_within(&text, u64::MAX, None);
+            let (pieces, taken, read) = lang.parse_within(&text, u64::MAX, Some(u64::MAX));
+            let (whole, pieces) = (whole.unwrap(), pieces.unwrap());
+            assert!(!whole.root_node().has_error(), "{name}");
+            assert_eq!(whole.root_node().to_sexp(), pieces.root_node().to_sexp());
+            assert_eq!(steps, taken, "{name}");
+            assert_eq!(none, 0);
+            assert!(read >= u64::try_from(text.len()).unwrap(), "{name}");
+            assert!(lang.parse_at(ENGINE_CURRENT, &text).is_some(), "{name}");
+        }
     }
 
     fn grammars_of(rules: &str) -> Vec<Language> {

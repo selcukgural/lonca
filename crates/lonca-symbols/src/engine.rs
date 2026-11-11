@@ -37,8 +37,10 @@ use crate::lang::Lang;
 /// in any language as the grammar's, not the file's; version 18 keeps, in a file
 /// with a parse error, the symbols the error is not in; version 19 names
 /// Python's `type` statement, C++ concepts and types declared in a class, and
-/// Swift macros.
-pub const ENGINE_CURRENT: u32 = 19;
+/// Swift macros; version 20 parses a file within a budget of the bytes its
+/// grammar reads, and sees a blank line change in what a parse error left
+/// unread.
+pub const ENGINE_CURRENT: u32 = 20;
 
 /// The first engine with sections.
 pub const ENGINE_SECTIONS: u32 = 1;
@@ -143,7 +145,8 @@ pub fn parse_budget(len: usize) -> u64 {
 }
 
 /// `engine` reads `text` with `lang` for symbols: it is within
-/// [`MAX_READ`], and the grammar gets through it within [`parse_budget`]. A
+/// [`MAX_READ`], and the grammar gets through it within [`parse_budget`]
+/// and, from [`ENGINE_READS`], [`read_budget`]. A
 /// text it does not read goes by its lines, as a file no grammar reads.
 pub fn reads_text(engine: u32, lang: Lang, text: &str) -> bool {
     reads_size(engine, text.len())
@@ -175,9 +178,39 @@ pub const ENGINE_PARTIAL: u32 = 18;
 /// class or struct, and a Swift `macro`.
 pub const ENGINE_MORE_DEFS: u32 = 19;
 
+/// The first engine that parses within [`read_budget`] too: a grammar's
+/// scanner can read to the end of the file from every place in it, which is
+/// work no parse action counts.
+pub const ENGINE_READS: u32 = 20;
+
+/// The bytes every parse may read, whatever its length.
+pub const READ_BASE: u64 = 1 << 20;
+
+/// The bytes a parse may read for each byte of its file.
+pub const READ_PER_BYTE: u64 = 64;
+
+/// The bytes a grammar is handed at a time, which is what is counted.
+pub const READ_CHUNK: usize = 4096;
+
+/// The bytes the parse of a file of `len` bytes may be handed. The text
+/// goes to tree-sitter in pieces of [`READ_CHUNK`] and every piece it asks
+/// for is counted, again when it goes back for one: that counts the reading
+/// of the grammar's scanner, and not time, so the auditor stops where the
+/// daemon stopped. Code people write is handed at most 27 times its length.
+pub fn read_budget(len: usize) -> u64 {
+    let len = u64::try_from(len).unwrap_or(u64::MAX);
+    READ_BASE.saturating_add(len.saturating_mul(READ_PER_BYTE))
+}
+
+/// The first engine for which the rest of a file with a parse error (see
+/// [`ENGINE_PARTIAL`]) is its text as it stands, without only the blank
+/// lines that touch a symbol taken out of it: a blank line or the end of a
+/// line that changed anywhere else is a change of the file.
+pub const ENGINE_REST: u32 = 20;
+
 /// Every engine version this build can recompute.
 pub const ENGINES_KNOWN: &[u32] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 ];
 
 /// Refuses an engine version this build can not recompute.
@@ -210,6 +243,12 @@ mod tests {
         assert!(reads_text(ENGINE_BUDGET, rust, "fn a() {}\n"));
         assert!(!reads_text(ENGINE_BUDGET, rust, &large));
         assert!(reads_text(ENGINE_BUDGET - 1, rust, &large));
+        let swift = Lang::named("swift");
+        let reread = crate::lang::read_over_and_over("func a() {}\n");
+        assert!(reads_text(ENGINE_READS, swift, "func a() {}\n"));
+        assert!(!reads_text(ENGINE_READS, swift, &reread));
+        assert!(!reads_bytes(ENGINE_READS, swift, reread.as_bytes()));
+        assert!(reads_text(ENGINE_READS - 1, swift, &reread));
         let long = "/".repeat(MAX_READ + 1);
         assert!(!reads_text(ENGINE_BUDGET, rust, &long));
         assert!(!reads_text(ENGINE_BUDGET - 1, rust, &long));

@@ -734,7 +734,10 @@ static inline bool scan_heredoc_content(Scanner *scanner, TSLexer *lexer) {
             return true;
         }
 
-        if (lexer->lookahead == *array_get(&heredoc->word, position_in_word) && look_for_heredoc_end) {
+        // lonca: a word is kept as bytes, and a byte from 0x80 up is negative
+        // where `char` is signed: it never equalled the character it was
+        // taken from, so the heredoc ended only where `char` is unsigned.
+        if (lexer->lookahead == (int32_t)(uint8_t)*array_get(&heredoc->word, position_in_word) && look_for_heredoc_end) {
             advance(lexer);
             position_in_word++;
         } else {

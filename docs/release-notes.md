@@ -220,6 +220,27 @@ than its daemon"). A program that calls `hook.input` itself answers the new
 (`docs/protocol.md`; `lonca_client::real_path`). Shell commands are not
 read for paths, as before.
 
+### Symbol engine 20: a parse is held to what it reads
+
+- A grammar's scanner can read to the end of the file for every token, and
+  no parse action counts that: a Swift file of nothing but `/*` kept the
+  daemon busy for 81 seconds at 200 KB. From engine 20 the bytes a grammar
+  is handed are counted too (1 MiB and 64 times the file's length; code
+  people write takes at most 27 times). A file past it goes by its lines, as
+  one past the steps of engine 16 does.
+- In a file with syntax its grammar does not read, a blank line or the end
+  of a line that changed in the unread part is now a change of the file. It
+  was no change at all, though the unread part may be a text of several
+  lines.
+- Ruby's and Swift's scanners gave a different tree by the machine Lonca was
+  built for: a Ruby heredoc whose word has a letter such as `É`, `Ö` or `ç`
+  ended only on Linux on ARM, and a Swift raw string of 128 or more `#` ended
+  only there. Our copies read the same on every target now.
+
+Entries of older engines are recomputed as they were written, with one
+exception: a Ruby or Swift file of the last kind, in a log written on x86-64
+or macOS, is read the right way now, and `lonca-audit` would name its entry.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

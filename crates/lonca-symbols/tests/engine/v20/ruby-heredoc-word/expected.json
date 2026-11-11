@@ -1,0 +1,256 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rb#Meter.read"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rb"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.rb#Meter.twice"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.rb"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": []
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "QUERY = <<~\"SQLÖ\"\n  select 1\nSQLÖ\n\nclass Meter\n  def read\n    10\n  end\n\n  def twice\n    20\n  end\nend\n"
+  },
+  "path": "src/sample.rb",
+  "symbols": {
+    "base": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program(\n  select 1\nSQLÖ\u001f)",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "QUERY",
+          "own": "",
+          "signature": "QUERY =",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            18
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.read",
+              "own": "",
+              "signature": "def read",
+              "skipped": false,
+              "span": [
+                51,
+                51,
+                71
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.twice",
+              "own": "",
+              "signature": "def twice",
+              "skipped": false,
+              "span": [
+                75,
+                75,
+                96
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Meter",
+          "own": "class(class\u001fMeter\u001fbody_statement()end\u001f)",
+          "signature": "class Meter",
+          "skipped": false,
+          "span": [
+            37,
+            37,
+            100
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program(\n  select 1\nSQLÖ\u001f)",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "QUERY",
+          "own": "",
+          "signature": "QUERY =",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            18
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.read",
+              "own": "",
+              "signature": "def read",
+              "skipped": false,
+              "span": [
+                51,
+                51,
+                72
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.twice",
+              "own": "",
+              "signature": "def twice",
+              "skipped": false,
+              "span": [
+                76,
+                76,
+                97
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Meter",
+          "own": "class(class\u001fMeter\u001fbody_statement()end\u001f)",
+          "signature": "class Meter",
+          "skipped": false,
+          "span": [
+            37,
+            37,
+            101
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": false,
+      "imports": [],
+      "js_tests": [],
+      "residual": "program(\n  select 1\nSQLÖ\u001f)",
+      "syms": [
+        {
+          "children": [],
+          "container": false,
+          "is_test": false,
+          "name": "QUERY",
+          "own": "",
+          "signature": "QUERY =",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            18
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.read",
+              "own": "",
+              "signature": "def read",
+              "skipped": false,
+              "span": [
+                51,
+                51,
+                71
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.twice",
+              "own": "",
+              "signature": "def twice",
+              "skipped": false,
+              "span": [
+                75,
+                75,
+                97
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Meter",
+          "own": "class(class\u001fMeter\u001fbody_statement()end\u001f)",
+          "signature": "class Meter",
+          "skipped": false,
+          "span": [
+            37,
+            37,
+            101
+          ]
+        }
+      ]
+    }
+  }
+}

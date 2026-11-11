@@ -316,11 +316,14 @@ void tree_sitter_swift_external_scanner_deserialize(
         return;
     }
 
+    // lonca: each byte is read as unsigned. Where `char` is signed, a byte
+    // from 0x80 up set every bit above it, so a count of 128 or more came
+    // back as another number there and as itself where `char` is unsigned.
     uint32_t hash_count = (
-                              (((uint32_t) buffer[0]) << 24) |
-                              (((uint32_t) buffer[1]) << 16) |
-                              (((uint32_t) buffer[2]) << 8) |
-                              (((uint32_t) buffer[3]))
+                              (((uint32_t)(uint8_t) buffer[0]) << 24) |
+                              (((uint32_t)(uint8_t) buffer[1]) << 16) |
+                              (((uint32_t)(uint8_t) buffer[2]) << 8) |
+                              (((uint32_t)(uint8_t) buffer[3]))
                           );
     struct ScannerState *state = (struct ScannerState *)payload;
     state->ongoing_raw_str_hash_count = hash_count;

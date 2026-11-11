@@ -1,7 +1,7 @@
 # lonca-tree-sitter-swift
 
 The [tree-sitter Swift grammar](https://github.com/alex-pinkus/tree-sitter-swift)
-0.7.4, as published on crates.io, with one fix in its external scanner
+0.7.4, as published on crates.io, with two fixes in its external scanner
 (`src/scanner.c`, the lines marked `lonca:`):
 
 - when a file ended in a compiler directive (`#if`, `#elseif`, `#else`,
@@ -12,7 +12,15 @@ The [tree-sitter Swift grammar](https://github.com/alex-pinkus/tree-sitter-swift
 Upstream fixed it in `0c5444e` (October 2026), with the same change, and has
 not released it. The byte read never changed the result (a directive that had
 matched in full was kept whatever the byte was), so the parse of every file is
-unchanged. Lonca's symbol engine (`lonca-symbols`) uses this crate in place of
+unchanged.
+
+The second: the scanner saves how many `#` opened the raw string it is in,
+and read the four bytes back as `char`s. Where `char` is signed (x86-64,
+macOS) a count of 128 or more came back as another number and the string did
+not end where it ends; where it is unsigned (Linux on ARM) it did. The bytes
+are read as unsigned now, on every target. Upstream has this one still.
+
+Lonca's symbol engine (`lonca-symbols`) uses this crate in place of
 `tree-sitter-swift`; Lonca's decision record says when it goes back.
 
 ```rust

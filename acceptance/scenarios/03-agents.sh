@@ -86,6 +86,20 @@ lacks $'[\e\r]'
 ok lonca reject "$tidy" --reason "no" --repo demo
 cd "$HOME/ws/codex"
 
+criterion A41 "a file its grammar would read over and over is answered at once: no symbols, and its proposal goes by its lines"
+git checkout -q src/billing.rs
+perl -e 'print "/*" x 100000' >src/slow.swift
+SECONDS=0
+ok lonca symbols src/slow.swift
+has 'needs src/slow.swift#<file>'
+lacks '^  '
+ok lonca lease acquire 'src/slow.swift#<file>' -i 'a slow file'
+ok lonca propose -i 'a slow file' --accept-facts
+has 'escalate: unobserved_session'
+slow=$(seq_of)
+[ "$SECONDS" -lt 20 ] || fail "symbols and propose took $SECONDS s"
+ok lonca reject "$slow" --reason "no" --repo demo
+
 criterion A11 "an ended session's token is refused"
 ok lonca session end
 refused lonca lease acquire 'src/billing.rs#Client.charge' -i 'after the end'

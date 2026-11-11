@@ -13,7 +13,7 @@
 use std::sync::OnceLock;
 
 use lonca_core::{FileEntry, FileMap, FileMode, GitId};
-use lonca_symbols::engine::{ENGINE_BUDGET, ENGINES_KNOWN};
+use lonca_symbols::engine::{ENGINE_READS, ENGINES_KNOWN};
 use lonca_symbols::sections::{Format, sections};
 use lonca_symbols::{Lang, Sym, analyze, parse_at};
 use serde::Deserialize;
@@ -60,17 +60,18 @@ pub fn header(data: &[u8]) -> Option<(&'static str, u32, &[u8])> {
 }
 
 /// `engine` gets through every text of `path` in bounded work. Engines
-/// before [`ENGINE_BUDGET`] parse without a budget, and a grammar can take
-/// without end on a short text; such an engine is fuzzed only on texts the
-/// budget lets through. The auditor runs it on an entry only, and the daemon
-/// that wrote the entry got through its files.
+/// before `ENGINE_BUDGET` parse without a budget of steps and those before
+/// [`ENGINE_READS`] without one of bytes read, and a grammar can take without
+/// end on a short text; such an engine is fuzzed only on texts both budgets
+/// let through. The auditor runs it on an entry only, and the daemon that
+/// wrote the entry got through its files.
 pub fn bounded(engine: u32, path: &str, texts: &[&str]) -> bool {
     let within = |lang: Lang| {
         texts
             .iter()
-            .all(|t| lang.parse_at(ENGINE_BUDGET, t).is_some())
+            .all(|t| lang.parse_at(ENGINE_READS, t).is_some())
     };
-    engine >= ENGINE_BUDGET || Lang::detect_at(engine, path).is_none_or(within)
+    engine >= ENGINE_READS || Lang::detect_at(engine, path).is_none_or(within)
 }
 
 fn in_bounds(syms: &[Sym], src: &str) {

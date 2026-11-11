@@ -1,5 +1,6 @@
 //! The tree-sitter Swift grammar 0.7.4 with a read past a string in its
-//! external scanner fixed (README.md). [`LANGUAGE`] goes to a tree-sitter
+//! external scanner fixed, and a long raw string read the same on every
+//! target (README.md). [`LANGUAGE`] goes to a tree-sitter
 //! `Parser`:
 //!
 //! ```

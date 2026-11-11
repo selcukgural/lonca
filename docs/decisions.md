@@ -815,6 +815,63 @@ entry format, so they have their own version
     `func` is. Its signature keeps `= #externalMacro(...)`: an expansion
     depends on which type implements the macro, so a change there lists the
     code that uses it.
+- **Engine 20** counts what a grammar reads, and sees a blank line in what it
+  did not read.
+  - **A parse has a budget of bytes read.** Engine 16's steps count parse
+    actions. A grammar's scanner is code of its own and can read as far as it
+    likes for one token: Swift's looks for the end of a comment from every
+    `/*`, and with none it reads to the end of the file each time. A file of
+    nothing but `/*` took 4.7 s at 40 KB and 81 s at 200 KB, under the single
+    writer, before the steps ran out; `MAX_READ` allows ten times that length
+    and the time grows with its square.
+  - The text now goes to tree-sitter in pieces of `READ_CHUNK` (4096) bytes
+    and every piece it asks for is counted, again each time it comes back for
+    one. A parse may be handed `READ_BASE` (1 MiB) and `READ_PER_BYTE` (64)
+    times its length (`read_budget`); past that the file ends there for the
+    grammar, the parse is `None`, and the file goes by its lines as one past
+    the steps does. It counts bytes, not time, so the auditor stops where the
+    daemon stopped; the count depends on the piece size and on how tree-sitter
+    fetches, so a change of either is a new engine.
+  - The numbers come from 31,577 source files (Python's standard library,
+    Homebrew's Ruby, node modules, this workspace and crates of the registry):
+    the most any was handed is 26.3 times its length (a Python file of 28 KB),
+    and the files over 1 MB under twice. The `/*` file is handed 35,000 times
+    its length at 40 KB. With the budget the worst input found costs 0.3 s at
+    `MAX_READ`.
+  - A text handed in pieces parses as the same text handed whole, steps
+    included (`a_text_handed_in_pieces_parses_as_the_whole_text`), and all 56
+    cases of v19 give the same output under v20. Engines before 20 are handed
+    the text whole and count nothing, as they did: the auditor reads at those
+    engines only an entry, and its daemon got through the file.
+  - **The rest of a partly read file is its text.** Engine 18 compared the
+    rest (the file without the symbols that were read) "without blank lines"
+    and without the ends of lines. What a grammar did not read may be a text
+    of several lines, where both are content: such a change gave no fact at
+    all, so it needed no lease and showed in no review of the facts. From 20
+    the rest is the lines as they stand; only the blank lines that touch a
+    symbol taken out are left out (`beside`), since they come and go with it:
+    adding a method behind a blank line is still an add and nothing else.
+  - **Two scanners read a byte as a `char`,** which is signed on x86-64 and
+    macOS and unsigned on Linux on ARM, so one file gave two trees by the
+    target Lonca was built for, and an auditor on one could not recompute
+    what a daemon on the other signed. Ruby's kept a heredoc's word as bytes
+    and compared them with characters: a word with a letter from U+0080 to
+    U+00FF (`É`, `Ö`, `ç`) never ended its heredoc where `char` is signed, and
+    everything behind it was the heredoc. Swift's read back the number of `#`
+    of a raw string from four `char`s: from 128 on it came back as another
+    number there. Both read the byte as unsigned now, in our copies (`lonca:`
+    in `scanner.c`), which is what the scanners meant and what Linux on ARM
+    always did.
+  - That fix is not held to engine 20: the build has one copy of each scanner,
+    and what the old engines gave for such a file was never one answer. An
+    entry about a Ruby file with such a heredoc word, or a Swift file with a
+    raw string of 128 `#`, written by a build for x86-64 or macOS, is
+    recomputed differently now. None is known; `lonca-audit` names the entry
+    if one exists.
+  - It widens the one exception of "Grammar updates": a scanner fault that
+    makes a parse depend on the build target is fixed in our copy, as one a
+    file can abort or overread with is. Upstream has both as they were
+    (read 2026-11-11).
 - **The cost of a merge grows with the file**, in every engine. Going through a
   list for each symbol, node or change made a merge of 300 KB take minutes.
   What did that now has a look-up (`Cuts`, `Namespaces`, `neighbours`,
@@ -1080,7 +1137,9 @@ request has to show.
   keeps every symbol the unread part is not in ("Symbol engine versions").
   The one exception stays Ruby's: a fault a file can cause (an abort, a read
   or write past a buffer) that upstream has fixed and not released is copied
-  with the smallest fix.
+  with the smallest fix. Since engine 20 it also holds for a fault that makes
+  a parse depend on the target it was built for ("Symbol engine versions"),
+  fixed upstream or not: the copies were there already.
 - **The first round (2026-11-10) updated nothing, and closed none of the 29
   gaps of the corpus list:** every grammar crate is at its newest release.
   What stands behind:

@@ -77,3 +77,20 @@ fn ruby_without_long_heredocs_parses_cleanly() {
         tree.root_node().to_sexp()
     );
 }
+
+/// A word is kept as bytes. Upstream compared a byte from 0x80 up with the
+/// character it came from as a `char`, which is negative where `char` is
+/// signed (x86-64, macOS) and not where it is unsigned (Linux on ARM): the
+/// heredoc ended on one and ran to the end of the file on the other.
+#[test]
+fn a_word_with_a_letter_past_ascii_ends_its_heredoc() {
+    for word in ["\u{c9}OF", "SQL\u{d6}", "\u{80}", "\u{ff}x\u{e7}"] {
+        let text = format!("X = <<~\"{word}\"\n  body\n{word}\nclass Foo\n  def bar; end\nend\n");
+        let tree = parse(&text);
+        let root = tree.root_node();
+        assert!(!root.has_error(), "{word}: {}", root.to_sexp());
+        assert_eq!(count(root, "heredoc_end"), 1, "{word}");
+        assert!(root.to_sexp().contains("(class name:"), "{word}");
+        assert_eq!(count(root, "method"), 1, "{word}");
+    }
+}

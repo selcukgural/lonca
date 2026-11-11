@@ -1,0 +1,366 @@
+{
+  "facts": {
+    "ours": {
+      "facts": {
+        "added_files": [],
+        "adds": [],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#<file>"
+        ],
+        "import_only_files": [],
+        "lines_added": 1,
+        "lines_removed": 0,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        },
+        "unparsed_files": [
+          "src/sample.cs"
+        ]
+      },
+      "syntax_errors": [
+        "src/sample.cs"
+      ]
+    },
+    "theirs": {
+      "facts": {
+        "added_files": [],
+        "adds": [
+          "src/sample.cs#Meter.Thrice"
+        ],
+        "deleted_files": [],
+        "deletes": [],
+        "edits": [
+          "src/sample.cs#Meter.Read"
+        ],
+        "import_only_files": [],
+        "lines_added": 3,
+        "lines_removed": 1,
+        "modified_files": [
+          "src/sample.cs"
+        ],
+        "signature_changes": [],
+        "tests": {
+          "added": 0,
+          "deleted": 0,
+          "modified": 0,
+          "skipped": 0
+        }
+      },
+      "syntax_errors": [
+        "src/sample.cs"
+      ]
+    }
+  },
+  "merge": {
+    "conflicts": [],
+    "text": "public static class Sequences\n{\n    extension<T>(IEnumerable<T> source)\n\n        where T : notnull\n    {\n        public int Length() => source.Count();\n    }\n}\n\npublic class Meter\n{\n    public int Value;\n    public int Read() => Value + 0;\n    public int Twice() => Value * 2;\n\n    public int Thrice() => Value * 3;\n}\n"
+  },
+  "path": "src/sample.cs",
+  "symbols": {
+    "base": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit(ERROR(}\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Sequences.Length",
+              "own": "",
+              "signature": "public int Length()",
+              "skipped": false,
+              "span": [
+                112,
+                112,
+                150
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Sequences",
+          "own": "class_declaration(modifier(public\u001f)modifier(static\u001f)class\u001fSequences\u001fERROR({\u001fvariable_declaration(generic_name(extension\u001ftype_argument_list(<\u001fT\u001f>\u001f))variable_declarator(tuple_pattern((\u001fIEnumerable\u001fERROR(<\u001f>\u001f))\u001f))):\u001fnotnull\u001f)declaration_list({\u001f}\u001f))",
+          "signature": "public static class Sequences { extension<T>(IEnumerable<T> source) where T : notnull",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            156
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Value",
+              "own": "",
+              "signature": "public int Value;",
+              "skipped": false,
+              "span": [
+                185,
+                185,
+                202
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Read",
+              "own": "",
+              "signature": "public int Read()",
+              "skipped": false,
+              "span": [
+                207,
+                207,
+                234
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Twice",
+              "own": "",
+              "signature": "public int Twice()",
+              "skipped": false,
+              "span": [
+                239,
+                239,
+                271
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Meter",
+          "own": "class_declaration(modifier(public\u001f)class\u001fMeter\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class Meter",
+          "skipped": false,
+          "span": [
+            160,
+            160,
+            273
+          ]
+        }
+      ]
+    },
+    "ours": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit(ERROR(}\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Sequences.Length",
+              "own": "",
+              "signature": "public int Length()",
+              "skipped": false,
+              "span": [
+                113,
+                113,
+                151
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Sequences",
+          "own": "class_declaration(modifier(public\u001f)modifier(static\u001f)class\u001fSequences\u001fERROR({\u001fvariable_declaration(generic_name(extension\u001ftype_argument_list(<\u001fT\u001f>\u001f))variable_declarator(tuple_pattern((\u001fIEnumerable\u001fERROR(<\u001f>\u001f))\u001f))):\u001fnotnull\u001f)declaration_list({\u001f}\u001f))",
+          "signature": "public static class Sequences { extension<T>(IEnumerable<T> source) where T : notnull",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            157
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Value",
+              "own": "",
+              "signature": "public int Value;",
+              "skipped": false,
+              "span": [
+                186,
+                186,
+                203
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Read",
+              "own": "",
+              "signature": "public int Read()",
+              "skipped": false,
+              "span": [
+                208,
+                208,
+                235
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Twice",
+              "own": "",
+              "signature": "public int Twice()",
+              "skipped": false,
+              "span": [
+                240,
+                240,
+                272
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Meter",
+          "own": "class_declaration(modifier(public\u001f)class\u001fMeter\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class Meter",
+          "skipped": false,
+          "span": [
+            161,
+            161,
+            274
+          ]
+        }
+      ]
+    },
+    "theirs": {
+      "has_error": true,
+      "imports": [],
+      "js_tests": [],
+      "residual": "compilation_unit(ERROR(}\u001f))",
+      "syms": [
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Sequences.Length",
+              "own": "",
+              "signature": "public int Length()",
+              "skipped": false,
+              "span": [
+                112,
+                112,
+                150
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Sequences",
+          "own": "class_declaration(modifier(public\u001f)modifier(static\u001f)class\u001fSequences\u001fERROR({\u001fvariable_declaration(generic_name(extension\u001ftype_argument_list(<\u001fT\u001f>\u001f))variable_declarator(tuple_pattern((\u001fIEnumerable\u001fERROR(<\u001f>\u001f))\u001f))):\u001fnotnull\u001f)declaration_list({\u001f}\u001f))",
+          "signature": "public static class Sequences { extension<T>(IEnumerable<T> source) where T : notnull",
+          "skipped": false,
+          "span": [
+            0,
+            0,
+            156
+          ]
+        },
+        {
+          "children": [
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Value",
+              "own": "",
+              "signature": "public int Value;",
+              "skipped": false,
+              "span": [
+                185,
+                185,
+                202
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Read",
+              "own": "",
+              "signature": "public int Read()",
+              "skipped": false,
+              "span": [
+                207,
+                207,
+                238
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Twice",
+              "own": "",
+              "signature": "public int Twice()",
+              "skipped": false,
+              "span": [
+                243,
+                243,
+                275
+              ]
+            },
+            {
+              "children": [],
+              "container": false,
+              "is_test": false,
+              "name": "Meter.Thrice",
+              "own": "",
+              "signature": "public int Thrice()",
+              "skipped": false,
+              "span": [
+                281,
+                281,
+                314
+              ]
+            }
+          ],
+          "container": true,
+          "is_test": false,
+          "name": "Meter",
+          "own": "class_declaration(modifier(public\u001f)class\u001fMeter\u001fdeclaration_list({\u001f}\u001f))",
+          "signature": "public class Meter",
+          "skipped": false,
+          "span": [
+            160,
+            160,
+            316
+          ]
+        }
+      ]
+    }
+  }
+}

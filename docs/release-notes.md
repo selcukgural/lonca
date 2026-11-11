@@ -130,6 +130,22 @@ through from anywhere. They are now held the same way. Nothing changes for
 a command inside the sandbox, for a human session, or for a session that
 is not isolated.
 
+### The hook that is checked is the hook that runs
+
+For the `hooks` and `hooks_sandbox` levels the daemon checks that the hook
+program named in the administrator's settings is out of a user's reach.
+Two commands passed that should not have:
+
+- one that starts another program which then finds `lonca` itself
+  (`/usr/bin/env lonca hook`, `/bin/sh -c …`), or carries shell syntax. A
+  hook's command has to be `<path>/lonca` and plain words;
+- a path whose link leads to a file in a directory anybody can write. A
+  path is now checked as named and where its links lead.
+
+Settings written by the hardened installers pass as before. If yours were
+written by hand and the level drops to `unobserved`, `lonca doctor` says
+which of the two it is.
+
 ### One entry of the log has a size, and the proxy a rate
 
 The log keeps every entry, so what goes into one is now bounded before it

@@ -456,8 +456,9 @@ a profile of yours with no table keeps the built-in one:
 file = { macos = "/Library/Application Support/Acme/managed.toml", linux = "/etc/acme/managed.toml" }
 format = "toml"                      # or "json"
 # Each list, as a JSON pointer, needs a Lonca hook for every tool: a group of `hooks`,
-# with a `command`, and at most a `matcher` of "*". Every such hook's program must be
-# root-owned as well.
+# with a `command`, and at most a `matcher` of "*". Every such hook's command must be
+# `<path>/lonca` and plain words for it (no `env`, no shell syntax, no quotes), with
+# the program root-owned, in root-owned directories, also where its links lead.
 hook_lists = ["/hooks/before", "/hooks/after"]
 # What a Lonca hook must say besides its command, if a harness needs it to block.
 hook_fields = { on_error = "block" }

@@ -94,6 +94,19 @@ no entry said why. Now the first check is recorded as `error`
 with `verification_error:<check>`, and the queue goes on. A proposal with a
 name over 255 bytes is refused when it is made.
 
+### The installer checks where an archive was built
+
+`install.sh` compared the archive with the `SHA256SUMS` of the same
+release. When the GitHub CLI is installed and signed in, it now also
+verifies the archive's build attestation (made by this repository's release
+workflow, for the tag of the version you asked for) and installs nothing
+when that fails; without `gh` it says that only the checksum was checked.
+`LONCA_ATTESTATION=require` refuses to install unchecked, `skip` does not
+look. With `wget`, only `https://` addresses are fetched. Published
+releases are immutable from now on, and from 0.2.4 `SHA256SUMS` and the
+SBOM are attested as the archives are. In `docs/ci/lonca-audit.yml` the
+attestation check now names the tag (`--source-ref`): copy it over yours.
+
 ### A session's directory is in the log
 
 `lonca session start` now records the workspace directory in the signed

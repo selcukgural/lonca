@@ -3646,6 +3646,20 @@ it and what it runs are part of the trust model.
   required reviewer on the `release` environment. With one maintainer it
   is the same person's second click, and a token that can push a tag and
   publish a release can approve a deployment too.
+- **A published release does not change, and a download is held to where
+  it was built.** `install.sh` compared an archive with the `SHA256SUMS`
+  of the same release: whoever could replace one file of a release could
+  replace both, and no tag, commit or workflow run would show it. Since
+  2026-11-12 the repository has immutable releases on (a published
+  release's files and tag are fixed), `release.yml` attests `SHA256SUMS`
+  and the SBOM with the archives, and `install.sh` runs `gh attestation
+  verify` (this repository, `release.yml`, and the tag when a version was
+  asked for) when `gh` is installed and signed in. Without `gh` it
+  installs on the checksum and says so in two lines: refusing would end
+  `curl … | sh` for most people, and `LONCA_ATTESTATION=require` is there
+  for who wants it refused. With `wget` only an `https://` address is
+  fetched (`--https-only` is about links in pages, not the address
+  given). The example auditor workflow pins `--source-ref` to its version.
 - **CODEOWNERS** names the owner of `.github/`, `deny.toml`,
   `rust-toolchain.toml`, `packaging/`, `lonca-core`, `lonca-policy`,
   `lonca-audit` and `SECURITY.md`; review by the owner is asked, not

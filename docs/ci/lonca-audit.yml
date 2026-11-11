@@ -45,7 +45,8 @@ jobs:
           gh release download "v$LONCA_VERSION" --repo selcukgural/lonca \
             --pattern "$archive" --dir "$RUNNER_TEMP"
           gh attestation verify "$RUNNER_TEMP/$archive" --repo selcukgural/lonca \
-            --signer-workflow selcukgural/lonca/.github/workflows/release.yml
+            --signer-workflow selcukgural/lonca/.github/workflows/release.yml \
+            --source-ref "refs/tags/v$LONCA_VERSION"
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" lonca-audit
       - name: The head the log had at the last run
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

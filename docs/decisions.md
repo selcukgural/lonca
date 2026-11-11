@@ -161,6 +161,14 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
 - **Version 31** holds a `cap.attenuate` to its parent's agent name (see
   "A child session is its parent's agent"). No field changes. Entries of
   older formats, where the child's name was free, replay as they were.
+- **Version 32** matches `[paths] critical` and `checks_by_path` with case
+  folded (see "A path that forbids is read with its case folded"). No
+  field changes. Entries of older formats, where the spelling was matched,
+  replay as they were.
+- **Version 33** holds a human signature to the log it was made for (see
+  "A human signature is for one log"): `at` in the signature, left out of
+  the encoding when absent, so earlier entries keep their bytes. Entries
+  of older formats, whose signatures name no entry, replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -1554,6 +1562,7 @@ A01/A07, zero trust: every request authenticated).
 | `human.logout` | public | ends the human session whose token it carries |
 | `whoami` | any | who the token is |
 | `session.where` | public | the session the log places at a path, or the one a harness's session is bound to |
+| `log.head` | public | the number and hash of the last entry of a repository's log, for a human signature to name |
 | `repo.list` | any human | the repositories the session is enrolled in |
 | `repo.prepare_init` | bootstrap | writes the genesis objects; may `git fetch` |
 | `repo.init` | bootstrap | submits the signed genesis |
@@ -4379,6 +4388,89 @@ name it took.
   their bytes and replay as they were, and nothing in the protocol changes
   shape.
 
+## A path that forbids is read with its case folded
+
+Format 32. A scope is a list of what a session may touch, and a spelling it
+does not list is refused. `[paths] critical`, `[paths] untrusted`,
+`checks_by_path` and a `forbid` on `context.path` are the other kind: lists
+of what is *not* free, and they matched the spelling. macOS opens
+`Build.rs` as `build.rs`, `.Cargo/config.toml` as `.cargo/config.toml` and
+`Vendor/x.c` as `vendor/x.c`, so a tainted session wrote a build script by
+changing a letter, and a read under `vendor/` did not taint.
+
+- **These lists read a path as such a file system does**
+  (`lonca_core::paths::folded`), pattern and path alike, on every platform:
+  a repository is checked out on a Mac sooner or later, and one answer
+  everywhere is what a replay needs. Scopes and leases stay exact.
+- **The table is Lonca's own**, not the standard library's: `decide()` is
+  replayed, and what it answers may not move with a Unicode version. ASCII
+  letters are lowered; the characters such file systems read as ASCII
+  letters are written as those (the Kelvin sign, the long s, the Latin
+  ligatures, the sharp s); what HFS+ leaves out of a name is left out.
+  Letters outside ASCII stand as written: a pattern `Çekirdek/**` matches
+  that spelling only, and says so in the guide. Folding too much makes a
+  path critical that was not, never the other way.
+- **Cedar gets `context.folded`** beside `context.path` on the `file.*`
+  actions. `like` can not fold, and folding `context.path` itself would
+  silently stop every rule written with a capital (`*Cargo.lock`). A rule
+  that forbids by name reads `context.folded` with a lower-case pattern;
+  the shipped policy and the guide's examples do. A rule that allows by
+  name (`!(context.path like "docs/*")`) was never open.
+- **`untrusted` folds without a format**: the hook records what a read
+  brought in once, and nothing recomputes it. `critical` and
+  `checks_by_path` are in `decide()`, so entries before format 32 replay
+  as they were decided.
+- **`context.folded` is there in every format.** `lonca policy check`
+  tries a candidate policy on the entries of the log, each at its own
+  format; a key that began at 32 would make every older file request a
+  `policy_error` for the first policy that reads it. The one log this
+  replays differently is one whose policy read `context.folded` before it
+  existed: every file request of that policy was an error and a denial, so
+  no policy that was in use did.
+- **Not done:** refusing a new path that differs from an existing one only
+  in case. It needs the tree in `decide()`, and what it would add is a rule
+  about a directory a pattern does not name.
+
+## A human signature is for one log
+
+Format 33. A human signed the repository's name, the operation, a nonce and
+a time. Nothing in that says which log: an `approve` names its target by
+number, and the freshness check reads the entry's own time. Whoever holds
+the daemon key (in cooperative mode an agent can read it) could write the
+log again from an earlier entry, put another proposal at the approved
+number, and carry the signature over; a second repository of the same name
+with the same key enrolled took it too. The chain verified and the auditor
+replayed it.
+
+- **A signature names the head its signer saw**: `at`, the number and hash
+  of the last entry (`log.head`), inside the signed bytes
+  (`lonca-human-intent-v2`). `decide()` refuses a signature that names no
+  entry, an entry this log does not have, or an `approve` or `reject` of
+  an entry later than the one it names. A hash covers everything before
+  it, the genesis included: the log a signature holds in is the one its
+  signer was shown, up to that entry.
+- **Why the head and not the target's hash.** Every signed operation gets
+  the same rule, not only the two that name an entry: a policy update or
+  an enrolment is not moved to another log either. And the head says the
+  signer could have seen the target; a hash of the target alone does not
+  bind what stood between.
+- **Why not `prev`.** The entry that takes the signature is rarely the
+  next one: agents append while a person reads and touches. So the state
+  keeps the hashes of the entries a live signature could name
+  (`State::seen`): those of the last eleven minutes (`MAX_AGE_MS` +
+  `MAX_SKEW_MS`) and the one before them, the head for as long as nothing
+  followed it.
+- **What it does not stop.** A log rewritten after the entry a signature
+  names keeps that signature where it was: it is still for what it
+  approved. Replacing the log wholesale is the auditor's question
+  ("lonca-audit verify has no anchor" is its own item).
+- **`log.head` is public.** A recovery is signed by someone who has no
+  session, for a repository whose daemon key may be gone (`foreign`), and
+  a hash says nothing of the log's content.
+- **A genesis and a login name no entry**: there is no log yet, and a
+  login is not an entry.
+- **The signer asks the daemon it submits to.** A daemon that lies about
+  the head gets a signature it can not use in the real log.
 ## The auditor is told which log to expect
 
 `verify_chain` takes the daemon key from the first entry it is given, and a

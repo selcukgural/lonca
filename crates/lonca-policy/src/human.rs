@@ -3,7 +3,7 @@
 use lonca_core::canonical::canonical_bytes;
 use lonca_core::keys::verify_hex;
 use lonca_core::oplog::{FORMAT_CURRENT, FORMAT_LEGACY, FORMAT_SECURITY_KEYS};
-use lonca_core::ops::{HumanIntent, HumanKey, HumanSignature, LoginIntent, Op};
+use lonca_core::ops::{HumanIntent, HumanKey, HumanSignature, LogPoint, LoginIntent, Op};
 
 /// How far a signature's `issued_ms` may lie from the daemon's clock.
 pub const MAX_AGE_MS: i64 = 10 * 60 * 1000;
@@ -12,24 +12,34 @@ pub const MAX_SKEW_MS: i64 = 60 * 1000;
 pub const NONCE_MIN: usize = 16;
 pub const NONCE_MAX: usize = 128;
 
-pub fn intent_bytes(repo: &str, op: &Op, nonce: &str, issued_ms: i64) -> Vec<u8> {
-    canonical_bytes(&HumanIntent::new(repo, op, nonce, issued_ms))
+pub fn intent_bytes(
+    repo: &str,
+    op: &Op,
+    nonce: &str,
+    issued_ms: i64,
+    at: Option<&LogPoint>,
+) -> Vec<u8> {
+    canonical_bytes(&HumanIntent::new(repo, op, nonce, issued_ms, at))
 }
 
-/// Signs `op` with a file key (development signer: no user presence).
+/// Signs `op` with a file key (development signer: no user presence), for
+/// the log whose head the signer saw at `at`; `None` only for a genesis,
+/// which has no log yet.
 pub fn sign_ed25519(
     key: &lonca_core::keys::KeyPair,
     human: &str,
     repo: &str,
     op: &Op,
     now_ms: i64,
+    at: Option<LogPoint>,
 ) -> HumanSignature {
     let nonce = lonca_core::canonical::nonce();
     HumanSignature {
         human: human.to_string(),
-        sig: key.sign_hex(&intent_bytes(repo, op, &nonce, now_ms)),
+        sig: key.sign_hex(&intent_bytes(repo, op, &nonce, now_ms, at.as_ref())),
         nonce,
         issued_ms: now_ms,
+        at,
     }
 }
 
@@ -44,7 +54,7 @@ pub fn verify(
     format: u32,
 ) -> Result<(), &'static str> {
     check_fresh(sig, now_ms)?;
-    let msg = intent_bytes(repo, op, &sig.nonce, sig.issued_ms);
+    let msg = intent_bytes(repo, op, &sig.nonce, sig.issued_ms, sig.at.as_ref());
     verify_bytes(key, &msg, &sig.sig, format)
 }
 
@@ -86,6 +96,7 @@ pub fn sign_login_ed25519(
         sig: key.sign_hex(&login_bytes(repo, human, ttl_ms, &nonce, now_ms)),
         nonce,
         issued_ms: now_ms,
+        at: None,
     }
 }
 
@@ -587,7 +598,7 @@ mod tests {
             verify(&key, "demo", &op, &login, now, FORMAT_CURRENT),
             Err("bad_human_signature")
         );
-        let signed = sign_ed25519(&kp, "ayse", "demo", &op, now);
+        let signed = sign_ed25519(&kp, "ayse", "demo", &op, now, None);
         assert_eq!(
             verify_login(&key, Some("demo"), 3_600_000, &signed, now),
             Err("bad_human_signature")
@@ -626,6 +637,7 @@ mod tests {
             nonce: "n".repeat(nonce_len),
             issued_ms,
             sig: String::new(),
+            at: None,
         };
         assert_eq!(check_fresh(&sig(now - MAX_AGE_MS, 16), now), Ok(()));
         assert_eq!(

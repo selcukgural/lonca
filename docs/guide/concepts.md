@@ -95,7 +95,8 @@ session is treated as tainted: each of its changes waits for a human.
 
 A session is **tainted** when content from outside entered it: a web fetch,
 a shell command that reached the network, another MCP server, a read of an
-untrusted path (`[taint]` and `[paths] untrusted` in `lonca.toml` say which).
+untrusted path (`[taint]` and `[paths] untrusted` in `lonca.toml` say which;
+`Vendor/x.c` is `vendor/x.c` to these lists, as it is to macOS).
 A tainted session's changes need a human, and it may not touch **critical
 paths** at all (`[paths] critical`: build scripts, CI, lockfiles, agent
 instructions such as `CLAUDE.md`). A taint never goes away for that session.

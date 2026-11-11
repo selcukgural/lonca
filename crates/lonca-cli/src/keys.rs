@@ -195,7 +195,8 @@ pub fn recover(name: &str, repos: &[String], recovery_key: &Path, new: NewKey) -
             human: name.into(),
             key: next.key.clone(),
         };
-        let sig = lonca_policy::human::sign_ed25519(&rk, name, repo, &op, ctx::now_ms());
+        let at = ctx::head(&mut c, repo)?;
+        let sig = lonca_policy::human::sign_ed25519(&rk, name, repo, &op, ctx::now_ms(), at);
         let r = match call(&mut c, "human.submit", json!({"op": op, "sig": sig})) {
             // The daemon key went with the Mac too: one entry, signed with
             // the recovery key, moves the repository onto this daemon and
@@ -208,7 +209,9 @@ pub fn recover(name: &str, repos: &[String], recovery_key: &Path, new: NewKey) -
                         key: next.key.clone(),
                     }),
                 };
-                let sig = lonca_policy::human::sign_ed25519(&rk, name, repo, &op, ctx::now_ms());
+                let at = ctx::head(&mut c, repo)?;
+                let sig =
+                    lonca_policy::human::sign_ed25519(&rk, name, repo, &op, ctx::now_ms(), at);
                 match call(&mut c, "human.submit", json!({"op": op, "sig": sig})) {
                     Ok(r) => {
                         moved.push(repo.clone());

@@ -78,14 +78,14 @@ fn without_a_token_nothing_but_ping_answers() {
             public: fresh.public_hex(),
         },
     };
-    let forged =
-        json!({"op": op, "sig": sign_ed25519(&KeyPair::generate(), "ayse", "demo", &op, e.now())});
+    let forged = json!({"op": op, "sig": sign_ed25519(&KeyPair::generate(), "ayse", "demo", &op, e.now(), e.head("demo"))});
     let (c, why) = e
         .anon("human.submit", Some("demo"), None, forged)
         .unwrap_err();
     assert_eq!(c, "forbidden");
     assert!(why.contains("bad_human_signature"), "{why}");
-    let body = json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now())});
+    let body =
+        json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now(), e.head("demo"))});
     let r = e.anon("human.submit", Some("demo"), None, body).unwrap();
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     e.human = fresh;
@@ -121,7 +121,7 @@ fn without_a_token_nothing_but_ping_answers() {
     // With the human's session it can.
     let prep = e.ok("repo.prepare_init", None, None, params);
     let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
-    let body = json!({"op": op, "sig": sign_ed25519(&e.human, "ayse", "other", &op, e.now())});
+    let body = json!({"op": op, "sig": sign_ed25519(&e.human, "ayse", "other", &op, e.now(), e.head("other"))});
     let r = e.ok("repo.init", None, None, body);
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     let mut list = e.ok("repo.list", None, None, json!({}));
@@ -354,7 +354,8 @@ fn a_human_session_opens_with_a_presence_signature_and_follows_the_key() {
         },
     });
     let op = Op::Freeze { reason: "x".into() };
-    let by_bora = json!({"op": op, "sig": sign_ed25519(&bora, "bora", "demo", &op, e.now())});
+    let by_bora =
+        json!({"op": op, "sig": sign_ed25519(&bora, "bora", "demo", &op, e.now(), e.head("demo"))});
     assert_eq!(
         code(e.anon("human.submit", Some("demo"), Some(&t), by_bora.clone())),
         "forbidden"
@@ -458,7 +459,7 @@ fn a_fresh_daemon_bootstraps_without_a_session_and_then_closes() {
     assert!(prep2.is_ok(), "{prep2:?}");
     let op: Op = serde_json::from_value(prep2.unwrap()["op"].clone()).unwrap();
     let _ = prep;
-    let body = json!({"op": op, "sig": sign_ed25519(&e.human, "ayse", "demo", &op, e.now())});
+    let body = json!({"op": op, "sig": sign_ed25519(&e.human, "ayse", "demo", &op, e.now(), e.head("demo"))});
     assert_eq!(
         e.anon("repo.init", None, None, body).unwrap()["decision"]["outcome"],
         "allow"
@@ -468,4 +469,47 @@ fn a_fresh_daemon_bootstraps_without_a_session_and_then_closes() {
         code(e.anon("repo.init", None, None, json!({"op": Op::Freeze { reason: "x".into() }, "sig": e.sign(&Op::Freeze { reason: "x".into() })["sig"]}))),
         "unauthenticated"
     );
+}
+
+/// A human signature names the head of the log (`log.head`, which anyone
+/// may ask), and one that names none, or an entry of another log, is a
+/// recorded denial.
+#[test]
+fn a_signature_names_the_head_of_the_log() {
+    let mut e = Env::new();
+    e.init(None);
+    let head = e.anon("log.head", Some("demo"), None, json!({})).unwrap();
+    let at: LogPoint = serde_json::from_value(head["at"].clone()).unwrap();
+    let status = e.ok("status", Some("demo"), None, json!({}));
+    assert_eq!(json!(at.seq + 1), status["next_seq"]);
+    assert_eq!(json!(at.hash), status["head_hash"]);
+    assert_eq!(
+        code(e.anon("log.head", Some("nowhere"), None, json!({}))),
+        "not_found"
+    );
+
+    let op = Op::Freeze { reason: "x".into() };
+    let reasons = |e: &mut Env, at: Option<LogPoint>| {
+        let sig = sign_ed25519(&e.human, "ayse", "demo", &op, e.now(), at);
+        let r = e.ok(
+            "human.submit",
+            Some("demo"),
+            None,
+            json!({"op": op, "sig": sig}),
+        );
+        assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+        r["decision"]["reasons"].clone()
+    };
+    assert_eq!(reasons(&mut e, None), json!(["unanchored_human_signature"]));
+    let elsewhere = LogPoint {
+        seq: at.seq,
+        hash: "0".repeat(64),
+    };
+    assert_eq!(
+        reasons(&mut e, Some(elsewhere)),
+        json!(["human_signature_of_another_log"])
+    );
+    // The head moved by those two denials; the one asked for now holds.
+    let r = e.human(op.clone());
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
 }

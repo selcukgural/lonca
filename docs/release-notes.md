@@ -237,9 +237,18 @@ read for paths, as before.
   ended only on Linux on ARM, and a Swift raw string of 128 or more `#` ended
   only there. Our copies read the same on every target now.
 
-Entries of older engines are recomputed as they were written, with one
-exception: a Ruby or Swift file of the last kind, in a log written on x86-64
-or macOS, is read the right way now, and `lonca-audit` would name its entry.
+- What is a space or a letter to a grammar was asked of the C library, and
+  the Linux archives (musl) answered from Unicode where macOS answers for
+  ASCII: a TypeScript function behind a line ending in an ideographic space
+  (U+3000) was a symbol on Linux and not on macOS. Lonca's Linux builds now
+  bring ASCII's answers themselves, so a file has the same symbols
+  everywhere.
+
+Entries of older engines are recomputed as they were written, with two
+exceptions, which `lonca-audit` would name: a Ruby or Swift file of the
+third kind in a log written on x86-64 or macOS, and a file of the fourth
+kind in a log written by a Linux archive. Both are read now as the other
+builds always read them.
 
 ## 0.2.3 (2026-11-11)
 

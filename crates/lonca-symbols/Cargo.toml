@@ -34,6 +34,9 @@ tree-sitter-rust = "0.24.2"
 lonca-tree-sitter-swift = { version = "0.2.3", path = "../lonca-tree-sitter-swift" }
 tree-sitter-typescript = "0.23.2"
 
+[build-dependencies]
+cc = "1.8.0"
+
 [dev-dependencies]
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 serde_json = "1.0.154"

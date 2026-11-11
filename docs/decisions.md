@@ -868,6 +868,35 @@ entry format, so they have their own version
     raw string of 128 `#`, written by a build for x86-64 or macOS, is
     recomputed differently now. None is known; `lonca-audit` names the entry
     if one exists.
+  - **What is a space or a letter is not asked of the C library.** The
+    scanners of Ruby, Swift, JavaScript, TypeScript, Rust, C#, C++, Kotlin and
+    PHP call `iswspace`, `iswalpha`, `iswalnum`, `iswdigit`, `iswupper`,
+    `iswlower` and `iswxdigit`. macOS and glibc answer for ASCII only in the C
+    locale, which is the one a process has that never calls `setlocale`; musl,
+    which both Linux release archives are built with, answers from Unicode
+    whatever the locale. So `let a = 1` with an ideographic space (U+3000)
+    behind it and a function on the next line had the function as a symbol on
+    the Linux archives and not on macOS; 7 of 21 files written to try it
+    differed, in six languages (run on musl, glibc and macOS).
+  - On Linux the symbol engine now brings those seven functions itself
+    (`crates/lonca-symbols/c/wctype.c`, ASCII only), linked whole into every
+    binary that has the engine, so the scanners get them in place of the C
+    library's: on musl and on glibc, with any locale. ASCII, because macOS can
+    not be given another answer: its header compiles the classes into the
+    scanner as a look-up in the current locale, and the grammars from
+    crates.io are built with the flags their own crates choose. So **nothing
+    in a process with the symbol engine calls `setlocale`**; `tests/classes.rs`
+    holds every code point to ASCII's classes on the build it runs on and
+    nine files to their trees, and acceptance A42 runs on every release
+    archive.
+  - The price: a space or a letter past ASCII is none to a scanner, also
+    where the language says it is one (JavaScript takes U+3000 for a space).
+    Such a file has a parse error on every build now, and from engine 18
+    that costs the definition it is in, not the file. Inside strings and
+    comments nothing changes: the scanners do not look there.
+  - Not held to an engine either, for the same reason as the two scanners:
+    an entry about such a file written by a Linux archive is recomputed as
+    macOS always read it.
   - It widens the one exception of "Grammar updates": a scanner fault that
     makes a parse depend on the build target is fixed in our copy, as one a
     file can abort or overread with is. Upstream has both as they were

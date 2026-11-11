@@ -2002,6 +2002,7 @@ name = "lonca-symbols"
 version = "0.2.3"
 dependencies = [
  "aho-corasick",
+ "cc",
  "diffy",
  "lonca-core",
  "lonca-tree-sitter-ruby",

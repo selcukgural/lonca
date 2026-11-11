@@ -4612,6 +4612,31 @@ the log said the allowed one.
   client is not told why a tunnel ended: after `200` there is no place to
   say it.
 
+## The hook that is checked is the hook that runs
+
+A session is `hooks` or `hooks_sandbox` when the administrator's settings
+name Lonca's hook for every tool and the hook's program is out of a
+user's reach (`hook_binary_protected`). Two ways the check said yes to a
+program a user could replace:
+
+- **The command's first word was the program.** `/usr/bin/env lonca
+  hook` passed on `env`, which then finds `lonca` by the user's `PATH`;
+  `/bin/sh -c …` and `…/lonca hook; other` passed the same way. A hook's
+  command now has to be `<path>/lonca` followed by plain words (letters,
+  digits and `/._-=:,+@`, single spaces): nothing a shell would work out,
+  no other program in front. A path with a space in it does not pass;
+  the installers use none.
+- **A path was checked as named.** Owner and mode were read through
+  links, the directories only along the name: a link in root's directory
+  to root's file in a directory anybody can write passed, and the file
+  could be replaced there. The path is now also checked where its links
+  lead (`canonicalize`), file and every directory above it; the same for
+  the managed settings file itself.
+
+Both fail closed: a settings file that passed before and does not now
+gives `unobserved` and a note in `lonca doctor`. What the hardened
+installers write passes unchanged.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

@@ -482,19 +482,22 @@ fn root_owned_not_writable(_: &Path) -> bool {
 }
 
 /// The file and every directory above it belong to root and are not group
-/// or world writable.
+/// or world writable: as it is named, and where its links lead. A link in
+/// a directory of root's may point at a file of root's that lies in a
+/// directory anybody can put another file in.
 pub fn protected_path(p: &Path) -> bool {
+    held_by(p, root_owned_not_writable)
+}
+
+/// [`protected_path`], with what makes one file or directory `roots`.
+fn held_by(p: &Path, roots: impl Fn(&Path) -> bool) -> bool {
     if !p.is_absolute() {
         return false;
     }
-    let mut cur = Some(p);
-    while let Some(c) = cur {
-        if !root_owned_not_writable(c) {
-            return false;
-        }
-        cur = c.parent();
-    }
-    true
+    let Ok(real) = fs::canonicalize(p) else {
+        return false;
+    };
+    p.ancestors().all(&roots) && real.ancestors().all(&roots)
 }
 
 /// The most of an administrator's settings file that is read.
@@ -547,14 +550,26 @@ fn read_capped(path: &Path) -> Option<Vec<u8>> {
     (bytes.len() as u64 <= MAX_SETTINGS).then_some(bytes)
 }
 
+/// The program a hook's command runs, if the command is that program and
+/// plain words for it, and the program is `lonca`. Anything else runs
+/// something this code does not look at: `/usr/bin/env lonca hook` finds
+/// `lonca` by a `PATH` the user sets, and a command with `;`, `$`, a quote
+/// or a redirection is a script for a shell.
+fn hook_program(command: &str) -> Option<&Path> {
+    let plain = |c: char| c.is_ascii_alphanumeric() || " /._-=:,+@".contains(c);
+    if !command.chars().all(plain) {
+        return None;
+    }
+    let program = Path::new(command.split(' ').next()?);
+    (program.file_name()? == "lonca").then_some(program)
+}
+
 /// Every list has a hook, and every hook's program is out of reach: a hook
 /// runs whichever list names it.
 fn programs_protected(lists: &[Vec<&Value>], protected: impl Fn(&Path) -> bool) -> bool {
     let program = |e: &&Value| {
         let command = e.get("command").and_then(Value::as_str).unwrap_or_default();
-        protected(Path::new(
-            command.split_whitespace().next().unwrap_or_default(),
-        ))
+        hook_program(command).is_some_and(&protected)
     };
     !lists.is_empty() && lists.iter().all(|l| !l.is_empty() && l.iter().all(program))
 }
@@ -624,8 +639,11 @@ pub fn inspect(
     ins.notes.extend(only_ones);
     ins.hook_binary_protected = programs_protected(&lists, |p| !require_root || protected_path(p));
     if !ins.hook_binary_protected {
-        ins.notes
-            .push("the hook program must live in root-owned, non-writable directories".into());
+        ins.notes.push(
+            "each hook's command must be `<path>/lonca` and plain words, with the program \
+                 (and what its links lead to) in root-owned, non-writable directories"
+                .into(),
+        );
     }
     let sandbox = unmet(&locked.sandbox, &s, proxy_port, "sandbox");
     ins.locked_sandbox = sandbox.is_empty();
@@ -1587,6 +1605,47 @@ run = { kind = "shell", fields = ["line"] }
         );
     }
 
+    /// The program that is checked is the program that runs.
+    #[test]
+    fn a_hook_command_is_lonca_and_plain_words() {
+        let lonca = Some(Path::new("/Library/Lonca/bin/lonca"));
+        assert_eq!(hook_program("/Library/Lonca/bin/lonca hook"), lonca);
+        assert_eq!(
+            hook_program("/Library/Lonca/bin/lonca hook --harness=codex-1.2 a,b"),
+            lonca
+        );
+        assert_eq!(hook_program("/Library/Lonca/bin/lonca"), lonca);
+        for other in [
+            // A protected program that runs one found by PATH.
+            "/usr/bin/env lonca hook",
+            "/bin/sh -c lonca hook",
+            "/usr/bin/sudo /Library/Lonca/bin/lonca hook",
+            // More than one program, or one a shell works out.
+            "/Library/Lonca/bin/lonca hook; /tmp/x",
+            "/Library/Lonca/bin/lonca hook && /tmp/x",
+            "/Library/Lonca/bin/lonca hook | /tmp/x",
+            "/Library/Lonca/bin/lonca hook\n/tmp/x",
+            "/Library/Lonca/bin/lonca hook > /tmp/x",
+            "/Library/Lonca/bin/lonca hook $(x)",
+            "/Library/Lonca/bin/lonca hook `x`",
+            "$HOME/lonca hook",
+            "~/lonca hook",
+            "'/Library/Lonca/bin/lonca' hook",
+            "\"/Library/Lonca/bin/lonca\" hook",
+            "/Library/Lonca/bin/lonca\thook",
+            "FOO=1 /Library/Lonca/bin/lonca hook",
+            " /Library/Lonca/bin/lonca hook",
+            "/Library/Lonca/bin/lonca-hook lonca hook",
+            "/Library/Lonca/bin/ hook lonca",
+            "",
+        ] {
+            assert_eq!(hook_program(other), None, "{other:?}");
+        }
+        // Such a command is no protected hook, whatever its first word is.
+        let env = json!({"command": "/usr/bin/env lonca hook"});
+        assert!(!programs_protected(&[vec![&env]], |_| true));
+    }
+
     /// A hook of something else in the file watches nothing for Lonca.
     #[test]
     fn a_lonca_hook_names_both_lonca_and_hook() {
@@ -1707,5 +1766,32 @@ run = { kind = "shell", fields = ["line"] }
         let dir = tempfile::tempdir().unwrap();
         assert!(!protected_path(dir.path()));
         assert!(!protected_path(Path::new("relative/path")));
+        assert!(!protected_path(Path::new("/usr/bin/no-such-program")));
+    }
+
+    /// A link is as protected as both its ends: root's file reached by a
+    /// link anybody can point elsewhere is not, and neither is anybody's
+    /// directory reached by a name that lies in root's.
+    #[cfg(unix)]
+    #[test]
+    fn a_protected_path_is_protected_where_its_links_lead() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().canonicalize().unwrap();
+        let (roots, anybodys) = (dir.join("roots"), dir.join("anybodys"));
+        for d in [&roots, &anybodys] {
+            fs::create_dir(d).unwrap();
+            fs::write(d.join("lonca"), "").unwrap();
+        }
+        std::os::unix::fs::symlink(anybodys.join("lonca"), roots.join("link")).unwrap();
+        std::os::unix::fs::symlink(&anybodys, roots.join("dir")).unwrap();
+        std::os::unix::fs::symlink(roots.join("lonca"), anybodys.join("link")).unwrap();
+        // As if everything but `anybodys` were root's.
+        let is_roots = |p: &Path| !p.starts_with(&anybodys);
+        assert!(held_by(&roots.join("lonca"), is_roots));
+        assert!(!held_by(&roots.join("link"), is_roots), "leads out");
+        assert!(!held_by(&roots.join("dir/lonca"), is_roots), "leads out");
+        assert!(!held_by(&anybodys.join("link"), is_roots), "named outside");
+        assert!(!held_by(&anybodys.join("lonca"), is_roots));
+        assert!(!held_by(&roots.join("gone"), is_roots), "no such file");
     }
 }

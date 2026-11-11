@@ -115,6 +115,7 @@ last column.
 | A40 | In a session's workspace, the hook denies a write through a symbolic link that leads out of the workspace and names where it leads; a write through a link to a directory of the workspace is not denied | `08-harness` |
 | A41 | A file its grammar would read over and over (200 KB of `/*` in Swift, which held the daemon for minutes) is answered at once: `lonca symbols` lists nothing of it and names `<file>` as what a change of it needs, and a proposal that adds it under that lease is taken | `03-agents` |
 | A42 | A file has the same symbols on every build, whatever its C library takes for a space or a letter: `lonca symbols` of a TypeScript file with an ideographic space (U+3000) behind a statement gives what the macOS build gives, on the Linux (musl) archives too | `03-agents` |
+| A44 | `lonca-audit verify` prints the log's `genesis:` and holds a log to what it is told from outside: `--genesis <hash>` fails another log (`anchor`), `--extends <hash>` fails a log that no longer has that entry (replaced, or taken back), and a hash that is not whole is a usage error | `05-audit` |
 
 ## Manual criteria
 

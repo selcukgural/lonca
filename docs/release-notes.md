@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### The auditor is told which log to expect
+
+`lonca-audit verify` proves that a log is whole and signed by its own
+daemon key. It could not know that the log was yours: somebody able to push
+to the remote could put another log there, or an earlier state of yours,
+with refs to match, and the audit in CI printed `ok`. `verify` now prints
+`genesis:` (the hash of the first entry, which never changes for a
+repository) and takes `--genesis <hash>` and `--extends <hash>`: the log
+must begin with that entry, and must still have an entry seen before (a
+`head:` of an earlier run). A log that is not the expected one is a finding
+(`anchor`) before anything of it is replayed.
+
+**Upgrading.** Copy the new `docs/ci/lonca-audit.yml` over your workflow
+and set the repository variable `LONCA_GENESIS` to the `genesis:` line of
+`lonca-audit verify` on your own machine; the job fails until it is set.
+The JSON report has a new field, `genesis_hash`.
+
 ### A session's directory is in the log
 
 `lonca session start` now records the workspace directory in the signed

@@ -135,7 +135,8 @@ hold ([Lonca with Claude Code](../guide/claude-code.md#how-much-is-proven)).
   bubblewrap on Linux, reads and writes closed by default, network only
   through the proxy (agents) or none (verification).
 - **The remote and its auditor.** `lonca push` carries the log; `lonca-audit
-  verify` in CI replays it on a machine the agents never touched.
+  verify --genesis … --extends …` in CI replays it on a machine the agents
+  never touched, and holds it to the log it was the last time.
 
 ## What the auditor catches, and what it does not
 
@@ -154,6 +155,13 @@ It does not catch:
   them; a replay can not run them again.
 - **Entries the rules allow, written by whoever holds the daemon key**, which
   in cooperative mode includes the agent (above).
+- **Another log in the place of yours, or yours taken back**, unless it is
+  told which log to expect: `verify --genesis <hash>` holds it to your
+  repository's first entry and `--extends <hash>` to a head seen before.
+  A log proves itself whole, not that it is the one you mean; the example
+  workflow passes both, from a repository variable and from the last run
+  (`docs/ci/lonca-audit.yml`). Without them, whoever can push to the
+  remote can replace the log and the refs together.
 
 ## Known limits
 

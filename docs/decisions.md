@@ -4379,6 +4379,43 @@ name it took.
   their bytes and replay as they were, and nothing in the protocol changes
   shape.
 
+## The auditor is told which log to expect
+
+`verify_chain` takes the daemon key from the first entry it is given, and a
+genesis is checked against the human key inside itself: a log vouches for
+its own wholeness and for nothing else. In CI the auditor read whatever the
+remote held. Whoever could push there (an agent outside a sandbox has the
+developer's credentials) could push a log of their own making with any
+trunk, or an earlier prefix of the real one from before a policy was
+tightened or a key revoked, and `verify` printed `ok`. `compare` needs a
+second copy, which a CI job does not have; `bridge.push` entries live in
+the log being replaced.
+
+- **`verify --genesis <hash>`**: the first entry must have this hash. It
+  covers the repository's name, the first daemon key and the owner's key,
+  so it is the name of the log among all logs, and it never changes.
+  `verify` prints it (`genesis:`) for the owner to note where a push does
+  not reach.
+- **`verify --extends <hash>`**: the log must have an entry with this hash,
+  a `head:` printed by an earlier run. A hash covers all before it: the
+  log is the earlier one, grown.
+- **A mismatch is a finding (`anchor`) and the audit stops there**, before
+  a decision is replayed or a fact recomputed. A log that is not the
+  expected one is hostile input, and the symbol engines an old entry may
+  name have fewer bounds than the current one (below 12 no depth limit,
+  below 16 no step budget, below 20 no read budget). Signed by the daemon
+  key they are the repository's own history; unanchored they were anyone's.
+- **Whole hashes only.** A prefix names many entries; a usage error.
+- **The example workflow** (`docs/ci/lonca-audit.yml`) takes the genesis
+  from a repository variable (an administrator's to change, not a push's)
+  and fails until it is set; the last head it keeps in the Actions cache
+  of the default branch, which a workflow run on another branch does not
+  write. Somebody who can change the workflow on the default branch can
+  still remove the check: that is the branch's protection to stop, not the
+  auditor's.
+- **Not the default.** `verify` without them still answers what it always
+  did; a store on the owner's own machine needs no anchor to be theirs.
+
 ## Text for a terminal
 
 A person approves from what `pending`, `diff` and `status` show, and most

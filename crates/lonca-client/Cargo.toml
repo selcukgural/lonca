@@ -19,7 +19,7 @@ test-env = []
 
 [dependencies]
 libc = "0.2.190"
-lonca-core = { version = "0.2.2", path = "../lonca-core", default-features = false }
+lonca-core = { version = "0.2.3", path = "../lonca-core", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 

@@ -27,7 +27,7 @@ body:
     attributes:
       label: Version
       description: The output of `lonca --version`.
-      placeholder: lonca 0.2.2
+      placeholder: lonca 0.2.3
     validations:
       required: true
   - type: dropdown

@@ -115,10 +115,11 @@ The rest, what the sandbox lets in and out, is in
 ## Checked in every release
 
 The [release checklist](https://github.com/selcukgural/lonca/blob/main/docs/release-checklist.md)
-runs Claude Code live before a tag. For 0.2.2: a session leased, proposed and
+runs Claude Code live before a tag. For 0.2.3: a session leased, proposed and
 integrated after approval, with no generated file in its diff; two sessions on
 one file, on different symbols, both integrated; one that stopped without
 proposing was sent back by the stop hook, proposed, and left nothing behind;
+one added a migration in a keyed directory after reserving its number;
 `lonca-audit verify` passed on the log. The
 [release notes](../release-notes.md) say what ran for each release.
 

@@ -7,12 +7,12 @@ reasons, and the reasons say what to do.
 ## `lonca doctor`
 
 ```text
-Doctor summary (lonca 0.2.2):
+Doctor summary (lonca 0.2.3):
 
 [✓] Mode: cooperative: the daemon runs as you
 [✓] Daemon
     ✓ socket: /Users/ayse/.lonca/lonca.sock belongs to the daemon
-    ✓ daemon: version 0.2.2, protocol 1
+    ✓ daemon: version 0.2.3, protocol 1
 [!] Hooks
     ! no managed settings at /Library/Application Support/ClaudeCode/managed-settings.json
       → sessions count as unobserved until the hardened installer has run

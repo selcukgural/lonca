@@ -17,7 +17,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 toml = "1.1.8"
 diffy = "0.5.2"
-lonca-core = { version = "0.2.2", path = "../lonca-core" }
+lonca-core = { version = "0.2.3", path = "../lonca-core" }
 similar = "3.2.0"
 tree-sitter = "0.27.1"
 tree-sitter-c = "0.24.2"
@@ -29,9 +29,9 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-php = "0.25.1"
 tree-sitter-python = "0.25.0"
-lonca-tree-sitter-ruby = { version = "0.2.2", path = "../lonca-tree-sitter-ruby" }
+lonca-tree-sitter-ruby = { version = "0.2.3", path = "../lonca-tree-sitter-ruby" }
 tree-sitter-rust = "0.24.2"
-lonca-tree-sitter-swift = { version = "0.2.2", path = "../lonca-tree-sitter-swift" }
+lonca-tree-sitter-swift = { version = "0.2.3", path = "../lonca-tree-sitter-swift" }
 tree-sitter-typescript = "0.23.2"
 
 [dev-dependencies]

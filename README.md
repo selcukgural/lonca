@@ -19,7 +19,7 @@ concurrent work merges, and how every action is recorded and checked.
 
 Everything else is on the site: **<https://selcukgural.github.io/lonca/>**.
 
-> Status: **0.2.2** ([release notes](https://selcukgural.github.io/lonca/docs/release-notes)).
+> Status: **0.2.3** ([release notes](https://selcukgural.github.io/lonca/docs/release-notes)).
 > Every phase of the design is implemented and tested, and a log written by
 > any 0.x release stays readable by every later one. 0.x is one machine: one
 > developer with many agents

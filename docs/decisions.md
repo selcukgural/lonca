@@ -165,6 +165,10 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   folded (see "A path that forbids is read with its case folded"). No
   field changes. Entries of older formats, where the spelling was matched,
   replay as they were.
+- **Version 34** carries a taint, an `unhooked` mark and a lowered level
+  from a session to the sessions made from it (see "What enters a session
+  enters its children"). No field changes. Entries of older formats, where
+  a child took them once at its making, replay as they were.
 - **Version 33** holds a human signature to the log it was made for (see
   "A human signature is for one log"): `at` in the signature, left out of
   the encoding when absent, so earlier entries keep their bytes. Entries
@@ -3580,7 +3584,9 @@ tries never reaches a decision, and nothing told anyone of a freeze.
   `integrity_alarm` (the auditor's freeze flag), `taint` (the daemon tainted
   a session), `sudo_without_password` (a bind whose hook reports it),
   `token_rotated` (`session.rotate`, #53), `unhooked` (a call to `lonca mcp`
-  with no hook event before it: the tool, #190). Entries the daemon appends
+  with no hook event before it: the tool, #190), `misnamed_tunnel` (a
+  tunnel through the proxy cut for the server name its client asked for:
+  both names; see "A tunnel is for the host it was asked for"). Entries the daemon appends
   (`freeze`, `import.unmediated`, `taint`, `unhooked`) are taken from the repository and
   written after the request, or by the worker within two seconds.
 - **Kept**: past 8 MiB the file moves to `security.log.1`, replacing the one
@@ -4472,6 +4478,31 @@ replayed it.
 - **The signer asks the daemon it submits to.** A daemon that lies about
   the head gets a signature it can not use in the real log.
 
+## What enters a session enters its children
+
+Format 34. A child made with `cap.attenuate` copied its parent's level,
+taint and `unhooked` mark at that moment and went its own way. The parent
+keeps the child's token: it asked for it. So a session made a child while
+clean, read the web, and went on leasing and proposing as the child, whose
+record said nothing had entered it. In an isolated session that is a change
+with no human; at any level it is a critical path that escalates instead of
+being refused.
+
+- **`taint`, an external `observe`, an `unhooked` tool and a `session.bind`
+  reach every session below the one they name**, live or not, in the same
+  entry: the taint as `inherited: <reason>`, the mark as it is, the level
+  as the lower of the two. The state carries it, so `decide()` reads one
+  session as before.
+- **Down only.** A child's taint does not rise to its parent: the parent
+  gave the child less, and what a child reads the parent's harness reports
+  for the parent when it comes back as a tool result. (Session trees made
+  by one harness process answer for each other at the proxy already.)
+- **A level only falls this way.** A parent bound higher again does not
+  lift a child; nobody vouched for the child since.
+- **Why in `apply` and not a walk in `decide()`.** Every reader of a
+  session (the policy context, `status`, a reviewer's `pending`) then sees
+  the same thing, and no check can forget to walk.
+
 ## A tree that can not be written out is the change's failure
 
 The verifier writes a change's files out before it runs the checks. Where
@@ -4833,6 +4864,21 @@ the log said the allowed one.
   that starts later on a connection (`STARTTLS`) is not looked for. The
   client is not told why a tunnel ended: after `200` there is no place to
   say it.
+- **Encrypted hellos stay let through** (decided 2026-11-11). Refusing
+  every hello with the extension would close the inner name and take the
+  network from every browser in a sandbox; it was weighed and left.
+- **A cut tunnel is a security event** (decided 2026-11-11). The log has
+  the attempt under the host that was let through, which is what the
+  session asked the proxy for; that the client then asked the server for
+  another name was written nowhere. The proxy tells its gate
+  (`Gate::misnamed`, with the name, or none for a hello that can not be
+  read), and the daemon writes `misnamed_tunnel` to `security.log` for
+  every session the connection counts against: the host and port of the
+  tunnel and the first 128 characters of the name asked for. A session
+  can cause one per connection, and connections come at
+  `sessions.ops_per_minute`; they push out their own kind only. It
+  taints nothing and freezes nothing: the connection was already an
+  observation, and nothing of it reached the host.
 
 ## The hook that is checked is the hook that runs
 

@@ -140,6 +140,10 @@ visible. Each becomes a criterion when it is automated.
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
   --secure-enclave`, FIDO2 keys).
 - The advisor (`lonca advise`): needs a model.
+- A parent's taint reaching its child sessions: `cap.attenuate` is a
+  socket method no command of `lonca` calls; the policy's test
+  `what_enters_a_session_enters_the_sessions_made_from_it` and the golden
+  log of format 34 cover it.
 - A change whose files the daemon's file system can not hold: a workspace
   on the same machine can not hold them either, so no command proposes
   one; the verifier's and the daemon's tests cover it
@@ -162,7 +166,9 @@ visible. Each becomes a criterion when it is automated.
   `a_tunnel_that_carries_nothing_is_cut`). The same for a tunnel held to
   the host it was asked for
   (`a_tunnel_is_held_to_the_name_it_was_let_through_for`,
-  `a_plain_request_is_for_its_own_host_and_is_the_only_one`).
+  `a_plain_request_is_for_its_own_host_and_is_the_only_one`) and the
+  security event of one that was cut
+  (`a_misnamed_tunnel_is_a_security_event_of_its_session`).
 - Policy changes (`lonca policy`), human enrollment and revocation,
   negotiation between agents beyond a handover, `lonca revert`, `lonca redact`, `lonca pull`,
   session rotation.

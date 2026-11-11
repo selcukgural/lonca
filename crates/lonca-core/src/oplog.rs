@@ -62,8 +62,9 @@ pub const FORMAT_LEGACY: u32 = 0;
 /// it unobserved; version 31 gives a child session its parent's agent
 /// name; version 32 matches `critical` and `checks_by_path` patterns with
 /// case folded; version 33 holds a human signature to the log it was made
-/// for (`at`).
-pub const FORMAT_CURRENT: u32 = 33;
+/// for (`at`); version 34 carries a taint, an unhooked tool and a lowered
+/// level from a session to the sessions made from it.
+pub const FORMAT_CURRENT: u32 = 34;
 /// The first format whose `change.propose` and `change.integrate` entries
 /// record the symbol engine version.
 pub const FORMAT_SYMBOLS_ENGINE: u32 = 2;
@@ -180,6 +181,12 @@ pub const FORMAT_FOLDED_PATHS: u32 = 32;
 /// held for any log of a repository of that name, for ten minutes. Older
 /// entries replay as they were.
 pub const FORMAT_ANCHORED: u32 = 33;
+/// The first format in which what enters a session enters its children
+/// that already exist: a taint (`taint`, an external `observe`), an
+/// `unhooked` mark, and a level lowered by a bind or by an unhooked tool.
+/// Before it a child took these once, when it was made. Older entries
+/// replay as they were.
+pub const FORMAT_TAINT_REACHES: u32 = 34;
 
 fn is_legacy(format: &u32) -> bool {
     *format == FORMAT_LEGACY

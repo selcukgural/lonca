@@ -47,6 +47,16 @@ daemon's git takes each path as the file it names
 (`GIT_LITERAL_PATHSPECS=1`). What is integrated was never affected, only
 the text shown for review.
 
+### What enters a session enters its children
+
+A child session (`cap.attenuate`) took its parent's taint, `unhooked` mark
+and level when it was made, and kept them whatever the parent did next. A
+session that made a child while clean and then read outside content could
+go on working as the child, untainted. From log format 34 a taint, an
+unhooked tool and a bind to a lower level reach every session made from the
+one they name, in the same entry (`inherited: <reason>`). Nothing goes from
+a child up to its parent.
+
 ### A human signature is for one log
 
 A human signature covered the repository's name, the operation, a nonce and
@@ -129,8 +139,10 @@ the one it let through:
 - A TLS client that asks the proxy for one host and the server for another
   (a server name that is not the `CONNECT` host) has its tunnel closed
   before a byte of it reaches the host. To the command this is a
-  connection dropped during the handshake. A tunnel asked for by address
-  is not held to a name.
+  connection dropped during the handshake; the daemon's `security.log`
+  has it as a `misnamed_tunnel` event of the session, with the host of
+  the tunnel and the name that was asked for (`lonca doctor` counts
+  them). A tunnel asked for by address is not held to a name.
 - A plain `http://` request whose `Host` header is not its URL's host and
   port is answered `400`. Each plain request now goes to the host on its
   own connection (`Connection: close`); requests for several hosts over
@@ -139,7 +151,8 @@ the one it let through:
   request is the server's to check.
 
 `lonca-net`: `Outcome::Misnamed` is new (an `Outcome` match needs an arm
-for it), and the `hello` module reads a TLS client's server name.
+for it), `Gate::misnamed` tells the gate which name such a tunnel asked
+for, and the `hello` module reads a TLS client's server name.
 
 ### The security log keeps the latest of every kind
 

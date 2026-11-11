@@ -4472,6 +4472,28 @@ replayed it.
 - **The signer asks the daemon it submits to.** A daemon that lies about
   the head gets a signature it can not use in the real log.
 
+## A check's log does not hold a passed value
+
+A check's log was stored as the command wrote it. The log is a blob of the
+store: `change.get` returns its end to any session of the repository, the
+proposing agent first of all, and a push carries it. The command is the
+change's own code. So a value the agent could not read itself (a name of
+`env_passthrough`, a file under `verification.read`) came back to it
+through a test that printed it.
+
+- **A value of `env_passthrough` is written `***` in the log**, as it
+  already was in what `identify` records. A value that is a directory is
+  left: `HOME` and `CARGO_HOME` are on every line of a build's output and
+  tell nothing.
+- **That is for accidents, and the guide says so.** A command that means
+  to tell a value writes it another way, and a file under `read` has no
+  value to look for. The rule a policy can rely on is the other one: what
+  the verification sandbox can read, the proposing agent can read. The
+  Node starter no longer opens `~/.npmrc`.
+- **Not done:** keeping the log from agents. An agent needs the failure to
+  fix it, and the pass or fail alone already carries a bit per run.
+- Logs written before are as they were.
+
 ## Text for a terminal
 
 A person approves from what `pending`, `diff` and `status` show, and most

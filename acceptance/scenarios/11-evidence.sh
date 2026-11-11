@@ -1,6 +1,8 @@
 # Evidence names the toolchain its checks ran with, and the auditor notes a
 # check that ran with another one.
 source "$ACC_LIB"
+# What the daemon has in its environment and the policy passes to the checks.
+export SHOP_TOKEN=tok-acc-123456
 standard_setup
 mkdir -p "$HOME/tools"
 tools=$(cd "$HOME/tools" && pwd -P)
@@ -16,7 +18,8 @@ printf '%s\n' "$OUT" | awk -v d="$HOME/policy" '
     /^==> policy.cedar <==$/ { f = d "/policy.cedar"; next }
     { print > f }'
 TOOLS="$tools" perl -0pi -e '
-    s|^# test = "cargo test --offline"$|test = "test -f src/billing.rs"|m or die "test";
+    s|^# test = "cargo test --offline"$|test = "echo token \$SHOP_TOKEN; test -f src/billing.rs"|m or die "test";
+    s|^env_passthrough = \[\]$|env_passthrough = ["SHOP_TOKEN"]|m or die "passthrough";
     s|^path = \[\]$|path = ["$ENV{TOOLS}", "/usr/bin", "/bin"]|m or die "path";
     s|^identify = \[\]$|identify = ["shoptool --version", "no-such-tool --version"]|m or die "identify";
 ' "$HOME/policy/lonca.toml"
@@ -63,3 +66,8 @@ has '^    shoptool --version: shoptool 2\.0 \(stable\)$'
 ok lonca-audit verify "$STORE/demo.git"
 has '^env +[0-9]+ tests +changed since [0-9]+$'
 has '^ok$'
+
+criterion A45 "a value passed to the checks is not in a check's log: the agent that proposed the change reads *** there"
+ok lonca change "$change" --repo demo --evidence
+has '^  token \*\*\*$'
+lacks 'tok-acc-123456'

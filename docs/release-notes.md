@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### A check's log does not hold a passed value
+
+The output of a build or test command is kept as the check's log, which the
+proposing agent reads back and `lonca push` carries. A value passed to the
+commands with `env_passthrough` is now written `***` wherever it turns up
+in a log (directories such as `HOME` stay readable). This catches a tool
+that prints its environment, not a test written to tell: the guide now says
+plainly that what the verification sandbox can read, the proposing agent
+can read, and its Node starter no longer opens `~/.npmrc`. If your
+`lonca.toml` passes a token or opens a credentials file for the checks,
+take it out and install dependencies before the checks run.
+
 ### A session's directory is in the log
 
 `lonca session start` now records the workspace directory in the signed

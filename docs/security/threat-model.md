@@ -32,7 +32,11 @@ the same pull request, as for the OWASP review.
   answers, text in dependencies. It reaches Lonca through an agent that read
   it, which is what taint tracks.
 - **Code under verification.** The merge queue builds and tests what agents
-  wrote, dependencies included. It runs in a sandbox with no network.
+  wrote, dependencies included. It runs in a sandbox with no network. What
+  the policy gives it (a value in `env_passthrough`, a file under
+  `verification.read`) that code can read, and the check's log brings it
+  back to the agent; Lonca hides a passed value printed as it is, nothing
+  more ([Verification](../guide/verification.md#the-environment-the-commands-see)).
 - **Another local user** may reach the socket only as its mode, group and
   uid list allow, and every method checks a credential on top of that.
 - **A network peer.** Lonca listens on no network port: the daemon speaks over

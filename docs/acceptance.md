@@ -139,7 +139,9 @@ visible. Each becomes a criterion when it is automated.
 - Hardened mode (`install-hardened.sh`, a daemon as its own user): needs
   root on the runner.
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
-  --secure-enclave`, FIDO2 keys).
+  --secure-enclave`, FIDO2 keys). What the Touch ID dialog says is
+  held to what `lonca` prints by `the_helper_says_what_lonca_says` (macOS,
+  `cargo test`).
 - The advisor (`lonca advise`): needs a model.
 - A parent's taint reaching its child sessions: `cap.attenuate` is a
   socket method no command of `lonca` calls; the policy's test

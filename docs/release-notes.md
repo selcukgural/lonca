@@ -40,6 +40,19 @@ and set the repository variable `LONCA_GENESIS` to the `genesis:` line of
 `lonca-audit verify` on your own machine; the job fails until it is set.
 The JSON report has a new field, `genesis_hash`.
 
+### The Touch ID dialog says what is signed, whoever asks
+
+`lonca-se`, the Secure Enclave helper, used to show the text its caller
+passed and sign its input unread. It now reads what it is asked to sign,
+refuses anything that is not a Lonca operation or login, and writes the
+dialog from those bytes itself. Another program running as you can no
+longer have one operation signed under the name of another. `lonca-se
+describe` prints the dialog's text for an intent on standard input.
+
+**Upgrading.** Install the `lonca-se` of the release beside its `lonca`
+(the archives and Homebrew do). The new helper works with an older `lonca`;
+an older helper beside a new `lonca` fails with a usage error.
+
 ### A session's directory is in the log
 
 `lonca session start` now records the workspace directory in the signed

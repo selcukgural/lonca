@@ -1329,7 +1329,8 @@ Enclave. Decided 2026-11-10:
   signatures prove presence, first log format, the form of its public key
   and its verifier. `decide()`, the daemon's `repo.prepare_init` and
   `lonca doctor` ask it; a new kind is a row there and a log format.
-- **The key shows nothing.** Touch ID names the operation; a security key
+- **The key shows nothing.** Touch ID names the operation (in the helper's
+  words, see "The Touch ID dialog is the helper's"); a security key
   blinks. `lonca` prints what the touch is for before it asks. A process
   running as the human can start a signature of its own and hope for the
   touch (threat model, "Humans and approvals"); the signature it gets is
@@ -4593,6 +4594,36 @@ the log being replaced.
   auditor's.
 - **Not the default.** `verify` without them still answers what it always
   did; a store on the owner's own machine needs no anchor to be theirs.
+
+## The Touch ID dialog is the helper's
+
+`lonca-se sign <keyfile> <reason>` signed its standard input unread under
+whatever text the caller gave. `lonca` gave a true one; any other program
+running as the human could build the bytes of a `policy.update` or an
+`approve` and ask for a touch under "Lonca (demo): end session s3". The
+threat model said the dialog names the operation.
+
+- **`sign` takes no text.** It reads what it is to sign, takes it for
+  signed only if it is an intent (`lonca-human-intent-v1`/`-v2`, or
+  `lonca-human-login-v1`: a JSON object with the fields the kind needs),
+  and writes the dialog from it. A fourth argument, as an older `lonca`
+  passes, is not read. Anything else is refused before the key is opened.
+- **The words are `describe`'s**, written a second time in Swift: the
+  helper can not link the Rust, and a helper that asked `lonca` for the
+  text would be back to trusting a caller. A test builds the helper and
+  asks both about every kind of operation a human signs
+  (`the_helper_says_what_lonca_says`, macOS only: it needs `swiftc`). A
+  new kind without words is named by its kind in both.
+- **Control and format characters are left out of the dialog**: an agent's
+  name or a path with a line break would redraw it.
+- **`lonca-se describe`** prints what `sign` would show, for that test and
+  for anyone who wants to see it without a touch.
+- **Not changed:** `.userPresence` (password and watch count as presence;
+  `.biometryCurrentSet` would lock a key at every new fingerprint and has
+  no fallback when the sensor fails), and `$LONCA_SE` before the helper
+  beside `lonca` (the tests stand a script in for the enclave through it;
+  a program that can set the environment of the human's shell can replace
+  `lonca` itself).
 
 ## Text for a terminal
 

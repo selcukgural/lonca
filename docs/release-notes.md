@@ -101,6 +101,15 @@ the one it let through:
 `lonca-net`: `Outcome::Misnamed` is new (an `Outcome` match needs an arm
 for it), and the `hello` module reads a TLS client's server name.
 
+### The security log keeps the latest of every kind
+
+`security.log` rotates at 8 MiB and keeps two files. Events that any
+caller can cause without end (a line that is no request, a bad token) used
+to push everything older out of both, a freeze or a session's taint
+included. The latest 256 events of each kind now stay through every
+rotation, whatever comes after them; `security.log.1` begins with those
+that would otherwise be gone. Nothing changes in the format of a line.
+
 ### One entry of the log has a size, and the proxy a rate
 
 The log keeps every entry, so what goes into one is now bounded before it

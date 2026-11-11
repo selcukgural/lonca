@@ -200,8 +200,18 @@ mod tests {
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut g = git(dir.path(), Duration::from_millis(300));
         g.bin = fake.to_string_lossy().into_owned();
-        let started = Instant::now();
-        let r = g.run(dir.path(), &["fetch"]);
+        // Linux refuses to run a file some process still has open for
+        // writing ("Text file busy"), and a test on another thread that
+        // forks at the wrong moment holds this one's for an instant.
+        let busy = |r: &Result<String, Failure>| matches!(r, Err(Failure::Start(e)) if e.contains("Text file busy"));
+        let (mut started, mut r) = (Instant::now(), g.run(dir.path(), &["fetch"]));
+        for _ in 0..50 {
+            if !busy(&r) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            (started, r) = (Instant::now(), g.run(dir.path(), &["fetch"]));
+        }
         assert_eq!(r, Err(Failure::Timeout(Duration::from_millis(300))));
         assert!(started.elapsed() < Duration::from_secs(5));
     }

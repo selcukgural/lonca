@@ -3360,6 +3360,20 @@ tag.
   that never came (the daemon stopped in between). The daemon removes it
   without a word; the auditor reports it, since from outside it is also what
   a log cut short looks like.
+- **A ref the daemon left behind is its own.** An entry is appended, then
+  its ref is moved; a daemon that stops between the two finds the ref one
+  step back at its next start. For the trunk that was always moved on
+  quietly (any commit of the log's history). The policy's ref was not: the
+  policy from before a `policy.update` read as a write behind the daemon's
+  back, which always freezes, so a crash at the wrong moment froze the
+  repository; and a daemon stopped between `repo.init` and its two refs
+  started with a new repository already frozen. Now quiet as well: the
+  policy from just before a `policy.update` **while that entry is the
+  log's last**, and either ref missing while `repo.init` is the only
+  entry. `State::policy_before` holds the former policy with the entry's
+  number (derived, not serialized, read by no decision). The policy's ref
+  stays held more closely than the trunk's: the old policy under it once
+  anything else has been logged is a write, logged and frozen for.
 - **The bridge pushes what the log has**: trunk, the log, the policy and
   the ref of every logged proposal, named one by one (500 per `git push`),
   instead of `refs/lonca/changes/*`.

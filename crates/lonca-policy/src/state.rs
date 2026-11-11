@@ -317,6 +317,11 @@ pub struct State {
     /// Daemon keys that were rotated away or replaced by a recovery.
     pub retired_daemon_keys: BTreeSet<String>,
     pub policy: Option<GitId>,
+    /// The policy before the last `policy.update`, and that entry's number:
+    /// what the policy's ref still names if the daemon stopped between the
+    /// entry and the ref. Worked out from the log, like the rest.
+    #[serde(skip)]
+    pub policy_before: Option<(GitId, u64)>,
     pub trunk: Option<GitId>,
     pub trunk_history: BTreeSet<GitId>,
     /// The log reached [`FORMAT_SYMBOL_KEYS`]: a name stands for every
@@ -1607,7 +1612,10 @@ impl State {
                     self.recover_human(human, key, time_ms);
                 }
             }
-            Op::PolicyUpdate { policy } => self.policy = Some(policy.clone()),
+            Op::PolicyUpdate { policy } => {
+                let before = self.policy.replace(policy.clone());
+                self.policy_before = before.map(|p| (p, seq));
+            }
             Op::SessionStart {
                 session,
                 agent,

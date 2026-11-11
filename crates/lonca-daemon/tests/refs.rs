@@ -257,3 +257,96 @@ fn a_push_carries_only_the_refs_the_log_has() {
     let r = audit_all(&pushed);
     assert!(r.ok(), "{:#?}", r.findings);
 }
+
+fn set_policy(e: &mut Env, config: &str) {
+    let prep = e.ok(
+        "human.prepare_policy",
+        Some("demo"),
+        None,
+        json!({"config": config, "policy": lonca_policy::config::DEFAULT_POLICY}),
+    );
+    let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
+    assert_eq!(e.human(op)["decision"]["outcome"], "allow");
+}
+
+const POLICY: &str = "refs/lonca/policy";
+const TRUNK: &str = "refs/heads/main";
+
+/// The daemon appends an entry and then moves the ref. Stopped between the
+/// two, it finds its own half-done work at the next start, not a write
+/// behind its back: nothing to log, and nothing to freeze for.
+#[test]
+fn a_policy_ref_the_daemon_left_behind_is_moved_on_quietly() {
+    let mut e = Env::new();
+    e.init(None);
+    let store = e.store();
+    let first = store.ref_get(POLICY).unwrap().unwrap();
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace("max_bytes = ", "max_bytes = 1");
+    assert_ne!(config, lonca_policy::config::DEFAULT_CONFIG);
+    set_policy(&mut e, &config);
+    let second = store.ref_get(POLICY).unwrap().unwrap();
+    assert_ne!(first, second);
+
+    // As if the daemon had stopped before the ref.
+    store.ref_force(POLICY, &first).unwrap();
+    e.reopen();
+    assert!(unmediated(&e).is_empty(), "{:?}", unmediated(&e));
+    assert_eq!(store.ref_get(POLICY).unwrap().unwrap(), second);
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    assert!(s["frozen"].is_null(), "{s}");
+    assert!(audit_all(&store).ok());
+
+    // Once anything else is in the log, the old policy under the ref is
+    // somebody's write: put back, logged, and the repository frozen.
+    e.session("s1", &["src/**"]);
+    store.ref_force(POLICY, &first).unwrap();
+    e.svc.reconcile_all();
+    assert_eq!(
+        unmediated(&e),
+        [(POLICY.to_owned(), Some(first), Some(second.clone()))]
+    );
+    assert_eq!(store.ref_get(POLICY).unwrap().unwrap(), second);
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    assert!(!s["frozen"].is_null(), "{s}");
+}
+
+#[test]
+fn a_policy_that_was_never_the_logs_is_a_write_even_right_after_an_update() {
+    let mut e = Env::new();
+    e.init(None);
+    let store = e.store();
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace("max_bytes = ", "max_bytes = 1");
+    set_policy(&mut e, &config);
+    let second = store.ref_get(POLICY).unwrap().unwrap();
+    let trunk = e.trunk();
+    store.ref_force(POLICY, &trunk).unwrap();
+    e.reopen();
+    assert_eq!(
+        unmediated(&e),
+        [(POLICY.to_owned(), Some(trunk), Some(second))]
+    );
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    assert!(!s["frozen"].is_null(), "{s}");
+}
+
+#[test]
+fn refs_missing_after_the_first_entry_are_written_quietly_and_later_are_not() {
+    let mut e = Env::new();
+    e.init(None);
+    let store = e.store();
+    let (trunk, policy) = (e.trunk(), store.ref_get(POLICY).unwrap().unwrap());
+    // As if the daemon had stopped between `repo.init` and its refs.
+    store.ref_delete(TRUNK, &trunk).unwrap();
+    store.ref_delete(POLICY, &policy).unwrap();
+    e.reopen();
+    assert!(unmediated(&e).is_empty(), "{:?}", unmediated(&e));
+    assert_eq!(store.ref_get(TRUNK).unwrap().unwrap(), trunk);
+    assert_eq!(store.ref_get(POLICY).unwrap().unwrap(), policy);
+    let s = e.ok("status", Some("demo"), None, json!({}));
+    assert!(s["frozen"].is_null(), "{s}");
+
+    e.session("s1", &["src/**"]);
+    store.ref_delete(POLICY, &policy).unwrap();
+    e.svc.reconcile_all();
+    assert_eq!(unmediated(&e), [(POLICY.to_owned(), None, Some(policy))]);
+}

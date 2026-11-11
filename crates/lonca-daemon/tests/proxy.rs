@@ -269,6 +269,7 @@ fn what_a_sandbox_is_built_from_comes_from_the_log() {
         expires_ms,
         continues: None,
         harness: None,
+        workspace: None,
     };
     e.human(start);
     let r = e.ok(

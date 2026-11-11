@@ -13,7 +13,7 @@
 //! by a stop hook: it reminds, and a failure ends the turn.
 
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
@@ -28,7 +28,7 @@ use crate::workspace::Workspace;
 const MAX_INPUT: u64 = 16 * 1024 * 1024;
 
 fn block(msg: &str) -> ExitCode {
-    eprintln!("{msg}");
+    errln!("{msg}");
     ExitCode::from(2)
 }
 
@@ -78,12 +78,25 @@ pub fn run(harness: &str, fail_open: bool) -> ExitCode {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
-    let Some(ws) = Workspace::find(&cwd) else {
-        return ExitCode::SUCCESS;
+    // A workspace file says where the session is, and the agent can write
+    // it: when it names no session, the log is asked before this is taken
+    // for a place Lonca has nothing to do with.
+    let ws = match Workspace::find(&cwd).filter(|ws| ws.meta.session.is_some()) {
+        Some(ws) => ws,
+        None => match placed(harness, &v, &cwd) {
+            Ok(Some(ws)) => ws,
+            Ok(None) => return ExitCode::SUCCESS,
+            Err(e) if fail_open => {
+                errln!("lonca: {e:#}");
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                return block(&format!(
+                    "lonca: {e:#}; blocking this tool call (fail closed)"
+                ));
+            }
+        },
     };
-    if ws.meta.session.is_none() {
-        return ExitCode::SUCCESS;
-    }
     // The answer is the decision: one the harness can not read is handled
     // as any other failure, closed unless `--fail-open`.
     let answered = handle(harness, &v, &ws).and_then(|out| {
@@ -98,7 +111,7 @@ pub fn run(harness: &str, fail_open: bool) -> ExitCode {
     match answered {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if fail_open => {
-            eprintln!("lonca: {e:#}");
+            errln!("lonca: {e:#}");
             ExitCode::SUCCESS
         }
         Err(e) => block(&format!(
@@ -107,12 +120,44 @@ pub fn run(harness: &str, fail_open: bool) -> ExitCode {
     }
 }
 
+/// The workspace of the live session the log places here: the one this
+/// harness session is bound to, or whose directory holds `cwd`. `None`
+/// when the log knows no such session, or no daemon answers and nothing
+/// here looks like a workspace. An error when there is one and its files
+/// do not read: its tools must not run unseen.
+fn placed(harness: &str, v: &Value, cwd: &Path) -> Result<Option<Workspace>> {
+    let mut client = match ctx::connect() {
+        Ok(c) => c,
+        Err(_) if !Workspace::encloses(cwd) => return Ok(None),
+        Err(e) => return Err(e.context("the workspace's metadata does not read")),
+    };
+    let Some(at) = ctx::placed(&mut client, cwd, Some((harness, v)))?.filter(|p| p.active) else {
+        return Ok(None);
+    };
+    let unreadable = || {
+        anyhow::anyhow!(
+            "this is the workspace of session {}, and its .lonca/workspace.json does not \
+             read as that session's; a human has to put it right",
+            at.session
+        )
+    };
+    let root = at
+        .workspace
+        .as_deref()
+        .map(Path::new)
+        .ok_or_else(unreadable)?;
+    let ws = Workspace::find(root).filter(|ws| ws.root == root);
+    let ws = ws.filter(|ws| ws.meta.session.is_some() && ws.meta.repo == at.repo);
+    ws.map(Some).ok_or_else(unreadable)
+}
+
 /// Knows no harness: the daemon reads the event with the profile in the
 /// signed policy and says what to answer.
 fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
     let mut client = ctx::connect()?;
     client.token = Some(ws.token()?);
-    let params = json!({"harness": harness, "input": v, "workspace": ws.root});
+    let real = ctx::resolved(&ws.root)?;
+    let params = json!({"harness": harness, "input": v, "workspace": ws.root, "real": real});
     let r = ctx::call(&mut client, "hook.input", params)?;
     if r["phase"] == "session_start" {
         return bind(&mut client, harness, &r, ws).map(Some);
@@ -120,7 +165,7 @@ fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
     if r["phase"] == "stop" {
         // Whatever the flags, a stop that fails here ends the turn.
         return Ok(stop(&mut client, harness, ws).unwrap_or_else(|e| {
-            eprintln!("lonca: {e:#}");
+            errln!("lonca: {e:#}");
             None
         }));
     }

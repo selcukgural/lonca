@@ -738,7 +738,7 @@ pub fn run(managed_settings: Option<PathBuf>, as_json: bool) -> Result<()> {
     if as_json {
         ctx::print_json(&report(mode, &checks))?;
     } else {
-        out!("{}", render(&checks, Paint::detect()));
+        crate::out::write_painted(&render(&checks, Paint::detect()));
     }
     match checks.iter().filter(|c| c.level == Level::Fail).count() {
         0 => Ok(()),

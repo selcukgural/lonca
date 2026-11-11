@@ -101,6 +101,9 @@ caused them:
 |---|---|
 | `session_ended`, `session_inactive`, `unknown_session`, `session_ttl` | The session is over. A human continues the workspace: `lonca session start --continue <dir>`. |
 | `session_continued`, `continue_child_session`, `scope_widening:<what>` | That continuation is refused: a session is continued once, a child session is not continued, a wider scope needs `--widen`. |
+| `child_agent_name:<name>` | A child session (`cap.attenuate`) has its parent's agent name: send `agent` as `<name>`. |
+| `continue_other_workspace` | A session is continued in the directory it was started in. One started before Lonca 0.2.4, or whose directory was moved, can not be: start a new session in a new workspace. |
+| `workspace_in_use`, `invalid_workspace` | Another live session works in that directory, in one inside it or around it; or the path is not an absolute, plain directory path. Use another directory, or continue or end the session that is there. |
 | `frozen:<reason>` | A human unfreezes it once the reason is dealt with. |
 | `already_approved` | You approved this one already; it waits for another human. |
 | `nothing_pending` | That sequence number does not wait for approval (approved, rejected or withdrawn meanwhile). |
@@ -127,6 +130,8 @@ An error means the request never reached the log.
 | `unauthenticated: login failed: …` | No enrolled key of that human verifies the signature: wrong `--as`, or the key was rotated on another machine. |
 | `forbidden` | A token of the wrong kind or for another repository, or a human the repository does not know. |
 | `rate_limited` | The session (with the sessions made from it) is past `[sessions] ops_per_minute`. The message says when to try again. |
+| `invalid: change.propose is … bytes; an entry of the log holds 65536` (or another operation's name) | The operation's text and lists are longer than one log entry holds. Write a shorter intent, or lease or propose in smaller parts. Nothing was logged. |
+| `forbidden: denied, and not logged: bad_human_signature` | A `lonca human recover` whose recovery key is not the one the repository has for that human. Such a refusal is in the security log, not in the operation log. |
 | `busy`, `closed` | Send it again. |
 | `foreign_key` | The repository is on a daemon key this daemon does not hold: `lonca daemon-key recover --repo <name>`, or, when your key was lost with it, `lonca human recover --repo <name> --recovery-key <file>` ([Recovery](recovery.md#a-lost-mac)). |
 | `integrity` | The log does not verify or replay. Do not write to the store; audit it and restore from a backup or a pushed remote. |

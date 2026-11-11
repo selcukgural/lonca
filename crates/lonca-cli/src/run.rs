@@ -347,7 +347,7 @@ fn finish(token: &str, root: &Path) -> Result<()> {
     };
     let total = r["unproposed_total"].as_u64().unwrap_or(0);
     if total > 0 {
-        eprintln!("lonca run: left unproposed: {total} file(s) never reached the repository");
+        errln!("lonca run: left unproposed: {total} file(s) never reached the repository");
     }
     Ok(())
 }
@@ -606,7 +606,7 @@ fn in_sandbox(plan: &Plan, a: &Args, start: Start, token: &str) -> Result<ExitSt
         .as_deref()
         .map(lonca_verify::sweep::end_what_is_left);
     if let Some(left @ 1..) = left {
-        eprintln!("lonca run: {left} process(es) of the sandbox would not end");
+        errln!("lonca run: {left} process(es) of the sandbox would not end");
     }
     drain(output, DRAIN);
     status
@@ -711,7 +711,7 @@ pub fn run(a: Args) -> Result<i32> {
     let ended = finish(token, &ws.root);
     let status = status?;
     if let Err(e) = ended {
-        eprintln!("lonca run: the session was not ended: {e:#}");
+        errln!("lonca run: the session was not ended: {e:#}");
     }
     Ok(exit_code(status))
 }

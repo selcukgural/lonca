@@ -148,6 +148,18 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   `human.enroll` checks the form of the key as the other key operations
   do. Before it such a key is `invalid_key` and signs nothing, and an
   enrolment keeps its looser check, so older entries replay as they were.
+- **Version 29** adds keyed directories (see "Keyed directories"): key
+  leases on a `dir#<dir>`, `taken_keys` in facts. Older entries replay as
+  they were.
+- **Version 30** adds `workspace` on `session.start` (see "Where a session
+  works is in the log"). Left out of the encoding when absent, so earlier
+  starts keep their bytes. From it on a continuation names the workspace
+  of the session it continues, a directory holds one live session, and a
+  continuation starts `unobserved`; entries of older formats do none of
+  it and replay to the state they always had.
+- **Version 31** holds a `cap.attenuate` to its parent's agent name (see
+  "A child session is its parent's agent"). No field changes. Entries of
+  older formats, where the child's name was free, replay as they were.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -1452,6 +1464,7 @@ A01/A07, zero trust: every request authenticated).
 | `human.login` | login | opens a human session from a presence signature |
 | `human.logout` | public | ends the human session whose token it carries |
 | `whoami` | any | who the token is |
+| `session.where` | public | the session the log places at a path, or the one a harness's session is bound to |
 | `repo.list` | any human | the repositories the session is enrolled in |
 | `repo.prepare_init` | bootstrap | writes the genesis objects; may `git fetch` |
 | `repo.init` | bootstrap | submits the signed genesis |
@@ -1832,9 +1845,10 @@ boundary keeps the session bounded.
   (`session_continued`: a workspace never has two live sessions), and the
   new scope is within the old one (`scope_widening:<what>`) unless the
   human passed `--widen`, which is in the log and in the Touch ID prompt.
-  The CLI refuses a directory that is not itself a workspace, a human's
-  workspace, and a workspace of another repository, before asking for a
-  signature.
+  The CLI refuses a directory that is not itself a workspace, one the log
+  places no session in, and a workspace of another repository, before
+  asking for a signature. From format 30 the session to continue is the
+  log's ("Where a session works is in the log").
 - **The old session ends in the same entry**, alive or not, with `continued
   by <new>`, and the daemon drops its token. The workspace's files, base,
   manifest and `submitted` stay; only `.lonca/session` and the session id
@@ -2152,7 +2166,11 @@ under the page budget (three quarters of the line cap, encoded). A page
 never mixes commits: `blobs` names the commit and refuses a path that is
 not in its tree. A file that alone does not fit a page is refused by
 name (`too_large`), as is a page that would overflow; the client refuses
-the file before asking. `repo.prepare_init` reports files above the
+the file before asking. `tree` asked for contents (`with_content`, which
+Lonca's client does not send) is held to the same page since 2026-11-11:
+it used to read and encode every blob of the commit and meet the line cap
+afterwards, so the daemon held the repository in memory to refuse it. The
+sizes are added up before a blob is read. `repo.prepare_init` reports files above the
 change cap (`changes.max_file_bytes` of the default policy) and a tree
 above one page, and `lonca init` prints them as warnings, so the limit
 is met at import, not at the first session. Not done: a per-file cap on
@@ -3285,7 +3303,9 @@ daemon fetched from.
   daemon pushes over SSH as the developer's own `git push` would), `LANG`,
   `LC_ALL` and `TMPDIR`; then `HOME=<daemon home>/git-home`,
   `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0`,
-  `GIT_ALLOW_PROTOCOL=file:https:ssh`, and `-c core.hooksPath=/dev/null -c
+  `GIT_ALLOW_PROTOCOL=file:https:ssh`, `GIT_LITERAL_PATHSPECS=1` (a
+  repository path given to git is that file and never a pattern: a file may
+  be called `:!src/a.rs` or `src/*`), and `-c core.hooksPath=/dev/null -c
   credential.interactive=never`. `GIT_CONFIG_*`, `GIT_SSH_COMMAND`, `GIT_DIR`
   and the rest do not reach it. **Credentials** for HTTPS remotes go in
   `<daemon home>/git-home/.gitconfig`, a file of the daemon's user: that is
@@ -3467,6 +3487,14 @@ it and what it runs are part of the trust model.
   (1.99.1, with clippy and rustfmt), here and in every CI job (`rustup
   toolchain install` reads it). It is raised by hand in a pull request of its
   own; Dependabot does not bump it.
+- **Ubuntu packages come through one script**, `.github/scripts/apt-install.sh`
+  (bubblewrap in `ci.yml`, age in `fuzz.yml`, musl-tools in `release.yml`). The
+  runner's apt mirrors are all names under ubuntu.com; on 2026-11-11 they did
+  not resolve on the runners for hours and the required `sandbox` job could
+  not start, on every pull request. The script adds kernel.org's mirror
+  after them, so apt asks it only when the others fail. A mirror can not
+  change a package: apt checks what it gets against the archive's signed
+  index, whoever served it.
 - **Actions**: the repository allows GitHub's own actions and five others by
   name (`EmbarkStudios/cargo-deny-action`, `ossf/scorecard-action`,
   `taiki-e/install-action`, `zizmorcore/zizmor-action`, and
@@ -4141,6 +4169,190 @@ changed, or whether the queue ran what CI runs.
   (`VERIFIED_FOR_MS`); its evidence, identify lines included, is that run's.
   The cache key is a digest of the whole `[verification]`, so a new
   `identify` list runs again.
+
+## Where a session works is in the log
+
+Format 30. Until it, the only record of which session a directory belonged
+to was `.lonca/workspace.json` in that directory, and an agent writes its
+own workspace. The hook, `session start --continue` and a human's commands
+all read it. What a session's own directory says about the session is no
+longer asked.
+
+- **`session.start` names `workspace`**: an absolute, normalized path with
+  its links resolved by the CLI (`invalid_workspace` otherwise; the rules
+  are a scratch root's). It is in the signed entry, so it is the human's
+  word, as `harness` is. A session started without one has none: it is not
+  continued and no hook is placed by its directory. Children stand in
+  their parent's.
+- **One directory, one live session** (`workspace_in_use`): a start in a
+  directory that is, holds or lies in the workspace of a live root session
+  is refused, the session it continues excepted.
+- **A session is continued where it was started**
+  (`continue_other_workspace`). `lonca session start --continue DIR` asks
+  the daemon which session the log places in `DIR` (`session.where`) and
+  names that one; the id in the directory's file is not read. A session
+  from before format 30 has no workspace in the log and can not be
+  continued: start a new one. So can not a workspace that was moved.
+- **A continuation starts `unobserved`.** It kept its predecessor's level
+  until its harness reported; a level is now what a bind of this session
+  showed. Taint, writes and `shell_seen` go along as before. Entries of
+  older formats replay as they were.
+- **`session.where` is public.** It is the question of a program that has
+  no token it can trust: a hook whose workspace file does not read, a
+  human's command in a directory. It answers with a session id, its
+  repository, workspace and whether it is live, for a path or for a
+  harness's own session id (`session.bind` records it as
+  `harness_session`). None of that opens anything; any socket peer learns
+  which directories have sessions.
+- **The hook asks before it stands aside.** `lonca hook` did nothing where
+  it found no agent workspace. It now asks `session.where` first, with the
+  directory and the short strings of its input (the daemon reads the
+  harness's session id out of them with the profile). A live session
+  there, or bound to that harness session: the hook goes on as that
+  session's from the logged directory, and if that directory's metadata
+  does not read as the session's, the tool call is blocked. With no daemon
+  to ask it stands aside only where no `.lonca/workspace.json` is above
+  it. `hook.input` carries the resolved root (`real`), and the daemon
+  refuses one that is not the session's logged workspace; `hook.bind`
+  attributes network to the logged workspace.
+- **A human's command in an agent's workspace is refused** when the file
+  there names no session (`sync`, `diff`, `propose`, `status` without
+  `--repo`), and commands that take the repository from the workspace take
+  the log's where the log places a session. A directory once used by an
+  agent's session is not reused for a human's workspace.
+
+## A child session is its parent's agent
+
+Format 31. `cap.attenuate` carries an `agent` for the child, and until this
+format it was any well-formed name. But the policy knows an agent by its
+name and nothing else (`Lonca::Agent::"<name>"`), and a name is also what a
+human reads beside a pending change. A child with a name of its own stood
+outside every rule written for its parent, and inside those written for the
+name it took.
+
+- **`agent` must be the parent's** (`child_agent_name:<the parent's>`). A
+  child is the same agent with less: narrower scope, no longer life, the
+  parent's level and harness, and now its name. Sessions are told apart by
+  their ids and by `parent`, as before.
+- **Why not another principal for Cedar.** Evaluating a child as its root
+  session's agent would keep the rules whole, but leave the name a human
+  sees in `pending` to the agent. One name, given by the human who started
+  the root session, is the simpler rule.
+- **The field stays** in the request and the entry: older entries keep
+  their bytes and replay as they were, and nothing in the protocol changes
+  shape.
+
+## Text for a terminal
+
+A person approves from what `pending`, `diff` and `status` show, and most
+of that text is an agent's: an intent, a path, the lines of a file, the
+reason of a denial that quotes another agent. A terminal obeys escape
+sequences, carriage returns and bidirectional controls, so such text could
+redraw the list it was part of.
+
+- **One place writes** (`crates/lonca-cli/src/out.rs`). Everything the CLI
+  prints for a person goes through `out!`, `outln!` or `errln!`, and they
+  pass the finished text through `lonca_core::terminal::printable`. A
+  command can not forget to clean a field, because no command cleans one,
+  and clippy refuses `println!` and `eprintln!` in the CLI
+  (`print_stdout`, `print_stderr`, denied in `main.rs`).
+  `lonca-audit` does the same for its report.
+- **Written out, not dropped.** `\u{1b}`, `\r`, `\u{202e}`: the reviewer
+  sees that something was there. Newlines and tabs stay. All of C0 but
+  those two, DEL, C1, the bidi controls and U+2028/2029.
+- **Always, not only on a terminal.** Output piped to a pager reaches a
+  terminal too. A program reads `--json`, which has the text as it is: a
+  JSON string has no raw control character.
+- **What writes as it is**: `doctor`'s own colours (`write_painted`; what
+  it shows from elsewhere is cleaned before it is painted), the hook's and
+  the MCP server's JSON, and the output of the command `lonca run` runs,
+  which is that command's terminal.
+- **Not refused at the source.** Intents and paths may still hold these
+  characters in the log: refusing them is a rule of `decide()` and a log
+  format, and what shows them is the place that must be right either way.
+  A program that shows Lonca's JSON to a person has the same duty.
+
+## A request's own work is done without the lock
+
+The daemon has one lock for its state, and the single writer is whoever
+holds it. Three methods kept it through work whose length their caller
+decides, so one session could stop every other answer, for every
+repository (private advisory, 2026-11-11): `facts.preview` built and
+parsed a commit of up to 64 MiB under it, `events` read the whole log,
+and `trunk.bundle` ran git for up to its 600 s. None of the three is
+counted against a session's rate.
+
+- **`facts.preview`** takes the store and the policy, lets the lock go,
+  builds its commit and reads the facts, and takes the lock again for who
+  holds which lease now. The session is asked for again then: it may have
+  ended meanwhile. The policy is the one from before the work, like a
+  proposal's facts would be if the policy changed a moment later.
+- **`events`** copies the state and its next sequence number, lets the
+  lock go, reads the log and leaves out what was appended since: the
+  answer is the log as it stood, and `next` is where the next call
+  starts, so nothing is told twice or skipped.
+- **`trunk.bundle`** makes the bundle without the lock and then asks
+  whether `refs/heads/main` is still the trunk it read before; if not it
+  makes it again, three times, then `busy`. Trunk only moves forward, so
+  a ref that is the same after is the same throughout.
+- **A proposal still holds the lock** while its commit is built and read:
+  it is the writer, and its place in the log is what the lock gives it.
+  The session rate bounds that. `repo.prepare_init` and `repo.restore`
+  fetch under it as before ("No push under the lock").
+- **Tested for the preview** (`a_long_preview_does_not_hold_the_daemon`:
+  a status request is answered while a ten-second preview runs; before, it
+  waited 9.5 s). The other two have no test of the lock itself: nothing in
+  them can be made slow from a test without a hook in the daemon that
+  exists for the test. Their answers are tested as before.
+
+## What a caller adds to the log is bounded
+
+The log keeps every entry for good, the refused ones too: that is what
+makes it a record. So whatever a caller can put in an entry, and however
+often, is what the store's disk and every replay pay for. Three ways were
+open (private advisory, 2026-11-11).
+
+- **An entry's operation and its human signature take 64 KiB at most**
+  (`MAX_OP_BYTES`, `RepoHandle::op_fits`), asked before anything is decided,
+  signed or written to the store. An operation's free text and lists came in
+  on lines of up to 96 MiB, and the limits the policy has on them
+  (`leases.max_items`, `intent_too_long`) are decisions: the refused entry
+  was logged whole. Past the limit the answer is `invalid`, with the
+  operation's name, its size and what to do, and nothing is logged. 64 KiB
+  is what a line that may not be long holds; the policy's own limits (64
+  lease items, 200 files) fit many times over.
+- **Not a rule of `decide()`.** It would need a log format, and it would be
+  the wrong place: a size refused by `decide()` is again an entry. Like the
+  session rate, it is the daemon declining to write; the auditor has
+  nothing to recompute, and an older log with a longer entry still replays.
+- **The daemon's merge results are let past it** (`change.integrate`,
+  `change.integrate_batch`). Their conflicts and merged lists are as long
+  as the repository makes them, and a refusal there would leave the queue
+  with a change it can never finish. Facts and evidence are not counted
+  either: the daemon computes them, from files the policy already bounds.
+  Everything else the daemon writes for a caller is held to it, `observe`
+  too: a hook event with a path past it is an error, which the hook answers
+  by blocking.
+- **A submission that needs no session is decided before it is logged.**
+  `human.recover` comes in on its signature alone, so anyone who can open
+  the socket could send one, each a denied entry. Now a denial there is
+  `forbidden`, which the security log records (it rotates), and no entry.
+  A signed-in human's denied operation is still an entry: the session says
+  who asked, and a reviewer reads that record. An escalated recovery is
+  logged as before; an escalation comes after a signature that verifies.
+- **The proxy records at the session's rate.** Every connection through it
+  is an `observe` entry for each session it counts against, and nothing
+  bounded how many a minute. They now spend from a bucket of
+  `sessions.ops_per_minute` per session, apart from the one for the
+  session's own operations, so a build that opens many connections does
+  not stop its agent's requests. Past it a connection is refused and not
+  recorded, which keeps the rule that nothing goes through the proxy
+  without being on the record. Not a new policy key: the number already
+  says how fast one session may grow the log.
+- **What is left.** A session at its rate with entries at the limit still
+  grows the log, by what the policy allows it; and a proposal's files are
+  objects in the store whatever the log says. A floor on the store's free
+  disk is a separate piece of work.
 
 ## Open questions (carried from the design)
 

@@ -129,7 +129,7 @@ pub fn denied(r: &Value) -> Result<()> {
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
         if let Some(advice) = r["advice"].as_str() {
-            eprintln!("{advice}");
+            errln!("{advice}");
         }
         bail!(Refused(reasons.join(", ")));
     }
@@ -372,7 +372,7 @@ pub fn sk_keygen_at(p: &Path, ty: SkType, name: &str) -> Result<HumanKey> {
         SkType::Ecdsa => "ecdsa-sk",
         SkType::Ed25519 => "ed25519-sk",
     };
-    eprintln!("making a key on your security key: touch it when it blinks");
+    errln!("making a key on your security key: touch it when it blinks");
     let application = format!("application={}", lonca_policy::human::sk::APPLICATION);
     let status = std::process::Command::new(ssh_keygen())
         .args(["-q", "-t", ty, "-O", &application, "-N", "", "-C"])
@@ -437,7 +437,7 @@ fn sk_public(line: &str) -> Result<HumanKey> {
 fn sk_sign(p: &Path, msg: &[u8], what: &str) -> Result<String> {
     use std::io::Write;
     use std::process::Stdio;
-    eprintln!("{what}\ntouch your security key to sign");
+    errln!("{what}\ntouch your security key to sign");
     let mut child = std::process::Command::new(ssh_keygen())
         .args(["-Y", "sign", "-n", lonca_policy::human::sk::NAMESPACE, "-f"])
         .arg(p)
@@ -790,6 +790,81 @@ pub fn duration_ms(s: &str) -> Result<i64> {
     Ok(n * mul)
 }
 
+/// `p` as the log names a directory: absolute, links resolved as far as
+/// the path exists, no `.` or `..`.
+pub fn resolved(p: &Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let mut flat = PathBuf::new();
+    for c in absolute(p)?.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                flat.pop();
+            }
+            c => flat.push(c),
+        }
+    }
+    let mut rest = Vec::new();
+    let mut there = flat.as_path();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(there) {
+            return Ok(rest.iter().rev().fold(real, |at, name| at.join(name)));
+        }
+        match (there.parent(), there.file_name()) {
+            (Some(up), Some(name)) => {
+                rest.push(name.to_os_string());
+                there = up;
+            }
+            _ => return Ok(flat),
+        }
+    }
+}
+
+/// Where the log places a session.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct Placed {
+    pub repo: String,
+    pub session: String,
+    pub workspace: Option<String>,
+    pub active: bool,
+}
+
+/// The session the log places at `path` (its workspace is that directory
+/// or holds it), or the live one a hook's harness session is bound to. The
+/// answer is the log's: no file of the workspace is read for it.
+pub fn placed(c: &mut Client, path: &Path, hook: Option<(&str, &Value)>) -> Result<Option<Placed>> {
+    let path = resolved(path)?;
+    let mut params = json!({"path": path});
+    if let Some((harness, input)) = hook {
+        // The harness's name for its session is one of the short strings
+        // at the top of its input; which one, its profile says.
+        let short = |(k, v): (&String, &Value)| {
+            let v = v.as_str().filter(|v| v.len() <= 256)?;
+            Some((k.clone(), json!(v)))
+        };
+        let fields: serde_json::Map<String, Value> = input
+            .as_object()
+            .map(|o| o.iter().filter_map(short).take(32).collect())
+            .unwrap_or_default();
+        params["harness"] = json!(harness);
+        params["fields"] = Value::Object(fields);
+    }
+    let r = match call(c, "session.where", params) {
+        Ok(r) => r,
+        // A daemon from before format 30, not restarted yet: its log
+        // places no session, and it says so of none.
+        Err(e) if matches!(e.downcast_ref::<MethodError>(), Some(m) if m.code == "unknown_method") =>
+        {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+    if r.get("session").is_none() {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::from_value(r)?))
+}
+
 pub fn absolute(p: &Path) -> Result<PathBuf> {
     if p.is_absolute() {
         Ok(p.to_path_buf())
@@ -819,6 +894,7 @@ mod tests {
             expires_ms: 1,
             continues,
             harness: None,
+            workspace: None,
         }
     }
 

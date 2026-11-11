@@ -290,6 +290,17 @@ signature, bad nonce), `invalid` (`ttl_ms` out of range).
 human session: `{"ended": true}`. An agent token: `forbidden`; a token
 the daemon does not know: `unauthenticated`.
 
+### `session.where`
+
+*public.* `{"path": absolute path | null, "harness": string | null,
+"fields": {string: string}}`. Where the log places a session: the live one
+whose `session.bind` named the harness session found in `fields` (read with
+`harness`'s profile), else the root session whose workspace is `path` or
+holds it, a live one before an ended one, the last started first. Result
+`{"repo", "session", "workspace": absolute path | null, "active": boolean,
+"continued_by": session id | null, "by": "harness" | "path"}`, or `{}` when
+the log knows none. No file of the workspace is read for it.
+
 ### `whoami`
 
 *any.* `params: {}`. For an agent token:
@@ -408,6 +419,7 @@ with a signed `daemon.rotate` through `human.submit`.
 
 - **session**: `{"id", "agent", "task", "parent": string | null,
   "level": "unobserved" | "hooks" | "hooks_sandbox" | "isolated",
+  "workspace": absolute path | null,
   "taint": string | null, "active": boolean, "expires_ms": time,
   "last_seen_ms": time | null, "verification_ms": integer,
   "continued_from": string | null,
@@ -418,7 +430,8 @@ with a signed `daemon.rotate` through `human.submit`.
   what the session's line has used of `[quota] session_seconds`: the session,
   those it was made from or continues, and theirs. `last_seen_ms` is
   the last heartbeat; `null` means none yet. `continued_from` and
-  `continued_by` link the sessions of one workspace; `parent` is a
+  `continued_by` link the sessions of one workspace, and `workspace` is the
+  directory its `session.start` named (`null` before log format 30); `parent` is a
   capability's origin. `unproposed` is what the workspace held the last time
   the session stopped or ended, with no standing proposal carrying it:
   `paths` names at most 32 of `total` files, and `rounds` counts the stops
@@ -515,7 +528,7 @@ Operation kinds (`op.op`) and their fields:
 | `daemon.rotate` | `key` |
 | `daemon.recover` | `key`, `recover`: `{"human", "key": human key}` or absent. With it, the human's recovery key signs, and the entry also replaces that human's key (log format 27) |
 | `policy.update` | `policy` (id) |
-| `session.start` | `session`, `agent`, `model`, `task`, `scope`, `expires_ms` |
+| `session.start` | `session`, `agent`, `model`, `task`, `scope`, `expires_ms`, `continues`, `harness`, `workspace` (absolute path, links resolved; log format 30) |
 | `session.bind` | `session`, `checks`, `level` |
 | `session.isolate` | `session`, `sandbox`, `profile` (SHA-256 of the sandbox's definition) |
 | `session.end` / `cap.revoke` / `taint` | `session`, `reason` |
@@ -562,9 +575,11 @@ null}`. The files of a commit:
 ```
 
 `size` is the blob's size in bytes (0 for a submodule). `content_b64`
-is set with `with_content`, except for submodules and redacted blobs;
-the whole answer is one line (`MAX_LINE`), so for a tree of any size
-fetch the manifest without contents and page them with `blobs`.
+is set with `with_content`, except for submodules and redacted blobs.
+With contents the answer is one page, as of `blobs`: past three quarters
+of `MAX_LINE` once encoded it is `too_large` and nothing is read, so for
+a tree of any size fetch the manifest without contents and page them
+with `blobs`.
 
 ### `blobs`
 
@@ -649,7 +664,8 @@ a git checkout, thin against the commits in `have` that the store knows
 point the ref at `trunk`.
 Errors: `redacted` (a redacted blob is among the objects; git needs
 whole objects, work from a workspace), `too_large` (the bundle does not
-fit one page; fetch from a closer point).
+fit one page; fetch from a closer point), `busy` (trunk moved three
+times while the bundle was made; send it again).
 
 ### `trunk.distance`
 
@@ -726,7 +742,9 @@ session's human. Result: logged, plus:
 Errors: `invalid` (the operation does not fit: a `repo.init` here, a
 rotation to a key the daemon does not hold), `not_fast_forward`,
 `foreign_key` (the repository waits for `daemon.recover`), `denied` for
-a recovery the log refused, `git`.
+a recovery the log refused, `git`. A denied operation that came with no
+session (`human.recover`) is `forbidden` with the reasons, and is not
+logged.
 
 ### `lease.acquire`
 
@@ -903,7 +921,10 @@ Denied `yield_to_another_session`, `lease_pinned`, `lease_expired`,
 ### `cap.attenuate`
 
 *agent.* `{"agent": string, "scope": scope, "expires_ms": time, "leases":
-[string] | null}`. A child session with a narrower scope. `leases` hands
+[string] | null}`. A child session with a narrower scope. `agent` is the
+caller's own agent name (`child_agent_name:<name>` otherwise, from log
+format 31): a child is the same agent to the policy and to a reviewer.
+`leases` hands
 lease sets to it until it ends, expires or misses its heartbeat; they go
 back to the parent then, with the time they had, if the parent is still
 there (on expiry and heartbeat from log format 23). Only the child renews
@@ -956,8 +977,10 @@ entries.
 ### `hook.input`
 
 *agent.* What a hook program got from its harness, untouched:
-`{"harness": string, "input": object, "workspace": absolute path}`. The
-daemon reads `input` with the harness's profile from the policy
+`{"harness": string, "input": object, "workspace": absolute path, "real":
+absolute path | null}`. `real` is `workspace` with its links resolved: when
+the session's `session.start` named a workspace and this is another, the
+request is `invalid`. The daemon reads `input` with the harness's profile from the policy
 (`docs/guide/runners.md`, "Any other harness"). A harness without a
 profile, or an event it does not have, is `invalid`. A session start gives
 `{"phase": "session_start", "session": string, "context": template,
@@ -1050,7 +1073,8 @@ the queue itself, and stays 0 under protocol 1.
 | `session_inactive` | `session.heartbeat` of a session that has ended or expired; nothing is logged |
 | `unknown_method` | not in the table |
 | `not_found` | no such repository or change; a path not in the commit (`blobs`) |
-| `too_large` | a request line over its method's limit; a `blobs` page, or one file, does not fit the line cap |
+| `too_large` | a request line over its method's limit; a `blobs` page, one file, or a `tree` with contents does not fit the line cap |
+| `invalid` | parameters that do not read, or do not fit the method. Also an operation whose JSON, with its human signature, is past 64 KiB: the message names the operation and its size; nothing is logged. Shorten its text and lists, or split it |
 | `rate_limited` | the session and those made from it are past `[sessions] ops_per_minute`; nothing is logged, and the message says when to try again. `session.end` and the methods that write nothing to the log are exempt |
 | `busy` | no room for this connection or long line; nothing ran, send it again |
 | `verifying` | `change.withdraw` of a change whose checks are running; nothing is logged. Send it again once they end, if the change is still queued |
@@ -1145,8 +1169,9 @@ Exit codes:
   outside the workspace for the agent's notes and logs; see
   `docs/guide/runners.md`.
 - `session start --continue DIR [--widen] --json`: the same, with
-  `"continues": old session id` (`null` for a plain start). The new
-  session takes over `DIR`: files, base, manifest and the change it
+  `"continues": old session id` (`null` for a plain start). The old
+  session is the one the log places in `DIR`, not one a file there names.
+  The new session takes over `DIR`: files, base, manifest and the change it
   proposed stay, the old session ends, its token stops working. Taint,
   observation level and what was seen written carry over; leases do not,
   except that items pinned to a change in flight pass to the new session.

@@ -702,3 +702,49 @@ matrix! {
     twenty_agents_php: "src/C.php",
     twenty_agents_swift: "Sources/C.swift",
 }
+
+/// A preview is its caller's work, as long as its files are: while one is
+/// built and parsed the daemon answers everyone else.
+#[test]
+fn a_long_preview_does_not_hold_the_daemon() {
+    use std::sync::atomic::AtomicBool;
+    let mut e = Env::new();
+    e.init(None);
+    let token = e.session("s1", &["src/**"]);
+    let base = e.trunk();
+    e.ok("status", Some("demo"), None, json!({}));
+    let body: String = (0..12_000)
+        .map(|i| format!("pub fn f{i}(a: u64) -> u64 {{\n    a + {i}\n}}\n\n"))
+        .collect();
+    let files: Vec<FileChange> = (0..4)
+        .map(|k| file(&format!("src/big{k}.rs"), &body))
+        .collect();
+    let svc = e.svc.clone();
+    let done = Arc::new(AtomicBool::new(false));
+    let told = done.clone();
+    let preview = std::thread::spawn(move || {
+        let r = svc.handle(Request {
+            id: 1,
+            method: "facts.preview".into(),
+            repo: None,
+            token: Some(token),
+            params: json!({"base": base, "files": files}),
+        });
+        told.store(true, Ordering::SeqCst);
+        assert!(r.ok, "{:?}", r.error.map(|e| e.message));
+        r.result["facts"].is_object()
+    });
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(
+        !done.load(Ordering::SeqCst),
+        "the preview ended too soon to show anything"
+    );
+    let asked = std::time::Instant::now();
+    e.ok("status", Some("demo"), None, json!({}));
+    let waited = asked.elapsed();
+    assert!(
+        !done.load(Ordering::SeqCst),
+        "status was answered only when the preview ended ({waited:?})"
+    );
+    assert!(preview.join().unwrap());
+}

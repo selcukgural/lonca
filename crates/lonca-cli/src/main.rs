@@ -1,5 +1,9 @@
 //! `lonca`: the command line for humans and agents.
 
+// Everything a person reads goes through `out` (`out!`, `outln!`,
+// `errln!`), which makes it safe for a terminal: agents wrote much of it.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 #[macro_use]
 mod out;
 
@@ -853,14 +857,14 @@ fn main() -> ExitCode {
             Ok(()) => match out::failed() {
                 None => ExitCode::SUCCESS,
                 Some(e) => {
-                    eprintln!("lonca: writing to stdout: {e}");
+                    errln!("lonca: writing to stdout: {e}");
                     ExitCode::from(3)
                 }
             },
             Err(e) if out::is_closed_pipe(&e) => ExitCode::SUCCESS,
             Err(e) => {
                 if !doctor::reported(&e) {
-                    eprintln!("lonca: {e:#}");
+                    errln!("lonca: {e:#}");
                 }
                 ExitCode::from(ctx::exit_code(&e))
             }
@@ -1001,10 +1005,16 @@ fn source(from: &str) -> Result<String> {
 fn repo_name(r: Option<String>) -> Result<String> {
     match r {
         Some(r) => Ok(r),
-        None => Ok(Workspace::current()
-            .context("pass --repo or run inside a workspace")?
-            .meta
-            .repo),
+        None => {
+            let ws = Workspace::current().context("pass --repo or run inside a workspace")?;
+            // In an agent's workspace the repository is the log's word:
+            // the file there is the agent's to write.
+            let placed = connect().and_then(|mut c| ctx::placed(&mut c, &ws.root, None));
+            match placed {
+                Ok(Some(p)) => Ok(p.repo),
+                _ => Ok(ws.meta.repo),
+            }
+        }
     }
 }
 
@@ -1098,8 +1108,28 @@ fn scratch_roots(workspace: &Path, dirs: &[PathBuf]) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Refuses a human's command in a directory the log gives to an agent's
+/// session. Its `workspace.json` says "no session" there, and the agent can
+/// write that file: a human would sign for what the agent left.
+fn not_an_agents(ws: &Workspace) -> Result<()> {
+    let mut c = connect()?;
+    match ctx::placed(&mut c, &ws.root, None)? {
+        Some(p) => bail!(
+            "{} is the workspace of agent session {} (repository {}), and its \
+             .lonca/workspace.json names no session: a human does not work from an agent's \
+             workspace. Continue it with `lonca session start --continue`, or use a workspace \
+             of your own",
+            ws.root.display(),
+            p.session,
+            p.repo
+        ),
+        None => Ok(()),
+    }
+}
+
 /// The human a workspace was created for, else the default identity.
 fn workspace_human(ws: &Workspace) -> Result<String> {
+    not_an_agents(ws)?;
     match &ws.meta.human {
         // It names key files, and workspace.json can be edited.
         Some(h) if h.contains('/') || h.starts_with('.') => bail!("bad human name {h:?}"),
@@ -1245,7 +1275,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let said =
                 lonca_daemon::service::sandbox_at_start(hardened, sandbox, allow_unsandboxed);
             if let Some(line) = said.map_err(anyhow::Error::msg)? {
-                eprintln!("lonca daemon: {line}");
+                errln!("lonca daemon: {line}");
             }
             let home = home
                 .map(lonca_daemon::Home::new)
@@ -1258,7 +1288,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 true => None,
                 false => lonca_daemon::proxy::bind(&proxy)
                     .inspect_err(|e| {
-                        eprintln!("lonca daemon: proxy not started on {proxy}: {e}");
+                        errln!("lonca daemon: proxy not started on {proxy}: {e}");
                     })
                     .ok(),
             };
@@ -1284,7 +1314,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let svc =
                 lonca_daemon::Service::open(home.clone(), settings, lonca_daemon::system_clock())?;
             for line in svc.sandbox_warnings(sandbox) {
-                eprintln!("lonca daemon: {line}");
+                errln!("lonca daemon: {line}");
             }
             let access = lonca_daemon::server::Access {
                 mode: u32::from_str_radix(&socket_mode, 8)
@@ -1311,12 +1341,12 @@ fn run(cmd: Cmd) -> Result<()> {
                 Some(_) => {
                     let left = svc.clear_left_over_verifications();
                     if left > 0 {
-                        eprintln!(
+                        errln!(
                             "lonca daemon: ended what {left} verification(s) of an earlier run left"
                         );
                     }
                 }
-                None => eprintln!(
+                None => errln!(
                     "lonca daemon: another daemon holds {}; what verifications left is not cleared",
                     home.root.display()
                 ),
@@ -1325,12 +1355,12 @@ fn run(cmd: Cmd) -> Result<()> {
             if let Some(l) = proxy_listener {
                 let s = svc.clone();
                 std::thread::spawn(move || lonca_daemon::proxy::serve(l, s));
-                eprintln!(
+                errln!(
                     "lonca daemon: network proxy on {}",
                     proxy_addr.as_deref().unwrap_or(&proxy)
                 );
             }
-            eprintln!(
+            errln!(
                 "lonca daemon: listening on {} (key {})",
                 home.socket().display(),
                 &svc.public_key()[..16]
@@ -1531,7 +1561,7 @@ fn run(cmd: Cmd) -> Result<()> {
             let op: Op = serde_json::from_value(prep["op"].clone())?;
             if !as_json {
                 for w in prep["warnings"].as_array().into_iter().flatten() {
-                    eprintln!("warning: {}", w.as_str().unwrap_or_default());
+                    errln!("warning: {}", w.as_str().unwrap_or_default());
                 }
             }
             let sig = ctx::sign(&human, &repo, &op)?;
@@ -1576,8 +1606,37 @@ fn run(cmd: Cmd) -> Result<()> {
             let human = human_name(human)?;
             let target = continue_dir.as_ref().or(workspace.as_ref());
             let dir = ctx::absolute(target.context("pass --workspace or --continue")?)?;
+            let dir = ctx::resolved(&dir)?;
+            // Which session a workspace was left by is the log's word: the
+            // id in its workspace.json is the agent's to write.
             let continuing = match continue_dir {
-                Some(_) => Some(Workspace::to_continue(&dir, &repo)?),
+                Some(_) => {
+                    let ws = Workspace::to_continue(&dir, &repo)?;
+                    let at = ctx::placed(&mut connect()?, &dir, None)?
+                        .filter(|p| p.workspace.as_deref().map(Path::new) == Some(dir.as_path()));
+                    let Some(at) = at else {
+                        if ws.meta.session.is_none() {
+                            bail!(
+                                "{} is a human workspace: no session to continue",
+                                dir.display()
+                            );
+                        }
+                        bail!(
+                            "the log places no session in {}: a session is continued in the \
+                             workspace it was started in (one started before Lonca 0.2.4, or \
+                             whose directory was moved, can not be)",
+                            dir.display()
+                        )
+                    };
+                    if at.repo != repo {
+                        bail!(
+                            "{} is the workspace of a session of repository {}, not {repo}",
+                            dir.display(),
+                            at.repo
+                        );
+                    }
+                    Some((ws, at.session))
+                }
                 None => None,
             };
             // Before the session starts: a refusal after it would leave a
@@ -1616,6 +1675,7 @@ fn run(cmd: Cmd) -> Result<()> {
                     widen,
                 }),
                 harness: harness.clone(),
+                workspace: Some(dir.to_string_lossy().into_owned()),
             };
             let r = if as_json {
                 let sig = ctx::sign(&human, &repo, &op)?;
@@ -1842,7 +1902,7 @@ fn run(cmd: Cmd) -> Result<()> {
                 }
             }
             if let Some(w) = &r.git_warning {
-                eprintln!("warning: .git still shows the old base: {w}");
+                errln!("warning: .git still shows the old base: {w}");
             }
             Ok(())
         }
@@ -1864,7 +1924,7 @@ fn run(cmd: Cmd) -> Result<()> {
                         }
                         None => {
                             let human = match human {
-                                Some(h) => h,
+                                Some(h) => not_an_agents(&ws).map(|()| h)?,
                                 None => workspace_human(&ws)?,
                             };
                             human_client(&ws.meta.repo, &human)?

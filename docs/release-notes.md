@@ -2,6 +2,84 @@
 
 ## Unreleased
 
+### A session's directory is in the log
+
+`lonca session start` now records the workspace directory in the signed
+`session.start` entry (log format 30), and Lonca asks the log, not the
+directory's own `.lonca/workspace.json`, which session works where:
+
+- `lonca hook` no longer stands aside when that file is missing, unreadable
+  or names no session. It asks the daemon; in a live session's directory,
+  or under the harness session a live session is bound to, a tool call is
+  blocked until the workspace reads as that session's again.
+- `lonca session start --continue DIR` continues the session that was
+  started in `DIR`. Two sessions can not be started in one directory, or in
+  directories inside each other, while the first is live
+  (`workspace_in_use`).
+- A continued session starts at `unobserved` until its own harness has
+  reported; it used to keep its predecessor's level until then.
+- A human's `sync`, `diff` or `propose` in a directory the log gives to an
+  agent's session is refused.
+
+**Upgrading.** A session started with 0.2.3 or earlier has no directory in
+the log and can not be continued (`continue_other_workspace`): propose or
+copy what its workspace holds, and start a new session in a new directory.
+The daemon and `lonca hook` are upgraded together, as always; the new
+socket method is `session.where` (public).
+
+### The reviewer's diff takes file names literally
+
+A file may have a name that git reads as a pattern, such as `src/*` or
+`:!src/billing.rs`. `lonca diff <change>` (the socket's `change.diff`) now
+shows such a file as itself, and every other changed file beside it: the
+daemon's git takes each path as the file it names
+(`GIT_LITERAL_PATHSPECS=1`). What is integrated was never affected, only
+the text shown for review.
+
+### A child session has its parent's agent name
+
+The policy knows an agent by its name (`Lonca::Agent::"docs-bot"`), and a
+reviewer reads that name in `pending`. A child session made with
+`cap.attenuate` is the same agent with a narrower scope, and from log
+format 31 it has the same name: an `agent` other than the parent's is
+refused (`child_agent_name:<name>`), so a rule on a name holds for every
+session made from that agent's. Nothing Lonca ships calls `cap.attenuate`
+with another name; a runner that does must send the parent's.
+
+### What an agent wrote is shown, not obeyed, by your terminal
+
+`lonca` and `lonca-audit` now write out control characters in everything
+they print for a person: an escape is shown as `\u{1b}`, a carriage return
+as `\r`, a text direction override as `\u{202e}`. An intent, a path, a
+line of a diff or the text of a denial can no longer move the cursor, clear
+a line or hide text on the reviewer's screen. Newlines and tabs are kept;
+`--json` output is unchanged. A CRLF file's lines end in a visible `\r` in
+`lonca diff`.
+
+### One entry of the log has a size, and the proxy a rate
+
+The log keeps every entry, so what goes into one is now bounded before it
+is written:
+
+- An operation whose JSON, with its human signature, is past 64 KiB is
+  refused as `invalid` and not logged; the message names the operation and
+  its size. In practice this is a very long intent or list: write a shorter
+  one, or lease and propose in smaller parts.
+- `lonca human recover` with a key that is not the repository's recovery
+  key for that human is refused as `forbidden` and is in the security log
+  (`lonca doctor` counts its events), no longer an entry of the operation
+  log.
+- Connections through the proxy are recorded at `sessions.ops_per_minute`
+  for a session, counted apart from its own operations. Past that a
+  connection is refused until the minute has room again.
+
+### `tree` with contents is one page
+
+For programs that speak the protocol: `tree` with `with_content: true`
+answers `too_large` when the contents are past one page (three quarters
+of the line limit, as for `blobs`), instead of reading the whole commit
+first. Ask without contents and page them with `blobs`, as `lonca` does.
+
 ## 0.2.3 (2026-11-11)
 
 ### A runner can wait for news instead of polling

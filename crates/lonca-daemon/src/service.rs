@@ -20,7 +20,9 @@ use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileMap, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::config::{Profile, UnparsedFiles, Verification};
-use lonca_policy::decide::{evidence_problems, level_for, quota_problems, valid_token};
+use lonca_policy::decide::{
+    evidence_problems, level_for, paths_nest, quota_problems, valid_scratch_root, valid_token,
+};
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
@@ -379,6 +381,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("human.login", Cred::Login),
     ("human.logout", Cred::Public),
     ("whoami", Cred::Any),
+    ("session.where", Cred::Public),
     ("repo.list", Cred::AnyHuman),
     ("repo.prepare_init", Cred::Bootstrap),
     ("repo.init", Cred::Bootstrap),
@@ -511,6 +514,10 @@ struct ProxyBook {
     /// Connections no process could be named for, so every session the
     /// proxy serves answered for them (see `lonca status`).
     unattributed: u64,
+    /// What each session may still have recorded this minute: every
+    /// connection is an entry of the log, so they come at the rate of the
+    /// session's own operations (`sessions.ops_per_minute`), counted apart.
+    recorded: BTreeMap<SessionKey, Bucket>,
 }
 
 impl ProxyBook {
@@ -1359,6 +1366,7 @@ impl Service {
             "trunk.bundle" => self.trunk_bundle(&auth, params(p)?),
             "trunk.distance" => self.trunk_distance(&auth, params(p)?),
             "whoami" => self.whoami(&auth),
+            "session.where" => self.session_where(params(p)?),
             "human.prepare_change" => self.prepare_change(&auth, params(p)?),
             "human.prepare_policy" => self.prepare_policy(&auth, params(p)?),
             "human.prepare_import" => self.prepare_import(&auth, params(p)?),
@@ -1930,7 +1938,7 @@ impl Service {
             .map(|x| {
                 json!({
                     "id": x.id, "agent": x.agent, "task": x.task, "parent": x.parent, "level": x.level,
-                    "harness": x.harness,
+                    "harness": x.harness, "workspace": x.workspace,
                     "taint": x.taint, "active": s.session_active(&x.id, now), "expires_ms": x.expires_ms,
                     "last_seen_ms": x.heartbeat.map(|h| h.seen_ms),
                     "verification_ms": s.session_spent(&x.id),
@@ -2083,6 +2091,11 @@ impl Service {
         let redacted = r.chain.state.redacted.clone();
         drop(inner);
         let files = store.commit_files(&q.commit).or_fail()?;
+        // With contents the answer is a page like one of `blobs`, counted
+        // from the sizes before a blob is read: what does not fit the line
+        // is never held.
+        let budget = page_budget(self.settings.line_cap);
+        let mut total = 0u64;
         let mut out = Vec::new();
         for (path, e) in files {
             if let Some(only) = &q.paths
@@ -2095,10 +2108,23 @@ impl Service {
             } else {
                 store.blob_size(&e.blob).or_fail()?
             };
-            let content_b64 = if q.with_content
+            let wanted = q.with_content
                 && e.mode != lonca_core::FileMode::Submodule
-                && !redacted.contains(&e.blob)
-            {
+                && !redacted.contains(&e.blob);
+            if wanted {
+                total = total.saturating_add(encoded_len(size));
+                if total > budget {
+                    return fail(
+                        "too_large",
+                        format!(
+                            "tree: the contents of {} are more than one answer holds \
+                             ({budget} encoded); ask without contents and page them with blobs",
+                            q.commit
+                        ),
+                    );
+                }
+            }
+            let content_b64 = if wanted {
                 Some(
                     base64::engine::general_purpose::STANDARD
                         .encode(store.read_blob(&e.blob).or_fail()?),
@@ -2261,13 +2287,37 @@ impl Service {
     /// page.
     fn trunk_bundle(&self, auth: &Auth, p: TrunkBundle) -> Hr {
         let name = auth.repo()?;
-        let mut inner = self.lock();
-        let r = Self::repo(&mut inner, &name)?;
-        let store = r.store.clone();
-        let trunk = r.chain.state.trunk.clone().expect("initialized");
-        let redacted = r.chain.state.redacted.clone();
-        let have: Vec<String> = p
-            .have
+        // Git makes the bundle without the lock, for as long as it takes.
+        // Trunk may move meanwhile; then the bundle is made again, so what
+        // is answered is one trunk and its bundle.
+        for _ in 0..3 {
+            let (store, trunk, redacted) = {
+                let mut inner = self.lock();
+                let r = Self::repo(&mut inner, &name)?;
+                let trunk = r.chain.state.trunk.clone().expect("initialized");
+                (r.store.clone(), trunk, r.chain.state.redacted.clone())
+            };
+            let made = self.bundle_of(&name, &store, &trunk, &redacted, &p.have)?;
+            if store.ref_get(TRUNK_REF).or_fail()?.as_ref() == Some(&trunk) {
+                return Ok(made);
+            }
+        }
+        fail(
+            "busy",
+            "trunk moved while its bundle was made; send it again",
+        )
+    }
+
+    /// The bundle of `refs/heads/main` past `have`, answered as `trunk`'s.
+    fn bundle_of(
+        &self,
+        name: &str,
+        store: &Store,
+        trunk: &GitId,
+        redacted: &BTreeSet<GitId>,
+        have: &[GitId],
+    ) -> Hr {
+        let have: Vec<String> = have
             .iter()
             .filter(|h| store.read_commit(h).is_ok())
             .map(|h| format!("^{h}"))
@@ -2820,6 +2870,7 @@ impl Service {
             },
             p.op.clone(),
         );
+        RepoHandle::op_fits(&sub.actor, &sub.op, Some(&p.sig)).or_fail()?;
         sub.human = Some(p.sig);
         let workspace = p.workspace.filter(|w| Path::new(w).is_absolute());
         // Store, remote, and the proposal refs the log has: only those go.
@@ -2859,6 +2910,16 @@ impl Service {
                 return fail("not_fast_forward", "import must contain trunk");
             }
             _ => {}
+        }
+        // What comes in with no session leaves no entry when it is denied:
+        // anyone who can open the socket could send it, and the log keeps
+        // every entry. The refusal is in the security log instead.
+        if matches!(auth.caller, Caller::Anonymous) {
+            let dry = r.dry_run(sub.clone(), now).or_fail()?;
+            if dry.entry.decision.outcome == lonca_core::ops::Outcome::Deny {
+                let why = dry.entry.decision.reasons.join(", ");
+                return fail("forbidden", format!("denied, and not logged: {why}"));
+            }
         }
         let old_policy = r.chain.state.policy.clone();
         let seq = r.chain.state.next_seq;
@@ -3177,10 +3238,18 @@ impl Service {
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
-        let ops = OpLog::new(&r.store).read_all().or_fail()?;
-        let state = &r.chain.state;
-        let events = for_session(state, &session, &ops, p.from, now);
+        // The log is read without the lock, as long as it is: the state is
+        // taken as it stands, and entries appended meanwhile are left for
+        // the next call.
+        let store = r.store.clone();
+        let state = r.chain.state.clone();
         let next = state.next_seq;
+        drop(guard);
+        let mut ops = OpLog::new(&store).read_all().or_fail()?;
+        ops.retain(|o| o.entry.seq < next);
+        let events = for_session(&state, &session, &ops, p.from, now);
+        let mut guard = self.lock();
+        let r = Self::repo(&mut guard, &repo)?;
         r.told
             .entry(session)
             .or_default()
@@ -3315,6 +3384,15 @@ impl Service {
         Self::reconcile(r, now)?;
         let session = actor.session().expect("agent").to_string();
         let change = p.change.unwrap_or_else(ChangeId::random);
+        // Asked before the commit and its ref are written: the base stands
+        // in for the commit, an id like it.
+        let probe = Op::ChangePropose {
+            change,
+            commit: p.base.clone(),
+            base: p.base.clone(),
+            claim: p.claim.clone(),
+        };
+        RepoHandle::op_fits(&actor, &probe, None).or_fail()?;
         let max = r.policy().or_fail()?.config.changes.max_file_bytes;
         let commit = r
             .build_change_commit(
@@ -3394,29 +3472,36 @@ impl Service {
     }
 
     fn facts_preview(&self, req: &Request, p: FactsPreview) -> Hr {
+        // The commit is built and read without the lock: it is the caller's
+        // work, as long as its files, and nothing else may wait for it.
+        let (actor, store, policy) = {
+            let mut guard = self.lock();
+            let (repo, actor) = Self::agent(&guard, req, self.now())?;
+            let r = Self::repo(&mut guard, &repo)?;
+            (actor, r.store.clone(), r.policy().or_fail()?)
+        };
+        let commit = RepoHandle::build_change_commit_in(
+            &store,
+            &p.base,
+            &p.files,
+            ChangeId::random(),
+            &actor.label(),
+            "preview@lonca.invalid",
+            ("lonca-preview", "1"),
+            "",
+            self.now(),
+            policy.config.changes.max_file_bytes,
+        )
+        .or_fail()?;
+        let keyed = &policy.keyed;
+        let a = facts_keyed(&store, ENGINE_CURRENT, &p.base, &commit, keyed).or_fail()?;
+        // Who holds what is the state's, as it is now.
         let mut guard = self.lock();
         let now = self.now();
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let r = Self::repo(&mut guard, &repo)?;
-        let max = r.policy().or_fail()?.config.changes.max_file_bytes;
-        let change = ChangeId::random();
-        let commit = r
-            .build_change_commit(
-                &p.base,
-                &p.files,
-                change,
-                &actor.label(),
-                "preview@lonca.invalid",
-                ("lonca-preview", "1"),
-                "",
-                now,
-                max,
-            )
-            .or_fail()?;
-        let keyed = &r.policy().or_fail()?.keyed;
-        let a = facts_keyed(&r.store, ENGINE_CURRENT, &p.base, &commit, keyed).or_fail()?;
         let session = actor.session().expect("agent");
-        let unparsed = r.policy().or_fail()?.config.leases.unparsed_files;
+        let unparsed = policy.config.leases.unparsed_files;
         let mut leases = details::lease_report(&r.chain.state, session, &a.facts, unparsed, now);
         leases.extend(details::key_report(
             &r.chain.state,
@@ -3566,6 +3651,56 @@ impl Service {
         Ok(out)
     }
 
+    /// Where the log places a session: the live one a harness's session is
+    /// bound to, else the one whose workspace holds a path (a live one
+    /// first, then the last started). Empty when the log knows none. The
+    /// workspace's own files are not asked: an agent can write them.
+    fn session_where(&self, w: SessionWhere) -> Hr {
+        let now = self.now();
+        let mut guard = self.lock();
+        let path = w.path.as_deref().filter(|p| valid_scratch_root(p));
+        let names: Vec<String> = guard.repos.keys().cloned().collect();
+        // (by the harness, live, started, session): the greatest wins.
+        let mut best: Option<((bool, bool, i64, String), Value)> = None;
+        for name in names {
+            let Ok(r) = Self::repo(&mut guard, &name) else {
+                continue;
+            };
+            let field = w.harness.as_deref().and_then(|h| {
+                let policy = r.policy().ok()?;
+                Some(policy.config.harness(h)?.fields.session.clone())
+            });
+            let theirs = field
+                .and_then(|f| w.fields.get(&f))
+                .filter(|s| !s.is_empty());
+            let state = &r.chain.state;
+            for s in state.sessions.values() {
+                let live = state.session_active(&s.id, now);
+                let bound = live && theirs.is_some() && s.harness_session.as_ref() == theirs;
+                let holds = |root: &String| {
+                    path.is_some_and(|p| paths_nest(root, p) && p.len() >= root.len())
+                };
+                let here = s.parent.is_none() && s.workspace.as_ref().is_some_and(holds);
+                if !bound && !here {
+                    continue;
+                }
+                let rank = (bound, live, s.created_ms, s.id.clone());
+                if best.as_ref().is_none_or(|(b, _)| rank > *b) {
+                    let found = json!({
+                        "repo": name,
+                        "session": s.id,
+                        "workspace": s.workspace,
+                        "active": live,
+                        "continued_by": s.continued_by,
+                        "by": if bound { "harness" } else { "path" },
+                    });
+                    best = Some((rank, found));
+                }
+            }
+        }
+        Ok(best.map(|(_, found)| found).unwrap_or_else(|| json!({})))
+    }
+
     fn hook_event(&self, req: &Request, ev: HookEvent) -> Hr {
         let mut guard = self.lock();
         let now = self.now();
@@ -3576,13 +3711,8 @@ impl Service {
             return fail("invalid", "workspace must be an absolute path");
         }
         let policy = r.policy().or_fail()?;
-        let scratch = r
-            .chain
-            .state
-            .sessions
-            .get(&session)
-            .map(|s| s.scope.scratch.clone())
-            .unwrap_or_default();
+        let held = r.chain.state.sessions.get(&session);
+        let scratch = held.map(|s| s.scope.scratch.clone()).unwrap_or_default();
         let (events, verdict) = hooks::translate(&ev, &policy, &scratch);
         // Heard, and for a tool of `lonca mcp` kept for its call (#190). A
         // refused call never comes, so only an allowed one waits.
@@ -3631,8 +3761,20 @@ impl Service {
     fn hook_input(&self, req: &Request, h: HookInput) -> Hr {
         let profile = {
             let mut guard = self.lock();
-            let (repo, _) = Self::agent(&guard, req, self.now())?;
-            let policy = Self::repo(&mut guard, &repo)?.policy().or_fail()?;
+            let (repo, actor) = Self::agent(&guard, req, self.now())?;
+            let r = Self::repo(&mut guard, &repo)?;
+            // Where the session works is the log's word when it has one:
+            // the hook found its own through a file the agent can write.
+            let session = actor.session().and_then(|s| r.chain.state.sessions.get(s));
+            let logged = session.and_then(|s| s.workspace.as_deref());
+            let theirs = h.real.as_deref().unwrap_or(&h.workspace);
+            if logged.is_some_and(|l| l != theirs) {
+                return fail(
+                    "invalid",
+                    format!("{theirs} is not the workspace this session was started in"),
+                );
+            }
+            let policy = r.policy().or_fail()?;
             policy.config.harness(&h.harness).cloned()
         };
         let Some(profile) = profile else {
@@ -3971,6 +4113,20 @@ impl Service {
                 allow = false;
                 continue;
             };
+            // Past its rate a connection is refused unrecorded: nothing
+            // goes through that the log does not have.
+            let rate = policy.config.sessions.ops_per_minute as u64;
+            let bucket = book.recorded.entry(key.clone());
+            let bucket = bucket.or_insert_with(|| Bucket::full(rate, now));
+            if bucket.take(rate, now).is_err() {
+                Counters::add(&self.counters.rate_limited);
+                allow = false;
+                reason.get_or_insert(format!(
+                    "this session had {rate} connections recorded in a minute \
+                     (sessions.ops_per_minute); try again shortly"
+                ));
+                continue;
+            }
             let cfg = &policy.config.observation;
             let (passes, external) = host_verdict(cfg, host);
             let refused = if !cfg.allow_ports.contains(&port) {

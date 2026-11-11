@@ -70,7 +70,9 @@ wins over an escalation, and an escalation over an allow.
 
 **Principal.** `Lonca::Human::"<name>"` for an enrolled human,
 `Lonca::Agent::"<agent>"` for an agent, named as at `lonca session start
---agent`. There are no groups and no attributes on them: `principal in`
+--agent`. A child session (`cap.attenuate`) has its parent's name, so a
+rule on a name holds for every session made from that agent's. There are
+no groups and no attributes on them: `principal in`
 matches nothing, so list names (`principal == Lonca::Agent::"claude"`) or
 use the type (`principal is Lonca::Agent`).
 

@@ -287,6 +287,7 @@ fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
         expires_ms: now + 3_600_000,
         continues: None,
         harness: Some("gemini".into()),
+        workspace: None,
     };
     // Refused roots: relative, with `..`, a trailing slash, too many.
     for bad in ["scratch", "/tmp/../x", "/tmp/x/", "/", "/tmp/./x"] {
@@ -382,7 +383,8 @@ fn scratch_roots_take_an_agents_notes_outside_the_workspace() {
 
     // A child may keep a root or drop it, not add one.
     let expires = e.now() + 60_000;
-    let child = |roots: Vec<String>| json!({"agent": "child", "scope": scope(roots), "expires_ms": expires});
+    let child =
+        |roots: Vec<String>| json!({"agent": "bot", "scope": scope(roots), "expires_ms": expires});
     let r = e.ok(
         "cap.attenuate",
         None,
@@ -579,6 +581,28 @@ fn trees_are_fetched_in_pages() {
     let err = call("blobs", json!({"commit": trunk, "paths": ["big.bin"]})).unwrap_err();
     assert_eq!(err.0, "too_large", "{err:?}");
     assert!(err.1.contains("big.bin is 3000 bytes"), "{err:?}");
+    // `tree` with contents is a page too: the whole commit does not fit,
+    // and it says where to go; without contents it has every file, and
+    // with contents the files that fit, to the byte.
+    let all = json!({"commit": trunk, "with_content": true});
+    let err = call("tree", all).unwrap_err();
+    assert_eq!(err.0, "too_large", "{err:?}");
+    assert!(err.1.contains("page them with blobs"), "{err:?}");
+    let listed = call("tree", json!({"commit": trunk, "with_content": false})).unwrap();
+    assert!(listed.as_array().unwrap().len() >= 4, "{listed}");
+    let some = json!({"commit": trunk, "with_content": true, "paths": ["a.txt", "src/lib.rs"]});
+    let some = call("tree", some).unwrap();
+    assert!(
+        some.as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["content_b64"].is_string()),
+        "{some}"
+    );
+    let edge = json!({"commit": trunk, "with_content": true, "paths": ["edge.bin"]});
+    assert_eq!(call("tree", edge).unwrap()[0]["size"], 2304);
+    let over = json!({"commit": trunk, "with_content": true, "paths": ["edge.bin", "a.txt"]});
+    assert_eq!(call("tree", over).unwrap_err().0, "too_large");
     let ok = call(
         "blobs",
         json!({"commit": trunk, "paths": ["a.txt", "src/lib.rs"]}),
@@ -709,6 +733,60 @@ fn trees_are_fetched_in_pages() {
     .unwrap();
     assert_eq!(prep["tree_bytes"], 2304);
     assert_eq!(prep["warnings"], json!([]), "{prep}");
+}
+
+/// A path is a path to git too: a file whose name is pathspec magic
+/// (`:!src/lib.rs`, "everything but") or a glob (`src/*`) takes no other
+/// file out of the reviewer's diff and adds none to its own.
+#[test]
+fn a_diff_takes_every_path_literally() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let base = e.trunk();
+    let token = e.session("s1", &["**"]);
+    e.bind(&token);
+    let magic = [":!src/lib.rs", ":(exclude)src/lib.rs", "src/*"];
+    for path in magic.iter().chain(&["src/lib.rs"]) {
+        e.wrote(&token, path);
+    }
+    e.lease(&token, "src/lib.rs#charge");
+    for path in magic {
+        e.lease(&token, &format!("{path}#<file>"));
+    }
+    let new = LIB.replacen("    a\n", "    a * 2\n", 1);
+    let mut files = vec![file("src/lib.rs", &new)];
+    files.extend(magic.iter().map(|p| file(p, "one\n")));
+    let r = e.propose(&token, &base, files, &["src/lib.rs#charge"]);
+    assert_ne!(r["decision"]["outcome"], "deny", "{r}");
+
+    let d = e.ok(
+        "change.diff",
+        Some("demo"),
+        None,
+        json!({"change": r["change"]}),
+    );
+    let diff = d["diff"].as_str().unwrap();
+    assert!(diff.contains("+    a * 2"), "{diff}");
+    let files = d["files"].as_array().unwrap();
+    assert_eq!(files.len(), 4, "{d}");
+    for f in files {
+        let (added, removed) = if f["path"] == "src/lib.rs" {
+            (1, 1)
+        } else {
+            (1, 0)
+        };
+        assert_eq!(
+            (f["added"].as_u64(), f["removed"].as_u64()),
+            (Some(added), Some(removed)),
+            "{f}"
+        );
+        assert!(
+            diff.contains(&format!("b/{}", f["path"].as_str().unwrap())),
+            "{diff}"
+        );
+    }
 }
 
 /// The diff and the evidence of a change come from the daemon: files
@@ -1616,7 +1694,7 @@ fn an_expired_session_can_not_beat() {
 fn a_continuation_replaces_the_token_of_the_session_it_ends() {
     let mut e = Env::new();
     e.init(None);
-    let a = e.session("a", &["src/**"]);
+    let a = e.session_in("a", &["src/**"], "/ws/a");
     let r = e.continue_session("b", "a", &["src/**"]);
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     let b = r["token"].as_str().unwrap().to_string();

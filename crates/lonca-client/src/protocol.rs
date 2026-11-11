@@ -408,6 +408,10 @@ pub struct HookInput {
     pub input: Value,
     /// Absolute path of the workspace root the hook resolved.
     pub workspace: String,
+    /// That root with its links resolved, as a `session.start` names a
+    /// workspace: the daemon holds it against the log's.
+    #[serde(default)]
+    pub real: Option<String>,
 }
 
 /// One file a workspace differs in from its base, as it would be in a tree.
@@ -448,6 +452,23 @@ pub struct HookBind {
     /// Workspace root; lets the network proxy attribute connections.
     #[serde(default)]
     pub workspace: Option<String>,
+}
+
+/// Asks where the log places a session. Needs no token: it is the question
+/// of a hook, or of a human's command, that found no workspace file it can
+/// trust, and the answer is the log's.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SessionWhere {
+    /// An absolute, normalized path: the session whose workspace it is, or
+    /// holds it.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// A hook's harness and the short strings at the top of its input: the
+    /// session that harness's session is bound to.
+    #[serde(default)]
+    pub harness: Option<String>,
+    #[serde(default)]
+    pub fields: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

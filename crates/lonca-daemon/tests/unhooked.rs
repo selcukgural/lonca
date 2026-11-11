@@ -52,7 +52,9 @@ fn repo() -> (Env, GitId, String) {
     e.human_change(vec![file("src/lib.rs", LIB)], "seed");
     e.svc.process_all();
     let base = e.trunk();
-    let token = e.session("s1", &["src/**"]);
+    // Started where its hook events say it works.
+    let ws = e.root.join("ws").to_string_lossy().into_owned();
+    let token = e.session_in("s1", &["src/**"], &ws);
     e.bind(&token);
     e.advance(START_GRACE_MS);
     (e, base, token)
@@ -252,7 +254,7 @@ fn a_child_inherits_the_mark_and_a_continuation_the_taint() {
         "cap.attenuate",
         None,
         Some(&t),
-        json!({"agent": "sub", "scope": scope, "expires_ms": expires, "leases": []}),
+        json!({"agent": "bot-s1", "scope": scope, "expires_ms": expires, "leases": []}),
     );
     let id = child["session"].as_str().unwrap().to_string();
     let c = session_of(&mut e, &id);

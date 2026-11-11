@@ -176,9 +176,102 @@ fn a_session_that_bound_low_stays_low() {
 fn a_continuation_binds_under_the_harness_it_took_over() {
     let mut e = Env::new();
     e.init(None);
-    let old = e.session("s1", &["src/**"]);
+    let old = e.session_in("s1", &["src/**"], "/ws/s1");
     e.bind(&old);
     let r = e.continue_session("s2", "s1", &["src/**"]);
     let t = r["token"].as_str().unwrap().to_string();
+    // The level is not handed on: this session's own harness reports.
+    let st = e.ok("status", Some("demo"), None, json!({}));
+    let all = st["sessions"].as_array().unwrap();
+    let s2 = all.iter().find(|s| s["id"] == "s2").unwrap();
+    assert_eq!(s2["level"], "unobserved", "{s2}");
+    assert_eq!(s2["workspace"], "/ws/s1");
     assert_eq!(bind(&mut e, &t, "claude-code")["level"], "hooks_sandbox");
+}
+
+/// `session.where`: the log's answer to "which session is here", asked
+/// without a token and without reading the directory.
+#[test]
+fn the_log_says_which_session_a_directory_or_a_harness_session_belongs_to() {
+    let mut e = Env::new();
+    e.init(None);
+    let asked = |e: &mut Env, p: Value| e.anon("session.where", None, None, p).unwrap();
+    assert_eq!(asked(&mut e, json!({"path": "/ws/s1"})), json!({}));
+
+    let t = e.session_in("s1", &["src/**"], "/ws/s1");
+    e.session("plain", &["src/**"]);
+    let r = asked(&mut e, json!({"path": "/ws/s1/src/deep"}));
+    assert_eq!(
+        (&r["session"], &r["repo"], &r["workspace"], &r["by"]),
+        (
+            &json!("s1"),
+            &json!("demo"),
+            &json!("/ws/s1"),
+            &json!("path")
+        ),
+        "{r}"
+    );
+    assert_eq!(r["active"], true);
+    // Around it, beside it, and what is no path: nothing.
+    for path in ["/ws", "/ws/s10", "/", "ws/s1", "/ws/s1/../s1"] {
+        assert_eq!(asked(&mut e, json!({"path": path})), json!({}), "{path}");
+    }
+
+    // By the harness's own session, once a bind has named it, wherever
+    // the harness stands; an empty name is nobody's.
+    let fields = |id: &str| json!({"path": "/tmp", "harness": "claude-code", "fields": {"session_id": id, "cwd": "/tmp"}});
+    assert_eq!(asked(&mut e, fields("h1")), json!({}));
+    e.bind(&t);
+    let r = asked(&mut e, fields("h1"));
+    assert_eq!(
+        (&r["session"], &r["by"]),
+        (&json!("s1"), &json!("harness")),
+        "{r}"
+    );
+    assert_eq!(asked(&mut e, fields("h2")), json!({}));
+    assert_eq!(asked(&mut e, fields("")), json!({}));
+    let other = json!({"harness": "nobody", "fields": {"session_id": "h1"}});
+    assert_eq!(asked(&mut e, other), json!({}));
+
+    // The session a hook's request comes from works where the log says.
+    let input = json!({"hook_event_name": "PreToolUse", "session_id": "h1", "cwd": "/ws/s1",
+                       "tool_name": "Read", "tool_input": {"file_path": "/ws/s1/src/lib.rs"}});
+    let at = |ws: &str, real: Value| json!({"harness": "claude-code", "input": input, "workspace": ws, "real": real});
+    e.ok("hook.input", None, Some(&t), at("/ws/s1", json!("/ws/s1")));
+    e.ok(
+        "hook.input",
+        None,
+        Some(&t),
+        at("/link/s1", json!("/ws/s1")),
+    );
+    for p in [
+        at("/ws/s1/sub", json!("/ws/s1/sub")),
+        at("/ws/other", Value::Null),
+    ] {
+        let (code, _) = e.anon("hook.input", None, Some(&t), p).unwrap_err();
+        assert_eq!(code, "invalid");
+    }
+
+    // Ended, it is still the directory's last session, and no longer live;
+    // its continuation is found first.
+    e.ok("session.end", None, Some(&t), json!({}));
+    let r = asked(&mut e, json!({"path": "/ws/s1"}));
+    assert_eq!(
+        (&r["session"], &r["active"]),
+        (&json!("s1"), &json!(false)),
+        "{r}"
+    );
+    assert_eq!(
+        asked(&mut e, fields("h1")),
+        json!({}),
+        "a bind of a session that is over"
+    );
+    let c = e.continue_session("s2", "s1", &["src/**"]);
+    assert_eq!(c["decision"]["outcome"], "allow", "{c}");
+    let r = asked(&mut e, json!({"path": "/ws/s1"}));
+    assert_eq!(
+        (&r["session"], &r["active"]),
+        (&json!("s2"), &json!(true)),
+        "{r}"
+    );
 }

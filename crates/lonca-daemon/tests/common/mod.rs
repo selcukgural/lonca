@@ -268,8 +268,27 @@ impl Env {
             session: old.into(),
             widen: false,
         });
-        let op = self.session_op(id, paths, continues);
+        let mut op = self.session_op(id, paths, continues);
+        // Where `old` was started, or the directory it is given now: a
+        // session of these tests starts without one.
+        let st = self.ok("status", Some("demo"), None, json!({}));
+        let all = st["sessions"].as_array().cloned().unwrap_or_default();
+        let held = all.iter().find(|s| s["id"] == old);
+        let held = held.and_then(|s| s["workspace"].as_str().map(str::to_string));
+        if let Op::SessionStart { workspace, .. } = &mut op {
+            *workspace = held;
+        }
         self.human(op)
+    }
+
+    /// A session started in a directory of its own, as the CLI starts one.
+    pub fn session_in(&mut self, id: &str, paths: &[&str], dir: &str) -> String {
+        let mut op = self.session_op(id, paths, None);
+        if let Op::SessionStart { workspace, .. } = &mut op {
+            *workspace = Some(dir.to_string());
+        }
+        let r = self.human(op);
+        r["token"].as_str().expect("token").to_string()
     }
 
     pub fn session_op(&self, id: &str, paths: &[&str], continues: Option<Continuation>) -> Op {
@@ -295,6 +314,7 @@ impl Env {
             expires_ms: self.now() + 3_600_000,
             continues,
             harness: Some("claude-code".into()),
+            workspace: None,
         }
     }
 

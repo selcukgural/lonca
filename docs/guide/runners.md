@@ -90,7 +90,9 @@ reads it.
 
 A session may send the log `sessions.ops_per_minute` operations a minute (600
 by default, shared with the sessions made from it). Past that a request is
-`rate_limited`, nothing is logged, and the message says when to try again. A
+`rate_limited`, nothing is logged, and the message says when to try again.
+One operation's JSON may take 64 KiB; a longer one is `invalid` and not
+logged, so keep intents short and lists to what the change needs. A
 connection that stays quiet is closed with a `closed` line; `docs/protocol.md`,
 "Wire format", has what a client does then.
 
@@ -114,10 +116,14 @@ lonca session start --repo demo --agent claude --paths 'src/**' \
   it reads the new one.
 - A session that is still alive ends in the same step, so one workspace
   never has two live sessions. A session can be continued once.
-- **Taint carries over**, with the observation level and what was seen
-  written, because the workspace may hold what the tainted session
-  wrote. A fresh directory is the only clean start. `isolated` is the one
-  level that does not carry over, and a continued session can not get it.
+- **Taint carries over**, with what was seen written, because the
+  workspace may hold what the tainted session wrote. A fresh directory is
+  the only clean start. The observation level does not: the new session is
+  `unobserved` until its own harness reports, and a continued session can
+  not become `isolated`.
+- **The session continued is the one started in that directory**, as the
+  log has it. A directory that was moved, or a session started before
+  Lonca 0.2.4, can not be continued.
 - **Leases do not**, and the worker leases again; `lease_needed` says
   what. Items pinned to a change in flight stay pinned to it and pass to
   the new session, so the worker can sync and propose on top of it, and
@@ -235,7 +241,10 @@ max_bytes = 1073741824
 A local model on port 11434 needs that port in `allow_ports` too. Cloud metadata
 addresses (`169.254.169.254`, `fd00:ec2::254` and the like) are never reachable,
 `allow_private_network` or not. Every attempt is in the log, refused or not, with
-the port when it is not 80 or 443 (`"host": "localhost:11434"`). When the daemon
+the port when it is not 80 or 443 (`"host": "localhost:11434"`). The log takes
+`sessions.ops_per_minute` of them a minute for a session, counted apart from
+the session's own operations; past that a connection is refused and not
+recorded, until the minute has room again. When the daemon
 can not tell which process opened a connection (`lsof` gave no answer), every
 session the proxy serves answers for it; `lonca status` says how often that
 happened since the daemon started (`PROXY …`, `proxy_unattributed` in `--json`).

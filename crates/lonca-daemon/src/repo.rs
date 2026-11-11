@@ -8,7 +8,7 @@ use base64::Engine;
 use lonca_core::changeid::CHANGE_ID_HEADER;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
-use lonca_core::ops::Op;
+use lonca_core::ops::{Actor, HumanSignature, Op};
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileEntry, FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::chain::{Chain, Submission, replay_checked};
@@ -25,6 +25,12 @@ pub const HUMAN_HEADER: &str = "lonca-human";
 
 /// Total size of one proposal.
 pub const MAX_PROPOSAL_BYTES: usize = 64 * 1024 * 1024;
+
+/// The most an entry's operation and human signature take, as JSON. The log
+/// keeps every entry for good, the refused ones too, so what a caller can
+/// put in one is bounded before it is decided and signed. The lists the
+/// policy counts (a lease's items, a change's files) fit many times over.
+pub const MAX_OP_BYTES: usize = 64 * 1024;
 
 pub struct RepoHandle {
     pub name: String,
@@ -135,9 +141,44 @@ impl RepoHandle {
         Ok(b)
     }
 
+    /// Refuses a submission past [`MAX_OP_BYTES`], before anything is
+    /// decided, signed or written. Only the results of the daemon's own
+    /// merges are let past it: their length is the repository's, and a
+    /// refusal there would leave the queue with a change it can not finish.
+    fn fits(sub: &Submission) -> Result<()> {
+        Self::op_fits(&sub.actor, &sub.op, sub.human.as_ref())
+    }
+
+    /// [`Self::fits`] for the parts of a submission, for a caller that
+    /// writes to the store before it submits: asked first, a refusal leaves
+    /// nothing behind.
+    pub fn op_fits(actor: &Actor, op: &Op, human: Option<&HumanSignature>) -> Result<()> {
+        let merged = matches!(
+            op,
+            Op::ChangeIntegrate { .. } | Op::ChangeIntegrateBatch { .. }
+        );
+        if merged && *actor == Actor::Daemon {
+            return Ok(());
+        }
+        let signature = match human {
+            Some(h) => serde_json::to_vec(h)?.len(),
+            None => 0,
+        };
+        let bytes = serde_json::to_vec(op)?.len() + signature;
+        if bytes > MAX_OP_BYTES {
+            return Err(Error::Invalid(format!(
+                "{} is {bytes} bytes; an entry of the log holds {MAX_OP_BYTES}. \
+                 Shorten its text and lists, or split it",
+                op.kind().as_str()
+            )));
+        }
+        Ok(())
+    }
+
     /// Decides without logging (used to refuse a bad genesis without
     /// leaving a denied genesis entry behind).
     pub fn dry_run(&mut self, sub: Submission, wall_ms: i64) -> Result<SignedOp> {
+        Self::fits(&sub)?;
         let policy = self.policy()?;
         let t = self.chain.entry_time(wall_ms);
         Ok(self.chain.prepare(sub, t, &policy))
@@ -145,6 +186,7 @@ impl RepoHandle {
 
     /// Decide, sign, persist, apply.
     pub fn submit(&mut self, sub: Submission, wall_ms: i64) -> Result<SignedOp> {
+        Self::fits(&sub)?;
         let policy = self.policy()?;
         let t = self.chain.entry_time(wall_ms);
         let op = self.chain.prepare(sub, t, &policy);
@@ -224,8 +266,37 @@ impl RepoHandle {
         time_ms: i64,
         max_file_bytes: u64,
     ) -> Result<GitId> {
-        let base_info = self.store.read_commit(base)?;
-        let mut files = self.store.read_tree(&base_info.tree)?;
+        Self::build_change_commit_in(
+            &self.store,
+            base,
+            changes,
+            change,
+            author_name,
+            author_email,
+            attribution,
+            intent,
+            time_ms,
+            max_file_bytes,
+        )
+    }
+
+    /// [`Self::build_change_commit`] with the store alone: a preview builds
+    /// its commit while others use the repository.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_change_commit_in(
+        store: &Store,
+        base: &GitId,
+        changes: &[FileChange],
+        change: ChangeId,
+        author_name: &str,
+        author_email: &str,
+        attribution: (&str, &str),
+        intent: &str,
+        time_ms: i64,
+        max_file_bytes: u64,
+    ) -> Result<GitId> {
+        let base_info = store.read_commit(base)?;
+        let mut files = store.read_tree(&base_info.tree)?;
         let mut total = 0usize;
         let mut seen = std::collections::BTreeSet::new();
         for c in changes {
@@ -272,18 +343,18 @@ impl RepoHandle {
                         c.path.clone(),
                         FileEntry {
                             mode,
-                            blob: self.store.write_blob(&bytes)?,
+                            blob: store.write_blob(&bytes)?,
                         },
                     );
                 }
             }
         }
-        let tree = self.store.write_tree(&files)?;
+        let tree = store.write_tree(&files)?;
         if tree == base_info.tree {
             return Err(Error::Invalid("the change is empty".into()));
         }
         let message = commit_message(intent, change);
-        self.store.write_commit(&CommitSpec {
+        store.write_commit(&CommitSpec {
             tree,
             parents: vec![base.clone()],
             author_name: author_name.into(),

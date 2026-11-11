@@ -106,8 +106,8 @@ impl Workspace {
     }
 
     /// The workspace at `dir` itself, for a new session of `repo` to go on
-    /// with. Returns it with the session it was left by.
-    pub fn to_continue(dir: &Path, repo: &str) -> Result<(Workspace, String)> {
+    /// with. Which session left it is not read here: the log says.
+    pub fn to_continue(dir: &Path, repo: &str) -> Result<Workspace> {
         let ws = Workspace::find(dir)
             .filter(|ws| ws.root == dir)
             .with_context(|| format!("{} is not a Lonca workspace", dir.display()))?;
@@ -118,13 +118,7 @@ impl Workspace {
                 ws.meta.repo
             );
         }
-        let Some(session) = ws.meta.session.clone() else {
-            bail!(
-                "{} is a human workspace: no session to continue",
-                dir.display()
-            );
-        };
-        Ok((ws, session))
+        Ok(ws)
     }
 
     pub fn token(&self) -> Result<String> {

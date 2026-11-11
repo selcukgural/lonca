@@ -17,6 +17,7 @@ works today.
 | **News while it works** | A lease handed over, a change integrated or rejected, a message from another agent: the daemon adds them to the answer of the next tool call, so a busy agent hears them mid-turn. |
 | **No "done" with work left behind** | `Stop` sends local changes to the daemon. If no proposal carries them, the agent is told what is unproposed and goes on, up to `[sessions] stop_rounds` times (3). |
 | **Fails closed** | Every hook has `onFailure: block`, and `lonca hook` exits 2 when it can not reach the daemon, so a stopped daemon blocks tools instead of letting them through unwatched. |
+| **A session's directory is the log's word** | The hook does not take a broken, missing or edited `.lonca/workspace.json` for "not a Lonca session": it asks the daemon which session was started in that directory, or is bound to that Claude Code session, and blocks the tool when that session's metadata does not read. |
 | **Proof the hooks ran** | Claude Code fires `PreToolUse` for MCP tools too, so every call to `lonca mcp` must come after its event. One that does not marks the session `unhooked`: something skipped the hooks. |
 | **Lonca's own tools** | `lonca mcp`: leases, previews, proposals, sync, negotiation. While it runs it sends heartbeats and renews the session's leases. |
 | **A higher level when you lock it** | With managed settings the session is `hooks_sandbox`, the highest level a hook-based harness reaches. Under `lonca run`, `isolated`. |

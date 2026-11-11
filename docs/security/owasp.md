@@ -25,11 +25,11 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 
 | Item | Status | In place | Open |
 |---|---|---|---|
-| A01 Broken Access Control (incl. SSRF) | met | every daemon method names its credential, deny by default (`METHODS`, `crates/lonca-daemon/src/service.rs`); capabilities only narrow (`cap.attenuate`, `scope_within` in `decide.rs`); peer uid allowlist (`server.rs`); proxy: private ranges, metadata always, port allowlist, per-host rules (`crates/lonca-net`, #64); local-path remotes kept out of the daemon home (#57) | — |
+| A01 Broken Access Control (incl. SSRF) | met | every daemon method names its credential, deny by default (`METHODS`, `crates/lonca-daemon/src/service.rs`); capabilities only narrow and a child session keeps its parent's agent name (`cap.attenuate`, `scope_within` in `decide.rs`); peer uid allowlist (`server.rs`); proxy: private ranges, metadata always, port allowlist, per-host rules (`crates/lonca-net`, #64); local-path remotes kept out of the daemon home (#57) | — |
 | A02 Security Misconfiguration | met | hardened profile and installers, root-owned hook and managed-settings checks, no silent unsandboxed verification (#54); key and home ownership checks (#62); `lonca policy check` tries a policy against the log before it is set, and a guide to writing one (#13) | — |
 | A03 Software Supply Chain Failures | met | cargo-deny (crates.io only, advisories, licenses), actions pinned by commit and allowlisted, Dependabot with cooldown, pinned toolchain, zizmor, SBOM and build provenance attestation of a release (#7), Scorecard (#60) | — |
 | A04 Cryptographic Failures | met | Ed25519 `verify_strict`, Secure Enclave P-256, SHA-256 chain, tokens stored as hashes, keys private on load and wiped in memory (`docs/crypto.md`, #62); human and daemon key rotation and recovery (#4, #5); FIDO security keys (`sk-p256`, `sk-ed25519`) verified as OpenSSH does, a signature without a touch refused (#17) | — |
-| A05 Injection | met | git: `--`, scheme allowlist, clean environment, no hooks, `GIT_ALLOW_PROTOCOL` (#57); strict repository paths (`crates/lonca-core/src/paths.rs`); Cedar context built from typed values; advisor input framed as data (#63); every parser of untrusted input fuzzed, found crashes kept as regressions (#15, `docs/fuzzing.md`) | — |
+| A05 Injection | met | git: `--`, scheme allowlist, clean environment, no hooks, `GIT_ALLOW_PROTOCOL`, paths taken literally (`GIT_LITERAL_PATHSPECS`) (#57); strict repository paths (`crates/lonca-core/src/paths.rs`); Cedar context built from typed values; advisor input framed as data (#63); every parser of untrusted input fuzzed, found crashes kept as regressions (#15, `docs/fuzzing.md`) | — |
 | A06 Insecure Design | met | pure `decide()`, single writer, append-only log replayed by the auditor; socket, request and rate limits (#50); verifier process-tree kill, rlimits, quota (#59); the threat model ([threat-model.md](threat-model.md), #14) | — |
 | A07 Authentication Failures | met | random 32-byte tokens, presence signatures with nonce and age checks (`human.rs`), clients verify the daemon (#52), token expiry, sweep and rotation (#53) | — |
 | A08 Software or Data Integrity Failures | met | hash-chained signed log, every ref held to it by `reconcile()` and the auditor (#58), anchors in pushed remotes | accepted: the auditor shares `decide()` with the daemon (`docs/decisions.md`, "The auditor shares the decision code"; #18 closed) |
@@ -95,13 +95,13 @@ requirement in it met, or the exception named.
 |---|---|---|
 | V1.1 Encoding and sanitization architecture | met | protocol is JSON lines with typed shapes (`docs/protocol.md`); canonical JSON for the log (`canonical.rs`) |
 | V1.2 Injection prevention | met | git arguments behind `--`, validated remotes and branches (`service.rs` `check_remote`, `check_branch`), clean git environment (`gitcmd.rs`); Cedar values typed |
-| V1.3 Sanitization | met | advisor output (`advise.rs` `printable`, `clean`); event text (`security.rs` `clean`); paths refuse control and bidi characters (`paths.rs`) |
+| V1.3 Sanitization | met | everything the CLI and the auditor print for a person has its control and bidi characters written out, at the one place that writes (`lonca_core::terminal::printable`, `crates/lonca-cli/src/out.rs`); advisor output (`advise.rs` `printable`, `clean`); event text (`security.rs` `clean`); paths refuse bidi characters (`paths.rs`) |
 | V1.4 Memory, string and unmanaged code | met | Rust; unsafe code refused outside named FFI modules with SAFETY notes (#61) |
 | V1.5 Safe deserialization | met | serde into fixed types, `deny_unknown_fields` on policy, unknown operation types refused; line and size limits before parsing (#50) |
 | V2.1 Validation documentation | met | `docs/protocol.md` names every field and limit |
 | V2.2 Input validation | met | `decide()` checks every operation's values (`decide.rs`), extreme numbers denied (#61) |
 | V2.3 Business logic security | met | single writer orders every operation; leases, quotas and approvals in `decide()`; the auditor replays them |
-| V2.4 Anti-automation | met | per-session rate limit, connection caps (#50), proxy budgets (#64), advisor budget (#63) |
+| V2.4 Anti-automation | met | per-session rate limit, connection caps (#50), proxy budgets (#64) and a rate on what the proxy records, a size limit on a log entry, advisor budget (#63) |
 | V4.1 Generic web service security | met | one Unix socket, authenticated methods, explicit errors (`docs/protocol.md`) |
 | V4.2 HTTP message structure | met | the proxy caps request heads at 16 KiB and parses only `CONNECT` and absolute `http://` (`crates/lonca-net`) |
 | V4.3, V4.4 GraphQL, WebSocket | n/a | none |

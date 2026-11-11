@@ -74,6 +74,11 @@ lonca advise kksuonzltktq --repo demo    # optional, see below
 - `diff` lists each file with the lines added and removed, then the unified
   diff between the change's base and its commit. Redacted files are named,
   not shown.
+- What an agent wrote is shown, never obeyed by your terminal: a control
+  character in an intent, a path or a file's line is written out
+  (`\u{1b}` for an escape, `\r` for a carriage return, `\u{202e}` for a
+  text direction override). An intent or a line with these in it is worth
+  a second look. `--json` has the text as it is, escaped as JSON.
 - `change` prints the record as JSON: the agent's **claim** and Lonca's
   **facts** (they match, or the proposal would have been denied), its status,
   `runs` (the checks the merge queue will run for it) and `checks` (named

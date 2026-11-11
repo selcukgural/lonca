@@ -20,7 +20,9 @@ use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileMap, GitId, Result, Store};
 use lonca_policy::chain::Submission;
 use lonca_policy::config::{Profile, UnparsedFiles, Verification};
-use lonca_policy::decide::{evidence_problems, level_for, quota_problems, valid_token};
+use lonca_policy::decide::{
+    evidence_problems, level_for, paths_nest, quota_problems, valid_scratch_root, valid_token,
+};
 use lonca_policy::events::{Event as SessionEvent, for_session, tell};
 use lonca_policy::harness::{Event, render, stop_message};
 use lonca_policy::human::{MAX_AGE_MS, MAX_SKEW_MS, check_fresh, verify_login};
@@ -379,6 +381,7 @@ pub const METHODS: &[(&str, Cred)] = &[
     ("human.login", Cred::Login),
     ("human.logout", Cred::Public),
     ("whoami", Cred::Any),
+    ("session.where", Cred::Public),
     ("repo.list", Cred::AnyHuman),
     ("repo.prepare_init", Cred::Bootstrap),
     ("repo.init", Cred::Bootstrap),
@@ -1359,6 +1362,7 @@ impl Service {
             "trunk.bundle" => self.trunk_bundle(&auth, params(p)?),
             "trunk.distance" => self.trunk_distance(&auth, params(p)?),
             "whoami" => self.whoami(&auth),
+            "session.where" => self.session_where(params(p)?),
             "human.prepare_change" => self.prepare_change(&auth, params(p)?),
             "human.prepare_policy" => self.prepare_policy(&auth, params(p)?),
             "human.prepare_import" => self.prepare_import(&auth, params(p)?),
@@ -1930,7 +1934,7 @@ impl Service {
             .map(|x| {
                 json!({
                     "id": x.id, "agent": x.agent, "task": x.task, "parent": x.parent, "level": x.level,
-                    "harness": x.harness,
+                    "harness": x.harness, "workspace": x.workspace,
                     "taint": x.taint, "active": s.session_active(&x.id, now), "expires_ms": x.expires_ms,
                     "last_seen_ms": x.heartbeat.map(|h| h.seen_ms),
                     "verification_ms": s.session_spent(&x.id),
@@ -3566,6 +3570,56 @@ impl Service {
         Ok(out)
     }
 
+    /// Where the log places a session: the live one a harness's session is
+    /// bound to, else the one whose workspace holds a path (a live one
+    /// first, then the last started). Empty when the log knows none. The
+    /// workspace's own files are not asked: an agent can write them.
+    fn session_where(&self, w: SessionWhere) -> Hr {
+        let now = self.now();
+        let mut guard = self.lock();
+        let path = w.path.as_deref().filter(|p| valid_scratch_root(p));
+        let names: Vec<String> = guard.repos.keys().cloned().collect();
+        // (by the harness, live, started, session): the greatest wins.
+        let mut best: Option<((bool, bool, i64, String), Value)> = None;
+        for name in names {
+            let Ok(r) = Self::repo(&mut guard, &name) else {
+                continue;
+            };
+            let field = w.harness.as_deref().and_then(|h| {
+                let policy = r.policy().ok()?;
+                Some(policy.config.harness(h)?.fields.session.clone())
+            });
+            let theirs = field
+                .and_then(|f| w.fields.get(&f))
+                .filter(|s| !s.is_empty());
+            let state = &r.chain.state;
+            for s in state.sessions.values() {
+                let live = state.session_active(&s.id, now);
+                let bound = live && theirs.is_some() && s.harness_session.as_ref() == theirs;
+                let holds = |root: &String| {
+                    path.is_some_and(|p| paths_nest(root, p) && p.len() >= root.len())
+                };
+                let here = s.parent.is_none() && s.workspace.as_ref().is_some_and(holds);
+                if !bound && !here {
+                    continue;
+                }
+                let rank = (bound, live, s.created_ms, s.id.clone());
+                if best.as_ref().is_none_or(|(b, _)| rank > *b) {
+                    let found = json!({
+                        "repo": name,
+                        "session": s.id,
+                        "workspace": s.workspace,
+                        "active": live,
+                        "continued_by": s.continued_by,
+                        "by": if bound { "harness" } else { "path" },
+                    });
+                    best = Some((rank, found));
+                }
+            }
+        }
+        Ok(best.map(|(_, found)| found).unwrap_or_else(|| json!({})))
+    }
+
     fn hook_event(&self, req: &Request, ev: HookEvent) -> Hr {
         let mut guard = self.lock();
         let now = self.now();
@@ -3576,13 +3630,8 @@ impl Service {
             return fail("invalid", "workspace must be an absolute path");
         }
         let policy = r.policy().or_fail()?;
-        let scratch = r
-            .chain
-            .state
-            .sessions
-            .get(&session)
-            .map(|s| s.scope.scratch.clone())
-            .unwrap_or_default();
+        let held = r.chain.state.sessions.get(&session);
+        let scratch = held.map(|s| s.scope.scratch.clone()).unwrap_or_default();
         let (events, verdict) = hooks::translate(&ev, &policy, &scratch);
         // Heard, and for a tool of `lonca mcp` kept for its call (#190). A
         // refused call never comes, so only an allowed one waits.
@@ -3631,8 +3680,20 @@ impl Service {
     fn hook_input(&self, req: &Request, h: HookInput) -> Hr {
         let profile = {
             let mut guard = self.lock();
-            let (repo, _) = Self::agent(&guard, req, self.now())?;
-            let policy = Self::repo(&mut guard, &repo)?.policy().or_fail()?;
+            let (repo, actor) = Self::agent(&guard, req, self.now())?;
+            let r = Self::repo(&mut guard, &repo)?;
+            // Where the session works is the log's word when it has one:
+            // the hook found its own through a file the agent can write.
+            let session = actor.session().and_then(|s| r.chain.state.sessions.get(s));
+            let logged = session.and_then(|s| s.workspace.as_deref());
+            let theirs = h.real.as_deref().unwrap_or(&h.workspace);
+            if logged.is_some_and(|l| l != theirs) {
+                return fail(
+                    "invalid",
+                    format!("{theirs} is not the workspace this session was started in"),
+                );
+            }
+            let policy = r.policy().or_fail()?;
             policy.config.harness(&h.harness).cloned()
         };
         let Some(profile) = profile else {

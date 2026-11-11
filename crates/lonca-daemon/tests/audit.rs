@@ -306,6 +306,7 @@ fn auditor_flag_freezes_the_repository() {
             expires_ms: e.now() + 60_000,
             continues: None,
             harness: None,
+            workspace: None,
         };
         e.sign(&op)
     });

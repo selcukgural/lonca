@@ -3584,7 +3584,9 @@ tries never reaches a decision, and nothing told anyone of a freeze.
   `integrity_alarm` (the auditor's freeze flag), `taint` (the daemon tainted
   a session), `sudo_without_password` (a bind whose hook reports it),
   `token_rotated` (`session.rotate`, #53), `unhooked` (a call to `lonca mcp`
-  with no hook event before it: the tool, #190). Entries the daemon appends
+  with no hook event before it: the tool, #190), `misnamed_tunnel` (a
+  tunnel through the proxy cut for the server name its client asked for:
+  both names; see "A tunnel is for the host it was asked for"). Entries the daemon appends
   (`freeze`, `import.unmediated`, `taint`, `unhooked`) are taken from the repository and
   written after the request, or by the worker within two seconds.
 - **Kept**: past 8 MiB the file moves to `security.log.1`, replacing the one
@@ -4501,6 +4503,33 @@ being refused.
   session (the policy context, `status`, a reviewer's `pending`) then sees
   the same thing, and no check can forget to walk.
 
+## The macOS sandbox reads programs, not what services keep
+
+The Seatbelt profile opened `/usr` and `/opt` whole: that is where the
+programs are, Homebrew's included. Homebrew also keeps the data
+directories of local databases under `var` and the configuration of
+services under `etc`, passwords among them, readable by the user and so by
+an agent's code in a sandbox that was meant to see none of the user's data.
+
+- **`/opt/homebrew/var`, `/opt/homebrew/etc`, `/usr/local/var` and
+  `/usr/local/etc` are closed**, after the system's trees open, except the
+  certificate stores a TLS library reads (`etc/openssl*`,
+  `etc/ca-certificates`). A `read` of the policy comes later in the
+  profile and opens what it names. A list of what to open under `/opt`
+  instead (`bin`, `lib`, `Cellar`, …) would miss whatever a formula puts
+  elsewhere, and a build would fail for no reason a person could find.
+- **`trustd` only where there is a way out.** A sandbox with no network
+  has no certificate to judge; verification no longer may ask it. An
+  isolated session may: its TLS goes through the proxy, and the native
+  libraries verify with it. What `trustd` fetches on its own is a limit in
+  the threat model, unmeasured.
+- **Shared memory and semaphores stay open by any name.** Programs choose
+  the names (`multiprocessing`, test runners); a prefix per run can not be
+  given to them, and closing them breaks the suites the sandbox exists to
+  run. Written down as a limit of macOS; Linux has a `/dev/shm` per run.
+- **A test runs the real `sandbox-exec`** with the profile: nothing else
+  reads its regular expression.
+
 ## The auditor is told which log to expect
 
 `verify_chain` takes the daemon key from the first entry it is given, and a
@@ -4870,6 +4899,21 @@ the log said the allowed one.
   that starts later on a connection (`STARTTLS`) is not looked for. The
   client is not told why a tunnel ended: after `200` there is no place to
   say it.
+- **Encrypted hellos stay let through** (decided 2026-11-11). Refusing
+  every hello with the extension would close the inner name and take the
+  network from every browser in a sandbox; it was weighed and left.
+- **A cut tunnel is a security event** (decided 2026-11-11). The log has
+  the attempt under the host that was let through, which is what the
+  session asked the proxy for; that the client then asked the server for
+  another name was written nowhere. The proxy tells its gate
+  (`Gate::misnamed`, with the name, or none for a hello that can not be
+  read), and the daemon writes `misnamed_tunnel` to `security.log` for
+  every session the connection counts against: the host and port of the
+  tunnel and the first 128 characters of the name asked for. A session
+  can cause one per connection, and connections come at
+  `sessions.ops_per_minute`; they push out their own kind only. It
+  taints nothing and freezes nothing: the connection was already an
+  observation, and nothing of it reached the host.
 
 ## The hook that is checked is the hook that runs
 

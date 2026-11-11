@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### A session's directory is in the log
+
+`lonca session start` now records the workspace directory in the signed
+`session.start` entry (log format 30), and Lonca asks the log, not the
+directory's own `.lonca/workspace.json`, which session works where:
+
+- `lonca hook` no longer stands aside when that file is missing, unreadable
+  or names no session. It asks the daemon; in a live session's directory,
+  or under the harness session a live session is bound to, a tool call is
+  blocked until the workspace reads as that session's again.
+- `lonca session start --continue DIR` continues the session that was
+  started in `DIR`. Two sessions can not be started in one directory, or in
+  directories inside each other, while the first is live
+  (`workspace_in_use`).
+- A continued session starts at `unobserved` until its own harness has
+  reported; it used to keep its predecessor's level until then.
+- A human's `sync`, `diff` or `propose` in a directory the log gives to an
+  agent's session is refused.
+
+**Upgrading.** A session started with 0.2.3 or earlier has no directory in
+the log and can not be continued (`continue_other_workspace`): propose or
+copy what its workspace holds, and start a new session in a new directory.
+The daemon and `lonca hook` are upgraded together, as always; the new
+socket method is `session.where` (public).
+
 ### The reviewer's diff takes file names literally
 
 A file may have a name that git reads as a pattern, such as `src/*` or

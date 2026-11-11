@@ -5,7 +5,8 @@ use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
     FORMAT_AFFECTED, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_KEYED,
-    FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, SignedOp, verify_chain,
+    FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE, SignedOp,
+    verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -197,6 +198,23 @@ impl H {
     }
 
     fn start_op(&self, session: &str, paths: &[&str], continues: Option<Continuation>) -> Op {
+        // A session's own directory; a continuation's is its predecessor's.
+        let old = continues.as_ref().map(|c| c.session.as_str());
+        let held = old.and_then(|o| self.chain.state.sessions.get(o));
+        let workspace = match held {
+            Some(s) => s.workspace.clone(),
+            None => Some(format!("/ws/{}", old.unwrap_or(session))),
+        };
+        self.start_in(session, paths, continues, workspace)
+    }
+
+    fn start_in(
+        &self,
+        session: &str,
+        paths: &[&str],
+        continues: Option<Continuation>,
+        workspace: Option<String>,
+    ) -> Op {
         Op::SessionStart {
             session: session.into(),
             agent: format!("bot-{session}"),
@@ -221,6 +239,7 @@ impl H {
             expires_ms: self.now + 120 * MIN,
             continues,
             harness: Some("claude-code".into()),
+            workspace,
         }
     }
 
@@ -1918,6 +1937,7 @@ fn key_operations_work_in_a_frozen_repository() {
         expires_ms: h.now + 60 * MIN,
         continues: None,
         harness: None,
+        workspace: None,
     };
     assert!(denied_with(&h.human("ayse", start), "frozen:incident"));
     assert!(
@@ -3589,8 +3609,10 @@ fn a_continuation_inherits_taint_level_and_writes_and_starts_alive() {
     let s = &h.chain.state;
     let (old, new) = (&s.sessions["a"], &s.sessions["b"]);
     assert_eq!(new.taint.as_deref(), Some("read the web"));
-    assert_eq!(new.level, old.level);
-    assert_ne!(new.level, ObservationLevel::Unobserved);
+    // Not the level: the new session's harness has not reported yet.
+    assert_ne!(old.level, ObservationLevel::Unobserved);
+    assert_eq!(new.level, ObservationLevel::Unobserved);
+    assert!(!new.bound);
     assert_eq!(new.writes, old.writes);
     assert!(new.writes.contains("src/a.rs"));
     assert_eq!(new.shell_seen, old.shell_seen);
@@ -3604,6 +3626,104 @@ fn a_continuation_inherits_taint_level_and_writes_and_starts_alive() {
     assert!(s.continues("b", "a"));
     assert!(!s.continues("a", "b"));
     h.assert_replay();
+}
+
+/// A session is continued in the directory the log says it was started in,
+/// and nowhere else: the id of the session to continue is not taken from
+/// that directory's own files.
+#[test]
+fn a_session_is_continued_only_in_its_own_workspace() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    h.start("other", &["src/**"]);
+    let from = |old: &str| {
+        Some(Continuation {
+            session: old.into(),
+            widen: false,
+        })
+    };
+    // In another session's directory, in none, and in one that is no path.
+    for ws in [Some("/ws/other"), Some("/ws/a/sub"), None] {
+        let op = h.start_in("b", &["src/**"], from("a"), ws.map(str::to_string));
+        let d = h.human("ayse", op);
+        assert!(denied_with(&d, "continue_other_workspace"), "{ws:?}: {d:?}");
+    }
+    for ws in ["ws/a", "/ws/a/", "/ws/../a", "/ws/a\n"] {
+        let op = h.start_in("b", &["src/**"], from("a"), Some(ws.to_string()));
+        let d = h.human("ayse", op);
+        assert!(denied_with(&d, "invalid_workspace"), "{ws:?}: {d:?}");
+    }
+    assert!(h.chain.state.session_active("a", h.now), "nothing happened");
+    assert!(h.chain.state.session_active("other", h.now));
+    assert!(h.continue_as("b", "a", &["src/**"], false).is_allow());
+    assert_eq!(
+        h.chain.state.sessions["b"].workspace.as_deref(),
+        Some("/ws/a")
+    );
+    h.assert_replay();
+}
+
+/// One directory, one live session: a second start there, in a directory
+/// of it or around it is refused until the first is over.
+#[test]
+fn a_directory_holds_one_live_session() {
+    let mut h = H::new();
+    h.start("a", &["src/**"]);
+    for ws in ["/ws/a", "/ws/a/deep/er", "/ws"] {
+        let op = h.start_in("b", &["src/**"], None, Some(ws.to_string()));
+        let d = h.human("ayse", op);
+        assert!(denied_with(&d, "workspace_in_use"), "{ws}: {d:?}");
+    }
+    // A name that only begins alike is another directory.
+    let op = h.start_in("b", &["src/**"], None, Some("/ws/ab".to_string()));
+    assert!(h.human("ayse", op).is_allow());
+    // A session that says nothing of a directory has none.
+    let op = h.start_in("c", &["src/**"], None, None);
+    assert!(h.human("ayse", op).is_allow());
+    assert_eq!(h.chain.state.sessions["c"].workspace, None);
+    h.now += 121 * MIN;
+    let op = h.start_in("d", &["src/**"], None, Some("/ws/a".to_string()));
+    assert!(h.human("ayse", op).is_allow(), "the first one expired");
+    h.assert_replay();
+}
+
+/// Before format 30 a `session.start` names no workspace, a continuation
+/// is not held to one and keeps its predecessor's level.
+#[test]
+fn before_format_30_a_continuation_is_as_it_was() {
+    let mut h = H::new();
+    let old = FORMAT_WORKSPACE - 1;
+    let op = h.start_in("a", &["src/**"], None, None);
+    assert!(h.human("ayse", op).is_allow());
+    let decided = |h: &H, format: u32, op: &Op, _: Option<&Facts>| {
+        let sig = h.sign("ayse", op);
+        let ctx = Ctx {
+            format,
+            time_ms: h.now,
+            policy: &h.policy,
+            facts: None,
+            evidence: &[],
+            symbols_engine: Some(0),
+        };
+        let ayse = Actor::Human {
+            name: "ayse".into(),
+        };
+        decide(&h.chain.state, &ayse, op, Some(&sig), &ctx)
+    };
+    let named = h.start_in("x", &["src/**"], None, Some("/ws/x".to_string()));
+    let d = decided(&h, old, &named, None);
+    assert!(denied_with(&d, "invalid_workspace"), "{d:?}");
+    let d = decided(&h, FORMAT_WORKSPACE, &named, None);
+    assert!(!denied_with(&d, "invalid_workspace"), "{d:?}");
+    let continues = Some(Continuation {
+        session: "a".into(),
+        widen: false,
+    });
+    let op = h.start_in("b", &["src/**"], continues, None);
+    let d = decided(&h, old, &op, None);
+    assert!(!denied_with(&d, "continue_other_workspace"), "{d:?}");
+    let d = decided(&h, FORMAT_WORKSPACE, &op, None);
+    assert!(denied_with(&d, "continue_other_workspace"), "{d:?}");
 }
 
 /// A session that was never tainted or bound stays so: nothing is

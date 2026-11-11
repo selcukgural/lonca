@@ -101,6 +101,8 @@ caused them:
 |---|---|
 | `session_ended`, `session_inactive`, `unknown_session`, `session_ttl` | The session is over. A human continues the workspace: `lonca session start --continue <dir>`. |
 | `session_continued`, `continue_child_session`, `scope_widening:<what>` | That continuation is refused: a session is continued once, a child session is not continued, a wider scope needs `--widen`. |
+| `continue_other_workspace` | A session is continued in the directory it was started in. One started before Lonca 0.2.4, or whose directory was moved, can not be: start a new session in a new workspace. |
+| `workspace_in_use`, `invalid_workspace` | Another live session works in that directory, in one inside it or around it; or the path is not an absolute, plain directory path. Use another directory, or continue or end the session that is there. |
 | `frozen:<reason>` | A human unfreezes it once the reason is dealt with. |
 | `already_approved` | You approved this one already; it waits for another human. |
 | `nothing_pending` | That sequence number does not wait for approval (approved, rejected or withdrawn meanwhile). |

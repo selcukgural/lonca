@@ -513,6 +513,7 @@ const RULES: &str = "\
 - A thread has few rounds. At negotiation_exhausted stop negotiating: do what is free, and say in your final answer what is left, for a person to decide.
 - Editing a file is not delivering it: nothing reaches the repository until you propose it. A git commit here stays here: `git status` and `git diff` show your edits, only {tool}propose delivers them.
 - Reading untrusted paths or files outside this workspace taints the session; whether web fetches, network commands and other MCP servers do is the repository's policy ([taint] in lonca.toml). Tainted changes need human review.
+- `.lonca/` in this workspace is Lonca's record of it: do not edit, move or delete anything there. Which session works in this directory is in Lonca's log, not in those files: if they do not read, every tool call is blocked until a person repairs them.
 - Lonca checks that the harness reports your tool calls: a call to a Lonca tool its hooks did not report marks the session `unhooked`, which taints it. Do not turn the hooks off.";
 
 /// The most names of files [`stop_message`] writes out.

@@ -80,7 +80,9 @@ when a human revokes it.
   `cap.attenuate`: a child session whose scope is the same or narrower, never
   wider. Revoking a session revokes every session made from it.
 - **Continuing.** A session can not be extended. A human continues its
-  workspace under a new session with `lonca session start --continue <dir>`
+  workspace under a new session with `lonca session start --continue <dir>`:
+  the session that was started in `<dir>`, which the log records, and
+  nothing a file in the directory says
   ([Running agents](runners.md#a-worker-that-outlives-its-session)).
 
 ### Observation and taint

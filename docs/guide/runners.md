@@ -114,10 +114,14 @@ lonca session start --repo demo --agent claude --paths 'src/**' \
   it reads the new one.
 - A session that is still alive ends in the same step, so one workspace
   never has two live sessions. A session can be continued once.
-- **Taint carries over**, with the observation level and what was seen
-  written, because the workspace may hold what the tainted session
-  wrote. A fresh directory is the only clean start. `isolated` is the one
-  level that does not carry over, and a continued session can not get it.
+- **Taint carries over**, with what was seen written, because the
+  workspace may hold what the tainted session wrote. A fresh directory is
+  the only clean start. The observation level does not: the new session is
+  `unobserved` until its own harness reports, and a continued session can
+  not become `isolated`.
+- **The session continued is the one started in that directory**, as the
+  log has it. A directory that was moved, or a session started before
+  Lonca 0.2.4, can not be continued.
 - **Leases do not**, and the worker leases again; `lease_needed` says
   what. Items pinned to a change in flight stay pinned to it and pass to
   the new session, so the worker can sync and propose on top of it, and

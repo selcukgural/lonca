@@ -598,6 +598,11 @@ pub enum Op {
         /// only one an observation level is read for (format 20).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         harness: Option<String>,
+        /// The directory the session works in, as the human who starts it
+        /// names it (format 30). The log's word for where a session is: no
+        /// file in that directory is asked.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace: Option<String>,
     },
     #[serde(rename = "session.bind")]
     SessionBind {

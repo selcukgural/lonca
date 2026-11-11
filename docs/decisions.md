@@ -148,6 +148,15 @@ the daemon signature (`crates/lonca-core/src/oplog.rs`).
   `human.enroll` checks the form of the key as the other key operations
   do. Before it such a key is `invalid_key` and signs nothing, and an
   enrolment keeps its looser check, so older entries replay as they were.
+- **Version 29** adds keyed directories (see "Keyed directories"): key
+  leases on a `dir#<dir>`, `taken_keys` in facts. Older entries replay as
+  they were.
+- **Version 30** adds `workspace` on `session.start` (see "Where a session
+  works is in the log"). Left out of the encoding when absent, so earlier
+  starts keep their bytes. From it on a continuation names the workspace
+  of the session it continues, a directory holds one live session, and a
+  continuation starts `unobserved`; entries of older formats do none of
+  it and replay to the state they always had.
 - An entry of an older format can not contain an operation type that a
   later version added; the chain check refuses one that does.
 - The daemon writes only the current version; a log written by an older
@@ -1452,6 +1461,7 @@ A01/A07, zero trust: every request authenticated).
 | `human.login` | login | opens a human session from a presence signature |
 | `human.logout` | public | ends the human session whose token it carries |
 | `whoami` | any | who the token is |
+| `session.where` | public | the session the log places at a path, or the one a harness's session is bound to |
 | `repo.list` | any human | the repositories the session is enrolled in |
 | `repo.prepare_init` | bootstrap | writes the genesis objects; may `git fetch` |
 | `repo.init` | bootstrap | submits the signed genesis |
@@ -1832,9 +1842,10 @@ boundary keeps the session bounded.
   (`session_continued`: a workspace never has two live sessions), and the
   new scope is within the old one (`scope_widening:<what>`) unless the
   human passed `--widen`, which is in the log and in the Touch ID prompt.
-  The CLI refuses a directory that is not itself a workspace, a human's
-  workspace, and a workspace of another repository, before asking for a
-  signature.
+  The CLI refuses a directory that is not itself a workspace, one the log
+  places no session in, and a workspace of another repository, before
+  asking for a signature. From format 30 the session to continue is the
+  log's ("Where a session works is in the log").
 - **The old session ends in the same entry**, alive or not, with `continued
   by <new>`, and the daemon drops its token. The workspace's files, base,
   manifest and `submitted` stay; only `.lonca/session` and the session id
@@ -4151,6 +4162,57 @@ changed, or whether the queue ran what CI runs.
   (`VERIFIED_FOR_MS`); its evidence, identify lines included, is that run's.
   The cache key is a digest of the whole `[verification]`, so a new
   `identify` list runs again.
+
+## Where a session works is in the log
+
+Format 30. Until it, the only record of which session a directory belonged
+to was `.lonca/workspace.json` in that directory, and an agent writes its
+own workspace. The hook, `session start --continue` and a human's commands
+all read it. What a session's own directory says about the session is no
+longer asked.
+
+- **`session.start` names `workspace`**: an absolute, normalized path with
+  its links resolved by the CLI (`invalid_workspace` otherwise; the rules
+  are a scratch root's). It is in the signed entry, so it is the human's
+  word, as `harness` is. A session started without one has none: it is not
+  continued and no hook is placed by its directory. Children stand in
+  their parent's.
+- **One directory, one live session** (`workspace_in_use`): a start in a
+  directory that is, holds or lies in the workspace of a live root session
+  is refused, the session it continues excepted.
+- **A session is continued where it was started**
+  (`continue_other_workspace`). `lonca session start --continue DIR` asks
+  the daemon which session the log places in `DIR` (`session.where`) and
+  names that one; the id in the directory's file is not read. A session
+  from before format 30 has no workspace in the log and can not be
+  continued: start a new one. So can not a workspace that was moved.
+- **A continuation starts `unobserved`.** It kept its predecessor's level
+  until its harness reported; a level is now what a bind of this session
+  showed. Taint, writes and `shell_seen` go along as before. Entries of
+  older formats replay as they were.
+- **`session.where` is public.** It is the question of a program that has
+  no token it can trust: a hook whose workspace file does not read, a
+  human's command in a directory. It answers with a session id, its
+  repository, workspace and whether it is live, for a path or for a
+  harness's own session id (`session.bind` records it as
+  `harness_session`). None of that opens anything; any socket peer learns
+  which directories have sessions.
+- **The hook asks before it stands aside.** `lonca hook` did nothing where
+  it found no agent workspace. It now asks `session.where` first, with the
+  directory and the short strings of its input (the daemon reads the
+  harness's session id out of them with the profile). A live session
+  there, or bound to that harness session: the hook goes on as that
+  session's from the logged directory, and if that directory's metadata
+  does not read as the session's, the tool call is blocked. With no daemon
+  to ask it stands aside only where no `.lonca/workspace.json` is above
+  it. `hook.input` carries the resolved root (`real`), and the daemon
+  refuses one that is not the session's logged workspace; `hook.bind`
+  attributes network to the logged workspace.
+- **A human's command in an agent's workspace is refused** when the file
+  there names no session (`sync`, `diff`, `propose`, `status` without
+  `--repo`), and commands that take the repository from the workspace take
+  the log's where the log places a session. A directory once used by an
+  agent's session is not reused for a human's workspace.
 
 ## Open questions (carried from the design)
 

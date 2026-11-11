@@ -179,7 +179,11 @@ without a sandbox; see [profiles.md](profiles.md)).
 A change's tests are the agent's code, so they run in the same sandbox as
 `lonca run` (`docs/guide/runners.md`), with no way out at all: no network,
 no socket. They write only the tree, a scratch `HOME` and `TMPDIR`. They read
-the system's directories and those on `PATH`. **Everything else is closed,
+the system's directories and those on `PATH`. On macOS the system's
+directories are `/usr` and `/opt` among others, where Homebrew lives, but
+not what Homebrew's services keep there: `/opt/homebrew/var` and `etc`
+(`/usr/local/var` and `etc` on an Intel Mac) are closed, except for the
+certificate stores under `etc`. **Everything else is closed,
 your home directory included**, until the policy names it:
 
 ```toml

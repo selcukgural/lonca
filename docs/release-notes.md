@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### The macOS sandbox no longer reads what Homebrew's services keep
+
+`lonca run` and verification on macOS open `/usr` and `/opt` for the
+programs there. Homebrew keeps more under them: databases' data
+(`/opt/homebrew/var`) and services' configuration (`/opt/homebrew/etc`),
+and the same under `/usr/local`. Those four are now closed in the sandbox,
+except the certificate stores (`etc/openssl*`, `etc/ca-certificates`). A
+check that reads something there (a local database's socket directory, a
+tool's configuration) names it in `[verification] read`. Verification, which
+has no network, can also no longer reach the system's certificate service.
+Two limits of the macOS sandbox are written down in the threat model:
+shared memory by name, and what that certificate service fetches for an
+isolated session.
 ### A check's log does not hold a passed value
 
 The output of a build or test command is kept as the check's log, which the
@@ -140,8 +153,10 @@ the one it let through:
 - A TLS client that asks the proxy for one host and the server for another
   (a server name that is not the `CONNECT` host) has its tunnel closed
   before a byte of it reaches the host. To the command this is a
-  connection dropped during the handshake. A tunnel asked for by address
-  is not held to a name.
+  connection dropped during the handshake; the daemon's `security.log`
+  has it as a `misnamed_tunnel` event of the session, with the host of
+  the tunnel and the name that was asked for (`lonca doctor` counts
+  them). A tunnel asked for by address is not held to a name.
 - A plain `http://` request whose `Host` header is not its URL's host and
   port is answered `400`. Each plain request now goes to the host on its
   own connection (`Connection: close`); requests for several hosts over
@@ -150,7 +165,8 @@ the one it let through:
   request is the server's to check.
 
 `lonca-net`: `Outcome::Misnamed` is new (an `Outcome` match needs an arm
-for it), and the `hello` module reads a TLS client's server name.
+for it), `Gate::misnamed` tells the gate which name such a tunnel asked
+for, and the `hello` module reads a TLS client's server name.
 
 ### The security log keeps the latest of every kind
 

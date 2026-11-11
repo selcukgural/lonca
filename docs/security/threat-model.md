@@ -84,7 +84,7 @@ What each mode does about each threat:
 | Taking another agent's name to leave a policy rule, or to be read as that agent in a review | prevented: only a human names an agent (`session.start`); a child session has its parent's name (format 31) | prevented | prevented |
 | Redrawing what a reviewer reads (escape sequences, carriage returns or bidi controls in an intent, a path, a file's lines or a denial's text) | prevented in Lonca's own output: `lonca` and `lonca-audit` write such characters out (`\u{1b}`, `\r`) instead of sending them to the terminal; JSON output escapes them as JSON does, so a program that shows it must do the same | prevented, as cooperative | prevented, as cooperative |
 | Having another session answer for a connection (standing in its workspace), or making it answer too | no gain: every change waits for a human anyway | prevented for the first: a connection is charged by the processes it descends from, not where it stands. Detected for the second: a command that leaves its harness is charged to every session, its own among them, so it can taint and slow the others but not stay clean | prevented and detected, as hardened |
-| Reaching a host that is not allowed through one that is (another server name or `Host` header at an address the allowed host shares) | possible: nothing holds the agent's network to the proxy, and every change waits for a human anyway | prevented for the TLS server name and for plain requests: the proxy ends a tunnel whose client asks for another name, and answers 400 to a plain request for another host. Not seen: the `Host` header inside TLS (the allowed host's front end decides), an encrypted client hello's inner name, TLS begun later on a connection | prevented, as hardened |
+| Reaching a host that is not allowed through one that is (another server name or `Host` header at an address the allowed host shares) | possible: nothing holds the agent's network to the proxy, and every change waits for a human anyway | prevented for the TLS server name and for plain requests: the proxy ends a tunnel whose client asks for another name (a `misnamed_tunnel` security event), and answers 400 to a plain request for another host. Not seen: the `Host` header inside TLS (the allowed host's front end decides), an encrypted client hello's inner name, TLS begun later on a connection | prevented, as hardened |
 | Using a session token outside where it was given | possible | possible (tokens are bearer tokens) | refused and detected, for reading the repository as for changing it: the request is answered `not_in_sandbox` and the session is tainted |
 | Pushing an event out of the security log with a flood of others (lines that are no request, bad tokens) | prevented across kinds: the latest 256 events of each kind stay through every rotation, so a freeze or a taint is not lost under another kind's flood. Within one kind the older are lost: 257 refusals push out the first | prevented, as cooperative | prevented, as cooperative |
 | Exhausting the daemon through the socket | bounded: connection, line, rate and byte limits | bounded | bounded |
@@ -241,6 +241,18 @@ It does not catch:
   outlive the sweep at the end of a run. Such a process holds a dead token,
   and a later run refuses the workspace it can still write. If the launcher
   itself is killed, nothing sweeps.
+- **On macOS the sandbox shares some of the machine.** Seatbelt has no
+  namespaces. A sandboxed process can open POSIX shared memory and
+  semaphores by name (test suites and language runtimes need them, under
+  names of their own choosing), so it can read and write a segment another
+  process of the same user made, if it knows or guesses the name. An
+  isolated session, which has a way out through the proxy, may ask the
+  system's certificate service (`trustd`), which runs outside the sandbox
+  and may itself fetch what a certificate names (an issuer, a revocation
+  answer) from a host of the certificate's choosing, past the proxy and
+  its list; whether that carries anything worth having back was not
+  measured. Verification has no way out and may not ask it. On Linux
+  (bubblewrap) the sandbox has its own `/dev/shm` and no such service.
 - **`sandbox_check` is not a public macOS API**, and `sandbox-exec` is
   deprecated. Both fail closed: if either goes away, isolated sessions stop
   working and say so. Whether a hardened daemon may ask about another user's

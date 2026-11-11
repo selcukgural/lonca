@@ -108,6 +108,7 @@ last column.
 | A33 | `lonca-audit verify` notes a check that ran with another toolchain than the last time it ran (`env … changed since …`), and the log still verifies | `11-evidence` |
 | A34 | In a live session's workspace whose `.lonca/workspace.json` was moved away, the hook blocks the tool call (exit 2) and names the session; outside the workspace, under the same harness session, it still answers as that session's; in a directory Lonca has no session in, it stands aside | `12-workspace` |
 | A35 | `session start --continue DIR` continues the session started in `DIR` whatever id the file there names; a second session in a directory inside a live one's is refused (`workspace_in_use`); a human's `propose` in an agent's workspace whose file names no session is refused | `12-workspace` |
+| A36 | `lonca diff <change>` shows the reviewer every file a proposal changes, also when the proposal has files whose names are git patterns (`:!src/billing.rs`, `src/*`) | `04-review` |
 | A37 | What an agent wrote (an intent, a file's lines, what a denial quotes) reaches a person's terminal with its control characters written out (`\u{1b}`, `\r`), in `pending`, `diff`, `status` and errors: no escape sequence or carriage return redraws what a reviewer reads | `03-agents` |
 | A38 | An operation longer than one log entry holds (64 KiB: a very long intent or list) is refused with its name, its size and what to do, and the log does not grow; the same request with a short intent is logged | `13-log` |
 

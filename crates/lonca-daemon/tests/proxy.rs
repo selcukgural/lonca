@@ -85,37 +85,103 @@ fn taints(e: &mut Env) -> Value {
         .into()
 }
 
-#[test]
-fn proxy_attributes_connections_to_the_workspace_that_made_them() {
-    let mut e = Env::new();
+/// What stands for a harness: a process a session is bound from, whose
+/// commands descend from it.
+struct Harness {
+    child: std::process::Child,
+    out: BufReader<std::process::ChildStdout>,
+}
+
+impl Harness {
+    fn start() -> Harness {
+        Harness::under(&mut Command::new("/bin/bash"))
+    }
+
+    fn under(shell: &mut Command) -> Harness {
+        use std::process::Stdio;
+        let mut child = shell
+            .arg("-s")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let out = BufReader::new(child.stdout.take().unwrap());
+        Harness { child, out }
+    }
+
+    fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Runs `script` in a process of its own below the harness and gives
+    /// what it printed.
+    fn run(&mut self, script: &str) -> String {
+        let stdin = self.child.stdin.as_mut().unwrap();
+        writeln!(stdin, "( {script} )\necho; echo harness-done").unwrap();
+        let mut text = String::new();
+        loop {
+            let mut line = String::new();
+            assert_ne!(self.out.read_line(&mut line).unwrap(), 0, "{text}");
+            if line.trim() == "harness-done" {
+                return text;
+            }
+            text.push_str(&line);
+        }
+    }
+
+    /// A tunnel opened by a command of the harness, like a sandboxed `curl`.
+    fn tunnel(&mut self, proxy: u16, target: &str) -> String {
+        self.run(&tunnel_script(proxy, target))
+    }
+}
+
+impl Drop for Harness {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn tunnel_script(proxy: u16, target: &str) -> String {
+    format!(
+        "exec 3<>/dev/tcp/127.0.0.1/{proxy}; printf 'CONNECT {target} HTTP/1.1\\r\\n\\r\\n' >&3; cat <&3"
+    )
+}
+
+/// Whether the daemon can name the process of a connection here.
+fn processes_are_named() -> bool {
+    Command::new("lsof").arg("-v").output().is_ok()
+        && lonca_daemon::lineage::Table::read().is_some()
+}
+
+/// Two sessions, each bound from a harness of its own, and a proxy open to
+/// an upstream on loopback.
+fn two_harnesses(e: &mut Env) -> (u16, u16, Harness, Harness, String) {
     e.init(None);
-    let proxy = start_proxy(&e);
+    let proxy = start_proxy(e);
     let up = upstream();
     let t1 = e.session("s1", &["src/**"]);
     let t2 = e.session("s2", &["src/**"]);
-    let ws1 = e.root.join("ws1");
-    let ws2 = e.root.join("ws2");
-    std::fs::create_dir_all(&ws1).unwrap();
-    std::fs::create_dir_all(&ws2).unwrap();
-    bind_with_workspace(&mut e, &t1, &ws1);
-    bind_with_workspace(&mut e, &t2, &ws2);
+    let (h1, h2) = (Harness::start(), Harness::start());
+    e.peer_pid = Some(h1.pid());
+    e.bind(&t1);
+    e.peer_pid = Some(h2.pid());
+    e.bind(&t2);
+    e.peer_pid = None;
     let config = lonca_policy::config::DEFAULT_CONFIG.replace(
         "allow_private_network = false",
         "allow_private_network = true",
     );
-    set_policy(&mut e, &open_to(&config, up));
+    set_policy(e, &open_to(&config, up));
+    (proxy, up, h1, h2, t1)
+}
 
-    // A process in s1's workspace opens a tunnel, like a sandboxed `curl`.
-    let script = format!(
-        "exec 3<>/dev/tcp/127.0.0.1/{proxy}; printf 'CONNECT 127.0.0.1:{up} HTTP/1.1\\r\\n\\r\\n' >&3; cat <&3"
-    );
-    let out = Command::new("/bin/bash")
-        .arg("-c")
-        .arg(&script)
-        .current_dir(&ws1)
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout);
+#[test]
+fn a_connection_is_charged_to_the_session_whose_harness_made_it() {
+    let mut e = Env::new();
+    let (proxy, up, mut h1, _h2, _) = two_harnesses(&mut e);
+
+    let text = h1.tunnel(proxy, &format!("127.0.0.1:{up}"));
     assert!(
         text.contains("200 Connection established") && text.contains("hello from upstream"),
         "{text}"
@@ -123,17 +189,208 @@ fn proxy_attributes_connections_to_the_workspace_that_made_them() {
 
     let t = taints(&mut e);
     assert!(t["s1"].as_str().unwrap().contains("fetch 127.0.0.1"), "{t}");
-    if Command::new("lsof").arg("-v").output().is_ok() {
+    if processes_are_named() {
         assert!(
             t["s2"].is_null(),
             "only the session that made the connection is tainted: {t}"
         );
+        assert_eq!(e.svc.proxy_unattributed(), 0);
     } else {
         assert!(
             !t["s2"].is_null(),
             "without attribution every proxied session is tainted"
         );
     }
+}
+
+#[test]
+fn where_a_process_stands_says_nothing_of_whose_it_is() {
+    let mut e = Env::new();
+    let (proxy, up, mut h1, _h2, _) = two_harnesses(&mut e);
+    // The other session's workspace, as the hook reported it at its bind
+    // and as `lonca run` would: a command of s1 goes there first.
+    let theirs = e.root.join("ws2");
+    std::fs::create_dir_all(&theirs).unwrap();
+    let script = tunnel_script(proxy, &format!("127.0.0.1:{up}"));
+    let text = h1.run(&format!("cd {} && {script}", theirs.display()));
+    assert!(text.contains("hello from upstream"), "{text}");
+
+    let t = taints(&mut e);
+    assert!(
+        t["s1"]
+            .as_str()
+            .is_some_and(|x| x.contains("fetch 127.0.0.1")),
+        "the session that fetched is tainted wherever its command stood: {t}"
+    );
+    if processes_are_named() {
+        assert!(t["s2"].is_null(), "{t}");
+    }
+}
+
+#[test]
+fn a_command_that_leaves_its_harness_is_charged_to_every_session() {
+    let mut e = Env::new();
+    let (proxy, up, mut h1, _h2, _) = two_harnesses(&mut e);
+    // The command's parent ends before it connects: nothing ties it to
+    // its harness any more, so it can not be told from the other's.
+    let out = e.root.join("left.out");
+    let script = tunnel_script(proxy, &format!("127.0.0.1:{up}"));
+    h1.run(&format!(
+        "( sleep 0.5; {script} > {out} 2>&1; echo over >> {out} ) > /dev/null 2>&1 &",
+        out = out.display()
+    ));
+    for _ in 0..500 {
+        let text = std::fs::read_to_string(&out).unwrap_or_default();
+        if text.contains("over") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let text = std::fs::read_to_string(&out).unwrap_or_default();
+    assert!(text.contains("hello from upstream"), "{text}");
+
+    let t = taints(&mut e);
+    assert!(!t["s1"].is_null() && !t["s2"].is_null(), "{t}");
+}
+
+#[test]
+fn a_session_answers_for_what_one_made_from_it_fetches() {
+    let mut e = Env::new();
+    let (proxy, up, _h1, _h2, t1) = two_harnesses(&mut e);
+    let expires = e.now() + 60_000;
+    let scope = Scope {
+        paths: vec!["src/**".into()],
+        symbols: None,
+        ops: vec![OpKind::ChangePropose],
+        max_files: None,
+        max_lines: None,
+        scratch: vec![],
+    };
+    let r = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&t1),
+        json!({"agent": "bot-s1", "scope": scope, "expires_ms": expires}),
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    let child = r["token"].as_str().unwrap().to_string();
+    // The child is bound from a harness of its own: its commands are
+    // nearer to it than to the session it was made from.
+    let mut below = Harness::start();
+    e.peer_pid = Some(below.pid());
+    e.ok(
+        "hook.bind",
+        None,
+        Some(&child),
+        json!({"harness": "claude-code", "harness_session": "h1", "sudo_without_password": false}),
+    );
+    e.peer_pid = None;
+    let text = below.tunnel(proxy, &format!("127.0.0.1:{up}"));
+    assert!(text.contains("hello from upstream"), "{text}");
+
+    let t = taints(&mut e);
+    let tainted: Vec<&String> = t
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, v)| !v.is_null())
+        .map(|(k, _)| k)
+        .collect();
+    assert!(tainted.iter().any(|k| *k == "s1"), "{t}");
+    assert!(tainted.len() >= 2, "the child and its parent: {t}");
+    if processes_are_named() {
+        assert!(t["s2"].is_null(), "{t}");
+    }
+}
+
+#[test]
+fn a_session_never_bound_itself_is_known_by_the_one_it_was_made_from() {
+    let mut e = Env::new();
+    let (proxy, up, mut h1, mut h2, t1) = two_harnesses(&mut e);
+    let expires = e.now() + 60_000;
+    let scope = Scope {
+        paths: vec!["src/**".into()],
+        symbols: None,
+        ops: vec![OpKind::ChangePropose],
+        max_files: None,
+        max_lines: None,
+        scratch: vec![],
+    };
+    let r = e.ok(
+        "cap.attenuate",
+        None,
+        Some(&t1),
+        json!({"agent": "bot-s1", "scope": scope, "expires_ms": expires}),
+    );
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    if !processes_are_named() {
+        return;
+    }
+    // What the other harness fetches is not the child's, nor its parent's.
+    h2.tunnel(proxy, &format!("127.0.0.1:{up}"));
+    let t = taints(&mut e);
+    let tainted = |t: &Value| {
+        let all = t.as_object().unwrap().iter();
+        let mut ids: Vec<String> = all
+            .filter(|(_, v)| !v.is_null())
+            .map(|(k, _)| k.clone())
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(tainted(&t), ["s2"], "{t}");
+    // What its parent's harness fetches is both's: nothing tells them apart.
+    h1.tunnel(proxy, &format!("127.0.0.1:{up}"));
+    let t = taints(&mut e);
+    assert_eq!(tainted(&t).len(), 3, "{t}");
+}
+
+#[test]
+fn a_session_below_the_sandbox_level_answers_for_its_own_once_bound() {
+    let mut e = Env::new();
+    let (proxy, up, _h1, _h2, _) = two_harnesses(&mut e);
+    let t3 = e.session("s3", &["src/**"]);
+    let mut h3 = Harness::start();
+    e.peer_pid = Some(h3.pid());
+    let other =
+        json!({"harness": "another", "harness_session": "h3", "sudo_without_password": false});
+    let r = e.ok("hook.bind", None, Some(&t3), other);
+    e.peer_pid = None;
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    assert_ne!(r["level"], "hooks_sandbox", "{r}");
+    h3.tunnel(proxy, &format!("127.0.0.1:{up}"));
+    let t = taints(&mut e);
+    assert!(!t["s3"].is_null(), "{t}");
+    if processes_are_named() {
+        assert!(t["s1"].is_null() && t["s2"].is_null(), "{t}");
+    }
+}
+
+#[test]
+fn a_refused_bind_places_no_session() {
+    let mut e = Env::new();
+    let (proxy, up, _h1, _h2, _) = two_harnesses(&mut e);
+    // A third session, bound first by something that is not its harness,
+    // from no process the daemon was told of.
+    let t3 = e.session("s3", &["src/**"]);
+    let other =
+        json!({"harness": "another", "harness_session": "h3", "sudo_without_password": false});
+    let r = e.ok("hook.bind", None, Some(&t3), other);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+    // A later bind may not raise its level: refused, and the process it
+    // came from is not what the session is known by.
+    let mut h3 = Harness::start();
+    e.peer_pid = Some(h3.pid());
+    let own =
+        json!({"harness": "claude-code", "harness_session": "h3", "sudo_without_password": false});
+    let r = e.ok("hook.bind", None, Some(&t3), own);
+    e.peer_pid = None;
+    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    h3.tunnel(proxy, &format!("127.0.0.1:{up}"));
+    let t = taints(&mut e);
+    // So its command is nobody's own, and those the proxy serves answer.
+    assert!(t["s3"].is_null(), "{t}");
+    assert!(!t["s1"].is_null() && !t["s2"].is_null(), "{t}");
 }
 
 #[test]
@@ -347,6 +604,37 @@ fn an_isolated_session_is_watched_through_the_proxy() {
     }
     let t = taints(&mut e);
     assert!(t["s1"].as_str().unwrap().contains("fetch 127.0.0.1"), "{t}");
+}
+
+#[test]
+fn an_isolated_session_is_known_by_the_launcher_that_asked() {
+    let mut e = Env::new();
+    e.init(None);
+    let proxy = start_proxy(&e);
+    let up = upstream();
+    e.session("s1", &["src/**"]);
+    let t2 = e.session("s2", &["src/**"]);
+    // `lonca run` asks for the sandbox and then starts the command in it.
+    let (mut run, h2) = (Harness::start(), Harness::start());
+    e.peer_pid = Some(run.pid());
+    let ws = e.root.join("ws1");
+    isolate(&mut e, "s1", &ws);
+    e.peer_pid = Some(h2.pid());
+    e.bind(&t2);
+    e.peer_pid = None;
+    let config = lonca_policy::config::DEFAULT_CONFIG.replace(
+        "allow_private_network = false",
+        "allow_private_network = true",
+    );
+    set_policy(&mut e, &open_to(&config, up));
+
+    let out = run.tunnel(proxy, &format!("127.0.0.1:{up}"));
+    assert!(out.contains("hello from upstream"), "{out}");
+    let t = taints(&mut e);
+    assert!(!t["s1"].is_null(), "{t}");
+    if processes_are_named() {
+        assert!(t["s2"].is_null(), "{t}");
+    }
 }
 
 #[test]

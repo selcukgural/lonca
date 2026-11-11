@@ -37,6 +37,7 @@ use serde_json::{Value, json};
 use crate::home::{Home, TokenEntry, Tokens};
 use crate::hooks;
 use crate::limits::{Bucket, Counters, Head};
+use crate::lineage;
 use crate::protocol::*;
 use crate::repo::{HUMAN_HEADER, POLICY_REF, RepoHandle, SESSION_HEADER, TRUNK_REF};
 
@@ -510,6 +511,31 @@ impl Auth {
 /// A session as the proxy counts it: repository and session id.
 type SessionKey = (String, String);
 
+/// What the operating system says of whoever sent a request, asked only
+/// when it matters.
+pub struct Peer<'a> {
+    /// Whether it runs in a sandbox.
+    pub in_sandbox: &'a dyn Fn() -> bool,
+    /// Its process, as the socket knows it.
+    pub pid: &'a dyn Fn() -> Option<u32>,
+}
+
+impl Peer<'_> {
+    /// Nothing is known of the sender.
+    pub const UNKNOWN: Peer<'static> = Peer {
+        in_sandbox: &|| false,
+        pid: &|| None,
+    };
+
+    /// The sender and what it descends from, with the table that says so.
+    fn line(&self) -> Option<(Vec<lineage::Proc>, lineage::Table)> {
+        let pid = (self.pid)()?;
+        let table = lineage::Table::read()?;
+        let line = table.line(pid);
+        (!line.is_empty()).then_some((line, table))
+    }
+}
+
 /// What the proxy has open, by session, and what it has carried. Only in
 /// memory: nothing of it is a decision, and a restart starts it over.
 #[derive(Default)]
@@ -519,8 +545,8 @@ struct ProxyBook {
     open: BTreeMap<std::net::SocketAddr, Vec<(SessionKey, u64)>>,
     /// Bytes each session moved through the proxy.
     carried: BTreeMap<SessionKey, u64>,
-    /// Connections no process could be named for, so every session the
-    /// proxy serves answered for them (see `lonca status`).
+    /// Connections that told nobody apart, so every session the proxy
+    /// serves answered for them (see `lonca status`).
     unattributed: u64,
     /// What each session may still have recorded this minute: every
     /// connection is an entry of the log, so they come at the rate of the
@@ -655,8 +681,10 @@ struct Inner {
     /// Nonces of recent logins, so a login signature opens one session.
     login_nonces: BTreeMap<String, i64>,
     prepared: BTreeMap<String, Op>,
-    /// (repo, session) -> workspace root, as reported at bind time.
-    workspaces: BTreeMap<(String, String), PathBuf>,
+    /// The processes each session was bound from, which the proxy tells
+    /// its connections by. Lives as long as the daemon: after a restart
+    /// nothing places a session until it is bound again.
+    bound: BTreeMap<SessionKey, lineage::Bound>,
 }
 
 /// How many trees the daemon remembers as verified.
@@ -953,7 +981,7 @@ impl Service {
                 buckets: BTreeMap::new(),
                 login_nonces: BTreeMap::new(),
                 prepared: BTreeMap::new(),
-                workspaces: BTreeMap::new(),
+                bound: BTreeMap::new(),
             }),
             wake: (Mutex::new(0), Condvar::new()),
             appended: (Mutex::new(()), Condvar::new()),
@@ -1150,15 +1178,15 @@ impl Service {
         c.notify_all();
     }
 
-    /// A request from nothing known to be in a sandbox.
+    /// A request from nothing known to be in a sandbox, nor known at all.
     pub fn handle(&self, req: Request) -> Response {
-        self.handle_from(req, &|| false)
+        self.handle_from(req, &Peer::UNKNOWN)
     }
 
-    /// A request; `in_sandbox` asks the operating system about whoever sent
-    /// it, which is only done when it matters.
-    pub fn handle_from(&self, req: Request, in_sandbox: &dyn Fn() -> bool) -> Response {
-        let r = match self.dispatch(&req, in_sandbox) {
+    /// A request; `peer` asks the operating system about whoever sent it,
+    /// which is only done when it matters.
+    pub fn handle_from(&self, req: Request, peer: &Peer<'_>) -> Response {
+        let r = match self.dispatch(&req, peer) {
             Ok(v) => Response::ok(req.id, v),
             Err((code, msg)) => {
                 self.refusal(&req, &code, &msg);
@@ -1323,7 +1351,7 @@ impl Service {
         self.authorize(&req, cred).map(|_| ())
     }
 
-    fn dispatch(&self, req: &Request, in_sandbox: &dyn Fn() -> bool) -> Hr {
+    fn dispatch(&self, req: &Request, peer: &Peer<'_>) -> Hr {
         let p = &req.params;
         let Some(&(_, cred)) = METHODS.iter().find(|(m, _)| *m == req.method) else {
             return fail("unknown_method", format!("unknown method {}", req.method));
@@ -1340,7 +1368,7 @@ impl Service {
         };
         let auth = self.authorize(req, cred)?;
         if cred == Cred::Agent {
-            self.hold_to_sandbox(req, in_sandbox)?;
+            self.hold_to_sandbox(req, peer.in_sandbox)?;
             if !NOT_THROTTLED.contains(&req.method.as_str()) {
                 self.throttle(req)?;
             }
@@ -1380,7 +1408,7 @@ impl Service {
             "human.prepare_import" => self.prepare_import(&auth, params(p)?),
             "human.prepare_push" => self.prepare_push(&auth, params(p)?),
             "human.prepare_isolate" => self.prepare_isolate(&auth, params(p)?),
-            "human.submit" => self.human_submit(&auth, params(p)?),
+            "human.submit" => self.human_submit(&auth, params(p)?, peer),
             "lease.acquire" => self.lease_acquire(req, params(p)?),
             "lease.release" => {
                 let s: SetRef = params(p)?;
@@ -1431,7 +1459,7 @@ impl Service {
             "session.rotate" => self.rotate(req),
             "hook.event" => self.hook_event(req, params(p)?),
             "hook.input" => self.hook_input(req, params(p)?),
-            "hook.bind" => self.hook_bind(req, params(p)?),
+            "hook.bind" => self.hook_bind(req, params(p)?, peer),
             "hook.stop" => self.hook_stop(req, params(p)?),
             "mcp.call" => self.mcp_call(req, params(p)?),
             "harness.setup" => self.harness_setup(req, params(p)?),
@@ -2897,9 +2925,15 @@ impl Service {
         Ok(logged(&op))
     }
 
-    fn human_submit(&self, auth: &Auth, p: HumanSubmit) -> Hr {
+    fn human_submit(&self, auth: &Auth, p: HumanSubmit, peer: &Peer<'_>) -> Hr {
         let name = auth.repo()?;
         auth.same_human(&p.sig.human)?;
+        // `lonca run` asks for the sandbox it then starts the command in:
+        // what descends from it is the session's.
+        let from = match p.op {
+            Op::SessionIsolate { .. } => peer.line(),
+            _ => None,
+        };
         if matches!(p.op, Op::DaemonRecover { .. }) {
             return self.daemon_recover(&name, p);
         }
@@ -2917,7 +2951,6 @@ impl Service {
         );
         RepoHandle::op_fits(&sub.actor, &sub.op, Some(&p.sig)).or_fail()?;
         sub.human = Some(p.sig);
-        let workspace = p.workspace.filter(|w| Path::new(w).is_absolute());
         // Store, remote, and the proposal refs the log has: only those go.
         let mut push: Option<(PathBuf, String, Vec<String>)> = None;
         match &p.op {
@@ -3036,9 +3069,9 @@ impl Service {
                 let old = std::slice::from_ref(session);
                 inner.tokens.revoke_sessions(&name, old).or_fail()?;
                 out["token"] = json!(Self::issue_token(inner, &name, session)?);
-                if let Some(ws) = workspace {
+                if let Some((line, table)) = from {
                     let key = (name.clone(), session.clone());
-                    inner.workspaces.insert(key, PathBuf::from(ws));
+                    inner.bound.entry(key).or_default().add(line, &table);
                 }
             }
             Op::CapRevoke { session, .. } | Op::SessionEnd { session, .. } => {
@@ -4035,7 +4068,9 @@ impl Service {
         Ok(json!({"setup": policy.config.harness(&h.harness).map(|p| &p.setup)}))
     }
 
-    fn hook_bind(&self, req: &Request, b: HookBind) -> Hr {
+    fn hook_bind(&self, req: &Request, b: HookBind, peer: &Peer<'_>) -> Hr {
+        // Asked before the lock: it runs a program.
+        let from = peer.line();
         let mut guard = self.lock();
         let now = self.now();
         let (repo, actor) = Self::agent(&guard, req, now)?;
@@ -4129,32 +4164,32 @@ impl Service {
                 .map(|s| s.scope.scratch.clone())
                 .unwrap_or_default()
         );
-        if let Some(ws) = b
-            .workspace
-            .filter(|w| std::path::Path::new(w).is_absolute())
-        {
-            let session = signed.entry.op.clone();
-            if let Op::SessionBind { session, .. } = session {
-                guard.workspaces.insert((repo, session), PathBuf::from(ws));
-            }
+        // The harness ran the hook that sent this: what descends from the
+        // harness is the session's, for the proxy. A refused bind places
+        // nothing.
+        if let Some((line, table)) = from.filter(|_| signed.entry.decision.is_allow()) {
+            let bound = guard.bound.entry((repo, session)).or_default();
+            bound.add(line, &table);
         }
         Ok(out)
     }
 
     // ---------------------------------------------------------------- network
 
-    /// Records an outbound connection seen by the Lonca proxy and decides
-    /// whether to let it through. `cwd` is the working directory of the
-    /// connecting process when it could be determined; the connection is
-    /// attributed to the sessions whose workspace contains it, otherwise to
-    /// every session routed through the proxy (fail closed).
-    /// The proxy's question: may this connection go through? Every session
-    /// it is attributed to has its policy asked (port, host, connections
-    /// and bytes), and the attempt is on each one's record before the
-    /// answer, refused or not.
+    /// The proxy's question: may this connection go through? `line` is
+    /// the connecting process and what it descends from, when the system
+    /// told us. The connection is charged to the sessions that line is
+    /// nearest to ([`lineage::answering`]) and to those they were made
+    /// from; when it tells nobody apart, to every session the proxy serves
+    /// (fail closed). Where the process stands says nothing: it chooses
+    /// that itself.
+    ///
+    /// Every session it is charged to has its policy asked (port, host,
+    /// connections and bytes), and the attempt is on each one's record
+    /// before the answer, refused or not.
     pub fn proxy_connect(
         &self,
-        cwd: Option<&std::path::Path>,
+        line: Option<&[lineage::Proc]>,
         host: &str,
         port: u16,
         peer: std::net::SocketAddr,
@@ -4162,31 +4197,45 @@ impl Service {
         let now = self.now();
         let mut guard = self.lock();
         let inner = &mut *guard;
-        let mut matched: Vec<(String, String)> = match cwd {
-            Some(c) => inner
-                .workspaces
-                .iter()
-                .filter(|(_, root)| c.starts_with(root))
-                .map(|(k, _)| k.clone())
-                .collect(),
-            None => vec![],
-        };
-        // A session that is over answers for nothing: a command could stand
-        // in its directory to keep its own session clean.
-        matched.retain(|(repo, session)| {
-            let r = inner.repos.get(repo);
-            r.is_some_and(|r| r.chain.state.session_active(session, now))
+        // A session that is over answers for nothing, and nothing of it
+        // is kept.
+        let repos = &inner.repos;
+        inner.bound.retain(|(repo, id), _| {
+            let r = repos.get(repo);
+            r.is_some_and(|r| r.chain.state.session_active(id, now))
         });
-        let attributed = !matched.is_empty();
-        if !attributed {
-            for (name, r) in inner.repos.iter().filter(|(_, r)| r.initialized()) {
-                let s = &r.chain.state;
-                for x in s.sessions.values() {
-                    if x.level >= ObservationLevel::HooksSandbox && s.session_active(&x.id, now) {
-                        matched.push((name.clone(), x.id.clone()));
-                    }
+        // Who the proxy serves: the sessions a harness sandbox or Lonca's
+        // own sends here, and any other that was bound from somewhere. One
+        // made from another and never bound itself runs where that one
+        // does, and is known by the same processes.
+        let mut served: BTreeMap<SessionKey, Option<&lineage::Bound>> = BTreeMap::new();
+        for (name, r) in inner.repos.iter().filter(|(_, r)| r.initialized()) {
+            let s = &r.chain.state;
+            for x in s.sessions.values() {
+                let key = (name.clone(), x.id.clone());
+                let above = std::iter::successors(Some(x), |x| s.sessions.get(x.parent.as_ref()?));
+                let bound = above
+                    .take(64)
+                    .find_map(|x| inner.bound.get(&(name.clone(), x.id.clone())));
+                let here = x.level >= ObservationLevel::HooksSandbox || bound.is_some();
+                if here && s.session_active(&x.id, now) {
+                    served.insert(key, bound);
                 }
             }
+        }
+        let (mut matched, attributed) = lineage::answering(line, &served);
+        // What a session made from another fetches, the other could read:
+        // a child answers with those it came from.
+        let mut i = 0;
+        while let Some((repo, session)) = matched.get(i).cloned() {
+            let state = inner.repos.get(&repo).map(|r| &r.chain.state);
+            let parent = state.and_then(|s| s.sessions.get(&session)?.parent.clone());
+            if let Some(key) = parent.map(|p| (repo, p))
+                && !matched.contains(&key)
+            {
+                matched.push(key);
+            }
+            i += 1;
         }
         if matched.is_empty() {
             return ProxyVerdict {
@@ -4302,8 +4351,9 @@ impl Service {
         within
     }
 
-    /// Connections the proxy could not name a process for, since the
-    /// daemon started.
+    /// Connections the proxy could tell nobody apart for (no process
+    /// named, or one that descends from nothing a session was bound from),
+    /// since the daemon started.
     pub fn proxy_unattributed(&self) -> u64 {
         self.proxy.lock().map(|b| b.unattributed).unwrap_or(0)
     }

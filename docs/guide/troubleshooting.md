@@ -49,7 +49,7 @@ Secure Enclave key or a security key and no live session it asks you to run
 | `sandbox` | none found | Install `bubblewrap` (Linux). Without it verification runs unsandboxed; a hardened daemon refuses to start. |
 | `sudo` | runs without a password (hardened only) | An agent running as you could use it: set `Defaults timestamp_timeout=0`, or work from a non-admin account. Sessions count as unobserved until then. |
 | `git` | not on `PATH` | Install git. |
-| `lsof` | not on `PATH` | Install lsof; without it network use can not be attributed to a session. |
+| `lsof` | not on `PATH` | Install lsof; without it (or without `ps`) network use can not be attributed to a session, and every sandboxed session answers for each connection. |
 | `human` | no identity | `lonca human keygen <name>`. |
 | `human` | could not open a session | `lonca human whoami`; maybe no repository knows this human yet (`lonca init`, or ask an enrolled human to `lonca human enroll` you). |
 | `security events` | a freeze, an integrity alarm, a write behind the daemon's back, a failed reconcile in the last day | Read the daemon's `security.log` and `lonca log` for the entries. |

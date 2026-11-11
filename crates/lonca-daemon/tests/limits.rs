@@ -118,7 +118,20 @@ fn a_connection_that_is_cut_for_a_new_one_is_told_to_send_again() {
     let sock = served(&e, limits);
     let mut quiet = Raw::open(&sock);
     quiet.refused();
-    let mut next = Raw::open(&sock);
+    // The daemon answers before it marks the connection as at rest: one that
+    // comes in between is told `busy`, and comes again.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut next = loop {
+        let mut next = Raw::open(&sock);
+        next.send(b"{\"id\":1,\"method\":\"ping\"}\n");
+        let r = next.answer();
+        if r.error.as_ref().is_some_and(|e| e.code == "busy") && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        }
+        assert_eq!(r.result["refused"]["evicted"], 1, "{:?}", r.error);
+        break next;
+    };
     assert_eq!(next.refused()["evicted"], 1);
     let told = quiet.answer();
     assert_eq!((told.id, told.error.unwrap().code.as_str()), (0, "closed"));

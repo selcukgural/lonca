@@ -251,10 +251,18 @@ addresses (`169.254.169.254`, `fd00:ec2::254` and the like) are never reachable,
 the port when it is not 80 or 443 (`"host": "localhost:11434"`). The log takes
 `sessions.ops_per_minute` of them a minute for a session, counted apart from
 the session's own operations; past that a connection is refused and not
-recorded, until the minute has room again. When the daemon
-can not tell which process opened a connection (`lsof` gave no answer), every
-session the proxy serves answers for it; `lonca status` says how often that
-happened since the daemon started (`PROXY …`, `proxy_unattributed` in `--json`).
+recorded, until the minute has room again.
+
+A connection is on the record of the session whose harness (or `lonca run`) the
+connecting process descends from, wherever that process stands; a session made
+from another (`cap.attenuate`) answers together with it. A command that outlives
+the process that started it is no longer under its harness: every session the
+proxy serves answers for it, its own among them. The same when the daemon can
+not tell which process opened a connection (`lsof` or `ps` gave no answer, or
+the daemon was restarted after the session was bound); `lonca status` says how
+often that happened since the daemon started (`PROXY …`, `proxy_unattributed` in
+`--json`). The proxy gives a client 10 seconds to send its request, and closes a
+tunnel through which nothing has moved for 10 minutes.
 
 **Requiring it.** Cedar sees the level, so a policy can ask for a sandbox by path or
 by task:

@@ -2725,7 +2725,7 @@ fn status_text(s: &Value) -> String {
     if let Some(n) = s["proxy_unattributed"].as_u64().filter(|n| *n > 0) {
         let _ = writeln!(
             t,
-            "PROXY  {n} connection(s) could not be traced to a process, so every proxied session answered for them"
+            "PROXY  {n} connection(s) could not be traced to a session's processes, so every proxied session answered for them"
         );
     }
     let q = s["queue"].as_array().map(|a| a.len()).unwrap_or(0);

@@ -4545,6 +4545,37 @@ an agent's code in a sandbox that was meant to see none of the user's data.
 - **A test runs the real `sandbox-exec`** with the profile: nothing else
   reads its regular expression.
 
+## Four small things in the command line
+
+Found together in a review of 2026-11-11, each small.
+
+- **A workspace file is taken only if its name was that file to the end.**
+  `wsfs::read` refuses a file with another hard link (the other name may
+  lie outside the workspace), but read the count after the open: a name
+  linked in from outside and removed in between showed one link on a file
+  that was never the workspace's. After the read the name is looked at
+  again without following links: same device and inode, one link, or
+  nothing is taken.
+- **`lonca fetch` writes trunk's bundle where only its user reads.** It
+  went to the shared temporary directory under the default mode, readable
+  by every local user for the length of a fetch; it is a `tempfile` now
+  (0600, removed when dropped).
+- **The launcher's last look at the workspace holds one file at a time.**
+  `lonca run` counts what a command left unproposed before it ends the
+  session. It read every changed file's content into one list first; a
+  command that left many large files got the launcher killed before
+  `session.end`, and the session and its token outlived the run.
+  `local_files` keeps each file's name and hash and lets the content go.
+- **A key file that was already there is announced.** `human rotate`,
+  `human recover` and `human recovery-key --out` go on with a key file an
+  interrupted run left, which is how they resume. A program running as
+  the same user can leave one too, of a key it knows. The command now
+  says that the file was there and which public key it holds, before the
+  key is signed into a repository. It does not refuse: resuming is the
+  point, and a refusal would need a flag every interrupted run then has
+  to be told about. With a key that proves presence the person reads the
+  note before they touch.
+
 ## Text for a terminal
 
 A person approves from what `pending`, `diff` and `status` show, and most

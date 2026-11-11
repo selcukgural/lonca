@@ -268,13 +268,31 @@ impl Workspace {
     /// Local changes against the base, as daemon file changes.
     pub fn changes(&self) -> Result<Vec<FileChange>> {
         let mut out = Vec::new();
+        self.each_change(&mut |c| {
+            out.push(c);
+            Ok(())
+        })?;
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(out)
+    }
+
+    /// Every local change against the base, one at a time: whoever takes
+    /// them decides what of a file's content it keeps.
+    fn each_change(&self, take: &mut dyn FnMut(FileChange) -> Result<()>) -> Result<()> {
+        struct Out<'a>(&'a mut dyn FnMut(FileChange) -> Result<()>);
+        impl Out<'_> {
+            fn push(&mut self, c: FileChange) -> Result<()> {
+                (self.0)(c)
+            }
+        }
+        let mut out = Out(take);
         for (path, (mode, blob)) in &self.meta.manifest {
             match wsfs::read(&self.root, path)? {
                 None => out.push(FileChange {
                     path: path.clone(),
                     content_b64: None,
                     mode: None,
-                }),
+                })?,
                 Some(local) => {
                     let (bytes, exec) = (local.bytes, local.executable);
                     let new_mode = match mode {
@@ -287,7 +305,7 @@ impl Workspace {
                             path: path.clone(),
                             content_b64: Some(b64().encode(&bytes)),
                             mode: new_mode.or(Some(*mode)),
-                        });
+                        })?;
                     }
                 }
             }
@@ -312,16 +330,19 @@ impl Workspace {
                 path: rel,
                 content_b64: Some(b64().encode(&local.bytes)),
                 mode: Some(mode),
-            });
+            })?;
         }
-        out.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(out)
+        Ok(())
     }
 
     /// [`Workspace::changes`] as tree entries, with no content: what the
     /// daemon needs to tell a proposed file from one nobody proposed.
+    ///
+    /// One file's content is held at a time: a workspace may have many
+    /// changed files, each as large as a request carries, and whoever asks
+    /// this (the launcher at the end of a run) must get to its end.
     pub fn local_files(&self) -> Result<Vec<LocalFile>> {
-        let local = |c: FileChange| {
+        let local = |c: FileChange| -> Result<LocalFile> {
             let entry = match c.content_b64 {
                 Some(text) => Some(FileEntry {
                     mode: c.mode.unwrap_or(FileMode::Regular),
@@ -334,7 +355,13 @@ impl Workspace {
                 entry,
             })
         };
-        self.changes()?.into_iter().map(local).collect()
+        let mut out = Vec::new();
+        self.each_change(&mut |c| {
+            out.push(local(c)?);
+            Ok(())
+        })?;
+        out.sort_by(|a: &LocalFile, b| a.path.cmp(&b.path));
+        Ok(out)
     }
 
     /// What differs from `tree`, the files of the commit the workspace was

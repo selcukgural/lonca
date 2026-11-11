@@ -691,10 +691,26 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
         .output()
         .unwrap();
     assert!(!cut.status.success());
+    assert!(
+        !text(&cut.stderr).contains("already at"),
+        "it made the key itself"
+    );
     assert_eq!(whoami(&e), first);
     assert!(r.join("humans/ayse.next.key").exists());
-    let out = e.run(r, &["human", "rotate", "--repo", "demo"]);
+    // The key the rerun signs in was not made by it: it says which one.
+    let again = e
+        .cmd(r, &["human", "rotate", "--repo", "demo"])
+        .output()
+        .unwrap();
+    assert!(again.status.success(), "{}", text(&again.stderr));
+    let out = text(&again.stdout);
     assert!(out.contains("demo: already uses the new key"), "{out}");
+    let said = text(&again.stderr);
+    assert!(
+        said.contains("note: using the key file that was already at")
+            && said.contains("ayse.next.key"),
+        "{said}"
+    );
     let second = whoami(&e);
     assert_ne!(first, second);
     assert_eq!(status_json(&e)["humans"]["ayse"]["public"], second.as_str());

@@ -97,11 +97,33 @@ const LINUX_SYSTEM: [&str; 8] = [
     "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc", "/opt",
 ];
 
-const MACH_SERVICES: [&str; 3] = [
+const MACH_SERVICES: [&str; 2] = [
     "com.apple.system.opendirectoryd.libinfo",
     "com.apple.system.notification_center",
-    "com.apple.trustd.agent",
 ];
+
+/// The service that judges a certificate for the Security framework. Only
+/// a sandbox with a way out has a certificate to judge, so only that one
+/// may ask it. It runs outside the sandbox and may fetch what a certificate
+/// names (an issuer, a revocation answer) by itself, past the proxy: a
+/// known limit of an isolated session on macOS (threat model).
+const MACH_TRUST: &str = "com.apple.trustd.agent";
+
+/// What `/opt` and `/usr` hold besides programs, where Homebrew installs:
+/// the data directories of local databases and services, and their
+/// configuration, passwords included. Closed after the system's trees are
+/// opened; a `read` of the policy opens one again, coming later.
+const MAC_SERVICES_DATA: [&str; 4] = [
+    "/opt/homebrew/var",
+    "/opt/homebrew/etc",
+    "/usr/local/var",
+    "/usr/local/etc",
+];
+
+/// What of those a program needs all the same: the certificates its TLS
+/// library trusts.
+const MAC_CERTIFICATES: &str =
+    r"^/(opt/homebrew|usr/local)/etc/(openssl[^/]*|ca-certificates)(/|$)";
 
 fn quoted(p: &Path) -> String {
     let text = String::from_utf8_lossy(p.as_os_str().as_bytes());
@@ -142,7 +164,9 @@ impl Jail {
              (allow ipc-posix-sem)\n\
              (allow ipc-posix-shm-read* ipc-posix-shm-write-data ipc-posix-shm-write-create)\n",
         );
-        for name in MACH_SERVICES {
+        let way_out = self.proxy_port.is_some() || self.relay.is_some();
+        let trust = way_out.then_some(MACH_TRUST);
+        for name in MACH_SERVICES.into_iter().chain(trust) {
             out += &format!("(allow mach-lookup (global-name \"{name}\"))\n");
         }
         if let Some(mark) = &self.mark {
@@ -151,6 +175,9 @@ impl Jail {
         }
         let system = MAC_SYSTEM.map(PathBuf::from);
         out += &format!("(allow file-read* {})\n", subpaths(&system));
+        let data = MAC_SERVICES_DATA.map(PathBuf::from);
+        out += &format!("(deny file-read* {})\n", subpaths(&data));
+        out += &format!("(allow file-read* (regex #\"{MAC_CERTIFICATES}\"))\n");
         let names = MAC_LITERALS.map(|p| format!("(literal \"{p}\")"));
         out += &format!("(allow file-read* {})\n", names.join(" "));
         for dir in self.ancestors() {
@@ -469,10 +496,101 @@ mod tests {
         assert!(!p.contains("(literal \"/h/.local/bin\")"), "{p}");
     }
 
+    /// `/opt` and `/usr` are open for the programs in them. Where Homebrew
+    /// keeps the data and the configuration of local services is closed
+    /// again, but for the certificates; a `read` of the policy, which comes
+    /// later, opens what it names.
+    #[test]
+    fn a_seatbelt_profile_closes_what_local_services_keep() {
+        let open = Jail {
+            readable: vec!["/usr/local/var/cache".into()],
+            ..jail()
+        };
+        let p = open.seatbelt();
+        let system = at(&p, "(allow file-read* (subpath \"/System\")");
+        let closed = at(
+            &p,
+            "(deny file-read* (subpath \"/opt/homebrew/var\") (subpath \"/opt/homebrew/etc\") \
+             (subpath \"/usr/local/var\") (subpath \"/usr/local/etc\"))\n",
+        );
+        let certificates = at(
+            &p,
+            "(allow file-read* (regex #\"^/(opt/homebrew|usr/local)/etc/",
+        );
+        let named = at(&p, "(subpath \"/usr/local/var/cache\"))\n");
+        assert!(
+            system < closed && closed < certificates && certificates < named,
+            "{p}"
+        );
+    }
+
+    /// The profile is one Seatbelt takes, and it does what it says, on the
+    /// files of this machine: a regular expression in it is not checked by
+    /// anything else.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_real_sandbox_takes_the_profile_and_closes_what_it_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().canonicalize().unwrap();
+        let jail = Jail {
+            workspace: ws.clone(),
+            writable: vec![],
+            readable: vec![],
+            secrets: vec![],
+            socket: None,
+            proxy_port: None,
+            ..jail()
+        };
+        let run = |script: &str| {
+            let argv: [OsString; 3] = ["/bin/sh".into(), "-c".into(), script.into()];
+            let mut c = jail.command(Sandbox::Seatbelt, &argv).unwrap();
+            c.current_dir(&ws).output().unwrap()
+        };
+        let out = run("echo in > f && cat f && ls /usr/bin >/dev/null");
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{said}");
+        assert_eq!(out.stdout, b"in\n");
+        // Where a closed directory exists here, it does not list.
+        for closed in MAC_SERVICES_DATA {
+            if Path::new(closed).is_dir() {
+                let out = run(&format!("ls {closed}"));
+                assert!(!out.status.success(), "{closed} lists");
+            }
+        }
+        // A certificate store under one of them reads.
+        for store in [
+            "/opt/homebrew/etc/ca-certificates",
+            "/usr/local/etc/ca-certificates",
+        ] {
+            if Path::new(store).is_dir() {
+                let out = run(&format!("ls {store}"));
+                assert!(out.status.success(), "{store} does not list");
+            }
+        }
+    }
+
     #[test]
     fn a_seatbelt_profile_names_only_the_harmless_services() {
         let p = jail().seatbelt();
-        assert_eq!(p.matches("(allow mach-lookup").count(), MACH_SERVICES.len());
+        // A way out, so a certificate to judge.
+        assert_eq!(
+            p.matches("(allow mach-lookup").count(),
+            MACH_SERVICES.len() + 1
+        );
+        at(&p, &format!("(global-name \"{MACH_TRUST}\")"));
+        let shut = Jail {
+            proxy_port: None,
+            ..jail()
+        };
+        let shut = shut.seatbelt();
+        assert!(
+            !shut.contains(MACH_TRUST),
+            "no way out, nobody to trust: {shut}"
+        );
+        assert_eq!(
+            shut.matches("(allow mach-lookup").count(),
+            MACH_SERVICES.len()
+        );
         let marked = Jail {
             mark: Some("lonca.run.x".into()),
             ..jail()
@@ -491,7 +609,9 @@ mod tests {
             ..jail()
         };
         let p = open.seatbelt();
-        assert!(!p.contains("(deny file"), "{p}");
+        // The one that is always there closes what local services keep.
+        assert_eq!(p.matches("(deny file").count(), 1, "{p}");
+        assert!(!p.contains("(deny file-read* file-write*"), "{p}");
     }
 
     #[test]

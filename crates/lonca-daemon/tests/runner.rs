@@ -711,6 +711,60 @@ fn trees_are_fetched_in_pages() {
     assert_eq!(prep["warnings"], json!([]), "{prep}");
 }
 
+/// A path is a path to git too: a file whose name is pathspec magic
+/// (`:!src/lib.rs`, "everything but") or a glob (`src/*`) takes no other
+/// file out of the reviewer's diff and adds none to its own.
+#[test]
+fn a_diff_takes_every_path_literally() {
+    let mut e = Env::new();
+    e.init(None);
+    e.human_change(vec![file("src/lib.rs", LIB)], "seed");
+    e.svc.process_all();
+    let base = e.trunk();
+    let token = e.session("s1", &["**"]);
+    e.bind(&token);
+    let magic = [":!src/lib.rs", ":(exclude)src/lib.rs", "src/*"];
+    for path in magic.iter().chain(&["src/lib.rs"]) {
+        e.wrote(&token, path);
+    }
+    e.lease(&token, "src/lib.rs#charge");
+    for path in magic {
+        e.lease(&token, &format!("{path}#<file>"));
+    }
+    let new = LIB.replacen("    a\n", "    a * 2\n", 1);
+    let mut files = vec![file("src/lib.rs", &new)];
+    files.extend(magic.iter().map(|p| file(p, "one\n")));
+    let r = e.propose(&token, &base, files, &["src/lib.rs#charge"]);
+    assert_ne!(r["decision"]["outcome"], "deny", "{r}");
+
+    let d = e.ok(
+        "change.diff",
+        Some("demo"),
+        None,
+        json!({"change": r["change"]}),
+    );
+    let diff = d["diff"].as_str().unwrap();
+    assert!(diff.contains("+    a * 2"), "{diff}");
+    let files = d["files"].as_array().unwrap();
+    assert_eq!(files.len(), 4, "{d}");
+    for f in files {
+        let (added, removed) = if f["path"] == "src/lib.rs" {
+            (1, 1)
+        } else {
+            (1, 0)
+        };
+        assert_eq!(
+            (f["added"].as_u64(), f["removed"].as_u64()),
+            (Some(added), Some(removed)),
+            "{f}"
+        );
+        assert!(
+            diff.contains(&format!("b/{}", f["path"].as_str().unwrap())),
+            "{diff}"
+        );
+    }
+}
+
 /// The diff and the evidence of a change come from the daemon: files
 /// with counts and symbols, redaction applied, a cap, and the checks of
 /// the last integration with their log tails.

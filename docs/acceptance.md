@@ -106,6 +106,7 @@ last column.
 | A31 | `lonca events --watch --follow` prints one JSON line per event and stops by itself when every session it watches by name has ended | `10-watch` |
 | A32 | With `identify` in `[verification]`, `lonca change --evidence` of an integrated change names the toolchain each check ran with (a digest and each command's first line), and an identify command that fails is shown as failed while the check passes | `11-evidence` |
 | A33 | `lonca-audit verify` notes a check that ran with another toolchain than the last time it ran (`env … changed since …`), and the log still verifies | `11-evidence` |
+| A36 | `lonca diff <change>` shows the reviewer every file a proposal changes, also when the proposal has files whose names are git patterns (`:!src/billing.rs`, `src/*`) | `04-review` |
 
 ## Manual criteria
 

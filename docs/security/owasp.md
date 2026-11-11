@@ -72,7 +72,7 @@ issue), **accepted** (a known limit, with where it is written down), **n/a**.
 |---|---|---|---|
 | CICD-SEC-1 Insufficient Flow Control | met | main takes pull requests only, and requires the `ci.yml` jobs (Ubuntu, macOS, sandbox) as status checks; no approval is required (one maintainer) (`docs/decisions.md`, "CI runs on every pull request" and #60) | — |
 | CICD-SEC-2 Inadequate IAM | met | one maintainer; workflows hold read-only tokens, `persist-credentials: false` | — |
-| CICD-SEC-3 Dependency Chain Abuse | met | cargo-deny crates.io only, Dependabot cooldown, lockfile `--locked`; `cargo vet` not adopted (`docs/decisions.md`, #60) | — |
+| CICD-SEC-3 Dependency Chain Abuse | met | cargo-deny crates.io only, Dependabot cooldown (cargo, Actions, and the site's npm packages), lockfile `--locked`; the site's build can not change the `install.sh` it serves (`docs.yml`, job `untouched`); `cargo vet` not adopted (`docs/decisions.md`, #60) | the pages the site's build renders are as its npm packages made them |
 | CICD-SEC-4 Poisoned Pipeline Execution | met | no `pull_request_target`, no event data in `run:`; no run on a tag restores a cache; zizmor on workflow changes | — |
 | CICD-SEC-5 Insufficient PBAC | met | `permissions: contents: read` per workflow; OIDC (`id-token: write`) only on the jobs that need it, none of which runs the tests: Scorecard, the Pages deploy, the release attestation, and the crates.io publish (environment `release`, tags `v*`) | — |
 | CICD-SEC-6 Insufficient Credential Hygiene | met | no long-lived secrets in CI; secret scanning with push protection | — |

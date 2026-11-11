@@ -3630,8 +3630,19 @@ it and what it runs are part of the trust model.
   it also requires the `ci.yml` jobs as status checks ("CI runs on every
   pull request"); from 2026-11-08 to then it required none. `cargo-deny`,
   CodeQL and zizmor run on pull requests and block nothing.
+- **The `install.sh` that is served is the one in the repository.** The
+  site is built by Docusaurus, a thousand npm packages, and the build's
+  output is what Pages serves, `install.sh` included: copied from
+  `website/static/` by code that is not ours. `npm ci --ignore-scripts`
+  stops a package's install script, not what a package does when the build
+  runs it. Since 2026-11-12 `docs.yml` has a job with no npm in it,
+  `untouched`, between the build and the deployment: it takes the Pages
+  artifact and compares its `install.sh` with the file in the repository,
+  byte for byte. The site's packages get Dependabot too, with the week's
+  wait the others have. The pages themselves (the command they show) are
+  still what the build made of them.
 - **CODEOWNERS** names the owner of `.github/`, `deny.toml`,
-  `rust-toolchain.toml`, `packaging/`, `lonca-core`, `lonca-policy`,
+  `rust-toolchain.toml`, `packaging/`, `website/static/install.sh`, `lonca-core`, `lonca-policy`,
   `lonca-audit` and `SECURITY.md`; review by the owner is asked, not
   required.
 - **A pinned toolchain**: `rust-toolchain.toml` names the exact version

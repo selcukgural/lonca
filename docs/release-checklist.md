@@ -5,8 +5,9 @@
 1. `rust-toolchain.toml`: is a newer stable out? Raise it in a pull request of
    its own, with the clippy fixes it needs, before the release.
 2. Run `ci.yml` and `fuzz.yml` on main (`gh workflow run ci.yml --ref
-   main`, `gh workflow run fuzz.yml --ref main`); both green. Mutants do
-   not gate a release (docs/decisions.md, "Mutation testing"). A fuzz failure's
+   main`, `gh workflow run fuzz.yml --ref main`); both green. Mutation
+   testing is not part of a release; it runs by hand when a change needs
+   it (docs/decisions.md, "Mutation testing"). A fuzz failure's
    input is encrypted (docs/fuzzing.md): fix it before the release.
 3. Try the four builds: `gh workflow run release.yml --ref main` (builds
    and runs the acceptance tests on the archives, drafts nothing).
@@ -44,7 +45,7 @@
    --repo selcukgural/lonca`.
 4. crates.io. A crate that is not on crates.io yet is published by hand
    from the tag, by its owner, in dependency order:
-   `git checkout vX.Y.Z && cargo publish --workspace --exclude lonca-mutants
+   `git checkout vX.Y.Z && cargo publish --workspace --exclude lonca-fuzz
    --locked`. Then on crates.io, for each new crate: Settings → Trusted
    Publishing → GitHub, `selcukgural/lonca`, workflow `registries.yml`,
    environment `release`. When every crate has it, set the repository

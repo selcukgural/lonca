@@ -8,7 +8,7 @@ use base64::Engine;
 use lonca_core::changeid::CHANGE_ID_HEADER;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
-use lonca_core::ops::Op;
+use lonca_core::ops::{Actor, HumanSignature, Op};
 use lonca_core::store::CommitSpec;
 use lonca_core::{ChangeId, Error, FileEntry, FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::chain::{Chain, Submission, replay_checked};
@@ -25,6 +25,12 @@ pub const HUMAN_HEADER: &str = "lonca-human";
 
 /// Total size of one proposal.
 pub const MAX_PROPOSAL_BYTES: usize = 64 * 1024 * 1024;
+
+/// The most an entry's operation and human signature take, as JSON. The log
+/// keeps every entry for good, the refused ones too, so what a caller can
+/// put in one is bounded before it is decided and signed. The lists the
+/// policy counts (a lease's items, a change's files) fit many times over.
+pub const MAX_OP_BYTES: usize = 64 * 1024;
 
 pub struct RepoHandle {
     pub name: String,
@@ -135,9 +141,44 @@ impl RepoHandle {
         Ok(b)
     }
 
+    /// Refuses a submission past [`MAX_OP_BYTES`], before anything is
+    /// decided, signed or written. Only the results of the daemon's own
+    /// merges are let past it: their length is the repository's, and a
+    /// refusal there would leave the queue with a change it can not finish.
+    fn fits(sub: &Submission) -> Result<()> {
+        Self::op_fits(&sub.actor, &sub.op, sub.human.as_ref())
+    }
+
+    /// [`Self::fits`] for the parts of a submission, for a caller that
+    /// writes to the store before it submits: asked first, a refusal leaves
+    /// nothing behind.
+    pub fn op_fits(actor: &Actor, op: &Op, human: Option<&HumanSignature>) -> Result<()> {
+        let merged = matches!(
+            op,
+            Op::ChangeIntegrate { .. } | Op::ChangeIntegrateBatch { .. }
+        );
+        if merged && *actor == Actor::Daemon {
+            return Ok(());
+        }
+        let signature = match human {
+            Some(h) => serde_json::to_vec(h)?.len(),
+            None => 0,
+        };
+        let bytes = serde_json::to_vec(op)?.len() + signature;
+        if bytes > MAX_OP_BYTES {
+            return Err(Error::Invalid(format!(
+                "{} is {bytes} bytes; an entry of the log holds {MAX_OP_BYTES}. \
+                 Shorten its text and lists, or split it",
+                op.kind().as_str()
+            )));
+        }
+        Ok(())
+    }
+
     /// Decides without logging (used to refuse a bad genesis without
     /// leaving a denied genesis entry behind).
     pub fn dry_run(&mut self, sub: Submission, wall_ms: i64) -> Result<SignedOp> {
+        Self::fits(&sub)?;
         let policy = self.policy()?;
         let t = self.chain.entry_time(wall_ms);
         Ok(self.chain.prepare(sub, t, &policy))
@@ -145,6 +186,7 @@ impl RepoHandle {
 
     /// Decide, sign, persist, apply.
     pub fn submit(&mut self, sub: Submission, wall_ms: i64) -> Result<SignedOp> {
+        Self::fits(&sub)?;
         let policy = self.policy()?;
         let t = self.chain.entry_time(wall_ms);
         let op = self.chain.prepare(sub, t, &policy);

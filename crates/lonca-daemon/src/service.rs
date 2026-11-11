@@ -514,6 +514,10 @@ struct ProxyBook {
     /// Connections no process could be named for, so every session the
     /// proxy serves answered for them (see `lonca status`).
     unattributed: u64,
+    /// What each session may still have recorded this minute: every
+    /// connection is an entry of the log, so they come at the rate of the
+    /// session's own operations (`sessions.ops_per_minute`), counted apart.
+    recorded: BTreeMap<SessionKey, Bucket>,
 }
 
 impl ProxyBook {
@@ -2824,6 +2828,7 @@ impl Service {
             },
             p.op.clone(),
         );
+        RepoHandle::op_fits(&sub.actor, &sub.op, Some(&p.sig)).or_fail()?;
         sub.human = Some(p.sig);
         let workspace = p.workspace.filter(|w| Path::new(w).is_absolute());
         // Store, remote, and the proposal refs the log has: only those go.
@@ -2863,6 +2868,16 @@ impl Service {
                 return fail("not_fast_forward", "import must contain trunk");
             }
             _ => {}
+        }
+        // What comes in with no session leaves no entry when it is denied:
+        // anyone who can open the socket could send it, and the log keeps
+        // every entry. The refusal is in the security log instead.
+        if matches!(auth.caller, Caller::Anonymous) {
+            let dry = r.dry_run(sub.clone(), now).or_fail()?;
+            if dry.entry.decision.outcome == lonca_core::ops::Outcome::Deny {
+                let why = dry.entry.decision.reasons.join(", ");
+                return fail("forbidden", format!("denied, and not logged: {why}"));
+            }
         }
         let old_policy = r.chain.state.policy.clone();
         let seq = r.chain.state.next_seq;
@@ -3319,6 +3334,15 @@ impl Service {
         Self::reconcile(r, now)?;
         let session = actor.session().expect("agent").to_string();
         let change = p.change.unwrap_or_else(ChangeId::random);
+        // Asked before the commit and its ref are written: the base stands
+        // in for the commit, an id like it.
+        let probe = Op::ChangePropose {
+            change,
+            commit: p.base.clone(),
+            base: p.base.clone(),
+            claim: p.claim.clone(),
+        };
+        RepoHandle::op_fits(&actor, &probe, None).or_fail()?;
         let max = r.policy().or_fail()?.config.changes.max_file_bytes;
         let commit = r
             .build_change_commit(
@@ -4032,6 +4056,20 @@ impl Service {
                 allow = false;
                 continue;
             };
+            // Past its rate a connection is refused unrecorded: nothing
+            // goes through that the log does not have.
+            let rate = policy.config.sessions.ops_per_minute as u64;
+            let bucket = book.recorded.entry(key.clone());
+            let bucket = bucket.or_insert_with(|| Bucket::full(rate, now));
+            if bucket.take(rate, now).is_err() {
+                Counters::add(&self.counters.rate_limited);
+                allow = false;
+                reason.get_or_insert(format!(
+                    "this session had {rate} connections recorded in a minute \
+                     (sessions.ops_per_minute); try again shortly"
+                ));
+                continue;
+            }
             let cfg = &policy.config.observation;
             let (passes, external) = host_verdict(cfg, host);
             let refused = if !cfg.allow_ports.contains(&port) {

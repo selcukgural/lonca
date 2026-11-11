@@ -739,7 +739,9 @@ session's human. Result: logged, plus:
 Errors: `invalid` (the operation does not fit: a `repo.init` here, a
 rotation to a key the daemon does not hold), `not_fast_forward`,
 `foreign_key` (the repository waits for `daemon.recover`), `denied` for
-a recovery the log refused, `git`.
+a recovery the log refused, `git`. A denied operation that came with no
+session (`human.recover`) is `forbidden` with the reasons, and is not
+logged.
 
 ### `lease.acquire`
 
@@ -1069,6 +1071,7 @@ the queue itself, and stays 0 under protocol 1.
 | `unknown_method` | not in the table |
 | `not_found` | no such repository or change; a path not in the commit (`blobs`) |
 | `too_large` | a request line over its method's limit; a `blobs` page, or one file, does not fit the line cap |
+| `invalid` | parameters that do not read, or do not fit the method. Also an operation whose JSON, with its human signature, is past 64 KiB: the message names the operation and its size; nothing is logged. Shorten its text and lists, or split it |
 | `rate_limited` | the session and those made from it are past `[sessions] ops_per_minute`; nothing is logged, and the message says when to try again. `session.end` and the methods that write nothing to the log are exempt |
 | `busy` | no room for this connection or long line; nothing ran, send it again |
 | `verifying` | `change.withdraw` of a change whose checks are running; nothing is logged. Send it again once they end, if the change is still queued |

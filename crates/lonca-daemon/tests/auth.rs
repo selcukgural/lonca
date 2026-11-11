@@ -60,7 +60,8 @@ fn without_a_token_nothing_but_ping_answers() {
     );
     // Recovery is the one submission that goes in on its signature alone:
     // the key that would sign in is the lost one. A bad signature is
-    // denied by decide(), like before.
+    // denied by decide(), like before, and leaves no entry: whoever can
+    // open the socket could send one.
     let rec = KeyPair::generate();
     e.human(Op::HumanRecoveryKey {
         human: "ayse".into(),
@@ -79,8 +80,11 @@ fn without_a_token_nothing_but_ping_answers() {
     };
     let forged =
         json!({"op": op, "sig": sign_ed25519(&KeyPair::generate(), "ayse", "demo", &op, e.now())});
-    let r = e.anon("human.submit", Some("demo"), None, forged).unwrap();
-    assert_eq!(r["decision"]["outcome"], "deny", "{r}");
+    let (c, why) = e
+        .anon("human.submit", Some("demo"), None, forged)
+        .unwrap_err();
+    assert_eq!(c, "forbidden");
+    assert!(why.contains("bad_human_signature"), "{why}");
     let body = json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now())});
     let r = e.anon("human.submit", Some("demo"), None, body).unwrap();
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");

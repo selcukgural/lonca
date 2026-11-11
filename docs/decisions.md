@@ -4538,6 +4538,51 @@ recorded for the other alone, and fetched without its own taint.
   process tree answer together. A process that gets another program to
   connect for it (a helper outside its own descent) is that program's.
 
+## A tunnel is for the host it was asked for
+
+The proxy decided by the host a client asked for (`CONNECT host:port`, or
+the target of a plain request), resolved it, and relayed whatever came. An
+address often serves many names (a content network, a shared host), and
+which of them answers is said by the client again, further in: the server
+name of its TLS hello, or the `Host` header. A command let through for one
+allowed host could so reach any other name at that host's addresses, and
+the log said the allowed one.
+
+- **The server name is the host.** For a `CONNECT` to a name, what the
+  client sends first is held back until it is known not to be TLS, or to
+  be a TLS client's first message (`lonca_net::hello`, read from the clear
+  bytes, across records, 64 KiB at most). A name in it that is not the
+  host (case and a last dot aside) ends the tunnel before a byte of the
+  client's reaches the host (`Outcome::Misnamed`); so does a first message
+  that can not be read to its end or names a server twice. No name at all
+  passes: it chooses nothing. The other direction is not held, so a server
+  that speaks first is heard.
+- **An address is an address.** A tunnel asked for by address (`CONNECT
+  10.0.0.5:443`) is not held to a name: the policy let the address
+  through, with whatever it serves.
+- **A plain request names its host once, and is alone.** Its `Host` header
+  has to be the target's host and port; another, a second one, a folded
+  header line or a line that is no header is answered 400 before the gate
+  is asked. What follows a request on its connection is relayed unread,
+  so the head goes on with `Connection: close` (the client's `Connection`,
+  `Proxy-Connection` and `Keep-Alive` are dropped): a server that follows
+  HTTP reads no second request. A client that sends requests for several
+  hosts over one proxy connection now gets each on its own; they used to
+  go to the first one's host.
+- **In `lonca-net`, for every gate.** It is the same promise as connecting
+  to the address that was checked, and needs nothing a gate knows. A gate
+  that serves a tunnel itself (`Gate::relay`) gets it before this and is on
+  its own.
+- **What stays.** Inside TLS the proxy reads nothing: a client that says
+  the allowed name in its hello and another in the `Host` header of the
+  request within is not seen, and is refused or served as the host's own
+  front end decides. An encrypted client hello (ECH) hides the inner name
+  by design; it is let through as long as the name outside is the host's,
+  since browsers send the extension on every connection, real or not. TLS
+  that starts later on a connection (`STARTTLS`) is not looked for. The
+  client is not told why a tunnel ended: after `200` there is no place to
+  say it.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

@@ -401,3 +401,178 @@ fn a_tunnel_that_carries_one_way_only_stays() {
         [("127.0.0.1".to_owned(), Outcome::Idle)]
     );
 }
+
+/// An upstream that sends back what it is sent, to the end.
+fn mirror_upstream() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let mut s = s.unwrap();
+            let mut all = Vec::new();
+            let _ = s.read_to_end(&mut all);
+            let _ = s.write_all(&all);
+        }
+    });
+    port
+}
+
+/// A proxy that lets `localhost` through: a name, as tunnels to names are
+/// the ones held to it.
+fn spawn_named() -> (lonca_net::Server, Arc<Recorder>) {
+    let gate = Arc::new(Recorder {
+        allowed: "localhost".into(),
+        outcomes: Mutex::new(Vec::new()),
+    });
+    let listener = lonca_net::bind("127.0.0.1:0").unwrap();
+    let server = lonca_net::spawn(listener, gate.clone()).unwrap();
+    (server, gate)
+}
+
+/// Opens a tunnel to `target`, sends `parts` through it one by one, and
+/// reads what comes back after the proxy's answer.
+fn through(server: &lonca_net::Server, target: &str, parts: &[&[u8]]) -> (String, Vec<u8>) {
+    let mut s = TcpStream::connect(server.local_addr()).unwrap();
+    write!(s, "CONNECT {target} HTTP/1.1\r\n\r\n").unwrap();
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let mut status = String::new();
+    r.read_line(&mut status).unwrap();
+    r.read_line(&mut String::new()).unwrap();
+    for part in parts {
+        // A tunnel that is cut takes no more.
+        let _ = s.write_all(part);
+        std::thread::sleep(ms(30));
+    }
+    let _ = s.shutdown(std::net::Shutdown::Write);
+    let mut back = Vec::new();
+    let _ = r.read_to_end(&mut back);
+    (status, back)
+}
+
+#[test]
+fn a_tunnel_is_held_to_the_name_it_was_let_through_for() {
+    let (server, gate) = spawn_named();
+    let target = format!("localhost:{}", mirror_upstream());
+    let hello = |name| lonca_net::hello::sample(name, 16384);
+
+    // The host's own name, however it is written and however it comes.
+    for name in ["localhost", "LocalHost", "localhost."] {
+        let sent = hello(Some(name));
+        let (status, back) = through(&server, &target, &[&sent, b"and more"]);
+        assert!(status.contains("200"), "{status}");
+        assert_eq!(back, [&sent[..], b"and more"].concat(), "{name}");
+    }
+    let sent = hello(Some("localhost"));
+    let (a, b) = sent.split_at(20);
+    assert_eq!(through(&server, &target, &[a, b]).1, sent, "in two pieces");
+    let small = lonca_net::hello::sample(Some("localhost"), 9);
+    assert_eq!(through(&server, &target, &[&small]).1, small, "in records");
+    // No name at all picks nothing, and what is not TLS has none.
+    let sent = hello(None);
+    assert_eq!(through(&server, &target, &[&sent]).1, sent);
+    let ssh = b"SSH-2.0-OpenSSH_9.9\r\n";
+    assert_eq!(through(&server, &target, &[ssh]).1, ssh);
+    assert_eq!(through(&server, &target, &[]).1, b"");
+    let seen = wait_for(&gate, 8);
+    assert!(
+        seen.iter().all(|(_, o)| *o == Outcome::Tunneled),
+        "{seen:?}"
+    );
+
+    // Another name the same address may serve: nothing of it gets there.
+    for sent in [
+        hello(Some("elsewhere.example")),
+        hello(Some("localhost.elsewhere.example")),
+        // A hello that something else is put in the middle of.
+        [&small[..13], &[23, 3, 3, 0, 1, 0], &small[13..]].concat(),
+    ] {
+        let before = gate.outcomes.lock().unwrap().len();
+        let (status, back) = through(&server, &target, &[&sent, b"and more"]);
+        assert!(status.contains("200"), "{status}");
+        assert_eq!(back, b"", "nothing came back, as nothing got there");
+        let seen = wait_for(&gate, before + 1);
+        assert_eq!(seen[before], ("localhost".to_owned(), Outcome::Misnamed));
+    }
+    // A hello that never ends is held back for as long as it does not.
+    let (_, back) = through(&server, &target, &[&hello(Some("localhost"))[..40]]);
+    assert_eq!(back, b"");
+}
+
+#[test]
+fn a_server_that_speaks_first_is_heard_before_the_client_says_anything() {
+    let (server, _gate) = spawn_named();
+    let target = format!("localhost:{}", upstream());
+    let (status, back) = through(&server, &target, &[]);
+    assert!(status.contains("200"), "{status}");
+    assert_eq!(back, b"hello from upstream\n");
+}
+
+#[test]
+fn a_tunnel_to_an_address_is_for_whatever_the_address_serves() {
+    let (server, gate) = spawn_proxy();
+    let target = format!("127.0.0.1:{}", mirror_upstream());
+    let sent = lonca_net::hello::sample(Some("elsewhere.example"), 16384);
+    assert_eq!(through(&server, &target, &[&sent]).1, sent);
+    assert_eq!(
+        wait_for(&gate, 1),
+        [("127.0.0.1".to_owned(), Outcome::Tunneled)]
+    );
+}
+
+/// An upstream that answers each connection with the whole head it got.
+fn head_upstream() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for s in l.incoming() {
+            let mut s = s.unwrap();
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            let mut head = String::new();
+            while r.read_line(&mut head).is_ok_and(|n| n > 2) {}
+            let _ = s.write_all(head.as_bytes());
+        }
+    });
+    port
+}
+
+#[test]
+fn a_plain_request_is_for_its_own_host_and_is_the_only_one() {
+    let (server, gate) = spawn_named();
+    let up = head_upstream();
+    let ask = |headers: &str| {
+        let mut s = TcpStream::connect(server.local_addr()).unwrap();
+        let request = format!("GET http://localhost:{up}/a HTTP/1.1\r\n{headers}\r\n");
+        s.write_all(request.as_bytes()).unwrap();
+        let mut all = String::new();
+        let _ = BufReader::new(s).read_to_string(&mut all);
+        all
+    };
+    // The host is told that no request follows this one: the next on the
+    // connection would be relayed unread, whatever host it named.
+    let got = ask(&format!(
+        "Host: LOCALHOST:{up}\r\nConnection: keep-alive\r\nProxy-Connection: keep-alive\r\nAccept: */*\r\n"
+    ));
+    assert_eq!(
+        got,
+        format!(
+            "GET /a HTTP/1.1\r\nHost: LOCALHOST:{up}\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+        )
+    );
+    assert_eq!(ask(""), "GET /a HTTP/1.1\r\nConnection: close\r\n\r\n");
+
+    let before = wait_for(&gate, 2).len();
+    for headers in [
+        "Host: elsewhere.example\r\n".to_owned(),
+        // The right name on another port is another server.
+        "Host: localhost\r\n".to_owned(),
+        format!("Host: localhost:{up}\r\nhost: elsewhere.example\r\n"),
+        format!("Host: localhost:{up}\r\n elsewhere.example\r\n"),
+        format!("Host: localhost:{up}\r\nnot a header\r\n"),
+    ] {
+        let got = ask(&headers);
+        assert!(got.starts_with("HTTP/1.1 400"), "{headers:?}: {got}");
+        assert!(got.contains("Host header"), "{got}");
+    }
+    // Refused before the gate was asked: nothing was let through.
+    assert_eq!(gate.outcomes.lock().unwrap().len(), before);
+}

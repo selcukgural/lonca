@@ -1583,21 +1583,24 @@ mod tests {
         let (dir, store, files, tree) = setup(&[("ok.txt", "yes\n")]);
         let v = Verifier::new(dir.path().join("scratch"));
         let mut c = cfg(Some("test -f ok.txt"), Some("exit 3"));
-        c.timeout_seconds = 1;
+        // The timeout is the checks' too: room for a slow runner's sandbox.
+        c.timeout_seconds = 3;
         c.identify = vec![
             "echo 'no such tool' >&2; exit 127".into(),
-            "sleep 5".into(),
+            "sleep 60".into(),
             "printf 'tool\\033[31m 1\\n'".into(),
         ];
         let started = Instant::now();
         let r = v.run(&store, &files, &tree, &c).unwrap();
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(30),
             "the timeout holds"
         );
         assert_eq!(
             (r[0].result, r[1].result),
-            (CheckResult::Pass, CheckResult::Fail)
+            (CheckResult::Pass, CheckResult::Fail),
+            "{:?}",
+            r[0].details
         );
         let d = &r[1].details;
         assert_eq!(d["env.0.error"], "exit 127");

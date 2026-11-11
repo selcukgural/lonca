@@ -88,6 +88,17 @@ jobs:
       # `-s none` cargo-fuzz needs no nightly (docs/fuzzing.md).
       - name: Rust toolchain
         run: rustup toolchain install
+      # Who can read what a run finds is this key's owner and nobody else:
+      # a change to the file that is not also a change here stops the run.
+      - name: The crash recipient is the one this workflow expects
+        env:
+          EXPECTED: age1gllamh7x2rqjkns82e7nf6djtt0n384uxuny7jp9dc5c3ts8kysq36u304
+        run: |
+          got=$(cat fuzz/crash-recipient.txt)
+          if [ "$got" != "$EXPECTED" ]; then
+            echo "::error::fuzz/crash-recipient.txt is not the recipient fuzz.yml expects"
+            exit 1
+          fi
       - name: cargo-fuzz and age
         run: |
           cargo install --locked cargo-fuzz@0.13.2

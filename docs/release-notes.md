@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### What waited for approval is checked again when it is released
+
+An operation a policy rule sends to a human (a `human.enroll`, a
+`session.start`, a `lease.acquire` under an `@escalate` rule) was applied
+at its approval as it had been asked, whatever had happened meanwhile. From
+log format 35 the releasing approval checks it again: a name enrolled in
+between is not given another key (`already_enrolled`), a session id is not
+taken twice (`session_exists`), a symbol someone else leased is not leased
+again (`lease_held:…`). `human.enroll` also refuses a key that another name
+uses. Smaller, in the same change: the intent of a lease held by a tainted
+session is no longer shown to other agents (in `lease_held:`, in a denial's
+details, in `status`); `lonca-audit` holds the evidence of a single
+integration to the tree that was merged, as it did for batches; and a log
+entry with a time at the end of the 64-bit range no longer stops the
+auditor.
+
 ### The macOS sandbox no longer reads what Homebrew's services keep
 
 `lonca run` and verification on macOS open `/usr` and `/opt` for the

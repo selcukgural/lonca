@@ -61,7 +61,11 @@ pub fn verify(
 /// The age and nonce checks every human signature gets, before any key
 /// is looked up.
 pub fn check_fresh(sig: &HumanSignature, now_ms: i64) -> Result<(), &'static str> {
-    if sig.issued_ms > now_ms + MAX_SKEW_MS || sig.issued_ms < now_ms - MAX_AGE_MS {
+    // Saturating: an entry's time is any 64-bit number its writer chose,
+    // and a replay must answer for it, not stop.
+    if sig.issued_ms > now_ms.saturating_add(MAX_SKEW_MS)
+        || sig.issued_ms < now_ms.saturating_sub(MAX_AGE_MS)
+    {
         return Err("stale_human_signature");
     }
     if sig.nonce.len() < NONCE_MIN || sig.nonce.len() > NONCE_MAX {
@@ -629,6 +633,23 @@ mod tests {
     /// Freshness at its edges: exactly MAX_AGE old is fresh, one more
     /// millisecond is stale; exactly MAX_SKEW ahead is fresh, one more is
     /// stale; the nonce bounds are inclusive.
+    /// An entry's time is whatever its writer put there: the check answers
+    /// for the ends of the range too, and a replay goes on.
+    #[test]
+    fn freshness_at_the_ends_of_time_is_an_answer() {
+        let sig = |issued_ms: i64| HumanSignature {
+            human: "ayse".into(),
+            nonce: "n".repeat(NONCE_MIN),
+            issued_ms,
+            sig: String::new(),
+            at: None,
+        };
+        for now in [i64::MAX, i64::MIN] {
+            assert_eq!(check_fresh(&sig(now), now), Ok(()));
+            assert_eq!(check_fresh(&sig(0), now), Err("stale_human_signature"));
+        }
+    }
+
     #[test]
     fn freshness_boundaries() {
         let now = 1_760_000_000_000;

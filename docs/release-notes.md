@@ -15,6 +15,13 @@ has no network, can also no longer reach the system's certificate service.
 Two limits of the macOS sandbox are written down in the threat model:
 shared memory by name, and what that certificate service fetches for an
 isolated session.
+### The sudo that is asked is the system's
+
+A session counts as unobserved while `sudo` runs without a password, and
+`lonca hook` and `lonca doctor` find that out by running `sudo -n true`.
+They ran the first `sudo` on `PATH`. They now run the system's
+(`/usr/bin/sudo`, `/bin/sudo`, or NixOS's wrapper), so a file named `sudo`
+earlier on `PATH` can not answer for it.
 
 ### A session's directory is in the log
 

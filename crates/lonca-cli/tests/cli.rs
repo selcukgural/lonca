@@ -6559,3 +6559,31 @@ fn policy_set_value_changes_one_key_of_the_policy_in_force() {
     e.run(r, &check);
     assert_eq!(files(&e), now);
 }
+
+/// Whether sudo asks for a password is asked of the system's sudo, never of
+/// the first file called `sudo` on `PATH`: an agent that runs as the
+/// developer can put one there.
+#[cfg(unix)]
+#[test]
+fn the_sudo_that_is_asked_is_the_systems() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = Env::new();
+    let fake = e.root.join("fake-bin");
+    std::fs::create_dir_all(&fake).unwrap();
+    let ran = e.root.join("fake-sudo-ran");
+    let script = format!("#!/bin/sh\ntouch {}\nexit 1\n", ran.display());
+    std::fs::write(fake.join("sudo"), script).unwrap();
+    std::fs::set_permissions(fake.join("sudo"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", fake.display());
+    // A client told to expect a hardened daemon: that is where sudo counts.
+    let other = (current_uid() + 1).to_string();
+    let out = e
+        .cmd(&e.root, &["doctor", "--json"])
+        .env("LONCA_TEST_DAEMON_UID", &other)
+        .env("PATH", path)
+        .output()
+        .unwrap();
+    let said = text(&out.stdout);
+    assert!(said.contains("\"name\":\"sudo\""), "the check ran: {said}");
+    assert!(!ran.exists(), "a sudo from PATH was run");
+}

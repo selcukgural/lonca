@@ -116,6 +116,12 @@ pub trait Gate: Send + Sync + 'static {
     /// Told how every request that reached [`Gate::decide`] ended.
     fn finished(&self, _request: &Request<'_>, _outcome: Outcome) {}
 
+    /// Told of a tunnel that ends [`Outcome::Misnamed`], before
+    /// [`Gate::finished`] is: `asked` is the server name its TLS client
+    /// asked for, lowercased and as long as the client made it, or `None`
+    /// for a hello that could not be read to its end.
+    fn misnamed(&self, _request: &Request<'_>, _asked: Option<&str>) {}
+
     /// Told of every `bytes` relayed for `request`, either way, before they
     /// are passed on. `false` cuts the connection: a budget is spent.
     fn carried(&self, _request: &Request<'_>, _bytes: u64) -> bool {
@@ -756,7 +762,12 @@ impl Way<'_> {
                     Hello::More if first.len() < hello::MAX_HELLO + CHUNK => {}
                     Hello::Other | Hello::Named(None) => break,
                     Hello::Named(Some(name)) if hello::names(&name, host) => break,
-                    Hello::More | Hello::Named(Some(_)) | Hello::Unreadable => {
+                    Hello::Named(Some(name)) => {
+                        self.gate.misnamed(self.request, Some(&name));
+                        return Outcome::Misnamed;
+                    }
+                    Hello::More | Hello::Unreadable => {
+                        self.gate.misnamed(self.request, None);
                         return Outcome::Misnamed;
                     }
                 }

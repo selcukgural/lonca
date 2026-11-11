@@ -4363,6 +4363,42 @@ impl Service {
         book.open.remove(&peer);
     }
 
+    /// A tunnel the proxy let through for `host` was cut: its TLS client
+    /// asked the server for `asked`, or in a way that can not be read
+    /// (`None`). A security event for every session the connection counts
+    /// against; the log has the attempt already, under the host that was
+    /// let through.
+    pub fn proxy_misnamed(
+        &self,
+        peer: std::net::SocketAddr,
+        host: &str,
+        port: u16,
+        asked: Option<&str>,
+    ) {
+        let sessions: Vec<SessionKey> = {
+            let book = self.proxy.lock().unwrap_or_else(|e| e.into_inner());
+            let open = book.open.get(&peer);
+            open.map(|b| b.iter().map(|(key, _)| key.clone()).collect())
+                .unwrap_or_default()
+        };
+        // The name is the client's own words: the first of it is enough.
+        let detail = match asked {
+            Some(name) => format!(
+                "a tunnel to {host}:{port} asked its server for {}",
+                crate::security::clean(name, 128)
+            ),
+            None => {
+                format!("a tunnel to {host}:{port} began with a TLS hello that can not be read")
+            }
+        };
+        let now = self.now();
+        for (repo, session) in sessions {
+            let event = crate::security::Event::new(now, crate::security::kind::MISNAMED_TUNNEL);
+            self.security
+                .record(event.repo(&repo).session(&session).detail(&detail));
+        }
+    }
+
     /// Counts `bytes` against every session the connection of `peer` counts
     /// against; `false` once one of them is past its budget, which cuts it.
     pub fn proxy_carried(&self, peer: std::net::SocketAddr, bytes: u64) -> bool {

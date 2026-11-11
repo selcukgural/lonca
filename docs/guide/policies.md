@@ -120,7 +120,17 @@ use the type (`principal is Lonca::Agent`).
 
 | Key | Type | What it is |
 |---|---|---|
-| `path` | String | the file, relative to the repository root |
+| `path` | String | the file, relative to the repository root, as written |
+| `folded` | String | the same path as a file system that folds case opens it: ASCII letters lowered (`Auth/Login.RS` is `auth/login.rs`) |
+
+macOS and Windows open `Auth/login.rs` and `auth/login.rs` as one file. A
+rule that **forbids** by name reads `context.folded`, with its pattern in
+lower case; a rule on `context.path` is passed by a capital letter. A rule
+that allows by name (`!(context.path like "docs/*")`) refuses the other
+spelling already. `[paths] critical` and `checks_by_path` (from log
+format 32) and `[paths] untrusted` fold by themselves. Only ASCII letters
+fold: a pattern with other letters (`çekirdek/*`) matches that spelling
+alone.
 
 `change.propose` adds:
 
@@ -149,7 +159,7 @@ below). A rule that reads `context.path` must therefore be limited to the
 @escalate("dependencies")
 @approvals("2")
 forbid(principal is Lonca::Agent, action in [Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
-when { context.path like "*Cargo.lock" || context.path like "*package-lock.json" };
+when { context.folded like "*cargo.lock" || context.folded like "*package-lock.json" };
 ```
 
 - **`permit`** lets a request through this step; with no `permit` that
@@ -183,7 +193,7 @@ Keep agents out of a directory altogether:
 ```cedar
 @id("no-agents-in-infra")
 forbid(principal is Lonca::Agent, action in [Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
-when { context.path like "infra/*" };
+when { context.folded like "infra/*" };
 ```
 
 A function that needs a human, wherever the change comes from:
@@ -201,7 +211,7 @@ Only a sandboxed session may touch authentication code (see
 ```cedar
 @id("auth-in-a-sandbox")
 forbid(principal is Lonca::Agent, action == Lonca::Action::"file.modify", resource)
-when { context.path like "src/auth/*" && context.observation != "isolated" };
+when { context.folded like "src/auth/*" && context.observation != "isolated" };
 ```
 
 A tainted session may not propose anything large, and an unobserved one
@@ -224,7 +234,7 @@ directory's keys are in `[paths.keyed]`, see
 ```cedar
 @id("migrations-stay")
 forbid(principal is Lonca::Agent, action in [Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
-when { context.path like "db/migration/*" };
+when { context.folded like "db/migration/*" };
 ```
 
 Deleted tests are refused instead of escalated (Lonca escalates them on

@@ -39,6 +39,7 @@ impl Submission {
     }
 }
 
+#[derive(Clone)]
 pub struct Chain {
     pub state: State,
     key: KeyPair,

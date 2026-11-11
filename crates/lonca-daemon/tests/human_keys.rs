@@ -47,7 +47,8 @@ fn rotation_and_recovery_end_tokens_and_the_log_audits() {
     // signature by it is denied.
     let old = std::mem::replace(&mut e.human, new);
     let op = Op::Freeze { reason: "x".into() };
-    let body = json!({"op": op, "sig": sign_ed25519(&old, "ayse", "demo", &op, e.now())});
+    let body =
+        json!({"op": op, "sig": sign_ed25519(&old, "ayse", "demo", &op, e.now(), e.head("demo"))});
     let r = e.ok("human.submit", Some("demo"), None, body);
     assert_eq!(r["decision"]["reasons"][0], "bad_human_signature");
     let sig = sign_login_ed25519(&old, "ayse", None, 60_000, e.now());
@@ -68,7 +69,8 @@ fn rotation_and_recovery_end_tokens_and_the_log_audits() {
         human: "ayse".into(),
         key: file_key(&newer),
     };
-    let body = json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now())});
+    let body =
+        json!({"op": op, "sig": sign_ed25519(&rec, "ayse", "demo", &op, e.now(), e.head("demo"))});
     let r = e.ok("human.submit", Some("demo"), None, body);
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
     refused(&mut e, &t2);

@@ -731,7 +731,7 @@ fn human_keys_rotate_recover_and_revoke_through_the_cli() {
     let o = recover(&["--repo", "nosuch"]);
     assert!(!o.status.success());
     assert!(
-        text(&o.stderr).contains("human.submit: not_found"),
+        text(&o.stderr).contains("not_found: no repository nosuch"),
         "{}",
         text(&o.stderr)
     );

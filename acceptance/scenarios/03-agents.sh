@@ -106,6 +106,14 @@ ok lonca symbols src/wide.ts
 has '^a  \(not read\)$'
 lacks '^f'
 
+criterion A43 "a critical path is critical in any case: Build.rs is build.rs to macOS, and to the policy"
+rm src/slow.swift src/wide.ts
+printf 'fn main() {}\n' >src/Build.rs
+ok lonca lease acquire 'src/Build.rs#<file>' -i 'a build script'
+refused lonca propose -i 'a build script' --accept-facts
+has 'unobserved_critical_path'
+rm src/Build.rs
+
 criterion A11 "an ended session's token is refused"
 ok lonca session end
 refused lonca lease acquire 'src/billing.rs#Client.charge' -i 'after the end'

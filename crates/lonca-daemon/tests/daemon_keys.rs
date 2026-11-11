@@ -34,13 +34,13 @@ fn init_repo(e: &mut Env, repo: &str) {
         json!({"repo": repo, "human": "ayse", "human_key": key}),
     );
     let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
-    let sig = sign_ed25519(&e.human, "ayse", repo, &op, e.now());
+    let sig = sign_ed25519(&e.human, "ayse", repo, &op, e.now(), e.head(repo));
     let r = e.ok("repo.init", None, None, json!({"op": op, "sig": sig}));
     assert_eq!(r["decision"]["outcome"], "allow", "{r}");
 }
 
 fn submit_to(e: &mut Env, repo: &str, op: Op) -> Result<Value, (String, String)> {
-    let sig = sign_ed25519(&e.human, "ayse", repo, &op, e.now());
+    let sig = sign_ed25519(&e.human, "ayse", repo, &op, e.now(), e.head(repo));
     e.call(
         "human.submit",
         Some(repo),
@@ -195,7 +195,14 @@ fn a_repository_whose_daemon_key_is_lost_is_recovered_by_a_human() {
         key: new.clone(),
         recover: None,
     };
-    let forged = sign_ed25519(&KeyPair::generate(), "ayse", "demo", &op, e.now());
+    let forged = sign_ed25519(
+        &KeyPair::generate(),
+        "ayse",
+        "demo",
+        &op,
+        e.now(),
+        e.head("demo"),
+    );
     let err = e
         .call(
             "human.submit",
@@ -260,7 +267,14 @@ fn a_forged_key_switch_in_the_store_stops_the_daemon_and_fails_the_audit() {
             },
             op.clone(),
         );
-        sub.human = Some(sign_ed25519(&attacker, "ayse", "demo", &op, t));
+        sub.human = Some(sign_ed25519(
+            &attacker,
+            "ayse",
+            "demo",
+            &op,
+            t,
+            e.head("demo"),
+        ));
         let mut entry: OpEntry = Chain::from_state(attacker.clone(), state.clone())
             .prepare(sub, t, &policy)
             .entry;
@@ -306,7 +320,7 @@ fn a_genesis_prepared_before_the_rotation_ended_is_prepared_again() {
     assert!(!home(&e).next_key_path().exists(), "rotation finished");
 
     // The prepared genesis named the deleted key.
-    let sig = sign_ed25519(&e.human, "ayse", "late", &stale, e.now());
+    let sig = sign_ed25519(&e.human, "ayse", "late", &stale, e.now(), e.head("late"));
     let err = e
         .call("repo.init", None, None, json!({"op": stale, "sig": sig}))
         .unwrap_err();

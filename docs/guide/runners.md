@@ -281,7 +281,7 @@ by task:
 ```cedar
 @id("auth-in-a-sandbox")
 forbid(principal is Lonca::Agent, action == Lonca::Action::"file.modify", resource)
-when { context.path like "src/auth/*" && context.observation != "isolated" };
+when { context.folded like "src/auth/*" && context.observation != "isolated" };
 ```
 
 ## Setting up a harness

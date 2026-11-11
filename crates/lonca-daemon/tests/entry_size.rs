@@ -147,7 +147,14 @@ fn a_denied_recovery_with_no_session_leaves_no_entry() {
     };
     let before = next_seq(&mut e);
     for _ in 0..5 {
-        let sig = sign_ed25519(&KeyPair::generate(), "ayse", "demo", &op, e.now());
+        let sig = sign_ed25519(
+            &KeyPair::generate(),
+            "ayse",
+            "demo",
+            &op,
+            e.now(),
+            e.head("demo"),
+        );
         let (code, message) = e
             .anon(
                 "human.submit",
@@ -165,7 +172,7 @@ fn a_denied_recovery_with_no_session_leaves_no_entry() {
     let refused = refused.filter(|x| x["method"] == "human.submit" && x["code"] == "forbidden");
     assert_eq!(refused.count(), 5, "{events}");
 
-    let sig = sign_ed25519(&rec, "ayse", "demo", &op, e.now());
+    let sig = sign_ed25519(&rec, "ayse", "demo", &op, e.now(), e.head("demo"));
     let r = e
         .anon(
             "human.submit",

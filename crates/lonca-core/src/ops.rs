@@ -850,22 +850,51 @@ pub struct HumanSignature {
     pub nonce: String,
     pub issued_ms: i64,
     pub sig: String,
+    /// The head of the log the signer saw (log format 33 on): the
+    /// signature is for the log that has this entry and for no other.
+    /// Left out of the encoding when absent, so older entries keep their
+    /// bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<LogPoint>,
+}
+
+/// An entry of a log: its number and its hash. The hash covers every
+/// entry before it, the genesis included.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogPoint {
+    pub seq: u64,
+    pub hash: String,
 }
 
 #[derive(Serialize)]
 pub struct HumanIntent<'a> {
     pub purpose: &'static str,
     pub repo: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<&'a LogPoint>,
     pub op: &'a Op,
     pub nonce: &'a str,
     pub issued_ms: i64,
 }
 
 impl<'a> HumanIntent<'a> {
-    pub fn new(repo: &'a str, op: &'a Op, nonce: &'a str, issued_ms: i64) -> Self {
+    /// The intent a signature covers. With `at` it is of another purpose:
+    /// neither kind passes for the other.
+    pub fn new(
+        repo: &'a str,
+        op: &'a Op,
+        nonce: &'a str,
+        issued_ms: i64,
+        at: Option<&'a LogPoint>,
+    ) -> Self {
+        let purpose = match at {
+            None => "lonca-human-intent-v1",
+            Some(_) => "lonca-human-intent-v2",
+        };
         Self {
-            purpose: "lonca-human-intent-v1",
+            purpose,
             repo,
+            at,
             op,
             nonce,
             issued_ms,

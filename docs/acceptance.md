@@ -115,6 +115,7 @@ last column.
 | A40 | In a session's workspace, the hook denies a write through a symbolic link that leads out of the workspace and names where it leads; a write through a link to a directory of the workspace is not denied | `08-harness` |
 | A41 | A file its grammar would read over and over (200 KB of `/*` in Swift, which held the daemon for minutes) is answered at once: `lonca symbols` lists nothing of it and names `<file>` as what a change of it needs, and a proposal that adds it under that lease is taken | `03-agents` |
 | A42 | A file has the same symbols on every build, whatever its C library takes for a space or a letter: `lonca symbols` of a TypeScript file with an ideographic space (U+3000) behind a statement gives what the macOS build gives, on the Linux (musl) archives too | `03-agents` |
+| A43 | A critical path is critical under any spelling a file system that folds case reads as it: a proposal of `src/Build.rs` is refused to an unobserved session with `unobserved_critical_path`, as one of `src/build.rs` is | `03-agents` |
 
 ## Manual criteria
 
@@ -139,6 +140,13 @@ visible. Each becomes a criterion when it is automated.
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
   --secure-enclave`, FIDO2 keys).
 - The advisor (`lonca advise`): needs a model.
+- A human signature made for another log, or before what it approves
+  (`human_signature_of_another_log`, `signed_before_its_target`,
+  `unanchored_human_signature`): `lonca` always signs at the head it was
+  just told, so no command reaches them; the policy's and the daemon's
+  tests cover them (`a_human_signature_is_for_the_log_it_was_made_in`,
+  `a_signature_names_the_head_of_the_log`). Every approval of the
+  scenarios is signed that way.
 - `disk_space` (no caller's files written while the stores' disk has less
   than 1 GiB free): needs a disk that is nearly full; the daemon's tests
   cover it with the floor set (`below_the_floor_a_callers_files_are_not_written`).

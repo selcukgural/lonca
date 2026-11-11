@@ -46,6 +46,44 @@ pub fn is_workspace_metadata(p: &str) -> bool {
     first.eq_ignore_ascii_case(".lonca")
 }
 
+/// A path as a file system that folds case reads it, for the lists that
+/// name what is *not* free (`critical`, `untrusted`, `checks_by_path`): on
+/// macOS `Build.rs` is `build.rs`, and a list that forbids must not be
+/// stepped over by a spelling.
+///
+/// The table is this function, not the standard library's: `decide()` is
+/// replayed, and its answer may not move with a Unicode version. ASCII
+/// letters are lowered; the few characters such file systems read as ASCII
+/// letters are written as those (the Kelvin sign, the long s, the Latin
+/// ligatures, the sharp s); what HFS+ ignores in a name is left out. Every
+/// other character stands as written, so a pattern with letters outside
+/// ASCII matches its own spelling only. Folding too much only makes more
+/// paths critical.
+pub fn folded(p: &str) -> String {
+    let mut out = String::with_capacity(p.len());
+    for c in p.chars() {
+        match c {
+            '\u{200C}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{206A}'..='\u{206F}'
+            | '\u{FEFF}' => {}
+            '\u{212A}' => out.push('k'),
+            '\u{017F}' => out.push('s'),
+            '\u{00DF}' | '\u{1E9E}' => out.push_str("ss"),
+            '\u{FB00}' => out.push_str("ff"),
+            '\u{FB01}' => out.push_str("fi"),
+            '\u{FB02}' => out.push_str("fl"),
+            '\u{FB03}' => out.push_str("ffi"),
+            '\u{FB04}' => out.push_str("ffl"),
+            '\u{FB05}' | '\u{FB06}' => out.push_str("st"),
+            '\u{037E}' => out.push(';'),
+            '\u{1FEF}' => out.push('`'),
+            c => out.push(c.to_ascii_lowercase()),
+        }
+    }
+    out
+}
+
 pub fn validate_path_pattern(p: &str) -> Result<()> {
     if p == "**" {
         return Ok(());
@@ -122,6 +160,29 @@ pub fn symbol_pattern_within(inner: &str, outer: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_folds_to_what_a_case_folding_file_system_reads() {
+        for (written, read) in [
+            ("crates/x/Build.RS", "crates/x/build.rs"),
+            (".Cargo/Config.toml", ".cargo/config.toml"),
+            ("Cargo.loc\u{212A}", "cargo.lock"),
+            ("ta\u{17F}ks.json", "tasks.json"),
+            ("Docker\u{FB01}le", "dockerfile"),
+            ("Ma\u{DF}", "mass"),
+            ("bu\u{200C}ild.rs", "build.rs"),
+            ("\u{FEFF}build.rs", "build.rs"),
+            ("src/**", "src/**"),
+            ("**/*.CSPROJ", "**/*.csproj"),
+            // Letters outside ASCII stand as written.
+            (
+                "\u{C7}ekirdek/\u{130}\u{15E}.rs",
+                "\u{C7}ekirdek/\u{130}\u{15E}.rs",
+            ),
+        ] {
+            assert_eq!(folded(written), read, "{written:?}");
+        }
+    }
 
     #[test]
     fn workspace_metadata_is_the_first_component_in_any_case() {

@@ -153,7 +153,7 @@ fn a_repository_that_needs_a_sandbox_is_named_at_the_start() {
     });
     let prep = e.ok("repo.prepare_init", None, None, params);
     let op: Op = serde_json::from_value(prep["op"].clone()).unwrap();
-    let sig = sign_ed25519(&e.human, "ayse", "tight", &op, e.now());
+    let sig = sign_ed25519(&e.human, "ayse", "tight", &op, e.now(), e.head("tight"));
     let body = json!({"op": op, "sig": sig});
     e.ok("repo.init", None, None, body);
 

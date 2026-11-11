@@ -72,7 +72,7 @@ What each mode does about each threat:
 | Writing the store or its refs directly | detected: `reconcile()` restores or freezes, the auditor reports | prevented: the store belongs to the daemon's user | prevented |
 | Signing as a human | prevented with a Secure Enclave key or a security key; with a file key the agent can read it | prevented where the human has a key that proves presence (required); not with `--without-presence`, see [limits](#humans-and-approvals) | prevented: human keys are closed to the sandbox |
 | Reading outside content, then changing code | every change waits for a human, since `unobserved` counts as tainted | prevented from inside the harness (taint: the change waits for a human); from a process started outside it, detected | prevented: all traffic goes through the proxy and taints |
-| Touching build scripts, CI, lockfiles, agent instructions | refused to unobserved and tainted sessions | refused to tainted sessions | refused to tainted sessions |
+| Touching build scripts, CI, lockfiles, agent instructions | refused to unobserved and tainted sessions, under any spelling a file system that folds case opens as one of them (`Build.rs`; format 32) | refused to tainted sessions, as cooperative | refused to tainted sessions, as cooperative |
 | Replacing the daemon, the hook program or the harness settings | possible: they are the developer's files; sessions stay `unobserved` | prevented: root-owned, clients check the daemon's uid | prevented |
 | Changing the workspace's own record (`.lonca/workspace.json`) to leave the session, or to be continued as another | no gain: every change waits for a human anyway | prevented: which session works in a directory is in the log (format 30); the hook asks it and blocks tools while the record does not read, and `--continue` names the log's session | prevented: the level does not rest on hooks |
 | Writing outside the workspace, or reading outside content untainted, through a symbolic link made inside it | no gain: every change waits for a human anyway, and nothing holds the agent's shell | prevented for the harness's file tools: the hook resolves a path's links before the daemon places it, at the time of the call; a link swapped between the hook and the write is the sandbox's to stop, as every shell command is | prevented: the sandbox, not the hooks, holds the files |
@@ -198,7 +198,9 @@ It does not catch:
   line `lonca` prints before it. A process running as the human that asks
   for a signature at the moment a touch is expected can have its own
   request touched instead. The signature still covers one operation, the
-  daemon logs it, and it can not be replayed.
+  daemon logs it, and it can not be replayed: not in this log (the nonce),
+  and not in another one, or in this one rewritten with the daemon's key
+  from before the entry it names (`at`, format 33).
 - **A kind of key is a claim.** The log records `p256-se` or `sk-p256` as
   the enrolling human named it, and checks the device's "user present"
   flag on a security key's signatures; it does not check an attestation

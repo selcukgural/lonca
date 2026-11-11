@@ -25,9 +25,13 @@ Notes:
 - **What a signature covers.** The daemon signs the SHA-256 digest of an
   entry's canonical bytes, and that digest names the previous entry's, so
   the chain and every entry are covered. A human signs the canonical bytes of
-  the intent: the repository, the operation, a nonce and `issued_ms`. The
-  daemon refuses a nonce it has seen and an `issued_ms` more than 10 minutes
-  old or 1 minute ahead (`human.rs`, `MAX_AGE_MS`, `MAX_SKEW_MS`).
+  the intent: the repository, the operation, a nonce, `issued_ms` and (log
+  format 33) `at`, the number and hash of the last entry of the log the
+  signer saw. The daemon refuses a nonce it has seen, an `issued_ms` more
+  than 10 minutes old or 1 minute ahead (`human.rs`, `MAX_AGE_MS`,
+  `MAX_SKEW_MS`), and an `at` the log does not have. An entry's hash covers
+  every entry before it, so a signature holds in the log it was made for,
+  from its genesis to that entry, and in no other.
 - **SHA-1 is Git's, not Lonca's.** Git object ids name trees and commits, and
   a collision would let two trees share a name. The log's integrity rests on
   SHA-256 and Ed25519; the auditor recomputes merges and facts from the

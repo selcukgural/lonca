@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use lonca_core::keys::KeyPair;
-use lonca_core::ops::{HumanKey, HumanSignature, Op};
+use lonca_core::ops::{HumanKey, HumanSignature, LogPoint, Op};
 use lonca_daemon::Client;
 use lonca_daemon::service::HUMAN_SESSION_DEFAULT_MS;
 use serde::{Deserialize, Serialize};
@@ -574,17 +574,33 @@ fn short_key(k: &str) -> &str {
     k.get(..16).unwrap_or(k)
 }
 
-pub fn sign(human: &str, repo: &str, op: &Op) -> Result<HumanSignature> {
+/// The head of `repo`'s log, for a signature to name: a signature is for
+/// the log its signer saw (log format 33). None while there is no log.
+pub fn head(c: &mut Client, repo: &str) -> Result<Option<LogPoint>> {
+    let was = c.repo.replace(repo.to_string());
+    let r = call(c, "log.head", json!({}));
+    c.repo = was;
+    Ok(serde_json::from_value(r?["at"].clone())?)
+}
+
+/// Signs `op` as `human` for the log of `repo` as the daemon behind `c`
+/// has it now; a genesis is signed for no log.
+pub fn sign(c: &mut Client, human: &str, repo: &str, op: &Op) -> Result<HumanSignature> {
+    let at = match op {
+        Op::RepoInit { .. } => None,
+        _ => head(c, repo)?,
+    };
     let kind = key_kind(human).unwrap_or(KeyKind::File);
     let nonce = lonca_core::canonical::nonce();
     let issued_ms = now_ms();
-    let msg = lonca_policy::human::intent_bytes(repo, op, &nonce, issued_ms);
+    let msg = lonca_policy::human::intent_bytes(repo, op, &nonce, issued_ms, at.as_ref());
     let sig = sign_with(&key_path(human, kind), kind, &msg, &describe(repo, op))?;
     Ok(HumanSignature {
         human: human.to_string(),
         nonce,
         issued_ms,
         sig,
+        at,
     })
 }
 
@@ -703,6 +719,7 @@ fn sign_login_with(
         nonce,
         issued_ms,
         sig,
+        at: None,
     })
 }
 

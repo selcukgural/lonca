@@ -16,7 +16,7 @@ pub use base64::Engine;
 pub use lonca_core::keys::KeyPair;
 pub use lonca_core::oplog::{OpLog, SignedOp, verify_chain};
 pub use lonca_core::ops::{
-    Claim, Continuation, HumanKey, LeaseItem, LeaseKind, Op, OpKind, Outcome, Scope,
+    Claim, Continuation, HumanKey, LeaseItem, LeaseKind, LogPoint, Op, OpKind, Outcome, Scope,
 };
 pub use lonca_core::{ChangeId, GitId, Store};
 pub use lonca_daemon::protocol::{FileChange, Request};
@@ -213,8 +213,22 @@ impl Env {
             .unwrap_or_else(|e| panic!("{method}: {e:?}"))
     }
 
+    /// The head of `repo`'s log, as a signer asks for it.
+    pub fn head(&self, repo: &str) -> Option<LogPoint> {
+        let request = Request {
+            id: 0,
+            method: "log.head".into(),
+            repo: Some(repo.into()),
+            token: None,
+            params: json!({}),
+        };
+        let r = self.svc.handle(request);
+        serde_json::from_value(r.result["at"].clone()).unwrap_or(None)
+    }
+
     pub fn sign(&self, op: &Op) -> Value {
-        json!({"op": op, "sig": sign_ed25519(&self.human, "ayse", "demo", op, self.now())})
+        let at = self.head("demo");
+        json!({"op": op, "sig": sign_ed25519(&self.human, "ayse", "demo", op, self.now(), at)})
     }
 
     pub fn human(&mut self, op: Op) -> Value {

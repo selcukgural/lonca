@@ -4,9 +4,9 @@
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::{
-    FORMAT_AFFECTED, FORMAT_CHILD_AGENT, FORMAT_CURRENT, FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES,
-    FORMAT_KEYED, FORMAT_REPLACES, FORMAT_SECURITY_KEYS, FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE,
-    SignedOp, verify_chain,
+    FORMAT_AFFECTED, FORMAT_ANCHORED, FORMAT_CHILD_AGENT, FORMAT_CURRENT, FORMAT_FOLDED_PATHS,
+    FORMAT_GIVE_BACK, FORMAT_INSERT_NAMES, FORMAT_KEYED, FORMAT_REPLACES, FORMAT_SECURITY_KEYS,
+    FORMAT_SYMBOL_KEYS, FORMAT_WORKSPACE, SignedOp, verify_chain,
 };
 use lonca_core::ops::*;
 use lonca_core::{ChangeId, GitId};
@@ -78,14 +78,26 @@ impl H {
         self.sign_with(key, name, op)
     }
 
+    /// The head of the log, as a signer sees it; none before the genesis.
+    fn head(&self) -> Option<LogPoint> {
+        let s = &self.chain.state;
+        let seq = s.next_seq.checked_sub(1)?;
+        Some(LogPoint {
+            seq,
+            hash: s.head_hash.clone(),
+        })
+    }
+
     fn sign_with(&self, key: &KeyPair, name: &str, op: &Op) -> HumanSignature {
         let nonce = nonce();
         let issued_ms = self.now + 1;
+        let at = self.head();
         HumanSignature {
             human: name.into(),
             nonce: nonce.clone(),
             issued_ms,
-            sig: key.sign_hex(&intent_bytes(REPO, op, &nonce, issued_ms)),
+            sig: key.sign_hex(&intent_bytes(REPO, op, &nonce, issued_ms, at.as_ref())),
+            at,
         }
     }
 
@@ -1394,6 +1406,7 @@ fn a_hardened_policy_lists_what_agents_do_and_nothing_else() {
     let allowed = |who: &Actor, action: &str| {
         let context = vec![
             ("path", CVal::Str("src/a.rs".into())),
+            ("folded", CVal::Str("src/a.rs".into())),
             ("recent_reverts", CVal::Long(0)),
             ("files", CVal::Long(1)),
             ("lines", CVal::Long(1)),
@@ -1505,13 +1518,15 @@ fn presence_can_be_required_for_human_signatures() {
     let op = Op::Freeze { reason: "y".into() };
     let nonce = nonce();
     let issued = h.now + 1;
-    let sig: p256::ecdsa::Signature = sk.sign(&intent_bytes(REPO, &op, &nonce, issued));
+    let sig: p256::ecdsa::Signature =
+        sk.sign(&intent_bytes(REPO, &op, &nonce, issued, h.head().as_ref()));
     let mut sub = Submission::new(Actor::Human { name: "cem".into() }, op);
     sub.human = Some(HumanSignature {
         human: "cem".into(),
         nonce,
         issued_ms: issued,
         sig: hex::encode(sig.to_der().as_bytes()),
+        at: h.head(),
     });
     let d = h.submit(sub);
     assert!(d.is_allow(), "{d:?}");
@@ -1529,6 +1544,116 @@ fn revoke(name: &str, reason: &str) -> Op {
         human: name.into(),
         reason: reason.into(),
     }
+}
+
+/// A human signature names the head of the log its signer saw, and holds
+/// in the log that has that entry: a log rewritten from an earlier entry
+/// on, with the daemon's key, can not carry an approval over to another
+/// proposal at the same number.
+#[test]
+fn a_human_signature_is_for_the_log_it_was_made_in() {
+    let mut h = H::new();
+    h.start("s0", &["src/**"]);
+    // The same log up to here; then each goes its own way.
+    let mut fork = H {
+        chain: h.chain.clone(),
+        policy: h.policy.clone(),
+        humans: h.humans.clone(),
+        now: h.now,
+        log: h.log.clone(),
+        engine: h.engine,
+    };
+    let (_, seq) = waiting(&mut h, "s1", "src/a.rs#f");
+    let (other, there) = waiting(&mut fork, "s1", "src/b.rs#g");
+    assert_eq!(there, seq);
+    let ayse = Actor::Human {
+        name: "ayse".into(),
+    };
+    let op = approve(seq);
+    let sig = h.sign("ayse", &op);
+    assert_eq!(sig.at.as_ref().map(|at| at.seq), Some(seq));
+    let mut sub = Submission::new(ayse.clone(), op.clone());
+    sub.human = Some(sig.clone());
+
+    // Before the format the signature held in both.
+    let before = Ctx {
+        format: FORMAT_ANCHORED - 1,
+        time_ms: fork.now + 1,
+        policy: &fork.policy,
+        facts: None,
+        evidence: &[],
+        symbols_engine: None,
+    };
+    let d = decide(&fork.chain.state, &ayse, &op, Some(&sig), &before);
+    assert!(d.reasons.contains(&"released".to_string()), "{d:?}");
+
+    let d = fork.submit(sub.clone());
+    assert!(denied_with(&d, "human_signature_of_another_log"), "{d:?}");
+    assert!(fork.chain.state.pending.contains_key(&seq));
+    let status = &fork.chain.state.changes[&other].status;
+    assert!(matches!(status, ChangeStatus::Pending { .. }), "{status:?}");
+    let d = h.submit(sub);
+    assert!(d.reasons.contains(&"released".to_string()), "{d:?}");
+
+    // A signature that names no entry is for no log.
+    let freeze = Op::Freeze { reason: "x".into() };
+    let mut bare = h.sign("ayse", &freeze);
+    bare.at = None;
+    let key = h.key_of("ayse");
+    bare.sig = key.sign_hex(&intent_bytes(
+        REPO,
+        &freeze,
+        &bare.nonce,
+        bare.issued_ms,
+        None,
+    ));
+    let mut sub = Submission::new(ayse.clone(), freeze.clone());
+    sub.human = Some(bare);
+    let d = h.submit(sub);
+    assert!(denied_with(&d, "unanchored_human_signature"), "{d:?}");
+
+    // One made before what it approves existed approves nothing: the
+    // signer did not see it.
+    let early = h.head();
+    let (_, later) = waiting(&mut h, "s2", "src/c.rs#h");
+    let op = approve(later);
+    let mut sig = h.sign("ayse", &op);
+    sig.at = early;
+    sig.sig = key.sign_hex(&intent_bytes(
+        REPO,
+        &op,
+        &sig.nonce,
+        sig.issued_ms,
+        sig.at.as_ref(),
+    ));
+    let mut sub = Submission::new(ayse.clone(), op);
+    sub.human = Some(sig);
+    let d = h.submit(sub);
+    assert!(denied_with(&d, "signed_before_its_target"), "{d:?}");
+    assert!(h.chain.state.pending.contains_key(&later));
+
+    // The entry a signature names is among those kept: the head however
+    // old, and everything a signature still alive could have seen.
+    let head = h.head().unwrap();
+    h.now += 3 * 24 * 60 * MIN;
+    let d = h.human("ayse", freeze);
+    assert!(d.is_allow(), "{d:?}");
+    let seen = &h.chain.state.seen;
+    assert_eq!(
+        seen.keys().copied().collect::<Vec<_>>(),
+        [head.seq, head.seq + 1]
+    );
+    for _ in 0..3 {
+        h.now += 6 * MIN;
+        assert!(
+            h.human("ayse", Op::Freeze { reason: "y".into() })
+                .is_allow()
+        );
+    }
+    let seen = &h.chain.state.seen;
+    assert_eq!(seen.len(), 3, "the window and the entry before it");
+    h.assert_replay();
+    fork.assert_replay();
 }
 
 fn approve(seq: u64) -> Op {
@@ -2027,7 +2152,8 @@ fn presence_does_not_block_recovery() {
     let op = Op::Freeze { reason: "y".into() };
     let nonce = nonce();
     let issued = h.now + 1;
-    let sig: p256::ecdsa::Signature = sk.sign(&intent_bytes(REPO, &op, &nonce, issued));
+    let sig: p256::ecdsa::Signature =
+        sk.sign(&intent_bytes(REPO, &op, &nonce, issued, h.head().as_ref()));
     let mut sub = Submission::new(
         Actor::Human {
             name: "ayse".into(),
@@ -2039,6 +2165,7 @@ fn presence_does_not_block_recovery() {
         nonce,
         issued_ms: issued,
         sig: hex::encode(sig.to_der().as_bytes()),
+        at: h.head(),
     });
     let d = h.submit(sub);
     assert!(d.is_allow(), "{d:?}");
@@ -2572,7 +2699,7 @@ fn a_human_rejects_an_escalated_proposal_with_a_reason() {
     ));
     assert!(denied_with(
         &h.human("ayse", reject(seq + 7, "no")),
-        "nothing_pending"
+        "signed_before_its_target"
     ));
     assert!(h.chain.state.pending.contains_key(&seq));
 
@@ -5473,6 +5600,112 @@ when { context.critical };
             "{path}: {d:?}"
         );
     }
+}
+
+/// macOS opens `Build.rs` as `build.rs`: a critical path is critical under
+/// every spelling a file system that folds case reads as it, and a tainted
+/// session does not reach it by one.
+#[test]
+fn a_critical_path_is_critical_in_any_case() {
+    for path in [
+        "crates/x/Build.rs",
+        ".Cargo/config.toml",
+        "sub/claude.md",
+        ".Claude/settings.json",
+        ".GITHUB/Workflows/ci.yml",
+        "CARGO.LOC\u{212A}",
+        "app/App.CSPROJ",
+    ] {
+        let mut h = H::new();
+        h.start_observed("s1", &["**"]);
+        h.wrote("s1", path);
+        let sym = format!("{path}#<file>");
+        assert!(h.lease("s1", "l1", &[(&sym, LeaseKind::Edit)]).is_allow());
+        let facts = edit(&sym);
+
+        // Entries from before the format replay as they were decided.
+        let before = Ctx {
+            format: FORMAT_FOLDED_PATHS - 1,
+            time_ms: h.now,
+            policy: &h.policy,
+            facts: Some(&facts),
+            evidence: &[],
+            symbols_engine: Some(h.engine),
+        };
+        let s1 = Actor::Agent {
+            name: "bot-s1".into(),
+            session: "s1".into(),
+        };
+        let op = Op::ChangePropose {
+            change: ChangeId::random(),
+            commit: gid('c'),
+            base: h.chain.state.trunk.clone().unwrap(),
+            claim: claim_of(&facts),
+        };
+        let d = decide(&h.chain.state, &s1, &op, None, &before);
+        assert!(d.is_allow(), "{path}: {d:?}");
+
+        let d = h.propose("s1", ChangeId::random(), facts.clone());
+        assert_eq!(d.outcome, Outcome::Escalate, "{path}: {d:?}");
+        assert!(
+            d.reasons.contains(&format!("critical_path:{path}")),
+            "{path}: {d:?}"
+        );
+        let taint = Op::Taint {
+            session: "s1".into(),
+            reason: "read the web".into(),
+        };
+        assert!(h.daemon(taint, vec![]).is_allow());
+        let d = h.propose("s1", ChangeId::random(), facts);
+        assert!(denied_with(&d, "tainted_critical_path"), "{path}: {d:?}");
+        h.assert_replay();
+    }
+}
+
+/// A rule that forbids by name reads `context.folded`: the path as a file
+/// system that folds case opens it.
+#[test]
+fn a_policy_reads_a_path_with_its_case_folded() {
+    let rule = r#"
+@id("no-lockfiles")
+forbid(principal is Lonca::Agent, action in [Lonca::Action::"file.add", Lonca::Action::"file.modify", Lonca::Action::"file.delete"], resource)
+when { context.folded like "*package-lock.json" };
+"#;
+    let source = format!("{DEFAULT_POLICY}\n{rule}");
+    for (path, denied) in [
+        ("web/package-lock.json", true),
+        ("web/Package-Lock.JSON", true),
+        ("web/package.json", false),
+    ] {
+        let policy = PolicyBundle::parse(DEFAULT_CONFIG, &source).unwrap();
+        let mut h = H::with_policy(policy);
+        h.start_observed("a", &["**"]);
+        let symbol = format!("{path}#<file>");
+        let lease = [(symbol.as_str(), LeaseKind::Edit)];
+        assert!(h.lease("a", "l", &lease).is_allow());
+        h.wrote("a", path);
+        let d = h.propose("a", ChangeId::random(), edit(&symbol));
+        assert_eq!(
+            denied_with(&d, "policy:no-lockfiles"),
+            denied,
+            "{path}: {d:?}"
+        );
+        h.assert_replay();
+    }
+}
+
+/// `checks_by_path` names a check for a path under any spelling of it.
+#[test]
+fn a_check_by_path_is_owed_in_any_case() {
+    let h = H::with_policy(named_checks_policy());
+    let vc = &h.policy.config.verification;
+    let none = BTreeSet::new();
+    let path = vec!["SRC/Web/app.ts".to_string()];
+    assert_eq!(
+        vc.owed(&none, &path, true),
+        BTreeSet::from(["e2e".to_string()])
+    );
+    assert_eq!(vc.owed(&none, &path, false), none);
 }
 
 /// A rule that names a symbol goes on working when it gets a key.
@@ -8448,7 +8681,10 @@ fn a_check_named_at_approval_is_owed_by_the_change() {
     let rec = &h.chain.state.changes[&c];
     assert_eq!(rec.checks, BTreeSet::from(["api".to_string()]));
     let vc = &h.policy.config.verification;
-    assert_eq!(rec.owed_checks(vc), BTreeSet::from(["api".to_string()]));
+    assert_eq!(
+        rec.owed_checks(vc, true),
+        BTreeSet::from(["api".to_string()])
+    );
     let d = integrate_named(&mut h, c, vec![]);
     assert!(denied_with(&d, "verification_missing:api"), "{d:?}");
     assert_eq!(d.reasons.len(), 1, "{d:?}");
@@ -8608,7 +8844,11 @@ fn the_policy_names_the_checks_a_path_owes() {
         assert!(h.propose("s1", c, edit(sym)).is_allow());
         let vc = h.policy.config.verification.clone();
         let want: BTreeSet<String> = owed.then(|| "e2e".to_string()).into_iter().collect();
-        assert_eq!(h.chain.state.changes[&c].owed_checks(&vc), want, "{sym}");
+        assert_eq!(
+            h.chain.state.changes[&c].owed_checks(&vc, true),
+            want,
+            "{sym}"
+        );
         let d = integrate_named(&mut h, c, vec![]);
         assert_eq!(
             denied_with(&d, "verification_missing:e2e"),
@@ -8929,10 +9169,18 @@ impl SoftSk {
     }
 
     /// The signature of `name` on `op`, as `ssh-keygen -Y sign` makes it.
-    fn sign(&self, name: &str, repo: &str, op: &Op, issued_ms: i64, flags: u8) -> HumanSignature {
+    fn sign(
+        &self,
+        name: &str,
+        repo: &str,
+        op: &Op,
+        issued_ms: i64,
+        flags: u8,
+        at: Option<LogPoint>,
+    ) -> HumanSignature {
         use lonca_policy::human::sk::{self, Assertion, Hash, Kind};
         let nonce = nonce();
-        let msg = intent_bytes(repo, op, &nonce, issued_ms);
+        let msg = intent_bytes(repo, op, &nonce, issued_ms, at.as_ref());
         let data = sk::signed_data(&msg, Hash::Sha512, flags, 3);
         let signature: [u8; 64] = match self.kind {
             Kind::P256 => {
@@ -8959,6 +9207,7 @@ impl SoftSk {
             nonce,
             issued_ms,
             sig: hex::encode(sk::encode(self.kind, &self.public(), &a)),
+            at,
         }
     }
 }
@@ -8966,7 +9215,7 @@ impl SoftSk {
 impl H {
     /// Submits `op` as `name`, signed with a security key.
     fn human_sk(&mut self, key: &SoftSk, name: &str, op: Op, flags: u8) -> Decision {
-        let sig = key.sign(name, REPO, &op, self.now + 1, flags);
+        let sig = key.sign(name, REPO, &op, self.now + 1, flags, self.head());
         let mut sub = Submission::new(Actor::Human { name: name.into() }, op);
         sub.human = Some(sig);
         self.submit(sub)
@@ -9055,7 +9304,7 @@ fn a_security_key_signs_with_a_touch() {
     let d = h.human_sk(&SoftSk::ed25519(11), "cem", freeze("x"), 0x01);
     assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
     // A signature is for one operation.
-    let sig = cem.sign("cem", REPO, &freeze("a"), h.now + 1, 0x01);
+    let sig = cem.sign("cem", REPO, &freeze("a"), h.now + 1, 0x01, h.head());
     let mut sub = Submission::new(Actor::Human { name: "cem".into() }, freeze("b"));
     sub.human = Some(sig);
     let d = h.submit(sub);
@@ -9229,11 +9478,11 @@ fn a_security_key_exists_from_format_28() {
     };
     let (old, new) = (FORMAT_SECURITY_KEYS - 1, FORMAT_SECURITY_KEYS);
     let empty = State::new();
-    let sig = sk.sign("ayse", REPO, &init, T0 + 1, 0x01);
+    let sig = sk.sign("ayse", REPO, &init, T0 + 1, 0x01, None);
     assert!(decide(&empty, &ayse, &init, Some(&sig), &ctx(new)).is_allow());
     let d = decide(&empty, &ayse, &init, Some(&sig), &ctx(old));
     assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
-    let untouched = sk.sign("ayse", REPO, &init, T0 + 1, 0x00);
+    let untouched = sk.sign("ayse", REPO, &init, T0 + 1, 0x00, None);
     let d = decide(&empty, &ayse, &init, Some(&untouched), &ctx(new));
     assert_eq!(d.reasons, ["bad_human_signature"], "{d:?}");
 
@@ -9246,7 +9495,7 @@ fn a_security_key_exists_from_format_28() {
     assert_eq!(genesis.entry.format, FORMAT_CURRENT);
     chain.commit(&genesis);
     let freeze = Op::Freeze { reason: "x".into() };
-    let sig = sk.sign("ayse", REPO, &freeze, T0 + 2, 0x01);
+    let sig = sk.sign("ayse", REPO, &freeze, T0 + 2, 0x01, None);
     let mut c = ctx(new);
     c.time_ms = T0 + 2;
     assert!(decide(&chain.state, &ayse, &freeze, Some(&sig), &c).is_allow());

@@ -73,6 +73,19 @@ pub use crate::peer_other::peer_in_sandbox;
 
 pub use crate::sys::peer_uid;
 
+/// The process that connected, where the system says.
+pub fn peer_pid(s: &UnixStream) -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    return crate::sys::peer_cred(s).and_then(|c| u32::try_from(c.pid).ok());
+    #[cfg(target_os = "macos")]
+    return crate::peer_other::peer_pid(s).and_then(|p| u32::try_from(p).ok());
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = s;
+        None
+    }
+}
+
 /// How many pid namespaces a process of `status`, the text of
 /// `/proc/<pid>/status`, lies in, as far as the reader can see.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -319,7 +332,13 @@ fn handle_conn(stream: &UnixStream, slot: &Slot, svc: &Service) -> std::io::Resu
                 return Ok(());
             }
             Incoming::Line(line) => match serde_json::from_str::<Request>(&line) {
-                Ok(req) => svc.handle_from(req, &|| peer_in_sandbox(stream)),
+                Ok(req) => {
+                    let peer = crate::service::Peer {
+                        in_sandbox: &|| peer_in_sandbox(stream),
+                        pid: &|| peer_pid(stream),
+                    };
+                    svc.handle_from(req, &peer)
+                }
                 Err(e) => {
                     use crate::security::{Event, kind};
                     let ev = Event::new(svc.now(), kind::MALFORMED)

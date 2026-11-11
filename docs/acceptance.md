@@ -140,6 +140,11 @@ visible. Each becomes a criterion when it is automated.
 - `disk_space` (no caller's files written while the stores' disk has less
   than 1 GiB free): needs a disk that is nearly full; the daemon's tests
   cover it with the floor set (`below_the_floor_a_callers_files_are_not_written`).
+- Whose session a connection through the proxy is charged to (by the
+  processes it descends from), and the proxy's time limits: need a harness
+  sandbox and an upstream to reach; the daemon's and `lonca-net`'s tests
+  cover them (`where_a_process_stands_says_nothing_of_whose_it_is`,
+  `a_tunnel_that_carries_nothing_is_cut`).
 - Policy changes (`lonca policy`), human enrollment and revocation,
   negotiation between agents beyond a handover, `lonca revert`, `lonca redact`, `lonca pull`,
   session rotation.

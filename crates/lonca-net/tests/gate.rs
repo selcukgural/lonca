@@ -305,3 +305,99 @@ fn a_gate_can_serve_a_plain_request_itself() {
     let passed = ask(odd.unwrap(), "");
     assert_eq!(passed, "upstream got GET /a?b HTTP/1.1\r\n", "{passed}");
 }
+
+fn spawn_with(limits: lonca_net::Limits) -> (lonca_net::Server, Arc<Recorder>) {
+    let gate = Arc::new(Recorder {
+        allowed: "127.0.0.1".into(),
+        outcomes: Mutex::new(Vec::new()),
+    });
+    let listener = lonca_net::bind("127.0.0.1:0").unwrap();
+    let server = lonca_net::spawn_with(listener, gate.clone(), limits).unwrap();
+    (server, gate)
+}
+
+fn ms(n: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(n)
+}
+
+#[test]
+fn a_head_that_comes_a_byte_at_a_time_is_given_up() {
+    let (server, gate) = spawn_with(lonca_net::Limits {
+        head: ms(400),
+        idle: ms(60_000),
+    });
+    let mut s = TcpStream::connect(server.local_addr()).unwrap();
+    let begun = std::time::Instant::now();
+    // Each byte comes well inside the limit; the head as a whole does not.
+    let feeder = s.try_clone().unwrap();
+    std::thread::spawn(move || {
+        for b in b"CONNECT 127.0.0.1:1 HTTP/1.1".iter().cycle().take(100) {
+            if (&feeder).write_all(&[*b]).is_err() {
+                return;
+            }
+            std::thread::sleep(ms(100));
+        }
+    });
+    s.set_read_timeout(Some(ms(5000))).unwrap();
+    let mut answer = String::new();
+    let _ = s.read_to_string(&mut answer);
+    assert!(answer.starts_with("HTTP/1.1 408"), "{answer}");
+    assert!(begun.elapsed() < ms(3000), "{:?}", begun.elapsed());
+    // The gate was never asked.
+    assert!(gate.outcomes.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_tunnel_that_carries_nothing_is_cut() {
+    let (server, gate) = spawn_with(lonca_net::Limits {
+        head: ms(5000),
+        idle: ms(300),
+    });
+    let up = silent_upstream();
+    let mut s = TcpStream::connect(server.local_addr()).unwrap();
+    write!(s, "CONNECT 127.0.0.1:{up} HTTP/1.1\r\n\r\n").unwrap();
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let mut status = String::new();
+    r.read_line(&mut status).unwrap();
+    assert!(status.contains("200"), "{status}");
+    assert_eq!(
+        wait_for(&gate, 1),
+        [("127.0.0.1".to_owned(), Outcome::Idle)]
+    );
+    s.set_read_timeout(Some(ms(5000))).unwrap();
+    let mut rest = Vec::new();
+    assert!(
+        r.read_to_end(&mut rest).is_ok(),
+        "the client's end is closed"
+    );
+}
+
+#[test]
+fn a_tunnel_that_carries_one_way_only_stays() {
+    let (server, gate) = spawn_with(lonca_net::Limits {
+        head: ms(5000),
+        idle: ms(400),
+    });
+    // An upstream that takes what comes and never says a word.
+    let up = silent_upstream();
+    let mut s = TcpStream::connect(server.local_addr()).unwrap();
+    write!(s, "CONNECT 127.0.0.1:{up} HTTP/1.1\r\n\r\n").unwrap();
+    let mut r = BufReader::new(s.try_clone().unwrap());
+    let mut status = String::new();
+    r.read_line(&mut status).unwrap();
+    assert!(status.contains("200"), "{status}");
+    // Three limits long, a byte every quarter of one: the silent way back
+    // does not end it.
+    for _ in 0..12 {
+        s.write_all(b"x").unwrap();
+        std::thread::sleep(ms(100));
+        assert!(gate.outcomes.lock().unwrap().is_empty());
+    }
+    // The client leaves; the upstream never answers nor closes, and the
+    // half that is left does not wait for it for ever.
+    drop((s, r));
+    assert_eq!(
+        wait_for(&gate, 1),
+        [("127.0.0.1".to_owned(), Outcome::Idle)]
+    );
+}

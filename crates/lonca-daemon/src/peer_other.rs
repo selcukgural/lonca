@@ -10,7 +10,7 @@ use std::os::unix::net::UnixStream;
 
 /// The pid of the process that connected.
 #[cfg(target_os = "macos")]
-fn peer_pid(s: &UnixStream) -> Option<libc::pid_t> {
+pub fn peer_pid(s: &UnixStream) -> Option<libc::pid_t> {
     let mut pid: libc::pid_t = 0;
     let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
     // SAFETY: fd is a valid socket; pid/len are live and sized correctly.

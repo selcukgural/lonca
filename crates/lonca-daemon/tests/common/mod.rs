@@ -38,6 +38,8 @@ pub struct Env {
     pub human_token: Option<String>,
     /// What the operating system would say of the caller.
     pub in_sandbox: bool,
+    /// The process requests come from, as the daemon's socket would say.
+    pub peer_pid: Option<u32>,
 }
 
 pub fn b64(s: &str) -> String {
@@ -94,6 +96,7 @@ impl Env {
             next_id: 1,
             human_token: None,
             in_sandbox: false,
+            peer_pid: None,
         }
     }
 
@@ -136,7 +139,12 @@ impl Env {
             token: token.map(String::from),
             params,
         };
-        let r = self.svc.handle_from(request, &|| in_sandbox);
+        let pid = self.peer_pid;
+        let peer = lonca_daemon::Peer {
+            in_sandbox: &|| in_sandbox,
+            pid: &|| pid,
+        };
+        let r = self.svc.handle_from(request, &peer);
         if r.ok {
             Ok(r.result)
         } else {

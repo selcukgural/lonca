@@ -4,23 +4,23 @@
 //! commands here (Claude Code: `sandbox.network.httpProxyPort`). Each
 //! connection is logged as an observation of the session it belongs to,
 //! which taints that session; repository policy may refuse it instead.
+//! Whose it is, the connecting process's parents say (`lineage`).
 //! The proxy itself lives in `lonca-net`; this module is Lonca's gate.
 
 use std::net::TcpListener;
 use std::sync::Arc;
 
-pub use lonca_net::{bind, is_private, peer_cwd};
+pub use lonca_net::{bind, is_private, peer_pid};
+
+use crate::lineage::Table;
 
 use crate::service::Service;
 
 impl lonca_net::Gate for Service {
     fn decide(&self, request: &lonca_net::Request<'_>) -> lonca_net::Verdict {
-        let verdict = self.proxy_connect(
-            peer_cwd(request.peer, request.local).as_deref(),
-            request.host,
-            request.port,
-            request.peer,
-        );
+        let line =
+            peer_pid(request.peer, request.local).and_then(|pid| Some(Table::read()?.line(pid)));
+        let verdict = self.proxy_connect(line.as_deref(), request.host, request.port, request.peer);
         lonca_net::Verdict {
             allow: verdict.allow,
             allow_private: verdict.allow_private,

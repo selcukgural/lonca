@@ -56,6 +56,31 @@ a line or hide text on the reviewer's screen. Newlines and tabs are kept;
 `--json` output is unchanged. A CRLF file's lines end in a visible `\r` in
 `lonca diff`.
 
+### A connection belongs to the session that made it
+
+The proxy used to put a connection on the record of the session in whose
+workspace the connecting command stood. It now goes by the processes the
+command descends from: the harness that ran the session's hook, or `lonca
+run`.
+
+- A command that enters another session's directory before it connects is
+  still its own session's: that one is tainted and pays the connection, not
+  the other.
+- A command that outlives the process that started it (`nohup … &` and its
+  parent gone) is charged to every session the proxy serves, its own among
+  them. Before, that happened only when it also stood outside every
+  workspace.
+- A session made from another with `cap.attenuate` answers together with
+  the one it came from.
+- After the daemon restarts, every session answers for every connection
+  until its harness starts again (the hook binds at session start). `lsof`
+  and `ps` are needed to tell sessions apart, as `lsof` was.
+- The proxy waits 10 seconds for a request and closes a tunnel through
+  which nothing has moved for 10 minutes.
+
+For `lonca-net` users: `Limits`, `spawn_with` and `serve_with` are new,
+`Outcome::Idle` is a new variant, and `peer_cwd` is replaced by `peer_pid`.
+
 ### One entry of the log has a size, and the proxy a rate
 
 The log keeps every entry, so what goes into one is now bounded before it

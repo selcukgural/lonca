@@ -582,11 +582,11 @@ fn in_sandbox(plan: &Plan, a: &Args, start: Start, token: &str) -> Result<ExitSt
     if let (Some(relay), Some(proxy)) = (&plan.jail.relay, plan.proxy) {
         fs::remove_file(relay)?;
         let listener = UnixListener::bind(relay)?;
+        // What the sandbox sends out connects to the proxy from this
+        // process, the one the daemon knows the session by: it asked for
+        // the isolation.
         std::thread::spawn(move || relay_out(listener, proxy));
     }
-    // The proxy tells sessions apart by the working directory of what
-    // connects, and on Linux that is this process.
-    std::env::set_current_dir(&plan.jail.workspace)?;
     keep_alive(token)?;
     let argv = inner_argv(&plan.jail, &a.command)?;
     let mut command = plan

@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,6 +19,29 @@ pub const MAX_CONNECTIONS: usize = 256;
 /// How much of a tunnel is copied between two reports to
 /// [`Gate::carried`].
 const CHUNK: usize = 16 * 1024;
+
+/// How long the proxy waits on a client. Without them a client that says
+/// nothing keeps one of the [`MAX_CONNECTIONS`] places for as long as it
+/// likes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// For the whole request head, from the first read of it: answered 408
+    /// past it, before the gate is asked anything.
+    pub head: Duration,
+    /// For a tunnel through which nothing moves, either way: it is cut
+    /// ([`Outcome::Idle`]) once it has been silent this long, and a quarter
+    /// longer at most.
+    pub idle: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Limits {
+        Limits {
+            head: Duration::from_secs(10),
+            idle: Duration::from_secs(600),
+        }
+    }
+}
 
 /// One connection a client asked for.
 #[derive(Debug, Clone, Copy)]
@@ -73,6 +95,8 @@ pub enum Outcome {
     Unreachable,
     /// The gate stopped it midway ([`Gate::carried`]).
     Cut,
+    /// Nothing moved through it for [`Limits::idle`].
+    Idle,
     /// Bytes flowed both ways until one side closed.
     Tunneled,
 }
@@ -141,7 +165,12 @@ pub fn bind(addr: &str) -> std::io::Result<TcpListener> {
 
 /// Serves connections until the listener fails, one thread each.
 pub fn serve<G: Gate>(listener: TcpListener, gate: Arc<G>) {
-    accept(listener, gate, &Arc::new(Shared::default()));
+    serve_with(listener, gate, Limits::default());
+}
+
+/// [`serve`] with other limits than the usual.
+pub fn serve_with<G: Gate>(listener: TcpListener, gate: Arc<G>, limits: Limits) {
+    accept(listener, gate, &Arc::new(Shared::default()), limits);
 }
 
 /// A proxy serving on its own thread until [`Server::stop`], or until it is
@@ -176,10 +205,19 @@ impl Shared {
 
 /// Starts serving `listener` on a new thread.
 pub fn spawn<G: Gate>(listener: TcpListener, gate: Arc<G>) -> std::io::Result<Server> {
+    spawn_with(listener, gate, Limits::default())
+}
+
+/// [`spawn`] with other limits than the usual.
+pub fn spawn_with<G: Gate>(
+    listener: TcpListener,
+    gate: Arc<G>,
+    limits: Limits,
+) -> std::io::Result<Server> {
     let addr = listener.local_addr()?;
     let shared = Arc::new(Shared::default());
     let served = Arc::clone(&shared);
-    let thread = std::thread::spawn(move || accept(listener, gate, &served));
+    let thread = std::thread::spawn(move || accept(listener, gate, &served, limits));
     Ok(Server {
         addr,
         shared,
@@ -230,7 +268,7 @@ impl Drop for Server {
     }
 }
 
-fn accept<G: Gate>(listener: TcpListener, gate: Arc<G>, shared: &Arc<Shared>) {
+fn accept<G: Gate>(listener: TcpListener, gate: Arc<G>, shared: &Arc<Shared>, limits: Limits) {
     for conn in listener.incoming() {
         if shared.stopping.load(Ordering::SeqCst) {
             return;
@@ -246,7 +284,8 @@ fn accept<G: Gate>(listener: TcpListener, gate: Arc<G>, shared: &Arc<Shared>) {
         std::thread::spawn(move || {
             // Stopping may have come between tracking and now.
             if !shared.stopping.load(Ordering::SeqCst) {
-                let _ = handle(stream, &*gate, &|upstream| shared.track(id, upstream));
+                let track = |upstream: &TcpStream| shared.track(id, upstream);
+                let _ = handle(stream, &*gate, &track, limits);
             }
             shared.open.lock().unwrap().remove(&id);
         });
@@ -341,10 +380,10 @@ fn parse_authority(a: &str, default_port: u16) -> Option<(String, u16)> {
     ok.then_some((host.to_ascii_lowercase(), port))
 }
 
-/// Working directory of the process on the other end of `peer`, if the
-/// operating system tells us (same user only).
-pub fn peer_cwd(peer: SocketAddr, local: SocketAddr) -> Option<PathBuf> {
-    let me = std::process::id().to_string();
+/// The process on the other end of `peer`, if the operating system tells
+/// us (same user only): the one whose end of a connection to `local`, our
+/// listener, is `peer`.
+pub fn peer_pid(peer: SocketAddr, local: SocketAddr) -> Option<u32> {
     let out = Command::new("lsof")
         .args([
             "-nP",
@@ -354,9 +393,18 @@ pub fn peer_cwd(peer: SocketAddr, local: SocketAddr) -> Option<PathBuf> {
         ])
         .output()
         .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    // Records: p<pid> then n<local>-><remote>. The client is the process
-    // whose local end is `peer` and whose remote end is our listener.
+    pid_of(
+        &String::from_utf8_lossy(&out.stdout),
+        peer,
+        local,
+        std::process::id(),
+    )
+}
+
+/// Reads `lsof -Fpn`: records of `p<pid>` then `n<local>-><remote>`. The
+/// client is the process whose local end is `peer` and whose remote end is
+/// `local`; `me` holds the other end of the same connection.
+fn pid_of(text: &str, peer: SocketAddr, local: SocketAddr, me: u32) -> Option<u32> {
     let want = format!(
         "{}:{}->{}:{}",
         peer.ip(),
@@ -368,22 +416,12 @@ pub fn peer_cwd(peer: SocketAddr, local: SocketAddr) -> Option<PathBuf> {
     let mut cur = None;
     for line in text.lines() {
         if let Some(p) = line.strip_prefix('p') {
-            cur = Some(p.to_string());
-        } else if let Some(n) = line.strip_prefix('n')
-            && n == want
-            && cur.as_deref() != Some(me.as_str())
-        {
-            pid = cur.clone();
+            cur = p.parse::<u32>().ok();
+        } else if line.strip_prefix('n') == Some(want.as_str()) && cur != Some(me) {
+            pid = cur.or(pid);
         }
     }
-    let pid = pid?;
-    let out = Command::new("lsof")
-        .args(["-a", "-p", &pid, "-d", "cwd", "-Fn"])
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|l| l.strip_prefix('n').map(PathBuf::from))
+    pid
 }
 
 /// The first of `addrs` that takes a connection, tried in order within one
@@ -408,18 +446,32 @@ fn respond(mut s: &TcpStream, code: u16, reason: &str) {
 
 /// Serves one client; `track` is shown the upstream connection, if one is
 /// made, so it can be cut from outside.
-fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std::io::Result<()> {
-    client.set_read_timeout(Some(Duration::from_secs(30)))?;
+fn handle(
+    client: TcpStream,
+    gate: &dyn Gate,
+    track: &dyn Fn(&TcpStream),
+    limits: Limits,
+) -> std::io::Result<()> {
     let peer = client.peer_addr()?;
     let local = client.local_addr()?;
-    let mut reader = BufReader::new(client.try_clone()?);
+    let mut reader = BufReader::new(Until {
+        stream: &client,
+        until: Instant::now() + limits.head,
+    });
     let mut head = Vec::new();
     loop {
         let mut line = Vec::new();
-        let n = reader
+        let read = reader
             .by_ref()
             .take((MAX_HEAD - head.len()) as u64)
-            .read_until(b'\n', &mut line)?;
+            .read_until(b'\n', &mut line);
+        let n = match read {
+            Err(e) if timed_out(&e) => {
+                respond(&client, 408, "the request head took too long");
+                return Ok(());
+            }
+            other => other?,
+        };
         if n == 0 || head.len() + n >= MAX_HEAD {
             respond(&client, 400, "bad request");
             return Ok(());
@@ -540,47 +592,100 @@ fn handle(client: TcpStream, gate: &dyn Gate, track: &dyn Fn(&TcpStream)) -> std
         }
         up_w.write_all(&buffered)?;
     }
-    let cut = AtomicBool::new(false);
+    // A read wakes often enough to see the silence of both ways together;
+    // a side that takes nothing for as long is as silent.
+    let wake = (limits.idle / 4).max(Duration::from_millis(1));
+    for s in [&client, &upstream] {
+        s.set_read_timeout(Some(wake))?;
+        s.set_write_timeout(Some(limits.idle.max(wake)))?;
+    }
+    let way = Way {
+        gate,
+        request: &request,
+        idle: limits.idle,
+        moved: Mutex::new(Instant::now()),
+    };
+    // The worst of what the two directions ended with.
+    let end = Mutex::new(Outcome::Tunneled);
+    let ended = |how: Outcome, a: &TcpStream, b: &TcpStream| {
+        if how != Outcome::Tunneled {
+            let mut end = end.lock().unwrap();
+            if *end != Outcome::Cut {
+                *end = how;
+            }
+            let _ = a.shutdown(std::net::Shutdown::Both);
+            let _ = b.shutdown(std::net::Shutdown::Both);
+        }
+        let _ = b.shutdown(std::net::Shutdown::Write);
+    };
     let (up_r, client_w) = (upstream.try_clone()?, client.try_clone()?);
     std::thread::scope(|scope| {
-        scope.spawn(|| {
-            if !carry(&up_r, &client_w, gate, &request) {
-                cut.store(true, Ordering::SeqCst);
-                let _ = up_r.shutdown(std::net::Shutdown::Both);
-                let _ = client_w.shutdown(std::net::Shutdown::Both);
-            }
-            let _ = client_w.shutdown(std::net::Shutdown::Write);
-        });
-        if !carry(&client, &up_w, gate, &request) {
-            cut.store(true, Ordering::SeqCst);
-            let _ = client.shutdown(std::net::Shutdown::Both);
-            let _ = up_w.shutdown(std::net::Shutdown::Both);
-        }
-        let _ = up_w.shutdown(std::net::Shutdown::Write);
+        scope.spawn(|| ended(way.carry(&up_r, &client_w), &up_r, &client_w));
+        ended(way.carry(&client, &up_w), &client, &up_w);
     });
-    let how = if cut.load(Ordering::SeqCst) {
-        Outcome::Cut
-    } else {
-        Outcome::Tunneled
-    };
+    let how = *end.lock().unwrap();
     gate.finished(&request, how);
     Ok(())
 }
 
-/// Copies `from` to `to` until the end, telling the gate of every chunk
-/// first; `false` when the gate stopped it.
-fn carry(mut from: &TcpStream, mut to: &TcpStream, gate: &dyn Gate, request: &Request<'_>) -> bool {
-    let mut buf = vec![0u8; CHUNK];
-    loop {
-        let n = match from.read(&mut buf) {
-            Ok(0) | Err(_) => return true,
-            Ok(n) => n,
-        };
-        if !gate.carried(request, n as u64) {
-            return false;
+/// Reads of `stream` that end, all of them together, by `until`: a limit on
+/// each read alone is none for a client that sends a byte now and then.
+struct Until<'a> {
+    stream: &'a TcpStream,
+    until: Instant,
+}
+
+impl Read for Until<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(std::io::ErrorKind::TimedOut.into());
         }
-        if to.write_all(&buf[..n]).is_err() {
-            return true;
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
+/// Whether a read ended because its time was up (which of the two kinds
+/// depends on the system).
+fn timed_out(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::{TimedOut, WouldBlock};
+    matches!(e.kind(), TimedOut | WouldBlock)
+}
+
+/// The two directions of one tunnel.
+struct Way<'a> {
+    gate: &'a dyn Gate,
+    request: &'a Request<'a>,
+    idle: Duration,
+    /// When a byte last moved, either way.
+    moved: Mutex<Instant>,
+}
+
+impl Way<'_> {
+    /// Copies `from` to `to` until the end, telling the gate of every chunk
+    /// first: [`Outcome::Cut`] when the gate stopped it, [`Outcome::Idle`]
+    /// when nothing moved either way for too long.
+    fn carry(&self, mut from: &TcpStream, mut to: &TcpStream) -> Outcome {
+        let mut buf = vec![0u8; CHUNK];
+        loop {
+            let n = match from.read(&mut buf) {
+                Err(e) if timed_out(&e) => {
+                    if self.moved.lock().unwrap().elapsed() >= self.idle {
+                        return Outcome::Idle;
+                    }
+                    continue;
+                }
+                Ok(0) | Err(_) => return Outcome::Tunneled,
+                Ok(n) => n,
+            };
+            *self.moved.lock().unwrap() = Instant::now();
+            if !self.gate.carried(self.request, n as u64) {
+                return Outcome::Cut;
+            }
+            if to.write_all(&buf[..n]).is_err() {
+                return Outcome::Tunneled;
+            }
         }
     }
 }
@@ -607,6 +712,26 @@ mod tests {
             connect_any(&[at], Duration::ZERO).is_none(),
             "no budget, no attempt"
         );
+    }
+
+    #[test]
+    fn the_client_is_the_other_end_of_our_connection() {
+        let peer: SocketAddr = "127.0.0.1:50001".parse().unwrap();
+        let local: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        // lsof names both ends: the client's record and our own.
+        let text = "p41\nn127.0.0.1:8080->127.0.0.1:50001\n\
+                    p77\nn127.0.0.1:50001->127.0.0.1:8080\nn127.0.0.1:50002->127.0.0.1:8080\n\
+                    p90\nn127.0.0.1:50003->127.0.0.1:8080\n";
+        assert_eq!(pid_of(text, peer, local, 41), Some(77));
+        // A connection of our own to ourselves is nobody's.
+        assert_eq!(pid_of(text, peer, local, 77), None);
+        let other: SocketAddr = "127.0.0.1:50009".parse().unwrap();
+        assert_eq!(pid_of(text, other, local, 41), None);
+        assert_eq!(
+            pid_of("pzz\nn127.0.0.1:50001->127.0.0.1:8080\n", peer, local, 41),
+            None
+        );
+        assert_eq!(pid_of("", peer, local, 41), None);
     }
 
     #[test]

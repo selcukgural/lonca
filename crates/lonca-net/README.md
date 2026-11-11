@@ -49,6 +49,12 @@ fn main() -> std::io::Result<()> {
 connection ended, see every byte relayed (and may cut it when a budget is
 spent), and may serve a tunnel themselves.
 
+A client is not waited for: a request head has 10 seconds in all, and a
+tunnel through which nothing moves either way for 10 minutes is cut
+(`Limits`, set with `spawn_with` and `serve_with`). At most 256
+connections are served at once. `peer_pid` names the process of a
+connection, for a gate that decides by who is asking.
+
 Its API has no stability promise yet, and its version moves with Lonca's
 workspace (every Lonca crate has the same version): pin an exact one.
 

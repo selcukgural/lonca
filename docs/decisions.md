@@ -47,9 +47,10 @@ from the design.
 - **Observation/effect consistency.** A file a session changed but no
   observed tool wrote (and no shell ran) escalates the change and taints the
   session.
-- **Network attribution** uses `lsof` to find the connecting process's
-  working directory. When it can not (other users, missing `lsof`), every
-  proxied session is tainted.
+- **Network attribution** uses `lsof` to find the connecting process and
+  `ps` for what it descends from (it was the process's working directory
+  until 0.2.3; see "Whose connection it is"). When it can not (other
+  users, missing `lsof`), every proxied session is tainted.
 - **Human presence** uses a Swift helper with CryptoKit's Secure Enclave
   P-256 keys (no keychain entitlement needed); `approvals.require_presence`
   rejects file-key signatures.
@@ -3422,6 +3423,12 @@ could hold any number of connections and move any number of bytes, and
   carries `:port` when the port is not 80 or 443. No new log field.
 - **Attribution fallback** is counted (`proxy_unattributed` in `status`,
   `PROXY …` in `lonca status`).
+- **A client is not waited for** (0.2.4): the whole request head has 10 s
+  (408, before the gate is asked), and a tunnel through which nothing
+  moves either way for 10 minutes is cut (`lonca_net::Limits`,
+  `Outcome::Idle`). There was a limit of 30 s on each read and none in
+  all, so a client sending a byte now and then kept one of the 256 places.
+  Constants, not policy: nothing a repository does needs a slower client.
 
 ## Security events outside the log (#56)
 
@@ -4213,8 +4220,9 @@ longer asked.
   does not read as the session's, the tool call is blocked. With no daemon
   to ask it stands aside only where no `.lonca/workspace.json` is above
   it. `hook.input` carries the resolved root (`real`), and the daemon
-  refuses one that is not the session's logged workspace; `hook.bind`
-  attributes network to the logged workspace.
+  refuses one that is not the session's logged workspace. (`hook.bind`
+  no longer places network use by a directory at all: "Whose connection
+  it is".)
 - **A human's command in an agent's workspace is refused** when the file
   there names no session (`sync`, `diff`, `propose`, `status` without
   `--repo`), and commands that take the repository from the workspace take
@@ -4481,6 +4489,54 @@ an inside read that did not taint.
 - **Names are compared as written.** On a file system that folds case a
   path in another case is, at worst, outside; patterns and case are their
   own question.
+
+## Whose connection it is
+
+The proxy charged a connection (log entry, taint, `max_connections`,
+`max_bytes`, the recording rate) to the session in whose workspace the
+connecting process had its working directory, and to every sandboxed
+session when it stood in none. A process chooses where it stands: a
+command of one session that entered another's workspace first was
+recorded for the other alone, and fetched without its own taint.
+
+- **By descent, not by directory.** A session is known by the processes
+  it was bound from: the daemon reads the peer of the socket request
+  (`LOCAL_PEERPID`, `SO_PEERCRED`) at an allowed `hook.bind` (the hook the
+  harness ran) and at `session.isolate` (`lonca run`, which then starts
+  the command), and keeps that process with everything above it, each as
+  number and start time (`ps -A -o pid= -o ppid= -o lstart=`), so a number
+  used again is another process. A connecting process (`lsof`, as before)
+  is followed up the same way, and the sessions it meets nearest answer
+  (`lineage::answering`): a command under harness A meets A at the
+  harness, and B, started from the same shell, only at the shell.
+- **Fail closed, as before.** Sessions that meet it at the same process
+  answer together. A process whose parents ended is given to the system's
+  first process (or a reaper above the harnesses): it meets every session
+  there, so all of them answer, its own among them. A session nothing
+  places (after a daemon restart, or bound from no process the daemon
+  could read) answers for every connection. No process named (`lsof` or
+  `ps` missing, another account's process in hardened mode) is everyone's,
+  counted in `proxy_unattributed`, which now also counts a process that
+  descends from nothing any session was bound from.
+- **A bind adds and never takes away.** An agent holds its session's
+  token and can send `hook.bind` itself, from wherever it likes. Lines
+  are only added (processes that ended fall out); with more than 8 the
+  session is placed by none and answers for everything. A refused bind
+  adds nothing.
+- **A child answers with its parents.** What a session made by
+  `cap.attenuate` fetches, the session it came from can read: the
+  connection is on both records.
+- **The directory is not used.** `"workspace"` in `hook.bind` and in
+  `human.submit` (with `session.isolate`) is still accepted and says
+  nothing; no protocol number for a field that is ignored.
+- **What stays.** A session can still make the others answer with it (a
+  command that leaves its parents is everyone's), so it can taint them
+  and spend their connections and bytes, at the price of its own; any
+  process of the account can do the same. Telling such a process from a
+  session's own needs an identity the process can not drop, which one
+  account does not give. Harnesses that run several sessions in one
+  process tree answer together. A process that gets another program to
+  connect for it (a helper outside its own descent) is that program's.
 
 ## Open questions (carried from the design)
 

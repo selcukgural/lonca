@@ -103,7 +103,7 @@ requirement in it met, or the exception named.
 | V2.3 Business logic security | met | single writer orders every operation; leases, quotas and approvals in `decide()`; the auditor replays them |
 | V2.4 Anti-automation | met | per-session rate limit, connection caps (#50), proxy budgets (#64) and a rate on what the proxy records, a size limit on a log entry, advisor budget (#63) |
 | V4.1 Generic web service security | met | one Unix socket, authenticated methods, explicit errors (`docs/protocol.md`) |
-| V4.2 HTTP message structure | met | the proxy caps request heads at 16 KiB and parses only `CONNECT` and absolute `http://` (`crates/lonca-net`) |
+| V4.2 HTTP message structure | met | the proxy caps request heads at 16 KiB and 10 s, parses only `CONNECT` and absolute `http://`, and cuts a tunnel silent for 10 minutes (`crates/lonca-net`) |
 | V4.3, V4.4 GraphQL, WebSocket | n/a | none |
 | V5 File handling | met | repository paths validated, workspace paths opened one component at a time, scratch and size limits; backups written mode 0640 to their own directory |
 | V6.1 Authentication documentation | met | `docs/decisions.md` "Daemon authentication", `docs/guide/humans.md` |

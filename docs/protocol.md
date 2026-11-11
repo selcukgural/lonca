@@ -722,9 +722,10 @@ setup in the policy, as `harness.setup` gives it. Errors: `not_found`.
 *human* (a `human.recover` operation, and a `daemon.recover` with
 `recover`, need no session: their recovery-key signature is the
 credential). `{"op": op, "sig": human signature,
-"workspace": string | null}`. `workspace` goes with `session.isolate`:
-the absolute path connections through the proxy are attributed by, not
-logged. Only the human who started a session can isolate it, only before
+"workspace": string | null}`. `workspace` went with `session.isolate`
+and is ignored since 0.2.4: connections through the proxy are charged to
+an isolated session by descent from the process that sent this request
+(`lonca run`), which the daemon reads from the socket. Only the human who started a session can isolate it, only before
 anything has used it (`session_used`: a heartbeat, an observation, a lease,
 a change, a child, a continuation), and not a capability's child, which
 takes its level from its parent.
@@ -1014,7 +1015,11 @@ answer, and it is then told. No news, no `"output"`.
 ### `hook.bind`
 
 *agent.* `{"harness": string, "harness_session": string,
-"sudo_without_password": boolean, "workspace": absolute path | null}`.
+"sudo_without_password": boolean, "workspace": absolute path | null}`
+(`workspace` is ignored since 0.2.4). An allowed bind also tells the daemon
+which processes the session is known by, for the proxy: the one that sent
+the request and everything it descends from, read from the socket and not
+from the request, so it is sent by the hook the harness runs.
 Logged, plus `"level"` (the level the session stands at after this request),
 `"notes"` ([string]) and `"scratch"` ([absolute path], the session's scratch roots
 from the log). A level is read only when `harness` is the one in the session's

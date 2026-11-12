@@ -51,6 +51,9 @@ pub struct RepoHandle {
     /// The last entry that integrated each change or failed to, by
     /// sequence number.
     integrations: BTreeMap<ChangeId, u64>,
+    /// The first entry that names each session as one to start, allowed or
+    /// not: the session is no older than that.
+    started: BTreeMap<String, u64>,
     policy: Option<(GitId, Arc<PolicyBundle>)>,
     /// How far each session has been told what others want of it.
     pub told: BTreeMap<String, Told>,
@@ -71,6 +74,7 @@ impl RepoHandle {
             head: None,
             log: Vec::new(),
             integrations: BTreeMap::new(),
+            started: BTreeMap::new(),
             policy: None,
             told: BTreeMap::new(),
             hooked: BTreeMap::new(),
@@ -110,8 +114,10 @@ impl RepoHandle {
             .unwrap_or(&keys[0]);
         let head = log.head()?;
         let mut integrations = BTreeMap::new();
+        let mut started = BTreeMap::new();
         for op in &ops {
             Self::note_integration(&mut integrations, op);
+            Self::note_start(&mut started, op);
         }
         Ok(Self {
             name: name.into(),
@@ -120,6 +126,7 @@ impl RepoHandle {
             head,
             log: ids,
             integrations,
+            started,
             policy: None,
             told: BTreeMap::new(),
             hooked: BTreeMap::new(),
@@ -216,6 +223,7 @@ impl RepoHandle {
         self.head = Some(commit.clone());
         self.log.push(commit);
         Self::note_integration(&mut self.integrations, &op);
+        Self::note_start(&mut self.started, &op);
         self.chain.commit(&op);
         self.alarm(&op);
         Ok(op)
@@ -232,6 +240,26 @@ impl RepoHandle {
             }
             _ => {}
         }
+    }
+
+    fn note_start(known: &mut BTreeMap<String, u64>, op: &SignedOp) {
+        let session = match &op.entry.op {
+            Op::SessionStart { session, .. } => session,
+            Op::CapAttenuate { child, .. } => child,
+            _ => return,
+        };
+        known.entry(session.clone()).or_insert(op.entry.seq);
+    }
+
+    /// Where the log can first have news for `session`: the oldest start of
+    /// it and of the sessions it continues. A message goes to a session
+    /// that is active, a lease set to one that is or that the same entry
+    /// makes, and a proposal reaches the leases of one that held them, so
+    /// nothing before is for it. The whole log when a start is not known.
+    pub fn news_from(&self, session: &str) -> u64 {
+        let line = self.chain.state.lineage(session);
+        let starts = line.iter().map(|s| self.started.get(s).copied());
+        starts.min().flatten().unwrap_or(0)
     }
 
     /// The commits of the entries from `from` on, at most `limit` of them:

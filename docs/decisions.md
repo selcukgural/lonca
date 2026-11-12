@@ -5286,6 +5286,17 @@ same answers and errors.
   asked paths up in a set. The daemon looks at a running `git` after 1 ms,
   then 2, up to the 20 ms it always waited, so a short command no longer
   costs up to 20 ms of sleep.
+- **A session's first `inbox` starts where the session does.** Nobody
+  told yet, it read the log from its first entry; `told` is in memory, so
+  again after every restart. The handle keeps the first entry that names
+  each session as one to start (`RepoHandle::news_from`, beside the log's
+  commits), and the read starts at the oldest of the session and those it
+  continues. Nothing before that is told to it: a message is refused
+  unless its receiver is active, a lease set comes with a message or with
+  the entry that makes the session, and a proposal reaches the leases of
+  a session that held them, which is why the sessions it continues count
+  (a test holds that). With 20,000 entries: 1,850 ms, now under 1 ms for
+  a session that just started.
 - **The reservations of a moment are found once for a decision and once
   for a report.** `State::settled` (which interests have their reservation
   now) was computed three times for one `lease.acquire` and twice for

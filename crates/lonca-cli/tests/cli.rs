@@ -2386,6 +2386,31 @@ fn a_git_checkout_fetches_and_proposes_through_the_daemon() {
         "mode kept"
     );
     g(&["reset", "-q", "--hard", "refs/lonca/trunk"]);
+    // One commit that deletes a file, adds one that is no text and one
+    // with a space in its name: each arrives as it is in the commit.
+    let odd: Vec<u8> = (0..=255u8).chain([b'\n', 0, b'\n']).collect();
+    std::fs::write(co.join("odd.bin"), &odd).unwrap();
+    std::fs::write(co.join("two words.txt"), "spaced\n").unwrap();
+    g(&["rm", "-q", "run.sh"]);
+    g(&["add", "odd.bin", "two words.txt"]);
+    g(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "-m",
+        "three kinds",
+    ]);
+    let sent = g(&["rev-parse", "HEAD^{tree}"]);
+    let p: serde_json::Value =
+        serde_json::from_str(&e.run(&co, &["propose", "--commit", "HEAD", "--json"])).unwrap();
+    assert_eq!(p["status"], "queued", "{p}");
+    e.settle();
+    e.run(&co, &["fetch"]);
+    assert_eq!(g(&["rev-parse", "refs/lonca/trunk^{tree}"]), sent);
+    g(&["reset", "-q", "--hard", "refs/lonca/trunk"]);
     std::os::unix::fs::symlink("README.md", co.join("link")).unwrap();
     g(&["add", "link"]);
     g(&[

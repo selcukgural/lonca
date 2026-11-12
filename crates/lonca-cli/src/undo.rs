@@ -1,7 +1,7 @@
 //! Undo: the log is never rewritten; every undo is a new, compensating
 //! operation that goes through the Gatekeeper like any other.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
@@ -14,7 +14,7 @@ use lonca_symbols::engine::ENGINE_CURRENT;
 use serde_json::json;
 
 use crate::ctx::call;
-use crate::workspace::fetch;
+use crate::workspace::{fetch, fill, listed};
 
 /// Entries from `from`, at most `limit` of them (all with `None`). The
 /// daemon answers a page at a time, so a longer log takes several requests:
@@ -56,19 +56,30 @@ fn reverse_range(
     after: &GitId,
 ) -> Result<(GitId, Vec<FileChange>)> {
     let t = trunk(c)?;
-    let b = fetch(c, before, None)?;
-    let a = fetch(c, after, None)?;
+    // What each commit has, by path; contents only of what differs.
+    let by_path = |files: Vec<TreeFile>| -> BTreeMap<String, TreeFile> {
+        files.into_iter().map(|f| (f.path.clone(), f)).collect()
+    };
+    let mut b = by_path(listed(c, before, None)?);
+    let mut a = by_path(listed(c, after, None)?);
     let changed: BTreeSet<String> = b
-        .iter()
-        .chain(&a)
-        .map(|f| f.path.clone())
-        .filter(|p| {
-            b.iter().find(|f| &f.path == p).map(|f| &f.blob)
-                != a.iter().find(|f| &f.path == p).map(|f| &f.blob)
-        })
+        .keys()
+        .chain(a.keys())
+        .filter(|p| b.get(*p).map(|f| &f.blob) != a.get(*p).map(|f| &f.blob))
+        .cloned()
         .collect();
-    let now = fetch(c, &t, Some(changed.iter().cloned().collect()))?;
-    let get = |v: &[TreeFile], p: &str| v.iter().find(|f| f.path == p).cloned();
+    fill(
+        c,
+        before,
+        b.values_mut().filter(|f| changed.contains(&f.path)),
+    )?;
+    fill(
+        c,
+        after,
+        a.values_mut().filter(|f| changed.contains(&f.path)),
+    )?;
+    let now = by_path(fetch(c, &t, Some(changed.iter().cloned().collect()))?);
+    let get = |v: &BTreeMap<String, TreeFile>, p: &str| v.get(p).cloned();
     let mut out = Vec::new();
     let mut conflicts = Vec::new();
     for p in &changed {

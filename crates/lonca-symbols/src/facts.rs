@@ -12,8 +12,8 @@ use crate::engine::{
     ENGINE_SECTIONS, ENGINE_SIGNATURES, ENGINE_UNPARSED, reads_bytes, reads_size,
 };
 use crate::extract::{
-    MAX_COMPARED, Parsed, Sym, align, best_pairs, likeness, moved, parse_at, parse_together,
-    shifted,
+    MAX_COMPARED, Parsed, Sym, align, best_pairs, has_error_at, likeness, moved, parse_at,
+    parse_together, shifted,
 };
 use crate::lang::Lang;
 use crate::mentions::{MAX_AFFECTED, bare, mentions, used_names};
@@ -41,7 +41,7 @@ fn sym_id(path: &str, name: &str) -> String {
 
 /// `bytes` are text the grammar of `lang` can read.
 fn reads(engine: u32, lang: Lang, bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes).is_ok_and(|text| !parse_at(engine, lang, text).has_error)
+    std::str::from_utf8(bytes).is_ok_and(|text| !has_error_at(engine, lang, text))
 }
 
 /// A change a line merge can stand in for a lease on: lines of one file that
@@ -88,19 +88,24 @@ pub fn analyze(
     let paths: BTreeSet<&String> = base.keys().chain(new.keys()).collect();
     for path in paths {
         let lang = Lang::detect_at(engine, path);
+        // A file's texts are asked about more than once and parsed once.
+        let _parses = crate::lang::remember();
         match (base.get(path), new.get(path)) {
             (None, None) => {}
             (None, Some(n)) => {
                 f.added_files.push(path.clone());
                 let bytes = read(&n.blob)?;
                 let lang = lang.filter(|&l| reads_bytes(engine, l, &bytes));
-                if lang.is_some_and(|l| !l.is_strict_at(engine) && !reads(engine, l, &bytes)) {
+                let text = std::str::from_utf8(&bytes).ok();
+                // Read once, for whether it reads and for what is in it.
+                let parsed = lang.zip(text).map(|(l, t)| parse_at(engine, l, t));
+                let reads = parsed.as_ref().is_some_and(|p| !p.has_error);
+                if lang.is_some_and(|l| !l.is_strict_at(engine) && !reads) {
                     f.unread_files.push(path.clone());
                 }
-                if let Ok(text) = std::str::from_utf8(&bytes) {
+                if let Some(text) = text {
                     f.lines_added += count_lines(text);
-                    if let Some(lang) = lang {
-                        let p = parse_at(engine, lang, text);
+                    if let Some(p) = parsed {
                         if p.has_error {
                             syntax_errors.push(path.clone());
                         }

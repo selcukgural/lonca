@@ -18,7 +18,7 @@ use lonca_core::ops::{Attestation, CheckKind, CheckResult};
 use lonca_core::{FileMap, FileMode, GitId, Result, Store};
 use lonca_policy::config::Verification;
 use lonca_symbols::engine::{ENGINE_CURRENT, reads_text};
-use lonca_symbols::{Lang, parse};
+use lonca_symbols::{Lang, has_error_at};
 
 pub mod jail;
 mod process;
@@ -135,8 +135,12 @@ impl Verifier {
             let bytes = store.read_blob(&e.blob)?;
             // Past its size or its budget a file goes by its lines, and
             // bytes that are no text are not parsed at all.
+            // One parse answers both, and nothing reads the symbols.
+            let _parses = lonca_symbols::lang::remember();
             let read = std::str::from_utf8(&bytes)
-                .map(|t| !reads_text(ENGINE_CURRENT, lang, t) || !parse(lang, t).has_error)
+                .map(|t| {
+                    !reads_text(ENGINE_CURRENT, lang, t) || !has_error_at(ENGINE_CURRENT, lang, t)
+                })
                 .unwrap_or(false);
             if !read {
                 unread.push(p.clone());

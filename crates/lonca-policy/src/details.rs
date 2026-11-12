@@ -14,7 +14,7 @@ use lonca_core::ops::{Facts, LeaseItem, LeaseKind};
 use serde::Serialize;
 
 use crate::config::UnparsedFiles;
-use crate::state::{ActiveLease, State};
+use crate::state::{ActiveLease, Named, Settled, State};
 use crate::symbols;
 
 pub const LEASE_HELD: &str = "lease_held";
@@ -83,16 +83,33 @@ impl Detail {
 /// What other sessions hold that conflicts with `wanted`, one entry per
 /// held item however many of `wanted` run into it.
 pub fn lease_held(state: &State, session: &str, wanted: &[LeaseItem], now_ms: i64) -> Vec<Detail> {
+    lease_held_in(state, &others(state, session, now_ms), wanted)
+}
+
+/// A lease in force with each of its items as trunk names it.
+type Held<'a> = (ActiveLease<'a>, Vec<Named<'a>>);
+
+/// The leases of other sessions in force at `now_ms`: the same for every
+/// lease a report asks about.
+fn others<'a>(state: &'a State, session: &str, now_ms: i64) -> Vec<Held<'a>> {
+    let theirs = state.active_leases(now_ms).filter(|h| h.holder != session);
+    theirs
+        .map(|h| {
+            let items = state.named_all(h.items.iter().copied());
+            (h, items)
+        })
+        .collect()
+}
+
+fn lease_held_in(state: &State, others: &[Held], wanted: &[LeaseItem]) -> Vec<Detail> {
+    let wanted = state.named_all(wanted);
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
-    for held in state.active_leases(now_ms) {
-        if held.holder == session {
-            continue;
-        }
-        for a in wanted {
-            for b in held.items.iter().filter(|b| state.conflict(a, b)) {
-                if seen.insert((held.lease.set.clone(), b.symbol.clone())) {
-                    out.push(Detail::held(state, &held, b, a.kind));
+    for (held, items) in others {
+        for a in &wanted {
+            for b in items.iter().filter(|b| state.conflict_named(a, b)) {
+                if seen.insert((&held.lease.set, &b.item.symbol)) {
+                    out.push(Detail::held(state, held, b.item, a.item.kind));
                 }
             }
         }
@@ -107,8 +124,17 @@ pub fn lease_reserved(
     wanted: &[LeaseItem],
     now_ms: i64,
 ) -> Vec<Detail> {
-    let reservations = state.reservations_at(now_ms);
-    let theirs = reservations.iter().filter(|r| r.session != session);
+    lease_reserved_in(state, &state.settled(now_ms), session, wanted)
+}
+
+fn lease_reserved_in(
+    state: &State,
+    settled: &Settled,
+    session: &str,
+    wanted: &[LeaseItem],
+) -> Vec<Detail> {
+    let reservations = settled.reservations.iter();
+    let theirs = reservations.filter(|r| r.session != session);
     let mut out = Vec::new();
     for r in theirs {
         for a in wanted {
@@ -133,9 +159,21 @@ pub fn lease_wanted(
     wanted: &[LeaseItem],
     now_ms: i64,
 ) -> Vec<Detail> {
-    let new = state.new_items(session, wanted, now_ms);
+    lease_wanted_in(state, &state.settled(now_ms), session, wanted, now_ms)
+}
+
+/// [`lease_wanted`] with the reservations of `now_ms` in hand: they are
+/// the same for every lease a report asks about.
+fn lease_wanted_in(
+    state: &State,
+    settled: &Settled,
+    session: &str,
+    wanted: &[LeaseItem],
+    now_ms: i64,
+) -> Vec<Detail> {
+    let new = state.new_items_in(settled, session, wanted, now_ms);
     let mut out = Vec::new();
-    for i in state.wanted_against(session, wanted, now_ms) {
+    for i in state.wanted_against_in(settled, session, wanted, now_ms) {
         for a in &new {
             for b in i.items.iter().filter(|b| state.conflict(a, b)) {
                 out.push(Detail {
@@ -166,6 +204,8 @@ pub fn lease_report(
         .filter(|l| l.holder == session)
         .collect();
     let mine = || leases.iter().flat_map(|l| l.items.iter().copied());
+    let settled = state.settled(now_ms);
+    let others = others(state, session, now_ms);
     let mut out = Vec::new();
     for need in symbols::lease_needs_under(facts, unparsed, FORMAT_CURRENT) {
         let Some(&kind) = need.kinds.first() else {
@@ -185,8 +225,8 @@ pub fn lease_report(
             names: names.clone(),
         };
         let wanted = std::slice::from_ref(&item);
-        let mut blockers = lease_held(state, session, wanted, now_ms);
-        blockers.extend(lease_wanted(state, session, wanted, now_ms));
+        let mut blockers = lease_held_in(state, &others, wanted);
+        blockers.extend(lease_wanted_in(state, &settled, session, wanted, now_ms));
         if blockers.is_empty() {
             out.push(Detail {
                 names,
@@ -213,6 +253,8 @@ pub fn key_report(
         .filter(|l| l.holder == session)
         .flat_map(|l| l.items.into_iter().cloned())
         .collect();
+    let settled = state.settled(now_ms);
+    let others = others(state, session, now_ms);
     let mut out = Vec::new();
     for path in &facts.added_files {
         let Some((d, name)) = keyed.of(path) else {
@@ -234,8 +276,8 @@ pub fn key_report(
             continue;
         }
         let wanted = std::slice::from_ref(&item);
-        let mut blockers = lease_held(state, session, wanted, now_ms);
-        blockers.extend(lease_wanted(state, session, wanted, now_ms));
+        let mut blockers = lease_held_in(state, &others, wanted);
+        blockers.extend(lease_wanted_in(state, &settled, session, wanted, now_ms));
         if blockers.is_empty() {
             out.push(Detail {
                 names: item.names.clone(),

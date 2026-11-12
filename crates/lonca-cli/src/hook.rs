@@ -172,7 +172,7 @@ fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
     client.token = Some(ws.token()?);
     let real = ctx::resolved(&ws.root)?;
     let mut params = json!({"harness": harness, "input": v, "workspace": ws.root, "real": real});
-    let mut r = ctx::call(&mut client, "hook.input", params.clone())?;
+    let mut r = ctx::call_with(&mut client, "hook.input", &params)?;
     if r["phase"] == "resolve" {
         // The daemon places the call's paths and may not see them: they
         // are looked at here, where the tool will walk them. One that
@@ -185,7 +185,7 @@ fn handle(harness: &str, v: &Value, ws: &Workspace) -> Result<Option<Value>> {
             .filter_map(|(p, real)| Some((p, real.to_str()?.to_string())))
             .collect();
         params["paths"] = json!(paths);
-        r = ctx::call(&mut client, "hook.input", params)?;
+        r = ctx::call_with(&mut client, "hook.input", &params)?;
     }
     if r["phase"] == "session_start" {
         return bind(&mut client, harness, &r, ws).map(Some);

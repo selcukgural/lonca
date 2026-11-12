@@ -197,11 +197,12 @@ pub fn propose(
     } else {
         intent.to_string()
     };
-    let prep = call(
-        c,
-        "human.prepare_change",
-        json!({"base": base, "files": files, "author": human, "intent": intent}),
-    )?;
+    let params = crate::ctx::WithFiles {
+        author: Some(human),
+        intent: Some(&intent),
+        ..crate::ctx::WithFiles::new(&base, &files)
+    };
+    let prep = crate::ctx::call_with(c, "human.prepare_change", &params)?;
     let op: Op = serde_json::from_value(prep["op"].clone())?;
     let Op::ChangePropose {
         change,

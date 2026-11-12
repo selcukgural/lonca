@@ -5316,10 +5316,17 @@ same answers and errors.
   (`json_sectioned`); it read the sides for the question and again for
   the merge. `lonca run` looks at its command after 1 ms, then 2, up to
   the 50 ms it always waited.
-- **Left as it is:** the CLI's `json!` of a proposal's files and the
-  hook's copy of its parameters. `Client::call` takes its parameters as a
-  `Value` it owns, so both go only with a change of what `lonca-client`
-  offers, and a harness depends on that.
+- **A request's parameters are written from where they are.**
+  `Client::call` takes a `Value` it owns, so the CLI made one of every
+  proposal with `json!`, a copy of each file's contents, and the hook
+  copied its parameters for a second request it rarely sends.
+  `Client::call_with` takes anything that serialises, by reference;
+  `call` is that with its `Value`, so nothing a harness uses changed and
+  the line is the same bytes (a test holds a borrowed request to an owned
+  one). The CLI's requests with a change's files (`facts.preview`,
+  `change.propose`, `human.prepare_change`) go as `ctx::WithFiles`, with
+  the keys in the order the `json!` had them (a test, per request). An
+  undo's request is still a `json!`: it holds the files that differ.
 - **`lonca sync` and `lonca undo` read the contents of what differs.**
   Both downloaded every file of the commits they compare (`fetch`), a
   whole repository two or three times over, to read the few files that

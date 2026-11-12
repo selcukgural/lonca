@@ -1997,20 +1997,17 @@ fn run(cmd: Cmd) -> Result<()> {
                 Some(_) => {
                     let mut c = connect()?;
                     c.token = Some(ws.token()?);
-                    call(
-                        &mut c,
-                        "facts.preview",
-                        json!({"base": ws.meta.base, "files": changes}),
-                    )?
+                    let params = ctx::WithFiles::new(&ws.meta.base, &changes);
+                    ctx::call_with(&mut c, "facts.preview", &params)?
                 }
                 None => {
                     let human = workspace_human(&ws)?;
                     let mut c = human_client(&ws.meta.repo, &human)?;
-                    call(
-                        &mut c,
-                        "human.prepare_change",
-                        json!({"base": ws.meta.base, "files": changes, "author": human}),
-                    )?
+                    let params = ctx::WithFiles {
+                        author: Some(&human),
+                        ..ctx::WithFiles::new(&ws.meta.base, &changes)
+                    };
+                    ctx::call_with(&mut c, "human.prepare_change", &params)?
                 }
             };
             outln!("{}", serde_json::to_string_pretty(&facts["facts"])?);
@@ -2216,11 +2213,8 @@ fn run(cmd: Cmd) -> Result<()> {
                     let symbols = [&edits, &adds, &deletes, &signature_changes];
                     let mut claim = claim_of(intent, symbols, deleted_files);
                     if accept_facts {
-                        let p = call(
-                            &mut c,
-                            "facts.preview",
-                            json!({"base": ws.meta.base, "files": changes}),
-                        )?;
+                        let params = ctx::WithFiles::new(&ws.meta.base, &changes);
+                        let p = ctx::call_with(&mut c, "facts.preview", &params)?;
                         let f: lonca_core::ops::Facts = serde_json::from_value(p["facts"].clone())?;
                         claim = Claim {
                             intent: claim.intent,
@@ -2233,11 +2227,11 @@ fn run(cmd: Cmd) -> Result<()> {
                             revert_of: None,
                         };
                     }
-                    let r = call(
-                        &mut c,
-                        "change.propose",
-                        json!({"base": ws.meta.base, "files": changes, "claim": claim}),
-                    )?;
+                    let params = ctx::WithFiles {
+                        claim: Some(&claim),
+                        ..ctx::WithFiles::new(&ws.meta.base, &changes)
+                    };
+                    let r = ctx::call_with(&mut c, "change.propose", &params)?;
                     let change: ChangeId = serde_json::from_value(r["change"].clone())?;
                     let commit: GitId = serde_json::from_value(r["commit"].clone())?;
                     (change, commit, r)
@@ -2245,11 +2239,12 @@ fn run(cmd: Cmd) -> Result<()> {
                 None => {
                     let human = workspace_human(&ws)?;
                     let mut c = human_client(&ws.meta.repo, &human)?;
-                    let prep = call(
-                        &mut c,
-                        "human.prepare_change",
-                        json!({"base": ws.meta.base, "files": changes, "author": human, "intent": intent}),
-                    )?;
+                    let params = ctx::WithFiles {
+                        author: Some(&human),
+                        intent: Some(&intent),
+                        ..ctx::WithFiles::new(&ws.meta.base, &changes)
+                    };
+                    let prep = ctx::call_with(&mut c, "human.prepare_change", &params)?;
                     let op: Op = serde_json::from_value(prep["op"].clone())?;
                     let repo = ws.meta.repo.clone();
                     let Op::ChangePropose { change, commit, .. } = &op else {

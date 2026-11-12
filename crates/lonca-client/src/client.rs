@@ -6,10 +6,11 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::protocol::{ErrorBody, MAX_LINE, Request, Response, read_line_limited, write_line};
+use crate::protocol::{ErrorBody, MAX_LINE, Response, read_line_limited, write_line};
 use crate::trust::Trust;
 
 pub struct Client {
@@ -189,6 +190,19 @@ fn not_read(r: &Response) -> bool {
     r.id == 0 && r.error.as_ref().is_some_and(|e| e.code == "closed")
 }
 
+/// A [`crate::protocol::Request`] as it is written: the same fields in the
+/// same order, with the parameters where the caller has them.
+#[derive(Serialize)]
+struct Sent<'a, P: Serialize + ?Sized> {
+    id: u64,
+    method: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<&'a str>,
+    params: &'a P,
+}
+
 impl Client {
     /// Connects to the daemon this machine trusts. There is no way to get
     /// a client without the check: a token goes nowhere unverified.
@@ -234,16 +248,29 @@ impl Client {
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
+        self.call_with(method, &params)
+    }
+
+    /// [`Client::call`] with parameters that are written to the line from
+    /// where they are: a change's files are not copied into a `Value`
+    /// first. The line is the one `call` writes for the same JSON.
+    pub fn call_with<P: Serialize + ?Sized>(
+        &mut self,
+        method: &str,
+        params: &P,
+    ) -> Result<Value, CallError> {
         if self.broken {
             self.reconnect()?;
         }
         let id = self.next;
         self.next += 1;
-        let req = Request {
+        let repo = self.repo.clone();
+        let token = self.token.clone();
+        let req = Sent {
             id,
-            method: method.into(),
-            repo: self.repo.clone(),
-            token: self.token.clone(),
+            method,
+            repo: repo.as_deref(),
+            token: token.as_deref(),
             params,
         };
         let resp = match self.exchange(&req) {
@@ -273,12 +300,12 @@ impl Client {
 
     /// The daemon closed this connection for being quiet and never saw the
     /// request, so it is safe to send on a new one, once.
-    fn again(&mut self, req: &Request) -> Result<Response, CallError> {
+    fn again<P: Serialize + ?Sized>(&mut self, req: &Sent<P>) -> Result<Response, CallError> {
         self.reconnect()?;
         Ok(self.exchange(req)?)
     }
 
-    fn exchange(&mut self, req: &Request) -> Result<Response, Exchange> {
+    fn exchange<P: Serialize + ?Sized>(&mut self, req: &Sent<P>) -> Result<Response, Exchange> {
         write_line(&mut self.writer, req).map_err(Exchange::Write)?;
         let line = read_line_limited(&mut self.reader, MAX_LINE)
             .map_err(Exchange::Read)?
@@ -316,9 +343,41 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::write_line;
+    use crate::protocol::{Request, write_line};
     use std::io::BufRead;
     use std::os::unix::net::UnixListener;
+
+    /// What `call_with` writes is the line of a [`Request`], byte for byte,
+    /// with and without a repository and a token.
+    #[test]
+    fn a_borrowed_request_is_written_as_an_owned_one() {
+        let params =
+            serde_json::json!({"files": [{"path": "a", "content_b64": "eA=="}], "base": "b"});
+        for (repo, token) in [
+            (None, None),
+            (Some("demo"), None),
+            (Some("demo"), Some("t")),
+        ] {
+            let owned = Request {
+                id: 7,
+                method: "change.propose".into(),
+                repo: repo.map(String::from),
+                token: token.map(String::from),
+                params: params.clone(),
+            };
+            let sent = Sent {
+                id: 7,
+                method: "change.propose",
+                repo,
+                token,
+                params: &params,
+            };
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            write_line(&mut a, &owned).unwrap();
+            write_line(&mut b, &sent).unwrap();
+            assert_eq!(a, b);
+        }
+    }
 
     /// A daemon of one connection at a time: `answer` gets each request
     /// line and says what to send back (nothing: stay quiet).

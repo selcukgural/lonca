@@ -5250,6 +5250,16 @@ same answers and errors.
   6 ms: the facts of the file added 50 -> 11 ms, modified 57 -> 22 ms, a
   merge by symbols 99 -> 43 ms, one that falls back to lines 168 -> 32 ms.
 
+- **Small ones.** The auditor takes the keyed-directory patterns the
+  policy bundle compiled; it compiled them again for every entry. A
+  request's parameters are read where they are (`T::deserialize(&Value)`),
+  not from a copy of the whole tree; a test holds the refusals to the same
+  words. A line that is UTF-8 becomes a `String` without a copy
+  (`protocol::line_text`), in the daemon and the client. `tree` looks its
+  asked paths up in a set. The daemon looks at a running `git` after 1 ms,
+  then 2, up to the 20 ms it always waited, so a short command no longer
+  costs up to 20 ms of sleep.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

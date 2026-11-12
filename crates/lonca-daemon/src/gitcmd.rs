@@ -103,6 +103,9 @@ impl Git {
         let out = child.stdout.take().map(|o| read(Box::new(o)));
         let err = child.stderr.take().map(|e| read(Box::new(e)));
         let started = Instant::now();
+        // Most commands are done in a few milliseconds: looked at often
+        // first, then as seldom as before.
+        let mut pause = Duration::from_millis(1);
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
@@ -112,7 +115,10 @@ impl Git {
                     let _ = child.wait();
                     return Err(Failure::Timeout(self.timeout));
                 }
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                Ok(None) => {
+                    std::thread::sleep(pause);
+                    pause = (pause * 2).min(Duration::from_millis(20));
+                }
                 Err(e) => return Err(Failure::Start(e.to_string())),
             }
         };

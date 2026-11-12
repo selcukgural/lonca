@@ -492,6 +492,12 @@ pub struct HookVerdict {
     pub reason: String,
 }
 
+/// The bytes of a line as text: themselves when they are UTF-8, which
+/// costs no copy, and otherwise with what is not replaced.
+pub fn line_text(buf: Vec<u8>) -> String {
+    String::from_utf8(buf).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+}
+
 /// Reads one line of at most `max` bytes. `Ok(None)` at end of stream.
 pub fn read_line_limited(r: &mut impl BufRead, max: usize) -> std::io::Result<Option<String>> {
     let mut buf = Vec::new();
@@ -501,14 +507,14 @@ pub fn read_line_limited(r: &mut impl BufRead, max: usize) -> std::io::Result<Op
             return Ok(if buf.is_empty() {
                 None
             } else {
-                Some(String::from_utf8_lossy(&buf).into_owned())
+                Some(line_text(buf))
             });
         }
         match chunk.iter().position(|&b| b == b'\n') {
             Some(i) => {
                 buf.extend_from_slice(&chunk[..i]);
                 r.consume(i + 1);
-                return Ok(Some(String::from_utf8_lossy(&buf).into_owned()));
+                return Ok(Some(line_text(buf)));
             }
             None => {
                 let n = chunk.len();

@@ -220,7 +220,7 @@ fn read_request(
             return Ok(match refused {
                 Some(why) => Incoming::Refused(why),
                 None if buf.is_empty() => Incoming::End,
-                None => Incoming::Line(String::from_utf8_lossy(&buf).into_owned()),
+                None => Incoming::Line(crate::protocol::line_text(buf)),
             });
         }
         deadline.get_or_insert_with(|| Instant::now() + limits.line);
@@ -257,7 +257,7 @@ fn read_request(
         if newline.is_some() {
             return Ok(match refused {
                 Some(why) => Incoming::Refused(why),
-                None => Incoming::Line(String::from_utf8_lossy(&buf).into_owned()),
+                None => Incoming::Line(crate::protocol::line_text(buf)),
             });
         }
     }

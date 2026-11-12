@@ -642,7 +642,8 @@ impl<T> OrFail<T> for Result<T> {
 }
 
 fn params<T: DeserializeOwned>(v: &Value) -> std::result::Result<T, (String, String)> {
-    serde_json::from_value(v.clone()).map_err(|e| ("invalid".into(), format!("params: {e}")))
+    // Read where they are: a request's parameters are not copied to be read.
+    T::deserialize(v).map_err(|e| ("invalid".into(), format!("params: {e}")))
 }
 
 fn logged(op: &SignedOp) -> Value {
@@ -2191,9 +2192,13 @@ impl Service {
         let budget = page_budget(self.settings.line_cap);
         let mut total = 0u64;
         let mut out = Vec::new();
+        let only: Option<BTreeSet<&str>> = q
+            .paths
+            .as_ref()
+            .map(|p| p.iter().map(String::as_str).collect());
         for (path, e) in files {
-            if let Some(only) = &q.paths
-                && !only.contains(&path)
+            if let Some(only) = &only
+                && !only.contains(path.as_str())
             {
                 continue;
             }
@@ -5516,6 +5521,40 @@ mod tests {
         assert_eq!(HUMAN_SESSION_MAX_MS, 86_400_000);
         assert_eq!(LOGIN_NONCE_WINDOW_MS, 660_000);
         assert_eq!(LOGIN_NONCE_WINDOW_MS, MAX_AGE_MS + MAX_SKEW_MS);
+    }
+
+    /// Parameters read by reference are refused in the words they were
+    /// refused in when they were copied first.
+    #[test]
+    fn parameters_read_in_place_are_refused_in_the_same_words() {
+        let shapes = [
+            json!({}),
+            json!(null),
+            json!([1, 2]),
+            json!("text"),
+            json!({"commit": 7}),
+            json!({"commit": "zz", "paths": "one"}),
+            json!({"commit": "0123456789abcdef0123456789abcdef01234567", "paths": [1]}),
+            json!({"commit": "0123456789abcdef0123456789abcdef01234567", "with_content": "yes"}),
+            json!({"from": -1, "limit": "all"}),
+            json!({"from": 1.5}),
+            json!({"base": {}, "files": [{"path": 1}], "claim": []}),
+            json!({"items": [{"symbol": "a#b", "kind": "nothing"}], "ttl_ms": {}}),
+        ];
+        fn same<T: DeserializeOwned + std::fmt::Debug>(v: &Value) {
+            let copied = serde_json::from_value::<T>(v.clone()).map_err(|e| e.to_string());
+            let in_place = params::<T>(v).map_err(|e| e.1);
+            let copied = copied
+                .map(|t| format!("{t:?}"))
+                .map_err(|e| format!("params: {e}"));
+            assert_eq!(in_place.map(|t| format!("{t:?}")), copied, "{v}");
+        }
+        for v in &shapes {
+            same::<TreeQuery>(v);
+            same::<LogQuery>(v);
+            same::<ProposeChange>(v);
+            same::<BlobsQuery>(v);
+        }
     }
 
     #[test]

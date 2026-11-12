@@ -1114,10 +1114,11 @@ pub fn decide(
                 v.deny("lease_ttl");
             }
             check_lease_request(s, items, intent, ctx, state.symbol_keys, &mut v);
-            if let Some(holder) = state.reserved_against(own, items, t) {
+            let settled = state.settled(t);
+            if let Some(holder) = state.reserved_against_in(&settled, own, items) {
                 v.deny(format!("lease_reserved:{holder}"));
             }
-            for i in state.wanted_against(own, items, t) {
+            for i in state.wanted_against_in(&settled, own, items, t) {
                 v.deny(format!("lease_wanted:{}", i.session));
             }
             for reason in held_against(state, own, items, ctx) {

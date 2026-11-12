@@ -44,6 +44,13 @@ pub struct RepoHandle {
     pub store: Arc<Store>,
     pub chain: Chain,
     pub head: Option<GitId>,
+    /// The log's commits by sequence number, kept as the log is: read at
+    /// [`RepoHandle::open`], one more with every entry. A page of the log
+    /// or one entry is read from here, not walked to from the head.
+    log: Vec<GitId>,
+    /// The last entry that integrated each change or failed to, by
+    /// sequence number.
+    integrations: BTreeMap<ChangeId, u64>,
     policy: Option<(GitId, Arc<PolicyBundle>)>,
     /// How far each session has been told what others want of it.
     pub told: BTreeMap<String, Told>,
@@ -62,6 +69,8 @@ impl RepoHandle {
             store: Arc::new(store),
             chain: Chain::new(key),
             head: None,
+            log: Vec::new(),
+            integrations: BTreeMap::new(),
             policy: None,
             told: BTreeMap::new(),
             hooked: BTreeMap::new(),
@@ -77,7 +86,7 @@ impl RepoHandle {
     pub fn open(name: &str, path: &Path, keys: &[&KeyPair]) -> Result<Self> {
         let store = Store::open(path)?;
         let log = OpLog::new(&store);
-        let ops = log.read_all()?;
+        let (ids, ops): (Vec<GitId>, Vec<SignedOp>) = log.walk_from(0)?.into_iter().unzip();
         let state = if ops.is_empty() {
             State::new()
         } else {
@@ -100,11 +109,17 @@ impl RepoHandle {
             .find(|k| k.public_hex() == state.daemon_key)
             .unwrap_or(&keys[0]);
         let head = log.head()?;
+        let mut integrations = BTreeMap::new();
+        for op in &ops {
+            Self::note_integration(&mut integrations, op);
+        }
         Ok(Self {
             name: name.into(),
             store: Arc::new(store),
             chain: Chain::from_state((*key).clone(), state),
             head,
+            log: ids,
+            integrations,
             policy: None,
             told: BTreeMap::new(),
             hooked: BTreeMap::new(),
@@ -198,10 +213,39 @@ impl RepoHandle {
         let t = self.chain.entry_time(wall_ms);
         let op = self.chain.prepare(sub, t, &policy);
         let commit = OpLog::new(&self.store).append(&op, self.head.as_ref())?;
-        self.head = Some(commit);
+        self.head = Some(commit.clone());
+        self.log.push(commit);
+        Self::note_integration(&mut self.integrations, &op);
         self.chain.commit(&op);
         self.alarm(&op);
         Ok(op)
+    }
+
+    fn note_integration(known: &mut BTreeMap<ChangeId, u64>, op: &SignedOp) {
+        let seq = op.entry.seq;
+        match &op.entry.op {
+            Op::ChangeIntegrate { change, .. } => {
+                known.insert(*change, seq);
+            }
+            Op::ChangeIntegrateBatch { merged, .. } => {
+                known.extend(merged.iter().map(|m| (m.0, seq)));
+            }
+            _ => {}
+        }
+    }
+
+    /// The commits of the entries from `from` on, at most `limit` of them:
+    /// each is read with [`OpLog::read_at`].
+    pub fn log_page(&self, from: u64, limit: usize) -> Vec<GitId> {
+        let from = usize::try_from(from).unwrap_or(usize::MAX);
+        let page = self.log.iter().skip(from).take(limit);
+        page.cloned().collect()
+    }
+
+    /// The commit of the last entry that integrated `change` or failed to.
+    pub fn last_integration(&self, change: &ChangeId) -> Option<GitId> {
+        let seq = usize::try_from(*self.integrations.get(change)?).ok()?;
+        self.log.get(seq).cloned()
     }
 
     /// The security event an appended entry is, if any.

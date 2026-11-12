@@ -222,22 +222,26 @@ pub fn merge_text_joining(
     if let Some(r) = section_merge(engine, path, b, o, t) {
         return r;
     }
+    let _parses = crate::lang::remember();
     let file_conflict = || vec![format!("{path}#<file>")];
     let lang = Lang::detect_at(engine, path).filter(|&l| all_read(engine, l, [b, o, t]));
+    // What the symbol merge read and merged on its way to the lines.
+    let (mut read, mut by_lines) = (None, None);
     if let Some(lang) = lang {
         match symbol_merge(engine, path, lang, [b, o, t], joins) {
             Sm::Merged(s) => return Ok(s),
             Sm::Conflict(c) => return Err(c),
-            Sm::Fallback => {}
+            Sm::Fallback(sides, lines) => (read, by_lines) = (Some(*sides), lines),
         }
     }
     let merged = if engine >= ENGINE_LINE_MERGE {
-        lines::merge(b, o, t).ok_or_else(file_conflict)?
+        let merged = by_lines.unwrap_or_else(|| lines::merge(b, o, t));
+        merged.ok_or_else(file_conflict)?
     } else {
         diffy::merge(b, o, t).map_err(|_| file_conflict())?
     };
     if let Some(lang) = lang {
-        let (naming, sides) = three_sides(engine, lang, [b, o, t]);
+        let (naming, sides) = read.unwrap_or_else(|| three_sides(engine, lang, [b, o, t]));
         let [pb, po, pt] = &sides;
         // A side that does not parse has no symbols to hold the merge to,
         // and engines before this check only asked that the result parses.
@@ -305,6 +309,7 @@ pub fn marked_around_conflicts(
     tag: &str,
 ) -> Option<String> {
     let lang = Lang::detect_at(engine, path)?;
+    let _parses = crate::lang::remember();
     let (kept, conflicts) = around_conflicts(engine, path, b, o, t)?;
     let [ours, theirs] = parse_together(engine, lang, [&kept, t]);
     let prefix = format!("{path}#");
@@ -335,6 +340,7 @@ fn around_conflicts(
     o: &str,
     t: &str,
 ) -> Option<(String, Vec<String>)> {
+    let _parses = crate::lang::remember();
     let lang = Lang::detect_at(engine, path).filter(|&l| all_read(engine, l, [b, o, t]))?;
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
     if pb.has_error || po.has_error || pt.has_error {
@@ -554,8 +560,13 @@ fn numbers_hold([pb, po, pt]: [&Parsed; 3]) -> bool {
 enum Sm {
     Merged(String),
     Conflict(Vec<String>),
-    Fallback,
+    /// The file goes by its lines. With the sides as they were read, and
+    /// the line merge when it was already made: neither is made again.
+    Fallback(Box<Sides>, Option<Option<String>>),
 }
+
+/// The three sides of a merge as [`three_sides`] reads them.
+type Sides = (Naming, [Parsed; 3]);
 
 struct Edit {
     start: usize,
@@ -1102,18 +1113,23 @@ fn no_new_gap_at_the_top(text: String, sides: [&str; 2]) -> String {
 
 fn symbol_merge(engine: u32, path: &str, lang: Lang, [b, o, t]: [&str; 3], joins: Joins) -> Sm {
     let (naming, [pb, po, pt]) = three_sides(engine, lang, [b, o, t]);
+    macro_rules! fallback {
+        ($lines:expr) => {
+            Sm::Fallback(Box::new((naming, [pb, po, pt])), $lines)
+        };
+    }
     if pb.has_error || po.has_error || pt.has_error {
-        return Sm::Fallback;
+        return fallback!(None);
     }
     let [cb, co, ct] = [&pb, &po, &pt].map(|p| outer_code(engine, p));
     if differs(engine, cb, ct) && differs(engine, co, ct) {
         if !differs(engine, cb, co) {
-            return Sm::Fallback;
+            return fallback!(None);
         }
         return Sm::Conflict(vec![format!("{path}#<module>")]);
     }
     if !numbers_hold([&pb, &po, &pt]) || (engine >= ENGINE_KEYS && !counts_hold([&pb, &po, &pt])) {
-        return Sm::Fallback;
+        return fallback!(None);
     }
     let mut m = Merger::new(engine, path, b, o, t, joins);
     m.imports(&pb, &po, &pt);
@@ -1125,7 +1141,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, [b, o, t]: [&str; 3], joins
         return Sm::Conflict(c);
     }
     if m.moved {
-        return Sm::Fallback;
+        return fallback!(None);
     }
     let mut joined = std::mem::take(&mut m.joined);
     let applied = m.apply().map(|text| match engine >= ENGINE_GAPS {
@@ -1139,10 +1155,10 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, [b, o, t]: [&str; 3], joins
         // outside symbols that only `theirs` changed went to the lines
         // above), and the line merge would make a conflict of both having it.
         Some(text) if engine >= ENGINE_EXACT && text == o => {
-            if engine >= ENGINE_ALREADY && lines::merge(b, o, t).is_none() {
-                Sm::Merged(text)
-            } else {
-                Sm::Fallback
+            let by_lines = (engine >= ENGINE_ALREADY).then(|| lines::merge(b, o, t));
+            match by_lines {
+                Some(None) => Sm::Merged(text),
+                made => fallback!(made),
             }
         }
         Some(text) if holds_up(engine, path, lang, &text, &naming, [&pb, &po, &pt], &[]) => {
@@ -1155,7 +1171,7 @@ fn symbol_merge(engine: u32, path: &str, lang: Lang, [b, o, t]: [&str; 3], joins
             joined.dedup();
             Sm::Conflict(joined)
         }
-        _ => Sm::Fallback,
+        _ => fallback!(None),
     }
 }
 

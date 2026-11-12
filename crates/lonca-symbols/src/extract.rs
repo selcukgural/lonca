@@ -18,8 +18,8 @@ use crate::engine::{
     ENGINE_LIMITS, ENGINE_REST, ENGINE_SIGNATURES,
 };
 use crate::lang::{
-    CallTests, DefHow, DefRule, GroupHow, GroupRule, ImportCalls, Lang, Marked, Partial, Rules,
-    Tests, Wrapper,
+    CallTests, DefHow, DefRule, GroupHow, GroupRule, ImportCalls, Lang, Marked, NAMESPACE_KIND,
+    Partial, Rules, Tests, Wrapper,
 };
 
 /// Declarations with a definition of their own even with no members in the
@@ -397,6 +397,13 @@ pub fn parse_at(engine: u32, lang: Lang, src: &str) -> Parsed {
     p
 }
 
+/// What [`parse_at`] says in `has_error`, without reading the symbols: the
+/// grammar did not get through `src`, or found a syntax error in it.
+pub fn has_error_at(engine: u32, lang: Lang, src: &str) -> bool {
+    let tree = lang.parse_at(engine, src);
+    tree.is_none_or(|t| t.root_node().has_error())
+}
+
 /// Names that more than one definition goes by in a file, with something to
 /// tell them apart.
 pub type Keyed = BTreeSet<String>;
@@ -415,6 +422,8 @@ pub fn read_together<const N: usize>(
     lang: Lang,
     texts: [&str; N],
 ) -> (Keyed, [Parsed; N]) {
+    // Each text is parsed once for both.
+    let _parses = crate::lang::remember();
     let keyed = keyed_names(engine, lang, &texts);
     let parsed = texts.map(|text| parse_keyed(engine, lang, text, &keyed));
     (keyed, parsed)
@@ -1129,19 +1138,24 @@ struct Namespaces<'s> {
 }
 
 impl<'s> Namespaces<'s> {
-    fn of(root: Node, src: &'s str) -> Self {
+    /// The namespaces of the file of `root`. A grammar that has no such
+    /// declaration is not asked: there is none to find in its tree.
+    fn of(lang: Lang, root: Node, src: &'s str) -> Self {
         let mut all: Vec<Namespace> = Vec::new();
         let mut turns = Vec::new();
         let mut open: Vec<usize> = Vec::new();
         // As [`comments_in`], where `None` leaves a namespace.
         let mut stack = vec![Some(root)];
+        if !lang.has_namespaces() {
+            stack.clear();
+        }
         while let Some(step) = stack.pop() {
             let Some(n) = step else {
                 let left = open.pop().map(|i| all[i].span.1);
                 turns.extend(left.map(|end| (end, open.last().copied())));
                 continue;
             };
-            if n.kind().ends_with("namespace_declaration") {
+            if n.kind().ends_with(NAMESPACE_KIND) {
                 let name = n.child_by_field_name("name");
                 turns.push((n.start_byte(), Some(all.len())));
                 all.push(Namespace {
@@ -1224,7 +1238,7 @@ impl<'s> Extractor<'s> {
             rules: lang.rules(),
             src,
             scopes: RefCell::default(),
-            namespaces: Namespaces::of(root, src),
+            namespaces: Namespaces::of(lang, root, src),
             groups_seen: Cell::new(0),
             levels: Cell::new(0),
             spent: Cell::new(0),
@@ -2178,12 +2192,24 @@ mod tests {
     }
 
     #[test]
+    fn an_error_is_told_without_reading_the_symbols() {
+        let rust = Lang::named("rust");
+        let long = format!("fn a() {{ {} }}\n", "(".repeat(4096));
+        for src in ["fn a() {}\n", "fn a( {}\n", "", "struct", long.as_str()] {
+            for engine in [0, ENGINE_KEYS, ENGINE_CURRENT] {
+                let read = parse_at(engine, rust, src).has_error;
+                assert_eq!(has_error_at(engine, rust, src), read, "{engine}: {src:?}");
+            }
+        }
+    }
+
+    #[test]
     fn namespaces_are_what_the_parents_of_a_node_say() {
         let src = "namespace A { namespace B.C { class X { } }\n namespace D { } class Y { } }\n\
                    class Z { }\nnamespace E { class W { } }\nnamespace F;\nclass V { }\n";
         let tree = Lang::named("csharp").parse(src).unwrap();
         let root = tree.root_node();
-        let spaces = Namespaces::of(root, src);
+        let spaces = Namespaces::of(Lang::named("csharp"), root, src);
         let by_parents = |n: Node| {
             let mut scope = String::new();
             let mut at = n.parent();

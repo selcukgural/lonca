@@ -116,6 +116,8 @@ fn in_file(
     names: &BTreeSet<String>,
     out: &mut BTreeSet<String>,
 ) -> bool {
+    // Read for its symbols and for its tokens: one parse.
+    let _parses = crate::lang::remember();
     let Parsed {
         syms,
         imports,

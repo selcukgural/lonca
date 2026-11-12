@@ -5224,6 +5224,32 @@ same answers and errors.
   others descend from themselves. The fold of an observation with 10,000
   sessions in the state: 869 us, now 55 us.
 
+- **A text is parsed once for one piece of work.** `read_together` parsed
+  every text twice (the names by key, then the symbols), and its callers
+  parsed the same text again before and after: five parses for the facts
+  of an added file, ten for a merge by symbols, up to nineteen for one
+  that fell back to lines. `lang::remember()` opens a scope on the thread:
+  inside it `Lang::parse_at` hands out the tree it made for the same
+  engine, grammar and text (at most 16 trees and 16 MiB of text, gone with
+  the last scope). The facts of a file, a merge of a file, a file read for
+  what it mentions and a file of the `syntax` check are each one scope. A
+  parse is a function of those three, so nothing reads differently; a
+  scope, not a cache that lives on, so a daemon thread keeps no trees.
+  Considered and left: handing trees down through every signature (the
+  same saving for a change in every caller).
+- **What a merge read on its way to the lines goes with it.**
+  `Sm::Fallback` carries the three sides as they were read, and the line
+  merge when it was already made, so neither is made a second time.
+- **`has_error_at`** says whether a text reads without reading its
+  symbols: the `syntax` check and `facts::reads` need only that.
+- **A grammar with no namespace declaration is not searched for one.**
+  `Namespaces::of` walked every node of every tree, twice or more per
+  text; only C# has such a kind of node (found once per grammar from its
+  list of kinds).
+- Measured on a Rust file of 4,400 lines (91 KB), where one parse takes
+  6 ms: the facts of the file added 50 -> 11 ms, modified 57 -> 22 ms, a
+  merge by symbols 99 -> 43 ms, one that falls back to lines 168 -> 32 ms.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

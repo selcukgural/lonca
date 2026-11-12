@@ -4,10 +4,12 @@
 //! and which nodes are definitions, imports and tests. The one thing that can
 //! not be data is the grammar, which is compiled code: see [`grammar`].
 
-use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::marker::PhantomData;
 use std::ops::ControlFlow;
+use std::rc::Rc;
 use std::sync::LazyLock;
 
 use serde::Deserialize;
@@ -357,6 +359,96 @@ static TABLE: LazyLock<Table> = LazyLock::new(|| {
     toml::from_str(include_str!("languages.toml")).expect("languages.toml is part of the build")
 });
 
+/// The grammars that have a kind of node for a namespace declaration: in the
+/// others no file has one, and nobody has to look.
+static NAMESPACED: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| {
+    let has = |e: &&Entry| {
+        grammar(&e.grammar).is_some_and(|g| {
+            let kinds = (0..g.node_kind_count()).filter_map(|id| u16::try_from(id).ok());
+            let mut names = kinds.filter_map(|id| g.node_kind_for_id(id));
+            names.any(|k| k.ends_with(NAMESPACE_KIND))
+        })
+    };
+    let with = TABLE.language.iter().filter(has);
+    with.map(|e| e.grammar.as_str()).collect()
+});
+
+/// How the kind of a namespace declaration ends, in every grammar that has
+/// one.
+pub(crate) const NAMESPACE_KIND: &str = "namespace_declaration";
+
+/// A parse that was made while something on this thread [`remember`]s.
+struct Kept {
+    engine: u32,
+    grammar: &'static str,
+    text: Box<str>,
+    tree: Option<Tree>,
+}
+
+#[derive(Default)]
+struct Memo {
+    /// How many [`Remembered`] are alive.
+    depth: usize,
+    kept: VecDeque<Kept>,
+    bytes: usize,
+}
+
+/// The most parses kept at a time, and the most text they may be of.
+const MEMO_PARSES: usize = 16;
+const MEMO_BYTES: usize = 16 << 20;
+
+thread_local! {
+    static MEMO: RefCell<Memo> = RefCell::default();
+}
+
+/// While one of these is alive on a thread, a text parsed there is parsed
+/// once: [`Lang::parse_at`] hands out the tree it made for the same engine,
+/// grammar and text. A parse is a function of those three, so nothing reads
+/// differently for it. The last one to go takes the trees with it.
+pub struct Remembered(PhantomData<Rc<()>>);
+
+/// One piece of work on a few texts, each asked about more than once: the
+/// facts of a file, a merge of three sides.
+pub fn remember() -> Remembered {
+    MEMO.with_borrow_mut(|m| m.depth += 1);
+    Remembered(PhantomData)
+}
+
+impl Drop for Remembered {
+    fn drop(&mut self) {
+        MEMO.with_borrow_mut(|m| {
+            m.depth -= 1;
+            if m.depth == 0 {
+                *m = Memo::default();
+            }
+        });
+    }
+}
+
+impl Memo {
+    fn recall(&self, engine: u32, grammar: &str, text: &str) -> Option<Option<Tree>> {
+        let same = |k: &&Kept| k.engine == engine && k.grammar == grammar && *k.text == *text;
+        self.kept.iter().find(same).map(|k| k.tree.clone())
+    }
+
+    fn keep(&mut self, engine: u32, grammar: &'static str, text: &str, tree: &Option<Tree>) {
+        if self.depth == 0 || text.len() > MEMO_BYTES {
+            return;
+        }
+        self.bytes += text.len();
+        self.kept.push_back(Kept {
+            engine,
+            grammar,
+            text: text.into(),
+            tree: tree.clone(),
+        });
+        while self.kept.len() > MEMO_PARSES || self.bytes > MEMO_BYTES {
+            let gone = self.kept.pop_front().map_or(0, |k| k.text.len());
+            self.bytes -= gone;
+        }
+    }
+}
+
 /// A language of the table.
 #[derive(Clone, Copy)]
 pub struct Lang {
@@ -440,6 +532,21 @@ impl Lang {
     /// [`parse_budget`] of its length, from [`ENGINE_READS`] within
     /// [`read_budget`] of it too, and `None` past either.
     pub fn parse_at(self, engine: u32, text: &str) -> Option<Tree> {
+        let grammar = self.entry.grammar.as_str();
+        if let Some(known) = MEMO.with_borrow(|m| m.recall(engine, grammar, text)) {
+            return known;
+        }
+        let tree = self.parse_new(engine, text);
+        MEMO.with_borrow_mut(|m| m.keep(engine, grammar, text, &tree));
+        tree
+    }
+
+    /// Whether a file of this language can have a namespace declaration.
+    pub(crate) fn has_namespaces(self) -> bool {
+        NAMESPACED.contains(self.entry.grammar.as_str())
+    }
+
+    fn parse_new(self, engine: u32, text: &str) -> Option<Tree> {
         let steps = if engine < ENGINE_BUDGET {
             u64::MAX
         } else {
@@ -539,6 +646,70 @@ mod tests {
         let (cut, taken, _) = rust.parse_within(&text, steps - 1, None);
         assert!(cut.is_none());
         assert_eq!(taken, steps);
+    }
+
+    #[test]
+    fn a_remembered_parse_is_the_parse_and_goes_with_its_scope() {
+        let rust = Lang::named("rust");
+        let text = "fn a() {}\nfn b() { a() }\n";
+        let large = past_budget("");
+        let plain = rust.parse_at(ENGINE_CURRENT, text).unwrap();
+        assert_eq!(
+            MEMO.with_borrow(|m| m.kept.len()),
+            0,
+            "nothing without a scope"
+        );
+        {
+            let _outer = remember();
+            let first = rust.parse_at(ENGINE_CURRENT, text).unwrap();
+            {
+                let _inner = remember();
+                let again = rust.parse_at(ENGINE_CURRENT, text).unwrap();
+                assert_eq!(again.root_node().to_sexp(), plain.root_node().to_sexp());
+                assert_eq!(again.root_node().to_sexp(), first.root_node().to_sexp());
+            }
+            assert_eq!(
+                MEMO.with_borrow(|m| m.kept.len()),
+                1,
+                "the outer scope goes on"
+            );
+            // A text the engine does not get through is remembered as that,
+            // and another engine or grammar is another parse.
+            assert!(rust.parse_at(ENGINE_CURRENT, &large).is_none());
+            assert!(rust.parse_at(ENGINE_CURRENT, &large).is_none());
+            assert!(rust.parse_at(ENGINE_BUDGET - 1, &large).is_some());
+            assert!(
+                Lang::named("python")
+                    .parse_at(ENGINE_CURRENT, text)
+                    .is_some()
+            );
+            assert_eq!(MEMO.with_borrow(|m| m.kept.len()), 4);
+            for i in 0..2 * MEMO_PARSES {
+                rust.parse_at(ENGINE_CURRENT, &format!("fn f{i}() {{}}\n"));
+            }
+            assert_eq!(MEMO.with_borrow(|m| m.kept.len()), MEMO_PARSES);
+        }
+        assert_eq!(
+            MEMO.with_borrow(|m| (m.kept.len(), m.bytes, m.depth)),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn only_a_grammar_with_namespaces_is_asked_for_them() {
+        assert!(Lang::named("csharp").has_namespaces());
+        assert!(!Lang::named("rust").has_namespaces());
+        // No grammar gives a node a kind it does not list.
+        for lang in Lang::all().filter(|l| !l.has_namespaces()) {
+            let g = grammar(&lang.entry.grammar).unwrap();
+            let kinds = (0..g.node_kind_count()).filter_map(|id| u16::try_from(id).ok());
+            let mut names = kinds.filter_map(|id| g.node_kind_for_id(id));
+            assert!(
+                !names.any(|k| k.ends_with(NAMESPACE_KIND)),
+                "{}",
+                lang.name()
+            );
+        }
     }
 
     #[test]

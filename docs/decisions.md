@@ -5211,6 +5211,13 @@ same answers and errors.
   their output before and after. No benchmark crate: `Instant` and a
   table are enough for differences of this size, and it is one
   dependency fewer.
+- **A proposal's base is found once.** `decide()` looked the base up in
+  the trunk line for every pair of a lease the facts need and an item the
+  session holds, and read every rename for the pair. `State::base_line`
+  finds the place once; needs, affected symbols and created files are
+  asked from there (`renamed_since`, `renamed_need`, `created_since_line`),
+  and the pins of a proposal rename each need once. The time of the
+  decision no longer depends on where the base is.
 - **A lease item's trunk name is asked once.** `State::conflict` renamed
   both items of every pair. `State::named` does it per item
   (`conflict_named`, `meets`); with neither renamed the second question is

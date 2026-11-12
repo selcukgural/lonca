@@ -625,7 +625,19 @@ impl State {
     /// passed such a name goes on, since what was renamed before the name was
     /// taken stays on its way.
     pub fn renamed_to(&self, symbol: &str, base: Option<&GitId>) -> String {
-        let line = base.and_then(|b| self.trunk_line.iter().rposition(|t| t == b));
+        self.renamed_since(symbol, base.and_then(|b| self.base_line(b)))
+    }
+
+    /// Where `base` is in `trunk_line`, the last time it was trunk; `None`
+    /// when it never was. Found once for a proposal: every question about
+    /// what trunk gained since its base starts here.
+    pub fn base_line(&self, base: &GitId) -> Option<usize> {
+        self.trunk_line.iter().rposition(|t| t == base)
+    }
+
+    /// [`State::renamed_to`] by the base's place in the trunk line
+    /// ([`State::base_line`]); every rename when there is none.
+    pub fn renamed_since(&self, symbol: &str, line: Option<usize>) -> String {
         let later = |r: &&Renamed| line.is_none_or(|at| r.line > at);
         let mut name = symbol.to_string();
         let mut moved = false;
@@ -698,11 +710,23 @@ impl State {
     /// `item` covers `need`, by the name in the facts or by what that is
     /// called now. A change from an older base has the old name.
     pub fn covers_need(&self, need: &LeaseNeed, item: &LeaseItem, base: Option<&GitId>) -> bool {
-        let keys = self.symbol_keys;
-        let renamed = LeaseNeed {
-            symbol: self.renamed_to(&need.symbol, base),
+        let line = base.and_then(|b| self.base_line(b));
+        self.covers_either(need, &self.renamed_need(need, line), item)
+    }
+
+    /// `need` as it is called on the trunk now, by the renames since the
+    /// base at `line` ([`State::base_line`]). Asked once for a need, not for
+    /// every item it is held against.
+    pub fn renamed_need(&self, need: &LeaseNeed, line: Option<usize>) -> LeaseNeed {
+        LeaseNeed {
+            symbol: self.renamed_since(&need.symbol, line),
             ..need.clone()
-        };
+        }
+    }
+
+    /// `item` covers `need` or `renamed`, its [`State::renamed_need`].
+    pub fn covers_either(&self, need: &LeaseNeed, renamed: &LeaseNeed, item: &LeaseItem) -> bool {
+        let keys = self.symbol_keys;
         need.covered_by(item, keys) || renamed.covered_by(item, keys)
     }
 
@@ -1354,13 +1378,17 @@ impl State {
                 && i.kind == lonca_core::ops::LeaseKind::Insert
                 && added_to(i) == Some(true)
         };
+        let renamed: Vec<LeaseNeed> = needs.iter().map(|n| self.renamed_need(n, None)).collect();
+        let needed = |i: &LeaseItem| {
+            let mut both = needs.iter().zip(&renamed);
+            both.any(|(n, r)| self.covers_either(n, r, i))
+        };
         let pinned: Vec<(String, Vec<LeaseItem>)> = self
             .active_leases(now_ms)
             .filter(|l| l.holder == session)
             .map(|l| {
                 let items = l.items.iter().copied();
-                let items =
-                    items.filter(|i| keys(i) || needs.iter().any(|n| self.covers_need(n, i, None)));
+                let items = items.filter(|i| keys(i) || needed(i));
                 (l.lease.set.clone(), items.cloned().collect())
             })
             .collect();
@@ -2202,7 +2230,12 @@ impl State {
 
     /// An integration since `base` created a file whose path `pick` takes.
     pub fn created_since_where(&self, base: &GitId, pick: impl Fn(&str) -> bool) -> bool {
-        let at = self.trunk_line.iter().rposition(|t| t == base);
+        self.created_since_line(self.base_line(base), pick)
+    }
+
+    /// [`State::created_since_where`] by the base's place in the trunk line
+    /// ([`State::base_line`]).
+    pub fn created_since_line(&self, at: Option<usize>, pick: impl Fn(&str) -> bool) -> bool {
         let later = |line: &usize| at.is_none_or(|at| *line > at);
         self.created.iter().any(|(line, p)| later(line) && pick(p))
     }

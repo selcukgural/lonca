@@ -269,13 +269,7 @@ fn check_key_item(s: &Session, item: &LeaseItem, dir: &str, ctx: &Ctx, v: &mut V
 /// reserved by the session, and no other file may have that key: in the
 /// proposal's own tree (`taken_keys` in its facts) or among the files trunk
 /// gained since its base. A name the pattern does not read is refused.
-fn check_keys(
-    state: &State,
-    mine: &[&LeaseItem],
-    base: &lonca_core::GitId,
-    ctx: &Ctx,
-    v: &mut Verdict,
-) {
+fn check_keys(state: &State, mine: &[&LeaseItem], line: Option<usize>, ctx: &Ctx, v: &mut Verdict) {
     let Some(f) = ctx.facts else {
         return;
     };
@@ -304,7 +298,7 @@ fn check_keys(
                     .of(p)
                     .is_some_and(|(o, n)| o.dir == d.dir && o.key_of(n).as_ref() == Some(&key))
         };
-        if state.created_since_where(base, same) {
+        if state.created_since_line(line, same) {
             v.deny(format!("key_taken:{}#{key}", d.dir));
         }
     }
@@ -1560,12 +1554,19 @@ fn affected_holders(
     t: i64,
 ) -> Vec<(String, String)> {
     let keys = state.symbol_keys;
+    // Each affected symbol by what it is called now, asked once.
+    let line = state.base_line(base);
+    let now: Vec<String> = f
+        .affected
+        .iter()
+        .map(|a| state.renamed_since(a, line))
+        .collect();
     let reaches = |item: &&LeaseItem| {
-        let met = |a: &String| {
+        let met = |(a, renamed): (&String, &String)| {
             symbols::overlaps(&item.symbol, a, keys)
-                || symbols::overlaps(&item.symbol, &state.renamed_to(a, Some(base)), keys)
+                || symbols::overlaps(&item.symbol, renamed, keys)
         };
-        item.kind != LeaseKind::Insert && f.affected.iter().any(met)
+        item.kind != LeaseKind::Insert && f.affected.iter().zip(&now).any(met)
     };
     let own = |l: &ActiveLease| {
         let me = actor.session();
@@ -1735,8 +1736,12 @@ fn propose(
                 .collect();
             let mine: Vec<&LeaseItem> = held.iter().flat_map(|l| l.items.iter().copied()).collect();
             let unparsed = cfg.leases.unparsed_files;
+            // The base's place in the trunk line, found once: an old base
+            // is the length of trunk away.
+            let line = state.base_line(base);
             for need in symbols::lease_needs_under(f, unparsed, ctx.format) {
-                if !mine.iter().any(|l| state.covers_need(&need, l, Some(base))) {
+                let renamed = state.renamed_need(&need, line);
+                if !mine.iter().any(|l| state.covers_either(&need, &renamed, l)) {
                     v.deny(format!("lease_missing:{}", need.symbol));
                 }
             }
@@ -1745,13 +1750,13 @@ fn propose(
             }
             if ctx.format >= FORMAT_INSERT_NAMES {
                 for p in &f.added_files {
-                    if state.created_since(base, p) {
+                    if state.created_since_line(line, |c| c == p) {
                         v.deny(format!("created_since_base:{p}"));
                     }
                 }
             }
             if ctx.format >= FORMAT_KEYED {
-                check_keys(state, &mine, base, ctx, v);
+                check_keys(state, &mine, line, ctx, v);
             }
 
             let unobserved =

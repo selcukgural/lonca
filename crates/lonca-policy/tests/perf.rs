@@ -2,11 +2,11 @@
 //! here asserts a time: they print, and are run by hand
 //! (`cargo test --release -p lonca-policy --test perf -- --ignored --nocapture`).
 
-use lonca_core::GitId;
 use lonca_core::canonical::nonce;
 use lonca_core::keys::KeyPair;
 use lonca_core::oplog::SignedOp;
 use lonca_core::ops::*;
+use lonca_core::{ChangeId, GitId};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -144,6 +144,91 @@ fn long_trunk(h: &mut H, len: usize, renames: usize) {
             new: format!("src/old{i}.rs#here{i}"),
             reused: None,
         });
+    }
+}
+
+fn proposal(needs: usize, base: GitId) -> (Op, Facts) {
+    let edits: Vec<String> = (0..needs)
+        .map(|i| format!("src/f{}.rs#fn{i}", i % 150))
+        .collect();
+    let facts = Facts {
+        modified_files: (0..150.min(needs))
+            .map(|i| format!("src/f{i}.rs"))
+            .collect(),
+        edits: edits.clone(),
+        lines_added: 2,
+        lines_removed: 1,
+        ..Default::default()
+    };
+    let claim = Claim {
+        intent: "test".into(),
+        edits,
+        adds: vec![],
+        deletes: vec![],
+        deleted_files: vec![],
+        signature_changes: vec![],
+        tests: facts.tests.clone(),
+        revert_of: None,
+    };
+    let op = Op::ChangePropose {
+        change: ChangeId::random(),
+        commit: gid(7),
+        base,
+        claim,
+    };
+    (op, facts)
+}
+
+/// `decide()` for a proposal, by the length of trunk, what the proposal
+/// touches and where its base is.
+#[test]
+#[ignore = "a timing, run by hand"]
+fn a_proposal_by_trunk_length_and_base() {
+    println!("trunk  renames  needs  items  base     decide_ms  denied");
+    for (trunk, renames, needs, sets) in [
+        (100, 0, 100, 1),
+        (10_000, 0, 100, 1),
+        (10_000, 0, 5_000, 1),
+        (10_000, 100, 5_000, 1),
+        (100_000, 0, 5_000, 1),
+    ] {
+        let mut h = H::new();
+        h.start("s1");
+        for set in 0..sets {
+            let items = (0..64)
+                .map(|i| LeaseItem {
+                    symbol: format!("src/other{set}.rs#held{i}"),
+                    kind: LeaseKind::Edit,
+                    names: vec![],
+                })
+                .collect();
+            let lease = Op::LeaseAcquire {
+                set: format!("set{set}"),
+                items,
+                intent: "work".into(),
+                ttl_ms: 10 * MIN,
+            };
+            let sub = h.agent("s1", lease);
+            let d = h.submit(sub).entry.decision;
+            assert!(d.is_allow(), "{d:?}");
+        }
+        long_trunk(&mut h, trunk, renames);
+        let head = h.chain.state.trunk_line.last().unwrap().clone();
+        let oldest = h.chain.state.trunk_line[0].clone();
+        for (name, base) in [("head", head), ("oldest", oldest), ("unknown", gid(9))] {
+            let (op, facts) = proposal(needs, base);
+            let mut sub = h.agent("s1", op);
+            sub.facts = Some(facts);
+            sub.symbols_engine = Some(0);
+            let started = Instant::now();
+            let op = h.prepare(sub);
+            let ms = started.elapsed().as_secs_f64() * 1000.0;
+            let denied = op.entry.decision.reasons.len();
+            println!(
+                "{trunk:<6} {renames:<8} {needs:<6} {:<6} {name:<8} {ms:<10.1} {denied}",
+                sets * 64
+            );
+        }
     }
 }
 

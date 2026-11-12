@@ -5250,6 +5250,26 @@ same answers and errors.
   6 ms: the facts of the file added 50 -> 11 ms, modified 57 -> 22 ms, a
   merge by symbols 99 -> 43 ms, one that falls back to lines 168 -> 32 ms.
 
+- **The handle knows where each entry of the log is.** `RepoHandle` keeps
+  the log's commits by sequence number (read at `open`, one more with
+  every `submit`, the only place the log grows) and the last entry that
+  integrated each change. `log` reads the entries of its page; it read
+  from `from` to the head and kept a page, so paging a log was the square
+  of its length. `change.get` reads the one entry; it read them all. A
+  page is now what the handle held when the request came: entries past it
+  that do not read are found where they are asked for, at `open` and by
+  the auditor, not by a request for an earlier page. Forty bytes a commit:
+  4 MB for a log of 100,000.
+- **`events` reads from `from`**, with `ops_for_events` as `events.watch`
+  does (an approval's request may be older), and no longer copies the
+  state for every call: the entries are read without the lock, and the
+  state is the one they end at unless the log grew meanwhile, which is
+  when it is done once more from a copy as before.
+- **An entry of the log is read in one pass** (`OpLog::walk_from`): its
+  commit once for tree and parent, one handle of the store for the walk
+  (`Store::reader`), and its JSON parsed once when it is an entry this
+  build reads; one it does not read is asked for its format first, as
+  before, so the error is the same.
 - **Small ones.** The auditor takes the keyed-directory patterns the
   policy bundle compiled; it compiled them again for every entry. A
   request's parameters are read where they are (`T::deserialize(&Value)`),

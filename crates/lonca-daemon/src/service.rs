@@ -2157,11 +2157,11 @@ impl Service {
         let name = auth.repo()?;
         let wait = q.wait_ms.unwrap_or(0).clamp(0, LOG_WAIT_MAX_MS);
         let deadline = std::time::Instant::now() + Duration::from_millis(wait as u64);
-        let store = loop {
+        let (store, page) = loop {
             let mut inner = self.lock();
             let r = Self::repo(&mut inner, &name)?;
             if r.chain.state.next_seq > q.from {
-                break r.store.clone();
+                break (r.store.clone(), r.log_page(q.from, log_page(q.limit)));
             }
             drop(inner);
             let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -2174,8 +2174,10 @@ impl Service {
                 .wait_timeout(held, left.min(Duration::from_millis(LOG_POLL_MS)))
                 .unwrap_or_else(|e| e.into_inner());
         };
-        let ops = OpLog::new(&store).read_from(q.from).or_fail()?;
-        Ok(json!(ops[..log_page(q.limit).min(ops.len())]))
+        // The page's own entries are read, not the log down to it.
+        let log = OpLog::new(&store);
+        let ops: Result<Vec<SignedOp>> = page.iter().map(|c| log.read_at(c)).collect();
+        Ok(json!(ops.or_fail()?))
     }
 
     fn tree(&self, auth: &Auth, q: TreeQuery) -> Hr {
@@ -2327,16 +2329,14 @@ impl Service {
             .policy()
             .ok()
             .map(|p| runs_for(&p.config.verification, &rec));
+        // The one entry, where the handle knows it to be.
+        let last = r.last_integration(&c.change);
         drop(inner);
         let mut out = json!(rec);
         out["runs"] = json!(runs);
-        let ops = OpLog::new(&store).read_all().or_fail()?;
-        let names_it = |o: &&SignedOp| match &o.entry.op {
-            Op::ChangeIntegrate { change, .. } => *change == c.change,
-            Op::ChangeIntegrateBatch { merged, .. } => merged.iter().any(|m| m.0 == c.change),
-            _ => false,
-        };
-        let last = ops.iter().rev().find(names_it);
+        let last = last.map(|at| OpLog::new(&store).read_at(&at));
+        let last = last.transpose().or_fail()?;
+        let last = last.as_ref();
         let evidence: Vec<Value> = match last {
             Some(o) => o
                 .entry
@@ -3375,18 +3375,37 @@ impl Service {
         let (repo, actor) = Self::agent(&guard, req, now)?;
         let session = actor.session().expect("agent").to_string();
         let r = Self::repo(&mut guard, &repo)?;
-        // The log is read without the lock, as long as it is: the state is
-        // taken as it stands, and entries appended meanwhile are left for
-        // the next call.
+        // The log is read without the lock, as long as it is, and from
+        // `from` (and what its approvals name), not from its start. Entries
+        // appended meanwhile are left for the next call.
         let store = r.store.clone();
-        let state = r.chain.state.clone();
-        let next = state.next_seq;
+        let next = r.chain.state.next_seq;
         drop(guard);
-        let mut ops = OpLog::new(&store).read_all().or_fail()?;
-        ops.retain(|o| o.entry.seq < next);
-        let events = for_session(&state, &session, &ops, p.from, now);
+        let read = |next: u64| {
+            let mut ops = ops_for_events(&store, p.from)?;
+            ops.retain(|o| o.entry.seq < next);
+            Ok(ops)
+        };
+        let ops: Vec<SignedOp> = read(next).or_fail()?;
         let mut guard = self.lock();
-        let r = Self::repo(&mut guard, &repo)?;
+        let mut r = Self::repo(&mut guard, &repo)?;
+        let (events, next) = if r.chain.state.next_seq == next {
+            // Nothing was appended: the state is the one the entries end at.
+            let state = &r.chain.state;
+            (for_session(state, &session, &ops, p.from, now), next)
+        } else {
+            // The log grew while it was read. Once more, with the state
+            // taken as it stands now.
+            let now = self.now();
+            let state = r.chain.state.clone();
+            let next = state.next_seq;
+            drop(guard);
+            let ops: Vec<SignedOp> = read(next).or_fail()?;
+            let events = for_session(&state, &session, &ops, p.from, now);
+            guard = self.lock();
+            r = Self::repo(&mut guard, &repo)?;
+            (events, next)
+        };
         r.told
             .entry(session)
             .or_default()

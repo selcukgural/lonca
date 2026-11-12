@@ -140,12 +140,13 @@ impl Store {
     }
 
     pub fn read_blob(&self, id: &GitId) -> Result<Vec<u8>> {
-        let repo = self.local();
-        let obj = repo.find_object(id.oid()?).map_err(git)?;
-        if obj.kind != gix::object::Kind::Blob {
-            return Err(Error::Invalid(format!("{} is not a blob", id.short())));
-        }
-        Ok(obj.data.clone())
+        self.reader().read_blob(id)
+    }
+
+    /// One handle for many reads: a walk of the log reads three objects an
+    /// entry, and each read of the store alone opens a handle of its own.
+    pub fn reader(&self) -> Reader {
+        Reader { repo: self.local() }
     }
 
     pub fn has_object(&self, id: &GitId) -> bool {
@@ -168,10 +169,7 @@ impl Store {
     }
 
     pub fn read_tree(&self, tree: &GitId) -> Result<FileMap> {
-        let repo = self.local();
-        let mut out = FileMap::new();
-        walk(&repo, tree.oid()?, "", &mut out)?;
-        Ok(out)
+        self.reader().read_tree(tree)
     }
 
     pub fn commit_files(&self, commit: &GitId) -> Result<FileMap> {
@@ -194,26 +192,7 @@ impl Store {
     }
 
     pub fn read_commit(&self, id: &GitId) -> Result<CommitInfo> {
-        let repo = self.local();
-        let obj = repo.find_object(id.oid()?).map_err(git)?;
-        if obj.kind != gix::object::Kind::Commit {
-            return Err(Error::Invalid(format!("{} is not a commit", id.short())));
-        }
-        let c = gix::objs::CommitRef::from_bytes(&obj.data, repo.object_hash()).map_err(git)?;
-        let author = c.author().map_err(git)?;
-        Ok(CommitInfo {
-            tree: c.tree().into(),
-            parents: c.parents().map(GitId::from).collect(),
-            headers: c
-                .extra_headers
-                .iter()
-                .map(|(k, v)| (k.to_str_lossy().into_owned(), v.to_str_lossy().into_owned()))
-                .collect(),
-            message: c.message.to_str_lossy().into_owned(),
-            author_name: author.name.to_str_lossy().into_owned(),
-            author_email: author.email.to_str_lossy().into_owned(),
-            time_ms: author.time().map_err(git)?.seconds * 1000,
-        })
+        self.reader().read_commit(id)
     }
 
     pub fn ref_get(&self, name: &str) -> Result<Option<GitId>> {
@@ -456,6 +435,51 @@ fn write_dir(
     }
     entries.sort();
     write(gix::objs::Tree { entries })
+}
+
+/// A handle of a [`Store`] for several reads in a row ([`Store::reader`]).
+/// Each read is what the store's own method of that name gives.
+pub struct Reader {
+    repo: gix::Repository,
+}
+
+impl Reader {
+    pub fn read_blob(&self, id: &GitId) -> Result<Vec<u8>> {
+        let mut obj = self.repo.find_object(id.oid()?).map_err(git)?;
+        if obj.kind != gix::object::Kind::Blob {
+            return Err(Error::Invalid(format!("{} is not a blob", id.short())));
+        }
+        Ok(std::mem::take(&mut obj.data))
+    }
+
+    pub fn read_tree(&self, tree: &GitId) -> Result<FileMap> {
+        let mut out = FileMap::new();
+        walk(&self.repo, tree.oid()?, "", &mut out)?;
+        Ok(out)
+    }
+
+    pub fn read_commit(&self, id: &GitId) -> Result<CommitInfo> {
+        let repo = &self.repo;
+        let obj = repo.find_object(id.oid()?).map_err(git)?;
+        if obj.kind != gix::object::Kind::Commit {
+            return Err(Error::Invalid(format!("{} is not a commit", id.short())));
+        }
+        let c = gix::objs::CommitRef::from_bytes(&obj.data, repo.object_hash()).map_err(git)?;
+        let author = c.author().map_err(git)?;
+        Ok(CommitInfo {
+            tree: c.tree().into(),
+            parents: c.parents().map(GitId::from).collect(),
+            headers: c
+                .extra_headers
+                .iter()
+                .map(|(k, v)| (k.to_str_lossy().into_owned(), v.to_str_lossy().into_owned()))
+                .collect(),
+            message: c.message.to_str_lossy().into_owned(),
+            author_name: author.name.to_str_lossy().into_owned(),
+            author_email: author.email.to_str_lossy().into_owned(),
+            time_ms: author.time().map_err(git)?.seconds * 1000,
+        })
+    }
 }
 
 fn walk(repo: &gix::Repository, id: ObjectId, prefix: &str, out: &mut FileMap) -> Result<()> {

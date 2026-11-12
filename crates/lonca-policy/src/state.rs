@@ -519,7 +519,7 @@ impl State {
     }
 
     /// `session` and the sessions it continues, newest first.
-    fn lineage(&self, session: &str) -> Vec<String> {
+    pub fn lineage(&self, session: &str) -> Vec<String> {
         let mut out = Vec::new();
         let mut cur = Some(session.to_string());
         while let Some(id) = cur {

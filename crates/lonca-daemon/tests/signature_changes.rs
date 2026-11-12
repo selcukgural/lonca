@@ -142,6 +142,39 @@ fn the_holder_of_a_caller_hears_and_the_queue_runs_more() {
     audited(&e);
 }
 
+/// What an earlier session was never told is told to the one that takes
+/// its workspace over: its news is older than it, and no older than the
+/// session it continues. One that only started then hears none of it.
+#[test]
+fn a_session_that_continues_another_hears_what_that_one_was_not_told() {
+    let (mut e, base) = repo(1, "true");
+    let b = e.session_in("b", &["src/**"], "/ws/b");
+    e.bind(&b);
+    e.wrote(&b, "src/uses.rs");
+    e.lease(&b, "src/uses.rs#g");
+    let r = change_lib(&mut e, "a", &base, NEW_LIB);
+    assert_eq!(r["decision"]["outcome"], "allow", "{r}");
+
+    let started = e.continue_session("b2", "b", &["src/**"]);
+    assert_eq!(started["decision"]["outcome"], "allow", "{started}");
+    let b2 = started["token"].as_str().unwrap().to_string();
+    let told = e.ok("inbox", None, Some(&b2), json!({}));
+    let heard: Vec<&Value> = told["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|x| x["kind"] == "symbols_changed")
+        .collect();
+    assert_eq!(heard.len(), 1, "{told}");
+    assert_eq!(heard[0]["change"], r["change"]);
+    let again = e.ok("inbox", None, Some(&b2), json!({}));
+    assert_eq!(again["events"], json!([]), "told once");
+
+    let late = e.session("late", &["src/**"]);
+    let told = e.ok("inbox", None, Some(&late), json!({}));
+    assert_eq!(told["events"], json!([]), "{told}");
+}
+
 #[test]
 fn a_change_of_a_body_reaches_nobody() {
     let (mut e, base) = repo(1, "false");

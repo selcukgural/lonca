@@ -3419,8 +3419,10 @@ impl Service {
         session: &str,
         now: i64,
     ) -> std::result::Result<Vec<SessionEvent>, (String, String)> {
+        // A session nobody told yet has no news older than itself.
+        let oldest = r.news_from(session);
         let told = r.told.entry(session.to_string()).or_default();
-        let from = told.from();
+        let from = told.from().max(oldest);
         let ops = OpLog::new(&r.store).read_from(from).or_fail()?;
         let events = for_session(&r.chain.state, session, &ops, from, now);
         Ok(told.unread(events, r.chain.state.next_seq))

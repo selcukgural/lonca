@@ -5316,6 +5316,13 @@ same answers and errors.
   (`json_sectioned`); it read the sides for the question and again for
   the merge. `lonca run` looks at its command after 1 ms, then 2, up to
   the 50 ms it always waited.
+- **The grammars are optimised in the dev profile** (`Cargo.toml`,
+  `[profile.dev.package.*]` for `tree-sitter` and each grammar): tests
+  ran parsers compiled at `-O0`. Measured on a clean target directory:
+  the build of `lonca-symbols` and its tests 10.3 s before and after,
+  `cargo test -p lonca-symbols` 21.6 s, now 16.4 s. Release builds are
+  what they were; a grammar added later and not listed is only slower in
+  tests.
 - **Left as it is:** the CLI's `json!` of a proposal's files and the
   hook's copy of its parameters. `Client::call` takes its parameters as a
   `Value` it owns, so both go only with a change of what `lonca-client`

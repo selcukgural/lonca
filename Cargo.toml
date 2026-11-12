@@ -21,3 +21,36 @@ unsafe_code = "deny"
 # values into denials before that can happen (docs/decisions.md).
 [profile.release]
 overflow-checks = true
+
+# The parsers are C that tests run a great deal of: optimised in the dev
+# profile too, which costs a clean build nothing that was measured
+# (docs/decisions.md, "Work that is done once"). A grammar missing here
+# is only slower in tests.
+[profile.dev.package.tree-sitter]
+opt-level = 3
+[profile.dev.package.lonca-tree-sitter-ruby]
+opt-level = 3
+[profile.dev.package.lonca-tree-sitter-swift]
+opt-level = 3
+[profile.dev.package.tree-sitter-c]
+opt-level = 3
+[profile.dev.package.tree-sitter-c-sharp]
+opt-level = 3
+[profile.dev.package.tree-sitter-cpp]
+opt-level = 3
+[profile.dev.package.tree-sitter-go]
+opt-level = 3
+[profile.dev.package.tree-sitter-java]
+opt-level = 3
+[profile.dev.package.tree-sitter-javascript]
+opt-level = 3
+[profile.dev.package.tree-sitter-kotlin-ng]
+opt-level = 3
+[profile.dev.package.tree-sitter-php]
+opt-level = 3
+[profile.dev.package.tree-sitter-python]
+opt-level = 3
+[profile.dev.package.tree-sitter-rust]
+opt-level = 3
+[profile.dev.package.tree-sitter-typescript]
+opt-level = 3

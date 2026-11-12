@@ -103,7 +103,21 @@ pub fn stands_for(a: &str, b: &str) -> bool {
 
 /// `a` is `b` or one of its containers.
 pub fn covers(a: &str, b: &str, keys: bool) -> bool {
-    a == b || ancestors(b).iter().any(|x| x == a) || (keys && covers_keyed(a, b))
+    a == b || contains(a, b) || (keys && covers_keyed(a, b))
+}
+
+/// `a` is one of the [`ancestors`] of `b`, without making them: the file of
+/// `b`, or its name up to one of its dots.
+fn contains(a: &str, b: &str) -> bool {
+    let Some((path, name)) = split(b) else {
+        return false;
+    };
+    let rest = a.strip_prefix(path).and_then(|r| r.strip_prefix('#'));
+    let Some(rest) = rest.filter(|_| name != FILE) else {
+        return false;
+    };
+    let ends_at_a_dot = || name.as_bytes().get(rest.len()) == Some(&b'.');
+    rest == FILE || (name.starts_with(rest) && ends_at_a_dot())
 }
 
 pub fn overlaps(a: &str, b: &str, keys: bool) -> bool {
@@ -280,6 +294,27 @@ mod tests {
 
     /// The format before additions carried their names.
     const BEFORE: u32 = FORMAT_INSERT_NAMES - 1;
+
+    /// `contains` answers as the list of ancestors does, for every pair of
+    /// short strings over what a symbol id is made of.
+    #[test]
+    fn a_container_is_found_as_the_ancestors_list_it() {
+        let alphabet = ["a", "b", ".", "#", "<file>", "é"];
+        let mut all = vec![String::new()];
+        for _ in 0..4 {
+            let longer = all.iter().flat_map(|s| alphabet.map(|c| format!("{s}{c}")));
+            let longer: Vec<String> = longer.collect();
+            all.extend(longer);
+            all.sort();
+            all.dedup();
+        }
+        for b in &all {
+            let listed = ancestors(b);
+            for a in &all {
+                assert_eq!(contains(a, b), listed.contains(a), "{a:?} of {b:?}");
+            }
+        }
+    }
 
     #[test]
     fn hierarchy() {

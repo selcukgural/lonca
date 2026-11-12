@@ -5195,6 +5195,35 @@ Both fail closed: a settings file that passed before and does not now
 gives `unobserved` and a note in `lonca doctor`. What the hardened
 installers write passes unchanged.
 
+## Work that is done once
+
+A review of every crate on 2026-11-12 looked for work that is repeated, or
+that grows with the log, the tree or the number of sessions, where the
+answer does not. What it found is in the issues under #329. The rule for
+every fix: nothing a user, a log or an auditor can see changes. Same facts,
+same merges, same decisions and reasons in the same order, same log bytes,
+same answers and errors.
+
+- **Timing tests** (`crates/*/tests/perf.rs`): ignored tests that build a
+  large state, log or file and print how long the thing takes. They assert
+  no time, so no machine fails them, and nothing runs them but a person
+  (CLAUDE.md, "Timing tests"). A pull request that is about time shows
+  their output before and after. No benchmark crate: `Instant` and a
+  table are enough for differences of this size, and it is one
+  dependency fewer.
+- **A lease item's trunk name is asked once.** `State::conflict` renamed
+  both items of every pair. `State::named` does it per item
+  (`conflict_named`, `meets`); with neither renamed the second question is
+  not asked, being the first. `symbols::covers` no longer lists the
+  ancestors of a symbol to find one in them (`contains`; a test holds it
+  to the list for every pair of short ids). One `lease.acquire` against
+  12,800 held items and 500 renames: 884 ms, now 48 ms.
+- **The leases in force are collected once for all waiting interests**
+  in `settled`, not once per interest.
+- **`descendants` follows up only sessions that have a parent.** The
+  others descend from themselves. The fold of an observation with 10,000
+  sessions in the state: 869 us, now 55 us.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

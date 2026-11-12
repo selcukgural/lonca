@@ -5286,21 +5286,6 @@ same answers and errors.
   asked paths up in a set. The daemon looks at a running `git` after 1 ms,
   then 2, up to the 20 ms it always waited, so a short command no longer
   costs up to 20 ms of sleep.
-<<<<<<< HEAD
-- **`lonca sync` and `lonca undo` read the contents of what differs.**
-  Both downloaded every file of the commits they compare (`fetch`), a
-  whole repository two or three times over, to read the few files that
-  changed. `workspace::listed` is the tree without contents and `fill`
-  the contents of the files it is given. A sync fills what trunk changed
-  against the workspace's manifest and what is edited locally (an open
-  conflict's trunk copy is of such a file, also when trunk left it alone
-  this time; a test holds that); the commit of a change that came back is
-  only listed. An undo lists both commits and fills the paths whose blobs
-  differ. One thing a user can meet differently: a file too large for a
-  fetch page stopped every sync and undo, and now stops only the ones
-  that read it. Left: `propose --commit` still starts two `git` per file,
-  and a new workspace decodes each file twice.
-=======
 - **The reservations of a moment are found once for a decision and once
   for a report.** `State::settled` (which interests have their reservation
   now) was computed three times for one `lease.acquire` and twice for
@@ -5324,7 +5309,19 @@ same answers and errors.
   hook's copy of its parameters. `Client::call` takes its parameters as a
   `Value` it owns, so both go only with a change of what `lonca-client`
   offers, and a harness depends on that.
->>>>>>> origin/main
+- **`lonca sync` and `lonca undo` read the contents of what differs.**
+  Both downloaded every file of the commits they compare (`fetch`), a
+  whole repository two or three times over, to read the few files that
+  changed. `workspace::listed` is the tree without contents and `fill`
+  the contents of the files it is given. A sync fills what trunk changed
+  against the workspace's manifest and what is edited locally (an open
+  conflict's trunk copy is of such a file, also when trunk left it alone
+  this time; a test holds that); the commit of a change that came back is
+  only listed. An undo lists both commits and fills the paths whose blobs
+  differ. One thing a user can meet differently: a file too large for a
+  fetch page stopped every sync and undo, and now stops only the ones
+  that read it. Left: `propose --commit` still starts two `git` per file,
+  and a new workspace decodes each file twice.
 
 ## Open questions (carried from the design)
 

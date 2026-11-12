@@ -36,6 +36,67 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// One `git cat-file --batch` for the blobs of a commit: asked one at a
+/// time, so neither pipe fills while the other is not read.
+struct Blobs {
+    child: std::process::Child,
+    ask: std::process::ChildStdin,
+    answer: std::io::BufReader<std::process::ChildStdout>,
+}
+
+impl Blobs {
+    fn of(dir: &Path) -> Result<Self> {
+        use std::process::Stdio;
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["cat-file", "--batch"])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("git cat-file --batch")?;
+        let ask = child.stdin.take().context("git cat-file: no stdin")?;
+        let answer = child.stdout.take().context("git cat-file: no stdout")?;
+        Ok(Self {
+            child,
+            ask,
+            answer: std::io::BufReader::new(answer),
+        })
+    }
+
+    /// The bytes of the blob `id`.
+    fn read(&mut self, id: &str) -> Result<Vec<u8>> {
+        use std::io::{BufRead, Read, Write};
+        writeln!(self.ask, "{id}")?;
+        self.ask.flush()?;
+        let mut head = String::new();
+        self.answer.read_line(&mut head)?;
+        // `<id> blob <size>`, or `<id> missing`.
+        let mut fields = head.trim_end().split(' ');
+        let (_, kind, size) = (fields.next(), fields.next(), fields.next());
+        let size: usize = match (kind, size.and_then(|s| s.parse().ok())) {
+            (Some("blob"), Some(size)) => size,
+            _ => bail!("{} is not a blob here: {}", id, head.trim_end()),
+        };
+        let mut bytes = vec![0; size];
+        self.answer.read_exact(&mut bytes)?;
+        let mut end = [0; 1];
+        self.answer.read_exact(&mut end)?;
+        Ok(bytes)
+    }
+}
+
+impl Drop for Blobs {
+    fn drop(&mut self) {
+        // Its stdin closes with `ask`, which ends it; a wait leaves no
+        // process behind when it did not get that far.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 fn rev(dir: &Path, r: &str) -> Option<GitId> {
     git(
         dir,
@@ -138,57 +199,74 @@ pub fn propose(
     if base == commit {
         bail!("{rev_spec} is already in trunk");
     }
+    // One `git diff` says what each file is in the commit (its mode and its
+    // blob), one `git cat-file --batch` gives the contents: two processes
+    // for a commit, not two for each of its files.
     let diff = git(
         dir,
         &[
             "diff",
-            "--name-status",
+            "--raw",
+            "--no-abbrev",
             "--no-renames",
             "-z",
             &base.to_string(),
             &commit.to_string(),
         ],
     )?;
-    let mut files = Vec::new();
+    // (path, the blob and mode it has in the commit; `None`: deleted)
+    let mut changed: Vec<(&str, Option<(&str, lonca_core::FileMode)>)> = Vec::new();
     let mut it = diff.split('\0').filter(|s| !s.is_empty());
-    while let (Some(status), Some(path)) = (it.next(), it.next()) {
+    while let (Some(meta), Some(path)) = (it.next(), it.next()) {
         lonca_core::paths::validate_repo_path(path)
             .with_context(|| format!("{path}: not a path Lonca accepts"))?;
+        // `:<old mode> <new mode> <old blob> <new blob> <status>`
+        let mut fields = meta.trim_start_matches(':').split(' ');
+        let (_, mode, _, blob, status) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        );
+        let (Some(mode), Some(blob), Some(status)) = (mode, blob, status) else {
+            bail!("git diff --raw: {meta:?} is not a line of it");
+        };
         if status.starts_with('D') {
+            changed.push((path, None));
+            continue;
+        }
+        // The mode first: a symlink or a submodule is refused before any
+        // content is read.
+        let mode = match mode {
+            "100755" => lonca_core::FileMode::Executable,
+            "120000" => bail!("{path}: symlinks are not proposed from a checkout"),
+            "160000" => bail!("{path}: submodules are not proposed from a checkout"),
+            _ => lonca_core::FileMode::Regular,
+        };
+        changed.push((path, Some((blob, mode))));
+    }
+    let mut blobs = Blobs::of(dir)?;
+    let mut files = Vec::new();
+    for (path, now) in changed {
+        let Some((blob, mode)) = now else {
             files.push(FileChange {
                 path: path.to_string(),
                 content_b64: None,
                 mode: None,
             });
             continue;
-        }
-        // The mode first: a symlink or a submodule is refused before any
-        // content is read.
-        let mode_line = git(dir, &["ls-tree", &commit.to_string(), "--", path])?;
-        let mode = match mode_line.split_whitespace().next() {
-            Some("100755") => Some(lonca_core::FileMode::Executable),
-            Some("120000") => bail!("{path}: symlinks are not proposed from a checkout"),
-            Some("160000") => bail!("{path}: submodules are not proposed from a checkout"),
-            _ => Some(lonca_core::FileMode::Regular),
         };
-        let spec = format!("{commit}:{path}");
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["cat-file", "blob", &spec])
-            .output()?;
-        if !out.status.success() {
-            bail!(
-                "git cat-file {spec}: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-        }
+        let bytes = blobs
+            .read(blob)
+            .with_context(|| format!("git cat-file {commit}:{path}"))?;
         files.push(FileChange {
             path: path.to_string(),
-            content_b64: Some(base64::engine::general_purpose::STANDARD.encode(&out.stdout)),
-            mode,
+            content_b64: Some(base64::engine::general_purpose::STANDARD.encode(&bytes)),
+            mode: Some(mode),
         });
     }
+    drop(blobs);
     if files.is_empty() {
         bail!("{rev_spec} changes nothing against trunk");
     }

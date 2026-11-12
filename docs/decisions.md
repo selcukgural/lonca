@@ -5345,8 +5345,13 @@ same answers and errors.
   only listed. An undo lists both commits and fills the paths whose blobs
   differ. One thing a user can meet differently: a file too large for a
   fetch page stopped every sync and undo, and now stops only the ones
-  that read it. Left: `propose --commit` still starts two `git` per file,
-  and a new workspace decodes each file twice.
+  that read it. Left: a new workspace decodes each file twice.
+- **`propose --commit` starts two `git` for a commit**, not two for each
+  of its files: one `git diff --raw` gives every file's mode and blob
+  (a symlink or a submodule is refused there, before any content), one
+  `git cat-file --batch` the contents, asked one at a time. A test sends
+  a commit with a deletion, a file that is no text and a name with a
+  space, and finds the commit's tree on trunk.
 
 ## Open questions (carried from the design)
 

@@ -22,7 +22,7 @@ use crate::ops::{
     Actor, Attestation, Decision, Facts, HumanSignature, LeaseItem, NegotiationMsg, ObsKind, Op,
 };
 #[cfg(feature = "store")]
-use crate::store::{CommitSpec, Store};
+use crate::store::{CommitInfo, CommitSpec, Reader, Store};
 
 pub const OPLOG_REF: &str = "refs/lonca/oplog";
 pub const GENESIS_PREV: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -421,10 +421,21 @@ impl<'a> OpLog<'a> {
     }
 
     pub fn read_at(&self, commit: &GitId) -> Result<SignedOp> {
-        let bytes = self.store.read_file(commit, OP_FILE)?.ok_or_else(|| {
-            Error::Integrity(format!("oplog commit {} has no {OP_FILE}", commit.short()))
-        })?;
-        decode(&bytes)
+        Ok(Self::entry_at(&self.store.reader(), commit)?.0)
+    }
+
+    /// The entry of `commit` and the commit itself, read once for both its
+    /// tree and its parent.
+    fn entry_at(reader: &Reader, commit: &GitId) -> Result<(SignedOp, CommitInfo)> {
+        let info = reader.read_commit(commit)?;
+        let files = reader.read_tree(&info.tree)?;
+        let Some(file) = files.get(OP_FILE) else {
+            let commit = commit.short();
+            return Err(Error::Integrity(format!(
+                "oplog commit {commit} has no {OP_FILE}"
+            )));
+        };
+        Ok((decode(&reader.read_blob(&file.blob)?)?, info))
     }
 
     /// All entries, oldest first.
@@ -435,15 +446,20 @@ impl<'a> OpLog<'a> {
     /// The entries from sequence `seq` on, oldest first. The log is walked
     /// from its head, so this costs what it returns, however long the log.
     pub fn read_from(&self, seq: u64) -> Result<Vec<SignedOp>> {
+        let found = self.walk_from(seq)?;
+        Ok(found.into_iter().map(|(_, op)| op).collect())
+    }
+
+    /// [`OpLog::read_from`], each entry with the commit it is in.
+    pub fn walk_from(&self, seq: u64) -> Result<Vec<(GitId, SignedOp)>> {
         let mut out = Vec::new();
         let mut cur = self.head()?;
+        let reader = self.store.reader();
         while let Some(c) = cur {
-            let op = self.read_at(&c)?;
+            let (op, info) = Self::entry_at(&reader, &c)?;
             if op.entry.seq < seq {
                 break;
             }
-            out.push(op);
-            let info = self.store.read_commit(&c)?;
             if info.parents.len() > 1 {
                 return Err(Error::Integrity(format!(
                     "oplog commit {} is a merge",
@@ -451,6 +467,7 @@ impl<'a> OpLog<'a> {
                 )));
             }
             cur = info.parents.into_iter().next();
+            out.push((c, op));
         }
         out.reverse();
         Ok(out)
@@ -471,6 +488,12 @@ pub fn decode(bytes: &[u8]) -> Result<SignedOp> {
         format: u32,
         #[serde(default)]
         seq: u64,
+    }
+    // An entry this build reads says its format itself. One it does not
+    // read is asked for its format alone, which is what tells why.
+    if let Ok(op) = serde_json::from_slice::<SignedOp>(bytes) {
+        check_format(op.entry.seq, op.entry.format)?;
+        return Ok(op);
     }
     let probe: Probe = serde_json::from_slice(bytes)?;
     check_format(probe.entry.seq, probe.entry.format)?;

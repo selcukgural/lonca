@@ -171,7 +171,8 @@ pub fn lease_report(
         let Some(&kind) = need.kinds.first() else {
             continue;
         };
-        if mine().any(|i| state.covers_need(&need, i, None)) {
+        let renamed = state.renamed_need(&need, None);
+        if mine().any(|i| state.covers_either(&need, &renamed, i)) {
             out.push(Detail::free(HELD_BY_YOU, &need.symbol, kind));
             continue;
         }

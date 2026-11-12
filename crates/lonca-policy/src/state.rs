@@ -196,6 +196,20 @@ impl LeaseSet {
 /// What of a lease set is held at a moment: everything while the set is
 /// alive, afterwards only what is pinned.
 #[derive(Clone, Debug)]
+/// A lease item and its name on the trunk now, when a rename changed it
+/// ([`State::named`]).
+pub struct Named<'a> {
+    pub item: &'a LeaseItem,
+    now: Option<LeaseItem>,
+}
+
+impl Named<'_> {
+    /// The item as trunk calls it.
+    fn trunk(&self) -> &LeaseItem {
+        self.now.as_ref().unwrap_or(self.item)
+    }
+}
+
 pub struct ActiveLease<'a> {
     pub lease: &'a LeaseSet,
     pub items: Vec<&'a LeaseItem>,
@@ -649,9 +663,36 @@ impl State {
                 && leases_conflict(&self.renamed_item(a), &self.renamed_item(b), keys))
     }
 
+    /// `item` with what it is called on the trunk now, when that is another
+    /// name: asked once for an item that is then held against many.
+    pub fn named<'a>(&self, item: &'a LeaseItem) -> Named<'a> {
+        let now = (!self.renames.is_empty()).then(|| self.renamed_item(item));
+        let now = now.filter(|n| n.symbol != item.symbol);
+        Named { item, now }
+    }
+
+    pub fn named_all<'a>(&self, items: impl IntoIterator<Item = &'a LeaseItem>) -> Vec<Named<'a>> {
+        items.into_iter().map(|i| self.named(i)).collect()
+    }
+
+    /// [`State::conflict`] of two items whose trunk names are known. With
+    /// neither renamed, the second question is the first one again.
+    pub fn conflict_named(&self, a: &Named, b: &Named) -> bool {
+        let keys = self.symbol_keys;
+        leases_conflict(a.item, b.item, keys)
+            || ((a.now.is_some() || b.now.is_some()) && leases_conflict(a.trunk(), b.trunk(), keys))
+    }
+
+    /// Something in `items` conflicts with `b`.
+    pub fn meets(&self, items: &[Named], b: &LeaseItem) -> bool {
+        let b = self.named(b);
+        items.iter().any(|a| self.conflict_named(a, &b))
+    }
+
     /// Something in `a` conflicts with something in `b`.
     fn clash(&self, a: &[LeaseItem], b: &[LeaseItem]) -> bool {
-        a.iter().any(|x| b.iter().any(|y| self.conflict(x, y)))
+        let a = self.named_all(a);
+        b.iter().any(|y| self.meets(&a, y))
     }
 
     /// `item` covers `need`, by the name in the facts or by what that is
@@ -797,13 +838,16 @@ impl State {
     }
 
     fn held_against(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
-        self.active_leases(now_ms)
-            .filter(|h| h.holder != session)
-            .any(|h| {
-                h.items
-                    .iter()
-                    .any(|b| items.iter().any(|a| self.conflict(a, b)))
-            })
+        let active: Vec<ActiveLease> = self.active_leases(now_ms).collect();
+        self.held_among(&active, session, &self.named_all(items))
+    }
+
+    /// A lease of `active` that another session holds conflicts with `items`.
+    fn held_among(&self, active: &[ActiveLease], session: &str, items: &[Named]) -> bool {
+        let others = active.iter().filter(|h| h.holder != session);
+        others
+            .into_iter()
+            .any(|h| h.items.iter().any(|b| self.meets(items, b)))
     }
 
     /// The reservations in force at `now_ms`, with the interests they serve.
@@ -818,16 +862,19 @@ impl State {
             .cloned()
             .collect();
         let mut served = Vec::new();
+        // The leases in force are the same for every interest.
+        let active: Vec<ActiveLease> = match self.interests.is_empty() {
+            true => Vec::new(),
+            false => self.active_leases(now_ms).collect(),
+        };
         for (seq, i) in &self.interests {
+            let mine = self.named_all(&i.items);
             let reserved = |r: &Reservation| {
-                r.session != i.session
-                    && r.items
-                        .iter()
-                        .any(|b| i.items.iter().any(|a| self.conflict(a, b)))
+                r.session != i.session && r.items.iter().any(|b| self.meets(&mine, b))
             };
             let mut older = self.interests.range(..seq).map(|(_, o)| o);
             if self.session_present(&i.session, now_ms)
-                && !self.held_against(&i.session, &i.items, now_ms)
+                && !self.held_among(&active, &i.session, &mine)
                 && !out.iter().any(reserved)
                 && !older.any(|o| self.stops(o, &i.session, &i.items, now_ms))
             {
@@ -932,14 +979,10 @@ impl State {
         items: &[LeaseItem],
         now_ms: i64,
     ) -> Option<String> {
+        let mine = self.named_all(items);
         self.reservations_at(now_ms)
             .into_iter()
-            .find(|r| {
-                r.session != session
-                    && r.items
-                        .iter()
-                        .any(|b| items.iter().any(|a| self.conflict(a, b)))
-            })
+            .find(|r| r.session != session && r.items.iter().any(|b| self.meets(&mine, b)))
             .map(|r| r.session)
     }
 
@@ -993,14 +1036,11 @@ impl State {
     /// what they got, so a line of interests does not stretch the cap. Sets
     /// that had no such time get this one.
     fn block_end(&mut self, session: &str, items: &[LeaseItem], now_ms: i64, limit: i64) -> i64 {
+        let mine = self.named_all(items);
         let sets: Vec<&LeaseSet> = self
             .active_leases(now_ms)
             .filter(|h| h.holder != session)
-            .filter(|h| {
-                h.items
-                    .iter()
-                    .any(|b| items.iter().any(|a| self.conflict(a, b)))
-            })
+            .filter(|h| h.items.iter().any(|b| self.meets(&mine, b)))
             .map(|h| h.lease)
             .collect();
         let names: Vec<String> = sets.iter().map(|l| l.set.clone()).collect();
@@ -1090,12 +1130,15 @@ impl State {
         }
     }
 
+    /// `root` and every session made from it, by id. A session with no
+    /// parent descends from itself alone, and most have none: only the
+    /// others are followed up.
     fn descendants(&self, root: &str) -> Vec<String> {
-        self.sessions
-            .keys()
-            .filter(|id| self.descends_from(id, root))
-            .cloned()
-            .collect()
+        let under = |(id, s): &(&String, &Session)| {
+            id.as_str() == root || (s.parent.is_some() && self.descends_from(id, root))
+        };
+        let found = self.sessions.iter().filter(under);
+        found.map(|(id, _)| id.clone()).collect()
     }
 
     /// Charges what an integration's checks took, whatever came of them: a
@@ -1274,12 +1317,8 @@ impl State {
     }
 
     fn register_interest(&mut self, session: &str, items: &[LeaseItem], now_ms: i64) {
-        let conflicts = |held: &ActiveLease| {
-            let mine = || items.iter();
-            held.items
-                .iter()
-                .any(|b| mine().any(|a| self.conflict(a, b)))
-        };
+        let mine = self.named_all(items);
+        let conflicts = |held: &ActiveLease| held.items.iter().any(|b| self.meets(&mine, b));
         let sets = self.active_leases(now_ms);
         let sets = sets.filter(|h| h.holder != session && conflicts(h));
         let sets: Vec<String> = sets.map(|h| h.lease.set.clone()).collect();

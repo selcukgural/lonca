@@ -665,19 +665,24 @@ pub(crate) fn session_context(
 /// tainted holder is not in it: the denial goes to another agent.
 fn held_against(state: &State, own: &str, items: &[LeaseItem], ctx: &Ctx) -> Vec<String> {
     let mut out = Vec::new();
+    let items = state.named_all(items);
     for held in state.active_leases(ctx.time_ms) {
         if held.holder == own {
             continue;
         }
+        let theirs = state.named_all(held.items.iter().copied());
         let intent = if ctx.format >= FORMAT_RELEASE_RECHECK {
             state.intent_for_agents(held.holder, &held.lease.intent)
         } else {
             &held.lease.intent
         };
-        for a in items {
-            for b in &held.items {
-                if state.conflict(a, b) {
-                    out.push(format!("lease_held:{}:{}:{intent}", b.symbol, held.holder));
+        for a in &items {
+            for b in &theirs {
+                if state.conflict_named(a, b) {
+                    out.push(format!(
+                        "lease_held:{}:{}:{intent}",
+                        b.item.symbol, held.holder
+                    ));
                 }
             }
         }

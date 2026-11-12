@@ -28,7 +28,7 @@ the design: `docs/decisions.md`.
 ## Working on the code
 
 ```sh
-cargo test --workspace          # ~1470 tests, includes real sandbox and socket tests
+cargo test --workspace          # ~1650 tests, includes real sandbox and socket tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 cargo deny check                # advisories, licenses, crates.io only (deny.toml)
@@ -130,6 +130,25 @@ cd fuzz && cargo fuzz run -s none <target> corpus/<target> seeds/<target> -- -ma
 - A new target: a module with `check(&[u8])`, `TARGETS`, a `[[bin]]` and its
   file in `fuzz/`, seeds in `write_seeds`, the list in `fuzz.yml`'s `plan` job.
   One target on demand: `gh workflow run fuzz.yml --ref main -f targets=parse`.
+
+## Timing tests
+
+`crates/{lonca-policy,lonca-symbols,lonca-daemon}/tests/perf.rs`: ignored
+tests that print how long a decision, a parse, a merge or a request takes
+on a large state, file or log. They assert no time and nothing runs them
+(docs/decisions.md, "Work that is done once").
+
+```sh
+cargo test --release -p lonca-policy --test perf -- --ignored --nocapture --test-threads=1
+cargo test --release -p lonca-symbols --test perf -- --ignored --nocapture
+cargo test --release -p lonca-daemon --test perf -- --ignored --nocapture   # about a minute
+```
+
+- A change made for time or memory changes nothing else: same decisions,
+  facts, merges, log bytes, answers and errors. Its pull request shows the
+  numbers before and after.
+- A new one prints a table and asserts only what proves it measured the
+  thing (an outcome, a count).
 
 ## CI
 

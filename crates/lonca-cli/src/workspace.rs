@@ -456,7 +456,7 @@ impl Workspace {
         for copy in std::mem::take(&mut self.meta.trunk_copies) {
             wsfs::remove(&self.root, &copy)?;
         }
-        let new_files: BTreeMap<String, TreeFile> = fetch(client, &trunk, None)?
+        let mut new_files: BTreeMap<String, TreeFile> = listed(client, &trunk, None)?
             .into_iter()
             .filter(|f| f.mode != FileMode::Submodule)
             .map(|f| (f.path.clone(), f))
@@ -466,12 +466,21 @@ impl Workspace {
             .into_iter()
             .map(|c| (c.path.clone(), c))
             .collect();
+        // Of trunk's contents, only these are read below: a file trunk
+        // changed (written, merged, or new to `.git`), and one edited here
+        // (its trunk copy, while a conflict is open in it). The rest of the
+        // repository is not downloaded.
+        let held = &self.meta.manifest;
+        let read = |f: &&mut TreeFile| {
+            held.get(&f.path).map(|(_, b)| b) != Some(&f.blob) || local.contains_key(&f.path)
+        };
+        fill(client, &trunk, new_files.values_mut().filter(read))?;
         if let Some((change, commit)) = self.meta.submitted.clone() {
             let status = call(client, "change.get", json!({"change": change}))?;
             match status["status"]["status"].as_str().unwrap_or("") {
                 "integrated" => {
                     // Edits that went in with the change are not local any more.
-                    let proposed: BTreeMap<String, GitId> = fetch(client, &commit, None)?
+                    let proposed: BTreeMap<String, GitId> = listed(client, &commit, None)?
                         .into_iter()
                         .map(|f| (f.path, f.blob))
                         .collect();
@@ -717,12 +726,33 @@ pub fn fetch(
     commit: &GitId,
     paths: Option<Vec<String>>,
 ) -> Result<Vec<TreeFile>> {
+    let mut files = listed(client, commit, paths)?;
+    fill(client, commit, &mut files)?;
+    Ok(files)
+}
+
+/// The files of a commit as its tree names them, without their contents.
+pub fn listed(
+    client: &mut Client,
+    commit: &GitId,
+    paths: Option<Vec<String>>,
+) -> Result<Vec<TreeFile>> {
     let v = call(
         client,
         "tree",
         json!({"commit": commit, "with_content": false, "paths": paths}),
     )?;
-    let mut files: Vec<TreeFile> = serde_json::from_value(v)?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// Reads the contents of `files`, which [`listed`] gave of `commit`, in
+/// their order: who needs a few files of a commit does not download it.
+pub fn fill<'a>(
+    client: &mut Client,
+    commit: &GitId,
+    files: impl IntoIterator<Item = &'a mut TreeFile>,
+) -> Result<()> {
+    let files: Vec<&mut TreeFile> = files.into_iter().collect();
     let sizes: Vec<(String, u64)> = files
         .iter()
         .filter(|f| f.mode != FileMode::Submodule)
@@ -737,12 +767,12 @@ pub fn fetch(
             contents.insert(f.path, f.content_b64);
         }
     }
-    for f in &mut files {
+    for f in files {
         if let Some(c) = contents.remove(&f.path) {
             f.content_b64 = c;
         }
     }
-    Ok(files)
+    Ok(())
 }
 
 /// The `.gitignore` and `.ignore` of each directory, read through `wsfs`: a

@@ -5180,6 +5180,53 @@ fn a_second_sync_keeps_an_open_conflict() {
     assert!(refused.contains("conflict not settled"), "{refused}");
 }
 
+/// Trunk's side of an open conflict is written again by a sync that brought
+/// another file: the copy is of a file trunk did not change this time.
+#[test]
+fn an_open_conflict_has_its_trunk_copy_after_a_sync_of_another_file() {
+    let e = Env::new();
+    let [a, b, _] = three_agents(&e);
+    let seed = numbered();
+    std::fs::write(a.join(MAIN), line(&seed, 10, "1000")).unwrap();
+    unparsed_land(&e, &a, "line 10");
+    std::fs::write(b.join(MAIN), line(&seed, 10, "2000")).unwrap();
+    unparsed_land(&e, &b, "line 10 too");
+    e.run(&b, &["sync", "--json"]);
+    let expected = std::fs::read_to_string(b.join("src/Main.zig.trunk")).unwrap();
+    assert!(expected.contains("a10 = 1000;"), "{expected}");
+
+    let hws = e.root.join("hws");
+    e.run(&hws, &["sync"]);
+    std::fs::write(hws.join("src/Other.zig"), "    int other = 1;\n").unwrap();
+    land(&e, &hws, "another file");
+    let synced = parse(&e.run(&b, &["sync", "--json"]));
+    assert_eq!(synced["conflicts"][0]["path"], MAIN, "{synced}");
+    assert!(b.join("src/Other.zig").exists(), "{synced}");
+    let copy = std::fs::read_to_string(b.join("src/Main.zig.trunk")).unwrap();
+    assert_eq!(copy, expected);
+}
+
+/// A sync reads the contents of what trunk changed, not of the repository:
+/// with pages too small for the file that stayed as it was, it still
+/// brings the one that is new.
+#[test]
+fn a_sync_reads_only_what_trunk_changed() {
+    let e = Env::new();
+    let [_, b, _] = three_agents(&e);
+    let hws = e.root.join("hws");
+    e.run(&hws, &["sync"]);
+    std::fs::write(hws.join("src/Small.zig"), "int s;\n").unwrap();
+    land(&e, &hws, "a small file");
+    let mut sync = e.cmd(&b, &["sync", "--json"]);
+    sync.env("LONCA_FETCH_BUDGET", "200");
+    let out = sync.output().unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let small = std::fs::read_to_string(b.join("src/Small.zig")).unwrap();
+    assert_eq!(small, "int s;\n");
+    // The whole of it does not fit such pages: a new workspace says so.
+    assert!(numbered().len() > 200);
+}
+
 /// One conflict in `src/Main.zig`, left open in the second workspace, and
 /// the text there.
 fn an_open_conflict(e: &Env) -> (PathBuf, String) {

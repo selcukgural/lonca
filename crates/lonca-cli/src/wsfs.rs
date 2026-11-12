@@ -126,7 +126,8 @@ fn read_within(root: &Path, rel: &str, cap: u64) -> Result<Option<Local>> {
     if stat.st_size as u64 > cap {
         bail!("{rel} is {} bytes, more than Lonca handles", stat.st_size);
     }
-    let mut bytes = Vec::new();
+    // Room for what `fstat` said, which is within the cap: not grown into.
+    let mut bytes = Vec::with_capacity(stat.st_size as usize);
     File::from(fd).take(cap).read_to_end(&mut bytes)?;
     // The count was read after the open: a name linked in from outside
     // and taken away between the two shows one link, on a file that was

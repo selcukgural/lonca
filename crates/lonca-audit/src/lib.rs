@@ -33,7 +33,7 @@ use lonca_core::keyed::KeyedDirs;
 use lonca_core::oplog::{FORMAT_KEYED, OpLog, SignedOp, verify_chain};
 use lonca_core::ops::{Attestation, Op};
 use lonca_core::{ChangeId, GitId, Result, Store};
-use lonca_policy::config::{CONFIG_FILE, Config, POLICY_FILE, PolicyBundle};
+use lonca_policy::config::{CONFIG_FILE, POLICY_FILE, PolicyBundle};
 use lonca_policy::decide::{Ctx, decide, evidence_name};
 use lonca_policy::state::State;
 use lonca_symbols::engine;
@@ -283,7 +283,7 @@ pub fn audit_ops_anchored(
             _ => true,
         };
         if opts.deep && engine_known {
-            recheck_objects(store, &state, &policy.config, op, &mut rep);
+            recheck_objects(store, &state, &policy, op, &mut rep);
         }
         let d = decide(
             &state,
@@ -382,15 +382,22 @@ fn check_other_refs(store: &Store, state: &State, all: bool, rep: &mut Report) {
 
 /// Recomputes facts and merges. `state` is the one before `op`: what a merge
 /// may join comes from it, as it did in the daemon.
-fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp, rep: &mut Report) {
+fn recheck_objects(
+    store: &Store,
+    state: &State,
+    policy: &PolicyBundle,
+    op: &SignedOp,
+    rep: &mut Report,
+) {
+    let config = &policy.config;
     let e = &op.entry;
     let engine = e.engine().unwrap_or(engine::ENGINE_CURRENT);
     // `PolicyBundle::parse` compiled these when the policy came in.
-    let keyed = config.paths.keyed_dirs().unwrap_or_default();
+    let keyed = &policy.keyed;
     let none = KeyedDirs::default();
     // Facts name taken keys from format 29 on.
     let facts_keys = if e.format >= FORMAT_KEYED {
-        &keyed
+        keyed
     } else {
         &none
     };
@@ -432,7 +439,7 @@ fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp,
                 trunk_before,
                 &rec.commit,
                 &may_join,
-                &keyed,
+                keyed,
             ) {
                 Ok(i) => {
                     if &i.merged != merged || &i.conflicts != conflicts {
@@ -481,7 +488,7 @@ fn recheck_objects(store: &Store, state: &State, config: &Config, op: &SignedOp,
                     &trunk,
                     &rec.commit,
                     &may_join,
-                    &keyed,
+                    keyed,
                 ) {
                     Ok(i) if i.merged.as_ref() == Some(commit) => {}
                     Ok(i) => {

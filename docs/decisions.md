@@ -5270,6 +5270,15 @@ same answers and errors.
   (`Store::reader`), and its JSON parsed once when it is an entry this
   build reads; one it does not read is asked for its format first, as
   before, so the error is the same.
+- **Small ones.** The auditor takes the keyed-directory patterns the
+  policy bundle compiled; it compiled them again for every entry. A
+  request's parameters are read where they are (`T::deserialize(&Value)`),
+  not from a copy of the whole tree; a test holds the refusals to the same
+  words. A line that is UTF-8 becomes a `String` without a copy
+  (`protocol::line_text`), in the daemon and the client. `tree` looks its
+  asked paths up in a set. The daemon looks at a running `git` after 1 ms,
+  then 2, up to the 20 ms it always waited, so a short command no longer
+  costs up to 20 ms of sleep.
 
 ## Open questions (carried from the design)
 

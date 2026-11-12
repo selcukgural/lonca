@@ -5286,6 +5286,29 @@ same answers and errors.
   asked paths up in a set. The daemon looks at a running `git` after 1 ms,
   then 2, up to the 20 ms it always waited, so a short command no longer
   costs up to 20 ms of sleep.
+- **The reservations of a moment are found once for a decision and once
+  for a report.** `State::settled` (which interests have their reservation
+  now) was computed three times for one `lease.acquire` and twice for
+  every lease a report of missing leases asks about; each time is every
+  waiting interest against every lease in force. It is handed down
+  (`Settled`, `reserved_against_in`, `wanted_against_in`, `new_items_in`),
+  and a report also collects the other sessions' leases once
+  (`details::others`). `holds` asks the sets without listing them. The
+  report of 200 needs with 200 sessions holding and 200 waiting: 40 s, now
+  0.2 s; one `lease.acquire` there 240 ms, now 110 ms. With nobody waiting
+  both are as before; what is left is the pairs of items themselves.
+- **More small ones.** A path is folded for case once for all the patterns
+  it is asked of (`config::read_as`), not once per pattern.
+  `proxy_connect` asks first whether a session is active, and looks for
+  its bound ancestors only then: the sessions that are over are most of a
+  long log's. The JSON section merge reads each side once
+  (`json_sectioned`); it read the sides for the question and again for
+  the merge. `lonca run` looks at its command after 1 ms, then 2, up to
+  the 50 ms it always waited.
+- **Left as it is:** the CLI's `json!` of a proposal's files and the
+  hook's copy of its parameters. `Client::call` takes its parameters as a
+  `Value` it owns, so both go only with a change of what `lonca-client`
+  offers, and a harness depends on that.
 
 ## Open questions (carried from the design)
 

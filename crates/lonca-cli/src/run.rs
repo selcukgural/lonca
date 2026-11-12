@@ -299,6 +299,9 @@ fn carry_streams(child: &mut Child) -> Vec<Receiver<()>> {
 fn wait(child: &mut Child, stop: &AtomicI32, grace: Duration) -> Result<ExitStatus> {
     let group = child.id() as libc::pid_t;
     let mut stopping: Option<Instant> = None;
+    // A short command is not kept waiting: looked at often first, then as
+    // seldom as before.
+    let mut pause = Duration::from_millis(1);
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(status);
@@ -314,7 +317,8 @@ fn wait(child: &mut Child, stop: &AtomicI32, grace: Duration) -> Result<ExitStat
             }
             _ => {}
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(Duration::from_millis(50));
     }
 }
 

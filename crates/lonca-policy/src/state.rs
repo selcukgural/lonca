@@ -144,6 +144,14 @@ pub struct Reservation {
     pub until_ms: i64,
 }
 
+/// The reservations in force at one time, and the waiting interests (by
+/// their place in the log) that became one of them then: what
+/// [`State::settled`] finds, for every question of one decision.
+pub struct Settled {
+    pub reservations: Vec<Reservation>,
+    served: Vec<u64>,
+}
+
 /// What a move of trunk changed other than under a `shared` lease: no other
 /// change may join its lines with it (see [`State::joins`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -878,7 +886,7 @@ impl State {
     /// The window of one that ran out is over for its session, and the next
     /// interest gets its own. Pure, and a function of the entry's time, so
     /// `decide()` sees what the fold of the same entry will record.
-    fn settled(&self, now_ms: i64) -> (Vec<Reservation>, Vec<u64>) {
+    pub fn settled(&self, now_ms: i64) -> Settled {
         let mut out: Vec<Reservation> = self
             .reservations
             .iter()
@@ -910,7 +918,10 @@ impl State {
                 served.push(*seq);
             }
         }
-        (out, served)
+        Settled {
+            reservations: out,
+            served,
+        }
     }
 
     /// `interest`, of another session, stands in the way of new leases on
@@ -925,10 +936,21 @@ impl State {
     /// Of `items`, what `session` does not have yet: neither held (a partial
     /// release acquires the rest again) nor reserved for it.
     pub fn new_items(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> Vec<LeaseItem> {
+        self.new_items_in(&self.settled(now_ms), session, items, now_ms)
+    }
+
+    /// [`Self::new_items`] with the reservations of `now_ms` in hand.
+    pub fn new_items_in(
+        &self,
+        settled: &Settled,
+        session: &str,
+        items: &[LeaseItem],
+        now_ms: i64,
+    ) -> Vec<LeaseItem> {
         let keys = self.symbol_keys;
-        let reservations = self.reservations_at(now_ms);
         let reserved = |i: &LeaseItem| {
-            let mut mine = reservations.iter().filter(|r| r.session == session);
+            let reservations = settled.reservations.iter();
+            let mut mine = reservations.filter(|r| r.session == session);
             mine.any(|r| {
                 r.items
                     .iter()
@@ -950,8 +972,19 @@ impl State {
         items: &[LeaseItem],
         now_ms: i64,
     ) -> Vec<&Interest> {
-        let new = self.new_items(session, items, now_ms);
-        let served = self.settled(now_ms).1;
+        self.wanted_against_in(&self.settled(now_ms), session, items, now_ms)
+    }
+
+    /// [`Self::wanted_against`] with the reservations of `now_ms` in hand.
+    pub fn wanted_against_in(
+        &self,
+        settled: &Settled,
+        session: &str,
+        items: &[LeaseItem],
+        now_ms: i64,
+    ) -> Vec<&Interest> {
+        let new = self.new_items_in(settled, session, items, now_ms);
+        let served = &settled.served;
         // An interest goes first over those younger than it, so a younger
         // one does not stop it.
         let behind = |seq: &u64, i: &Interest| {
@@ -968,15 +1001,25 @@ impl State {
     /// Something other sessions have or are first in line for conflicts
     /// with `items`: there is something to wait for.
     pub fn taken(&self, session: &str, items: &[LeaseItem], now_ms: i64) -> bool {
-        self.held_against(session, items, now_ms)
-            || self.reserved_against(session, items, now_ms).is_some()
-            || !self.wanted_against(session, items, now_ms).is_empty()
+        if self.held_against(session, items, now_ms) {
+            return true;
+        }
+        let settled = self.settled(now_ms);
+        self.reserved_against_in(&settled, session, items).is_some()
+            || !self
+                .wanted_against_in(&settled, session, items, now_ms)
+                .is_empty()
     }
 
     /// `session` holds exactly `item` at `now_ms`.
     pub fn holds(&self, session: &str, item: &LeaseItem, now_ms: i64) -> bool {
-        self.active_leases(now_ms)
-            .any(|h| h.holder == session && h.items.contains(&item))
+        // As `active_leases` has it, with no list made of each set.
+        let leases = self.leases.values();
+        let mut mine = leases.filter(|l| self.holder(l, now_ms) == session);
+        mine.any(|l| {
+            let alive = self.lease_alive(l, now_ms);
+            l.items.iter().any(|i| i == item && (alive || l.pinned(i)))
+        })
     }
 
     /// `session` already waits for something that overlaps `items`.
@@ -993,7 +1036,7 @@ impl State {
     }
 
     pub fn reservations_at(&self, now_ms: i64) -> Vec<Reservation> {
-        self.settled(now_ms).0
+        self.settled(now_ms).reservations
     }
 
     /// Another session's reservation stands in the way of `items`.
@@ -1003,15 +1046,28 @@ impl State {
         items: &[LeaseItem],
         now_ms: i64,
     ) -> Option<String> {
+        self.reserved_against_in(&self.settled(now_ms), session, items)
+    }
+
+    /// [`Self::reserved_against`] with the reservations of its time in hand.
+    pub fn reserved_against_in(
+        &self,
+        settled: &Settled,
+        session: &str,
+        items: &[LeaseItem],
+    ) -> Option<String> {
         let mine = self.named_all(items);
-        self.reservations_at(now_ms)
-            .into_iter()
+        let mut theirs = settled.reservations.iter();
+        theirs
             .find(|r| r.session != session && r.items.iter().any(|b| self.meets(&mine, b)))
-            .map(|r| r.session)
+            .map(|r| r.session.clone())
     }
 
     fn settle_reservations(&mut self, now_ms: i64) {
-        let (reservations, served) = self.settled(now_ms);
+        let Settled {
+            reservations,
+            served,
+        } = self.settled(now_ms);
         self.reservations = reservations;
         for seq in served {
             self.interests.remove(&seq);

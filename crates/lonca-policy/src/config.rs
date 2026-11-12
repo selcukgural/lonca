@@ -582,8 +582,9 @@ impl Verification {
     ) -> BTreeSet<String> {
         let mut owed = asked.clone();
         for path in paths {
+            let path = read_as(path, folds);
             for (pattern, names) in &self.checks_by_path {
-                if config_pattern_reads(pattern, path, folds) {
+                if pattern_reads(pattern, &path, folds) {
                     owed.extend(names.iter().cloned());
                 }
             }
@@ -1070,11 +1071,23 @@ pub fn config_pattern_matches(pattern: &str, path: &str) -> bool {
 /// [`config_pattern_matches`] as a file system that folds case reads the
 /// two (`folds`, log format 32 on), or by their spelling.
 pub fn config_pattern_reads(pattern: &str, path: &str, folds: bool) -> bool {
-    if folds {
-        use lonca_core::paths::folded;
-        config_pattern_matches(&folded(pattern), &folded(path))
-    } else {
-        config_pattern_matches(pattern, path)
+    pattern_reads(pattern, &read_as(path, folds), folds)
+}
+
+/// `path` as [`pattern_reads`] takes it: folded once, for every pattern
+/// it is asked of.
+fn read_as(path: &str, folds: bool) -> std::borrow::Cow<'_, str> {
+    match folds {
+        true => lonca_core::paths::folded(path).into(),
+        false => path.into(),
+    }
+}
+
+/// [`config_pattern_reads`] of a path [`read_as`] gave.
+fn pattern_reads(pattern: &str, path: &str, folds: bool) -> bool {
+    match folds {
+        true => config_pattern_matches(&lonca_core::paths::folded(pattern), path),
+        false => config_pattern_matches(pattern, path),
     }
 }
 
@@ -1310,21 +1323,17 @@ impl PolicyBundle {
     /// Is `path` one of `[paths] critical`? `folds`: with case folded
     /// (log format 32 on), since `Build.rs` is `build.rs` on macOS.
     pub fn is_critical(&self, path: &str, folds: bool) -> bool {
-        self.config
-            .paths
-            .critical
-            .iter()
-            .any(|p| config_pattern_reads(p, path, folds))
+        let path = read_as(path, folds);
+        let mut critical = self.config.paths.critical.iter();
+        critical.any(|p| pattern_reads(p, &path, folds))
     }
 
     /// Is `path` one of `[paths] untrusted`? Case is folded: what a read
     /// brought in is recorded once, by the hook, and never recomputed.
     pub fn is_untrusted(&self, path: &str) -> bool {
-        self.config
-            .paths
-            .untrusted
-            .iter()
-            .any(|p| config_pattern_reads(p, path, true))
+        let path = read_as(path, true);
+        let mut untrusted = self.config.paths.untrusted.iter();
+        untrusted.any(|p| pattern_reads(p, &path, true))
     }
 
     /// Where this repository stands below the hardened profile, for a

@@ -407,8 +407,22 @@ fn nested(key: &str, member: &str) -> Option<JsonObject> {
 }
 
 fn json(text: &str) -> Option<Vec<Section>> {
+    json_sections(&json_read(text)?)
+}
+
+/// A JSON text as its members, read once.
+fn json_read(text: &str) -> Option<JsonObject> {
     serde_json::from_str::<serde_json::Value>(text).ok()?;
-    let object = json_object(text)?;
+    json_object(text)
+}
+
+/// The object [`sections`] takes: one with more than one section.
+fn json_sectioned(text: &str) -> Option<JsonObject> {
+    let object = json_read(text)?;
+    (json_sections(&object)?.len() > 1).then_some(object)
+}
+
+fn json_sections(object: &JsonObject) -> Option<Vec<Section>> {
     let mut out = vec![Section {
         name: PREAMBLE.into(),
         text: format!("{}{}", object.open, object.close),
@@ -581,8 +595,7 @@ fn join(object: &JsonObject, members: Vec<Named>) -> String {
 }
 
 /// Members of two objects, one level into the keys that hold many.
-fn merge_json(base: &str, ours: &str, theirs: &str) -> Option<Result<String, Vec<String>>> {
-    let (b, o, t) = (json_object(base)?, json_object(ours)?, json_object(theirs)?);
+fn merge_json(b: JsonObject, o: JsonObject, t: JsonObject) -> Option<Result<String, Vec<String>>> {
     let firsts = [&b, &o, &t].map(|side| first_of(&side.members));
     let inner = |side: usize, key: &str| nested(key, firsts[side].get(key)?);
     // A member both sides changed may still merge by its own members.
@@ -619,14 +632,16 @@ fn merge_json(base: &str, ours: &str, theirs: &str) -> Option<Result<String, Vec
 /// Merges one file by its sections. `None` when any side has none, for the
 /// caller's whole-file merge. `Err` carries the conflicting section names.
 pub fn merge(format: Format, b: &str, o: &str, t: &str) -> Option<Result<String, Vec<String>>> {
+    if format == Format::Json {
+        // Each side is read once, for the question and for the merge.
+        let sides = (json_sectioned(b)?, json_sectioned(o)?, json_sectioned(t)?);
+        return merge_json(sides.0, sides.1, sides.2);
+    }
     let (sb, so, st) = (
         sections(format, b)?,
         sections(format, o)?,
         sections(format, t)?,
     );
-    if format == Format::Json {
-        return merge_json(b, o, t);
-    }
     let append = format == Format::Markdown;
     let merged = merge_named(&named(sb), &named(so), &named(st), append);
     Some(merged.map(concat))

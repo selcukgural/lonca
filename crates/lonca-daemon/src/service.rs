@@ -4278,15 +4278,15 @@ impl Service {
         let mut served: BTreeMap<SessionKey, Option<&lineage::Bound>> = BTreeMap::new();
         for (name, r) in inner.repos.iter().filter(|(_, r)| r.initialized()) {
             let s = &r.chain.state;
-            for x in s.sessions.values() {
-                let key = (name.clone(), x.id.clone());
+            // Asked first: the sessions that are over are most of them,
+            // and nothing else is asked of one.
+            for x in s.sessions.values().filter(|x| s.session_active(&x.id, now)) {
                 let above = std::iter::successors(Some(x), |x| s.sessions.get(x.parent.as_ref()?));
                 let bound = above
                     .take(64)
                     .find_map(|x| inner.bound.get(&(name.clone(), x.id.clone())));
-                let here = x.level >= ObservationLevel::HooksSandbox || bound.is_some();
-                if here && s.session_active(&x.id, now) {
-                    served.insert(key, bound);
+                if x.level >= ObservationLevel::HooksSandbox || bound.is_some() {
+                    served.insert((name.clone(), x.id.clone()), bound);
                 }
             }
         }

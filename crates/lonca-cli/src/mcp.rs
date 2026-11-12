@@ -338,11 +338,8 @@ pub fn lease_needed(c: &mut Client, ws: &Workspace) -> Result<Value> {
             json!({"changes": 0, "leases": [], "acquire": [], "advice": null, "no_lease": []}),
         );
     }
-    let r = ctx::call(
-        c,
-        "facts.preview",
-        json!({"base": ws.meta.base, "files": changes}),
-    )?;
+    let params = ctx::WithFiles::new(&ws.meta.base, &changes);
+    let r = ctx::call_with(c, "facts.preview", &params)?;
     Ok(json!({
         "changes": changes.len(), "leases": r["leases"], "acquire": r["acquire"],
         "advice": r["advice"], "no_lease": r["no_lease"],
@@ -509,11 +506,8 @@ impl Server {
                 if changes.is_empty() {
                     return Ok(json!({"changes": 0}));
                 }
-                ctx::call(
-                    c,
-                    "facts.preview",
-                    json!({"base": self.ws.meta.base, "files": changes}),
-                )
+                let params = ctx::WithFiles::new(&self.ws.meta.base, &changes);
+                ctx::call_with(c, "facts.preview", &params)
             }
             "propose" => {
                 self.ws.check_settled()?;
@@ -538,11 +532,11 @@ impl Server {
                     },
                     revert_of: None,
                 };
-                let mut r = ctx::call(
-                    c,
-                    "change.propose",
-                    json!({"base": self.ws.meta.base, "files": changes, "claim": claim}),
-                )?;
+                let params = ctx::WithFiles {
+                    claim: Some(&claim),
+                    ..ctx::WithFiles::new(&self.ws.meta.base, &changes)
+                };
+                let mut r = ctx::call_with(c, "change.propose", &params)?;
                 r["claim_mismatch"] = claim_mismatch(args, &r);
                 if r["decision"]["outcome"] != "deny" {
                     self.ws.meta.submitted = Some((

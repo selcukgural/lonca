@@ -166,6 +166,53 @@ pub fn call(c: &mut Client, method: &str, params: Value) -> Result<Value> {
     })
 }
 
+/// [`call`] with parameters written from where they are.
+pub fn call_with<P: serde::Serialize + ?Sized>(
+    c: &mut Client,
+    method: &str,
+    params: &P,
+) -> Result<Value> {
+    c.call_with(method, params).map_err(|e| {
+        anyhow!(MethodError {
+            method: method.to_string(),
+            code: e.0.code,
+            message: e.0.message,
+        })
+    })
+}
+
+/// The parameters of a request that carries a change's files, borrowed: a
+/// `json!` of them copies every file's contents once more. The keys are in
+/// the order the requests wrote them with `json!` (which keeps the order
+/// it is given in this build) and one that is not given is left out, so
+/// the line is the same; a test holds it.
+#[derive(serde::Serialize)]
+pub struct WithFiles<'a> {
+    pub base: &'a lonca_core::GitId,
+    pub files: &'a [lonca_daemon::protocol::FileChange],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim: Option<&'a lonca_core::ops::Claim>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<&'a str>,
+}
+
+impl<'a> WithFiles<'a> {
+    pub fn new(
+        base: &'a lonca_core::GitId,
+        files: &'a [lonca_daemon::protocol::FileChange],
+    ) -> Self {
+        Self {
+            author: None,
+            base,
+            claim: None,
+            files,
+            intent: None,
+        }
+    }
+}
+
 /// The whole id of the change `id` names: the id itself, or a prefix the
 /// daemon finds exactly one change for (`pending` and `log` show 12 letters).
 pub fn resolve_change(c: &mut Client, id: &str) -> Result<String> {
@@ -899,6 +946,77 @@ pub fn absolute(p: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The borrowed parameters are the bytes `json!` gave, whichever of
+    /// the keys a request has.
+    #[test]
+    fn borrowed_parameters_are_written_as_json_wrote_them() {
+        use lonca_core::ops::Claim;
+        use lonca_daemon::protocol::FileChange;
+        use serde_json::json;
+        let base = lonca_core::GitId("1".repeat(40));
+        let files = vec![
+            FileChange {
+                path: "src/a.rs".into(),
+                content_b64: Some("eA==".into()),
+                mode: None,
+            },
+            FileChange {
+                path: "src/gone.rs".into(),
+                content_b64: None,
+                mode: None,
+            },
+        ];
+        let claim = Claim {
+            intent: "why".into(),
+            edits: vec!["src/a.rs#f".into()],
+            ..Default::default()
+        };
+        let (human, intent) = ("ayse", "why");
+        let text = |v: &dyn erased::Text| v.text();
+        let same = [
+            (
+                text(&WithFiles::new(&base, &files)),
+                text(&json!({"base": base, "files": files})),
+            ),
+            (
+                text(&WithFiles {
+                    author: Some(human),
+                    ..WithFiles::new(&base, &files)
+                }),
+                text(&json!({"base": base, "files": files, "author": human})),
+            ),
+            (
+                text(&WithFiles {
+                    claim: Some(&claim),
+                    ..WithFiles::new(&base, &files)
+                }),
+                text(&json!({"base": base, "files": files, "claim": claim})),
+            ),
+            (
+                text(&WithFiles {
+                    author: Some(human),
+                    intent: Some(intent),
+                    ..WithFiles::new(&base, &files)
+                }),
+                text(&json!({"base": base, "files": files, "author": human, "intent": intent})),
+            ),
+        ];
+        for (borrowed, copied) in same {
+            assert_eq!(borrowed, copied);
+        }
+    }
+
+    mod erased {
+        pub trait Text {
+            fn text(&self) -> String;
+        }
+        impl<T: serde::Serialize> Text for T {
+            fn text(&self) -> String {
+                serde_json::to_string(self).unwrap()
+            }
+        }
+    }
 
     fn start(continues: Option<lonca_core::ops::Continuation>) -> Op {
         Op::SessionStart {

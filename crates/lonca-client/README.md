@@ -42,6 +42,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+`Client::call_with(method, &params)` is `call` for parameters you hold as
+your own type, or do not want copied into a `Value` (a change's files):
+anything that serialises, by reference, written as the same line.
+
 A runner wakes an idle agent when something happens to its session,
 with the human session it started the agents with and one open request
 (`events.watch`). It gets the kind of news, never another agent's words,

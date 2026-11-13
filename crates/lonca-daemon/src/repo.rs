@@ -90,7 +90,7 @@ impl RepoHandle {
     pub fn open(name: &str, path: &Path, keys: &[&KeyPair]) -> Result<Self> {
         let store = Store::open(path)?;
         let log = OpLog::new(&store);
-        let (ids, ops): (Vec<GitId>, Vec<SignedOp>) = log.walk_from(0)?.into_iter().unzip();
+        let (ids, ops): (Vec<GitId>, Vec<SignedOp>) = log.walk_all()?.into_iter().unzip();
         let state = if ops.is_empty() {
             State::new()
         } else {

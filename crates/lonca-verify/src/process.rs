@@ -128,7 +128,7 @@ pub fn remove_tree(dir: &Path) -> io::Result<()> {
         let Ok(meta) = std::fs::symlink_metadata(&path) else {
             continue;
         };
-        unflag(&path);
+        unflag(&path, &meta);
         if meta.is_dir() {
             // The path is a directory, not a link, so this changes only it.
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
@@ -140,9 +140,15 @@ pub fn remove_tree(dir: &Path) -> io::Result<()> {
 }
 
 /// macOS: clears the flags an owner may set, `uchg` and `uappnd` among them;
-/// a link's own, not what it points at.
+/// a link's own, not what it points at. `meta` is what was just read of
+/// `path`: with no flag on it there is nothing to clear, which is nearly
+/// every file of a tree, and the call is one write of the file's entry.
 #[cfg(target_os = "macos")]
-fn unflag(path: &Path) {
+fn unflag(path: &Path, meta: &std::fs::Metadata) {
+    use std::os::macos::fs::MetadataExt;
+    if meta.st_flags() == 0 {
+        return;
+    }
     let Ok(name) = CString::new(path.as_os_str().as_bytes()) else {
         return;
     };
@@ -152,7 +158,7 @@ fn unflag(path: &Path) {
 
 /// Linux: a flag that keeps a file takes a privilege to set.
 #[cfg(not(target_os = "macos"))]
-fn unflag(_: &Path) {}
+fn unflag(_: &Path, _: &std::fs::Metadata) {}
 
 /// Starts `command` as a session of its own, under the limits of `cfg`. A
 /// session, not only a group: the leader of a group can move to another one

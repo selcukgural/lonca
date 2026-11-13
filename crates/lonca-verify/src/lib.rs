@@ -679,17 +679,24 @@ fn attestation(
 /// their target so a tree can never point the verifier outside `dir`.
 pub fn materialize(store: &Store, files: &FileMap, dir: &Path) -> Result<()> {
     fs::create_dir_all(dir)?;
+    // The files come in the order of their paths, a directory's one after
+    // the other: it is made for the first of them and is there for the rest.
+    let mut made: Option<PathBuf> = None;
+    let reader = store.reader();
     for (path, entry) in files {
         lonca_core::paths::validate_repo_path(path)?;
         if entry.mode == FileMode::Submodule {
             continue;
         }
         let target = dir.join(path);
-        let blob = store.read_blob(&entry.blob)?;
+        let blob = reader.read_blob(&entry.blob)?;
         // Which file it was is the whole message: the system's has no name.
-        let write = || -> std::io::Result<()> {
-            if let Some(parent) = target.parent() {
+        let mut write = || -> std::io::Result<()> {
+            if let Some(parent) = target.parent()
+                && made.as_deref() != Some(parent)
+            {
                 fs::create_dir_all(parent)?;
+                made = Some(parent.to_path_buf());
             }
             fs::write(&target, &blob)?;
             #[cfg(unix)]

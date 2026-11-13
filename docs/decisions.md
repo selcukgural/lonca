@@ -3126,6 +3126,17 @@ died. None of it needs a log format: evidence is recorded, not recomputed.
   gives every directory back its owner's `rwx` and, on macOS, clears the
   flags an owner may set (`uchg`): a directory left behind would keep its
   disk space from every later run.
+  The flags are cleared where one is set (#328): clearing them on every
+  file was a write of each file's entry, 160 ms of a 5,000 file tree's
+  removal, for flags nearly no file has. Writing the tree out makes a
+  directory for the first of its files, not again for each, and reads
+  the blobs with one handle of the store. A run of `true` on 5,000 files:
+  1,070 ms, now 717; on 20,000: 4,184 ms, now 3,237
+  (`crates/lonca-verify/tests/perf.rs`). Measured and left: writing the
+  files on several threads (three times as fast, but the files' times
+  would no longer be in the order of their paths, which a build can
+  see, and two names a file system reads as one would race), and
+  removing them on several (80 ms of 260).
 - **The account keeps 256 processes**: `RLIMIT_NPROC` is set to the policy's
   figure, but never above the most the account may have, less 256. That
   figure is the limit in force, and on macOS `kern.maxprocperuid` as well,

@@ -5352,6 +5352,23 @@ same answers and errors.
   `git cat-file --batch` the contents, asked one at a time. A test sends
   a commit with a deletion, a file that is no text and a name with a
   space, and finds the commit's tree on trunk.
+- **A whole log is read and checked on several threads** (#328, daemon
+  start). A daemon's start and an audit read every entry and check every
+  hash and signature, one after the other. The commits of a log are a
+  chain and are still followed one by one; the entries in them
+  (`OpLog::walk_all`) and the hash and signature of each
+  (`verify_chain`) are worked side by side, on up to eight threads for a
+  log of 512 entries or more (`lonca_core::threads`), and the answers
+  are read in the log's order. So the error is the one a single thread
+  meets first: tests hold both to the walk from the head and to one
+  thread, for every kind of damage, alone and two at once. A thread that
+  can not be started is no error, its part is worked where it was asked.
+  A request still reads on its own thread (`walk_from`): one request
+  must not take eight cores. Repositories are still opened one after the
+  other; the threads are inside each. A log of 20,000 entries: read
+  1,728 ms, now 1,011; a daemon's start on it 2,522 ms, now 1,106. What
+  is left is the commits, three files of the store each
+  (see "Loose objects" in #328).
 
 ## Who names Lonca's MCP server
 

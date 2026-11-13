@@ -22,6 +22,7 @@ pub mod paths;
 #[cfg(feature = "store")]
 pub mod store;
 pub mod terminal;
+mod threads;
 
 pub use changeid::ChangeId;
 pub use error::{Error, Result};

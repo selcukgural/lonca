@@ -23,6 +23,7 @@ use crate::ops::{
 };
 #[cfg(feature = "store")]
 use crate::store::{CommitInfo, CommitSpec, Reader, Store};
+use crate::threads;
 
 pub const OPLOG_REF: &str = "refs/lonca/oplog";
 pub const GENESIS_PREV: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -428,19 +429,80 @@ impl<'a> OpLog<'a> {
     /// tree and its parent.
     fn entry_at(reader: &Reader, commit: &GitId) -> Result<(SignedOp, CommitInfo)> {
         let info = reader.read_commit(commit)?;
-        let files = reader.read_tree(&info.tree)?;
+        Ok((Self::entry_in(reader, commit, &info.tree)?, info))
+    }
+
+    /// The entry in `tree`, the tree of the log's `commit`.
+    fn entry_in(reader: &Reader, commit: &GitId, tree: &GitId) -> Result<SignedOp> {
+        let files = reader.read_tree(tree)?;
         let Some(file) = files.get(OP_FILE) else {
             let commit = commit.short();
             return Err(Error::Integrity(format!(
                 "oplog commit {commit} has no {OP_FILE}"
             )));
         };
-        Ok((decode(&reader.read_blob(&file.blob)?)?, info))
+        decode(&reader.read_blob(&file.blob)?)
     }
 
     /// All entries, oldest first.
     pub fn read_all(&self) -> Result<Vec<SignedOp>> {
-        self.read_from(0)
+        let found = self.walk_all()?;
+        Ok(found.into_iter().map(|(_, op)| op).collect())
+    }
+
+    /// The whole log, each entry with the commit it is in: what
+    /// `walk_from(0)` gives, entry or error, with the entries of a long log
+    /// read on several threads. For a daemon's start and an audit; a
+    /// request reads with [`OpLog::walk_from`], on its own thread.
+    pub fn walk_all(&self) -> Result<Vec<(GitId, SignedOp)>> {
+        self.walk_all_on(None)
+    }
+
+    /// [`OpLog::walk_all`] on `threads` threads, or as many as the log is
+    /// worth. The commits are a chain, so they are followed first, to the
+    /// first one that does not read or is a merge; the entries in them are
+    /// then read side by side. The error is the one the walk from the head
+    /// meets first: an entry that does not read comes before whatever
+    /// stopped the commits further down.
+    fn walk_all_on(&self, threads: Option<usize>) -> Result<Vec<(GitId, SignedOp)>> {
+        let mut commits: Vec<(GitId, GitId)> = Vec::new();
+        let mut stopped = None;
+        let mut cur = self.head()?;
+        let reader = self.store.reader();
+        while let Some(c) = cur.take() {
+            let info = match reader.read_commit(&c) {
+                Ok(info) => info,
+                Err(e) => {
+                    stopped = Some(e);
+                    break;
+                }
+            };
+            if info.parents.len() > 1 {
+                // Its own entry is read first, as on the walk.
+                stopped = Some(Error::Integrity(format!(
+                    "oplog commit {} is a merge",
+                    c.short()
+                )));
+            } else {
+                cur = info.parents.into_iter().next();
+            }
+            commits.push((c, info.tree));
+        }
+        let threads = threads.unwrap_or_else(|| threads::worth(commits.len()));
+        let entries = threads::in_order(&commits, threads, |part| {
+            let reader = self.store.reader();
+            let read = |(commit, tree): &(GitId, GitId)| Self::entry_in(&reader, commit, tree);
+            part.iter().map(read).collect()
+        });
+        let mut out = Vec::with_capacity(commits.len());
+        for ((commit, _), entry) in commits.into_iter().zip(entries) {
+            out.push((commit, entry?));
+        }
+        if let Some(e) = stopped {
+            return Err(e);
+        }
+        out.reverse();
+        Ok(out)
     }
 
     /// The entries from sequence `seq` on, oldest first. The log is walked
@@ -510,17 +572,28 @@ pub fn decode(bytes: &[u8]) -> Result<SignedOp> {
 /// (`lonca_policy::chain::replay_checked`) and the auditor decide every
 /// switch again.
 pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
+    verify_chain_on(ops, threads::worth(ops.len()))
+}
+
+/// [`verify_chain`] with the hashes and signatures checked on `threads`
+/// threads. What it answers does not depend on the number: every entry is
+/// asked the same question as on one thread, and the answers are read in
+/// the log's order, so the first entry that fails anything is the one
+/// reported, with what it failed first.
+fn verify_chain_on(ops: &[SignedOp], threads: usize) -> Result<String> {
     let Some(first) = ops.first() else {
         return Err(Error::Integrity("empty operation log".into()));
     };
-    let mut daemon_key = match &first.entry.op {
-        Op::RepoInit { daemon_key, .. } => daemon_key.clone(),
+    let daemon_key = match &first.entry.op {
+        Op::RepoInit { daemon_key, .. } => daemon_key,
         _ => return Err(Error::Integrity("first operation is not repo.init".into())),
     };
+    let mut signed = signed_by(ops, daemon_key, threads).into_iter();
     let mut prev = GENESIS_PREV.to_string();
     let mut last_time = i64::MIN;
     let mut last_format = FORMAT_LEGACY;
     for (i, op) in ops.iter().enumerate() {
+        let signed = signed.next().unwrap_or(Ok(()));
         check_format(op.entry.seq, op.entry.format)?;
         if op.entry.format < last_format {
             return Err(Error::Integrity(format!(
@@ -558,15 +631,31 @@ pub fn verify_chain(ops: &[SignedOp]) -> Result<String> {
         if op.entry.time_ms < last_time {
             return Err(Error::Integrity(format!("op {i}: time goes backwards")));
         }
-        op.verify(op.entry.signer(&daemon_key))?;
-        if let Some(new) = op.entry.switches_daemon_key() {
-            daemon_key = new.to_string();
-        }
+        signed?;
         prev = op.hash.clone();
         last_time = op.entry.time_ms;
         last_format = op.entry.format;
     }
     Ok(prev)
+}
+
+/// What [`SignedOp::verify`] says of every entry, in the log's order, with
+/// the daemon key that must have signed it: `first_key` followed through
+/// every allowed switch before the entry. For the entries up to the first
+/// one that fails a check of the chain this is the key `verify_chain`
+/// holds there, and it reads no answer past that entry.
+fn signed_by(ops: &[SignedOp], first_key: &str, threads: usize) -> Vec<Result<()>> {
+    let mut key = first_key;
+    let mut signed = Vec::with_capacity(ops.len());
+    for op in ops {
+        signed.push((op, op.entry.signer(key)));
+        if let Some(new) = op.entry.switches_daemon_key() {
+            key = new;
+        }
+    }
+    threads::in_order(&signed, threads, |part| {
+        part.iter().map(|(op, key)| op.verify(key)).collect()
+    })
 }
 
 #[cfg(test)]
@@ -575,6 +664,7 @@ mod tests {
     use super::*;
     use crate::ChangeId;
     use crate::ops::{Continuation, Decision, HumanKey, LeaseKind, Scope};
+    use std::collections::BTreeSet;
 
     fn genesis(key: &KeyPair, store: &Store) -> OpEntry {
         let tree = store.empty_tree().unwrap();
@@ -1400,6 +1490,245 @@ mod tests {
         let denied = switch(&g, recover, Decision::deny("x"), &old);
         assert_eq!(denied.entry.signer(&old.public_hex()), old.public_hex());
         assert!(verify_chain(&[g, denied]).is_ok());
+    }
+
+    /// A log's commit made by hand: `tree` as its tree, on `parents`.
+    fn commit_of(store: &Store, tree: GitId, parents: &[&GitId]) -> GitId {
+        let spec = CommitSpec {
+            tree,
+            parents: parents.iter().map(|p| (*p).clone()).collect(),
+            author_name: "lonca".into(),
+            author_email: "daemon@lonca.invalid".into(),
+            time_ms: 1000,
+            message: "by hand".into(),
+            headers: vec![],
+        };
+        store.write_commit(&spec).unwrap()
+    }
+
+    fn tree_with(store: &Store, name: &str, bytes: &[u8]) -> GitId {
+        let mut files = FileMap::new();
+        let blob = store.write_blob(bytes).unwrap();
+        let mode = FileMode::Regular;
+        files.insert(name.into(), FileEntry { mode, blob });
+        store.write_tree(&files).unwrap()
+    }
+
+    /// The whole log is read on several threads at a daemon's start and by
+    /// an audit. It must be what the walk from the head gives: the same
+    /// entries with the same commits, or the error that walk meets first.
+    #[test]
+    fn the_whole_log_reads_as_the_walk_from_its_head_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let key = KeyPair::generate();
+        let log = OpLog::new(&store);
+        assert_eq!(log.walk_all().unwrap(), vec![]);
+
+        let mut ops = vec![SignedOp::sign(genesis(&key, &store), &key)];
+        let mut heads = vec![log.append(&ops[0], None).unwrap()];
+        for i in 1..30 {
+            ops.push(SignedOp::sign(next(&ops[i - 1], 1000 + i as i64), &key));
+            heads.push(log.append(&ops[i], heads.last()).unwrap());
+        }
+        let said = |r: Result<Vec<(GitId, SignedOp)>>| match r {
+            Ok(found) => Ok(found),
+            Err(e) => Err(e.to_string()),
+        };
+        let same = |what: &str| {
+            let walk = said(log.walk_from(0));
+            for threads in [1, 2, 3, 7, 64] {
+                let all = said(log.walk_all_on(Some(threads)));
+                assert_eq!(all, walk, "{what}, {threads} threads");
+            }
+            assert_eq!(said(log.walk_all()), walk, "{what}");
+            walk
+        };
+        let whole = same("whole").unwrap();
+        let want: Vec<_> = heads.iter().cloned().zip(ops.iter().cloned()).collect();
+        assert_eq!(whole, want);
+        assert_eq!(log.read_all().unwrap(), ops);
+
+        // Damage, built on top of the log from its entry `at`: every kind
+        // the walk can meet, alone and two at once, nearer the head or
+        // further from it.
+        let good = |parent: &GitId, n: usize| {
+            let mut head = parent.clone();
+            for _ in 0..n {
+                let tree = store.read_commit(&heads[3]).unwrap().tree;
+                head = commit_of(&store, tree, &[&head]);
+            }
+            head
+        };
+        let no_file = |parent: &GitId| {
+            let tree = tree_with(&store, "other.json", b"{}");
+            commit_of(&store, tree, &[parent])
+        };
+        let no_json = |parent: &GitId| {
+            let tree = tree_with(&store, OP_FILE, b"not json");
+            commit_of(&store, tree, &[parent])
+        };
+        let newer = |parent: &GitId| {
+            let entry = br#"{"entry":{"format":4000000,"seq":7}}"#;
+            commit_of(&store, tree_with(&store, OP_FILE, entry), &[parent])
+        };
+        let merge = |parent: &GitId| {
+            let tree = store.read_commit(&heads[3]).unwrap().tree;
+            commit_of(&store, tree, &[parent, &heads[0]])
+        };
+        // A merge whose own entry does not read: the entry is said first.
+        let merge_no_file = |parent: &GitId| {
+            let tree = tree_with(&store, "other.json", b"{}");
+            commit_of(&store, tree, &[parent, &heads[0]])
+        };
+        type Damage<'a> = &'a dyn Fn(&GitId) -> GitId;
+        let kinds: [(&str, Damage); 5] = [
+            ("no file", &no_file),
+            ("no json", &no_json),
+            ("newer", &newer),
+            ("merge", &merge),
+            ("merge, no file", &merge_no_file),
+        ];
+        let head = heads.last().unwrap().clone();
+        let set = |to: &GitId| {
+            let now = log.head().unwrap();
+            store.ref_cas(OPLOG_REF, to, now.as_ref()).unwrap();
+        };
+        let mut errors = BTreeSet::new();
+        for (name, first) in kinds {
+            for gap in [0, 1, 5] {
+                let one = good(&first(&good(&heads[20], gap)), gap);
+                set(&one);
+                errors.insert(same(&format!("{name}, {gap} above")).unwrap_err());
+                for (other, second) in kinds {
+                    let two = good(&second(&good(&one, gap)), gap);
+                    set(&two);
+                    let e = same(&format!("{other} over {name}, {gap} apart"));
+                    errors.insert(e.unwrap_err());
+                }
+            }
+        }
+        // Each kind was the one reported somewhere.
+        let reported = |part: &str| errors.iter().any(|e| e.contains(part));
+        assert!(reported("has no op.json"), "{errors:?}");
+        assert!(reported("is a merge"), "{errors:?}");
+        assert!(reported("json: "), "{errors:?}");
+        assert!(reported("format 4000000"), "{errors:?}");
+
+        // A commit that is not there: the entries above it are read first.
+        set(&head);
+        let lost = store.path().join("objects");
+        let id = heads[10].0.clone();
+        let file = lost.join(&id[..2]).join(&id[2..]);
+        std::fs::remove_file(&file).unwrap();
+        let store = Store::open(store.path()).unwrap();
+        let log = OpLog::new(&store);
+        let walk = log.walk_from(0).map_err(|e| e.to_string());
+        assert!(walk.is_err());
+        for threads in [1, 2, 7] {
+            let all = log.walk_all_on(Some(threads)).map_err(|e| e.to_string());
+            assert_eq!(all, walk, "{threads} threads");
+        }
+    }
+
+    /// The signatures of a long log are checked on several threads. What
+    /// `verify_chain` says must not depend on how many: the same head, or
+    /// the same first entry with the same words, wherever the damage is and
+    /// however many entries are damaged.
+    #[test]
+    fn the_answer_does_not_depend_on_the_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init_bare(&dir.path().join("r.git")).unwrap();
+        let (k0, k1, k2) = (
+            KeyPair::generate(),
+            KeyPair::generate(),
+            KeyPair::generate(),
+        );
+        let mut log = vec![SignedOp::sign(genesis(&k0, &store), &k0)];
+        let mut key = &k0;
+        for i in 1..40 {
+            let prev = log.last().unwrap();
+            let op = match i {
+                10 => {
+                    let rotate = Op::DaemonRotate {
+                        key: k1.public_hex(),
+                    };
+                    let op = switch(prev, rotate, Decision::allow(), key);
+                    key = &k1;
+                    op
+                }
+                20 => {
+                    let recover = Op::DaemonRecover {
+                        key: k2.public_hex(),
+                        recover: None,
+                    };
+                    key = &k2;
+                    switch(prev, recover, Decision::allow(), key)
+                }
+                _ => SignedOp::sign(next(prev, prev.entry.time_ms + 1), key),
+            };
+            log.push(op);
+        }
+        let said = |ops: &[SignedOp], threads| match verify_chain_on(ops, threads) {
+            Ok(head) => format!("ok {head}"),
+            Err(e) => e.to_string(),
+        };
+        let same = |ops: &[SignedOp], what: &str| -> String {
+            let one = said(ops, 1);
+            for threads in [0, 2, 3, 7, 40, 64] {
+                assert_eq!(said(ops, threads), one, "{what}, {threads} threads");
+            }
+            one
+        };
+        assert_eq!(same(&log, "whole"), format!("ok {}", log[39].hash));
+
+        let other = KeyPair::generate();
+        let forged = |ops: &mut [SignedOp], i: usize| {
+            ops[i] = SignedOp::sign(ops[i].entry.clone(), &other);
+        };
+        let edited = |ops: &mut [SignedOp], i: usize| {
+            ops[i].entry.decision = Decision::deny("rewritten");
+        };
+        let unchained = |ops: &mut [SignedOp], i: usize| {
+            ops[i].entry.prev = "f".repeat(64);
+        };
+        for i in 0..log.len() {
+            let mut ops = log.clone();
+            forged(&mut ops, i);
+            let e = same(&ops, &format!("forged {i}"));
+            assert!(e.contains(&format!("op {i}: bad daemon signature")), "{e}");
+
+            let mut ops = log.clone();
+            edited(&mut ops, i);
+            let e = same(&ops, &format!("edited {i}"));
+            assert!(e.contains(&format!("op {i}: hash does not match")), "{e}");
+
+            // Two entries damaged: the first is the one named, whatever
+            // each of them fails and whichever thread reads it.
+            for j in [0, 9, 10, 11, 19, 20, 21, 39] {
+                if i == j {
+                    continue;
+                }
+                let first = i.min(j);
+                let mut ops = log.clone();
+                forged(&mut ops, i);
+                unchained(&mut ops, j);
+                let e = same(&ops, &format!("forged {i}, unchained {j}"));
+                assert!(e.starts_with(&format!("integrity: op {first}: ")), "{e}");
+                let mut ops = log.clone();
+                edited(&mut ops, i);
+                forged(&mut ops, j);
+                let e = same(&ops, &format!("edited {i}, forged {j}"));
+                assert!(e.starts_with(&format!("integrity: op {first}: ")), "{e}");
+            }
+        }
+        // Past a key switch that was taken out, the key in force is the
+        // one before it, on every thread.
+        let mut ops = log.clone();
+        ops[10].entry.decision = Decision::deny("x");
+        ops[10] = SignedOp::sign(ops[10].entry.clone(), &k0);
+        let e = same(&ops, "rotation denied");
+        assert!(e.contains("op 11: "), "{e}");
     }
 
     fn with_format(e: OpEntry, format: u32) -> OpEntry {

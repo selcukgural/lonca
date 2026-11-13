@@ -24,6 +24,8 @@ pub struct Prepared {
     socket: String,
     workspace: String,
     mcp: Value,
+    /// An administrator's file names the MCP servers on this machine.
+    managed: bool,
 }
 
 /// The rules for this workspace, with the neutral tool names.
@@ -36,7 +38,7 @@ pub fn neutral_rules(ws: Option<&Workspace>) -> String {
 /// Reads the harness's setup from the policy and fills it in for `ws`.
 pub fn prepare(client: &mut Client, ws: &Workspace, harness: &str) -> Result<Prepared> {
     let r = ctx::call(client, "harness.setup", json!({"harness": harness}))?;
-    filled_in(ws, harness, r["setup"].clone())
+    filled_in(ws, harness, &r)
 }
 
 /// The setup of the harness the human named when the session started, from
@@ -45,11 +47,12 @@ pub fn of_session(ws: &Workspace, isolate: &Value) -> Result<Option<Prepared>> {
     let Some(harness) = isolate["harness"].as_str() else {
         return Ok(None);
     };
-    filled_in(ws, harness, isolate["setup"].clone()).map(Some)
+    filled_in(ws, harness, isolate).map(Some)
 }
 
-fn filled_in(ws: &Workspace, harness: &str, setup: Value) -> Result<Prepared> {
-    let setup: Option<Setup> = serde_json::from_value(setup)?;
+fn filled_in(ws: &Workspace, harness: &str, answer: &Value) -> Result<Prepared> {
+    let setup: Option<Setup> = serde_json::from_value(answer["setup"].clone())?;
+    let managed = answer["managed"].as_bool().unwrap_or(false);
     let rules = neutral_rules(Some(ws));
     let socket = ctx::socket().to_string_lossy().into_owned();
     let workspace = ws.root.to_string_lossy().into_owned();
@@ -73,6 +76,7 @@ fn filled_in(ws: &Workspace, harness: &str, setup: Value) -> Result<Prepared> {
         rules,
         socket,
         workspace,
+        managed,
     })
 }
 
@@ -141,6 +145,7 @@ impl Prepared {
             socket: "/s".into(),
             workspace: workspace.into(),
             mcp: Value::Null,
+            managed: false,
         }
     }
 
@@ -166,6 +171,7 @@ impl Prepared {
         json!({
             "harness": self.harness,
             "known": self.setup.is_some(),
+            "managed": self.managed,
             "written": written,
             "files": self.filled.files,
             "flags": self.filled.flags,
@@ -193,7 +199,13 @@ impl Prepared {
         for (key, value) in &self.filled.env {
             outln!("{key}={}", shell_quote(value));
         }
-        if print || written.is_empty() {
+        if self.managed && self.filled.flags.is_empty() && self.filled.files.is_empty() {
+            outln!(
+                "{}: the MCP server and the hooks are the administrator's on this machine \
+                 (managed settings); nothing to write and no flags to pass",
+                self.harness
+            );
+        } else if print || written.is_empty() {
             let flags: Vec<String> = self.filled.flags.iter().map(|f| shell_quote(f)).collect();
             outln!("{}", flags.join(" "));
         }
@@ -291,6 +303,7 @@ mod tests {
             socket: String::new(),
             workspace: String::new(),
             mcp: Value::Null,
+            managed: false,
         }
     }
 
@@ -303,7 +316,7 @@ mod tests {
             "env": {"TRUST": "{workspace}", "LONCA_SOCKET": "{socket}", "BOTH": "env"},
             "run_env": {"T": "{tmp}/x", "H": "{home}", "BOTH": "run_env", "W": "{workspace}"},
         });
-        let p = filled_in(&w, "acme", setup).unwrap();
+        let p = filled_in(&w, "acme", &json!({"setup": setup})).unwrap();
         let env = p.run_env("/h", "/t").unwrap();
         let want = [
             ("BOTH", "env"),
@@ -323,13 +336,13 @@ mod tests {
         let env = p.run_env("/{tmp}", "/t").unwrap();
         assert!(env.contains(&("H".into(), "/{tmp}".into())), "{env:?}");
 
-        let unknown = filled_in(&w, "acme", Value::Null).unwrap();
+        let unknown = filled_in(&w, "acme", &json!({"setup": null})).unwrap();
         assert!(unknown.run_env("/h", "/t").unwrap().is_empty());
         for bad in [
             json!({"env": {"DYLD_INSERT_LIBRARIES": "x"}}),
             json!({"run_env": {"PATH": "x"}}),
         ] {
-            let p = filled_in(&w, "acme", bad).unwrap();
+            let p = filled_in(&w, "acme", &json!({"setup": bad})).unwrap();
             let e = p.run_env("/h", "/t").unwrap_err().to_string();
             assert!(e.contains("not a name the sandbox may be given"), "{e}");
         }

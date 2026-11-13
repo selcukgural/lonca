@@ -8,6 +8,7 @@
 //! change it.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
@@ -204,6 +205,27 @@ pub struct Locked {
     /// A harness with none of its own stops at `hooks`.
     #[serde(default)]
     pub sandbox: Vec<Check>,
+    /// The administrator's list of MCP servers, where the harness has one
+    /// that shuts out every other. With it the hooks count only if that
+    /// list is Lonca's server alone: a server a workspace file names is the
+    /// agent's to rewrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<LockedMcp>,
+}
+
+/// The file that names every MCP server a locked harness loads. It lies
+/// beside `file` and is read in the same format.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedMcp {
+    /// Its name in the directory of `file`.
+    pub file: String,
+    /// Where the servers are, as a JSON pointer to a table by name. It must
+    /// hold one server, `lonca`, whose `command` is a `lonca` out of a
+    /// user's reach.
+    pub servers: String,
+    /// The `args` that server must have.
+    pub args: Vec<String>,
 }
 
 /// One value in the file: `equals` says what it is, `is` what kind.
@@ -257,6 +279,17 @@ impl Locked {
         self.file.get(std::env::consts::OS).map(String::as_str)
     }
 
+    /// The MCP list that goes with the settings at `settings`.
+    pub fn mcp_file(&self, settings: &Path) -> Option<PathBuf> {
+        let mcp = self.mcp.as_ref()?;
+        Some(settings.parent()?.join(&mcp.file))
+    }
+
+    /// [`Locked::mcp_file`] on this operating system.
+    pub fn mcp_file_here(&self) -> Option<PathBuf> {
+        self.mcp_file(Path::new(self.file_here()?))
+    }
+
     /// The file's content as JSON, whatever it is written in.
     pub fn parse(&self, bytes: &[u8]) -> Option<Value> {
         match self.format {
@@ -286,6 +319,15 @@ impl Locked {
         }
         if checks.clone().any(|c| c.equals.is_some() == c.is.is_some()) {
             return Err("locked: a check has either equals or is".into());
+        }
+        if let Some(mcp) = &self.mcp {
+            let name = Path::new(&mcp.file);
+            if name.file_name().and_then(|n| n.to_str()) != Some(mcp.file.as_str()) {
+                return Err("locked.mcp.file is a file's name, beside locked.file".into());
+            }
+            if !mcp.servers.starts_with('/') {
+                return Err("locked: a place in the file is a JSON pointer, from /".into());
+            }
         }
         // `is = "empty"` holds for a key nobody wrote, so it can only narrow
         // what something else showed.
@@ -320,6 +362,21 @@ pub struct Setup {
     /// What a person has to know or do that Lonca can not.
     #[serde(default)]
     pub note: String,
+    /// What takes the place of `files` and `flags` on a machine whose
+    /// administrator names the MCP servers (`locked.mcp`): there the server
+    /// is not the workspace's to give, and a harness may refuse to start
+    /// with one given besides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<Managed>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Managed {
+    #[serde(default)]
+    pub files: Vec<SetupFile>,
+    #[serde(default)]
+    pub flags: Vec<Flag>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -362,6 +419,17 @@ pub struct Filled {
 }
 
 impl Setup {
+    /// The setup for a machine whose administrator names the MCP servers.
+    /// One that says nothing for it stays as it is.
+    pub fn managed(&self) -> Setup {
+        let mut s = self.clone();
+        if let Some(m) = s.managed.take() {
+            s.files = m.files;
+            s.flags = m.flags;
+        }
+        s
+    }
+
     /// Fills the holes. Text goes through each format's own writer, so
     /// nothing in a path or in the rules can change a file's structure.
     pub fn fill(&self, rules: &str, socket: &str, workspace: &str) -> Result<Filled, String> {
@@ -779,6 +847,76 @@ mod tests {
             });
             p.check().unwrap();
         }
+    }
+
+    /// Claude Code's list of MCP servers lies beside its settings, wherever
+    /// those are, and a profile can not name a file elsewhere.
+    #[test]
+    fn the_mcp_list_lies_beside_the_settings() {
+        let l = locked();
+        assert_eq!(
+            l.mcp_file(Path::new("/etc/claude-code/managed-settings.json")),
+            Some(PathBuf::from("/etc/claude-code/managed-mcp.json"))
+        );
+        assert_eq!(l.mcp_file(Path::new("/")), None);
+        let here = l.mcp_file_here().unwrap();
+        assert_eq!(here.parent(), Path::new(l.file_here().unwrap()).parent());
+        let none = Locked {
+            mcp: None,
+            ..l.clone()
+        };
+        assert_eq!(none.mcp_file(Path::new("/etc/x.json")), None);
+        none.check().unwrap();
+
+        let mut p = built_in()["claude-code"].clone();
+        let with = |file: &str, servers: &str| {
+            let mcp = LockedMcp {
+                file: file.into(),
+                servers: servers.into(),
+                args: vec!["mcp".into()],
+            };
+            Some(Locked {
+                mcp: Some(mcp),
+                ..locked()
+            })
+        };
+        for file in ["", "..", "../x.json", "/etc/x.json", "a/b.json", "x.json/"] {
+            p.locked = with(file, "/mcpServers");
+            assert!(p.check().unwrap_err().contains("mcp.file"), "{file}");
+        }
+        p.locked = with("x.json", "mcpServers");
+        assert!(p.check().unwrap_err().contains("pointer"));
+        p.locked = with("x.json", "/mcpServers");
+        p.check().unwrap();
+    }
+
+    /// Where an administrator names the MCP servers, Claude Code is given
+    /// no server and no file: it exits when started with one besides. What
+    /// it is started with in a run stays.
+    #[test]
+    fn a_managed_machine_gets_the_setup_without_a_server() {
+        let setup = &built_in()["claude-code"].setup;
+        let managed = setup.managed();
+        assert!(managed.files.is_empty() && managed.flags.is_empty());
+        assert_eq!(managed.managed, None);
+        assert_eq!(managed.run_env, setup.run_env);
+        assert_eq!(managed.env, setup.env);
+        let filled = managed.fill("RULES", "/s", "/w").unwrap();
+        assert!(filled.files.is_empty() && filled.flags.is_empty());
+        // A harness that says nothing for it keeps its setup.
+        for name in ["codex", "gemini", "opencode"] {
+            let setup = &built_in()[name].setup;
+            assert_eq!(&setup.managed(), setup, "{name}");
+        }
+        // What stands instead is filled like the rest.
+        let own: Setup = toml::from_str(
+            "flags = [\"a\"]\n[managed]\nflags = [\"--socket\", \"{socket}\"]\n\
+             [[managed.files]]\npath = \"x.txt\"\nformat = \"text\"\ncontent = \"{workspace}\"",
+        )
+        .unwrap();
+        let filled = own.managed().fill("", "/s", "/w").unwrap();
+        assert_eq!(filled.flags, ["--socket", "/s"]);
+        assert_eq!(filled.files["x.txt"], "/w\n");
     }
 
     #[test]

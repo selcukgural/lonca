@@ -40,6 +40,7 @@ DAEMON_CONFIG_DIR=/etc/lonca
 DAEMON_CONFIG=$DAEMON_CONFIG_DIR/daemon.toml
 UNIT=/etc/systemd/system/lonca.service
 MANAGED=/etc/claude-code/managed-settings.json
+MANAGED_MCP=/etc/claude-code/managed-mcp.json
 PROXY_PORT=8471
 
 src_bin=""
@@ -104,6 +105,7 @@ managed_settings() {
 {
   "allowManagedHooksOnly": true,
   "env": { "LONCA_SOCKET": "$SOCKET" },
+  "permissions": { "allow": ["mcp__lonca__*"] },
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "$BIN_DIR/lonca hook", "onFailure": "block" }] }],
     "PreToolUse":  [{ "matcher": "*", "hooks": [{ "type": "command", "command": "$BIN_DIR/lonca hook", "onFailure": "block" }] }],
@@ -121,10 +123,23 @@ managed_settings() {
 EOF
 }
 
+# The only MCP servers Claude Code loads while this file stands: a server a
+# workspace's .mcp.json names would be the agent's to point at any program.
+managed_mcp() {
+    cat <<EOF
+{
+  "mcpServers": {
+    "lonca": { "command": "$BIN_DIR/lonca", "args": ["mcp"], "env": { "LONCA_SOCKET": "$SOCKET" } }
+  }
+}
+EOF
+}
+
 if [ -n "$render" ]; then
     mkdir -p "$render"
     unit "${dev_uid:-1000}" > "$render/lonca.service"
     managed_settings > "$render/managed-settings.json"
+    managed_mcp > "$render/managed-mcp.json"
     daemon_toml "${daemon_uid:-0}" > "$render/daemon.toml"
     echo "rendered $render/lonca.service and $render/managed-settings.json"
     exit 0
@@ -232,6 +247,13 @@ else
     managed_settings > "$MANAGED"
     chmod 0644 "$MANAGED"
 fi
+if [ -e "$MANAGED_MCP" ] && ! grep -q "\"$BIN_DIR/lonca\"" "$MANAGED_MCP"; then
+    managed_mcp > "$MANAGED_MCP.lonca"
+    echo "NOTE: $MANAGED_MCP already exists; a session is 'hooks' only when it names Lonca's server alone, as $MANAGED_MCP.lonca does."
+else
+    managed_mcp > "$MANAGED_MCP"
+    chmod 0644 "$MANAGED_MCP"
+fi
 systemctl daemon-reload
 systemctl enable lonca.service
 systemctl restart lonca.service
@@ -256,6 +278,7 @@ $version $done_word, running as lonca.
   backups: $BACKUP_DIR (lonca backup; readable by group lonca)
   imports: $IMPORT_DIR (leave Git bundles here)
   hooks:   $MANAGED
+  mcp:     $MANAGED_MCP (Claude Code loads no other MCP server)
 
 Log out and in again (or run 'newgrp lonca') so your account joins group lonca.
 

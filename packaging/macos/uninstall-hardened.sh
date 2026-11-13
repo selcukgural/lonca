@@ -26,6 +26,11 @@ if [ -e "$MANAGED" ] && grep -q "/Library/Lonca/bin/lonca hook" "$MANAGED"; then
     rm -f "$MANAGED"
 fi
 rm -f "$MANAGED.lonca"
+MANAGED_MCP="/Library/Application Support/ClaudeCode/managed-mcp.json"
+if [ -e "$MANAGED_MCP" ] && grep -q '"/Library/Lonca/bin/lonca"' "$MANAGED_MCP"; then
+    rm -f "$MANAGED_MCP"
+fi
+rm -f "$MANAGED_MCP.lonca"
 rm -rf /Library/Lonca/bin /Library/Lonca/run
 # Left behind, it would hold every later client to a daemon that is gone.
 rm -f /Library/Lonca/daemon.toml

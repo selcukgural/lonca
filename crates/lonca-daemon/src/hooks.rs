@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use lonca_core::canonical::sha256_hex;
 use lonca_core::ops::{ObsKind, Observation, Phase};
 use lonca_policy::config::{PolicyBundle, Taint};
-use lonca_policy::harness::{Check, Locked, Profile, ToolKind};
+use lonca_policy::harness::{Check, Locked, LockedMcp, Profile, ToolKind};
 use serde_json::Value;
 
 use crate::protocol::{HookEvent, HookVerdict};
@@ -574,6 +574,60 @@ fn programs_protected(lists: &[Vec<&Value>], protected: impl Fn(&Path) -> bool) 
     !lists.is_empty() && lists.iter().all(|l| !l.is_empty() && l.iter().all(program))
 }
 
+/// What keeps the administrator's MCP list from being Lonca's server alone;
+/// nothing when it is. `settings` is the file the list lies beside.
+fn mcp_unmet(locked: &Locked, mcp: &LockedMcp, settings: &Path, require_root: bool) -> Vec<String> {
+    let Some(path) = locked.mcp_file(settings) else {
+        return vec!["mcp: the managed settings have no directory".into()];
+    };
+    let at = path.display();
+    // In this order, as for the settings: nothing unchecked is read.
+    if fs::metadata(&path).is_err() {
+        return vec![format!(
+            "mcp: no managed MCP servers at {at}: a workspace's file could name any program as Lonca's"
+        )];
+    }
+    if require_root && !protected_path(&path) {
+        return vec![format!("mcp: {at} is writable by non-root users")];
+    }
+    let doc = read_capped(&path).and_then(|bytes| locked.parse(&bytes));
+    let servers = doc.as_ref().and_then(|d| d.pointer(&mcp.servers));
+    let Some(servers) = servers.and_then(Value::as_object) else {
+        return vec![format!("mcp: {at} has no servers at {}", mcp.servers)];
+    };
+    let mut notes = Vec::new();
+    if servers.len() != 1 {
+        notes.push(format!("mcp: {at} must name one server, lonca"));
+    }
+    let Some(server) = servers.get("lonca") else {
+        notes.push(format!("mcp: {at} has no server lonca"));
+        return notes;
+    };
+    let program = server.get("command").and_then(Value::as_str).map(Path::new);
+    let ours = program.is_some_and(|p| {
+        p.is_absolute()
+            && p.file_name().is_some_and(|n| n == "lonca")
+            && (!require_root || protected_path(p))
+    });
+    if !ours {
+        notes.push(
+            "mcp: the server's command must be `<path>/lonca`, in root-owned, non-writable \
+             directories"
+                .into(),
+        );
+    }
+    let args = server.get("args").and_then(Value::as_array);
+    let same = args.is_some_and(|a| {
+        a.iter()
+            .map(Value::as_str)
+            .eq(mcp.args.iter().map(|s| Some(s.as_str())))
+    });
+    if !same {
+        notes.push(format!("mcp: the server's args must be {:?}", mcp.args));
+    }
+    notes
+}
+
 /// Inspects a harness's administrator settings, read as its profile says.
 /// `require_root` is false only in tests; `proxy_port` is where the daemon's
 /// proxy listens, if one runs.
@@ -637,6 +691,14 @@ pub fn inspect(
     ins.managed_hooks =
         !lists.is_empty() && lists.iter().all(|l| !l.is_empty()) && only_ones.is_empty();
     ins.notes.extend(only_ones);
+    if let Some(mcp) = &locked.mcp {
+        // Part of what makes the hooks hold: tools of a server named `lonca`
+        // are taken as Lonca's own, so who names that server decides what
+        // the hooks see as outside.
+        let unmet = mcp_unmet(locked, mcp, path, require_root);
+        ins.managed_hooks &= unmet.is_empty();
+        ins.notes.extend(unmet);
+    }
     ins.hook_binary_protected = programs_protected(&lists, |p| !require_root || protected_path(p));
     if !ins.hook_binary_protected {
         ins.notes.push(
@@ -1458,7 +1520,15 @@ run = { kind = "shell", fields = ["line"] }
         assert!(!translate(&e, &off).0[0].external);
     }
 
+    /// Claude Code's table without its MCP list, which has tests of its own.
     fn claude_code() -> Locked {
+        Locked {
+            mcp: None,
+            ..with_mcp()
+        }
+    }
+
+    fn with_mcp() -> Locked {
         lonca_policy::harness::built_in()["claude-code"]
             .locked
             .clone()
@@ -1468,6 +1538,91 @@ run = { kind = "shell", fields = ["line"] }
     /// With the proxy where the files of these tests say it is.
     fn inspect(locked: &Locked, path: &Path, require_root: bool) -> Inspection {
         super::inspect(locked, path, require_root, Some(8471))
+    }
+
+    /// A server a workspace's file names is the agent's to rewrite, and its
+    /// tools would count as Lonca's own. So on a harness whose administrator
+    /// can name every server, the hooks hold only where that list is Lonca's
+    /// server alone, by a path and with nothing else beside it.
+    #[test]
+    fn the_hooks_hold_only_with_the_administrators_mcp_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("managed-settings.json");
+        let settings = json!({
+            "allowManagedHooksOnly": true,
+            "hooks": {
+                "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/libexec/lonca hook", "onFailure": "block"}]}],
+                "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/local/libexec/lonca hook", "onFailure": "block"}]}]
+            },
+        });
+        fs::write(&p, serde_json::to_vec(&settings).unwrap()).unwrap();
+        let l = with_mcp();
+        let list = dir.path().join("managed-mcp.json");
+        assert_eq!(l.mcp_file(&p).as_deref(), Some(list.as_path()));
+        let i = inspect(&l, &p, false);
+        assert!(!i.managed_hooks && i.hook_binary_protected, "{i:?}");
+        assert!(
+            i.notes.iter().any(|n| n.contains("no managed MCP")),
+            "{i:?}"
+        );
+        assert!(inspect(&claude_code(), &p, false).managed_hooks);
+
+        let lonca = json!({"command": "/usr/local/libexec/lonca", "args": ["mcp"], "env": {"LONCA_SOCKET": "/s"}});
+        let write = |servers: Value| {
+            fs::write(
+                &list,
+                serde_json::to_vec(&json!({"mcpServers": servers})).unwrap(),
+            )
+            .unwrap();
+        };
+        write(json!({"lonca": lonca}));
+        let i = inspect(&l, &p, false);
+        assert!(i.managed_hooks, "{i:?}");
+        assert!(i.notes.iter().all(|n| !n.starts_with("mcp")), "{i:?}");
+        // Root's settings with a list anybody can write prove nothing.
+        assert!(!inspect(&l, &p, true).managed_hooks);
+
+        let with = |field: &str, value: Value| {
+            let mut s = lonca.clone();
+            s[field] = value;
+            s
+        };
+        for (servers, why) in [
+            (json!({}), "no server"),
+            (json!({"lonca": lonca, "other": lonca}), "two servers"),
+            (json!({"Lonca": lonca}), "another name"),
+            (
+                json!({"lonca": with("command", json!("lonca"))}),
+                "found by name",
+            ),
+            (
+                json!({"lonca": with("command", json!("/usr/bin/env"))}),
+                "another program",
+            ),
+            (json!({"lonca": with("command", Value::Null)}), "no command"),
+            (
+                json!({"lonca": with("args", json!(["mcp", "--x"]))}),
+                "more arguments",
+            ),
+            (json!({"lonca": with("args", json!([]))}), "no arguments"),
+            (
+                json!({"lonca": with("args", json!("mcp"))}),
+                "arguments as text",
+            ),
+            (json!([lonca]), "a list"),
+        ] {
+            write(servers);
+            let i = inspect(&l, &p, false);
+            assert!(!i.managed_hooks, "{why}");
+            assert!(
+                i.notes.iter().any(|n| n.starts_with("mcp:")),
+                "{why}: {i:?}"
+            );
+        }
+        fs::write(&list, "{").unwrap();
+        assert!(!inspect(&l, &p, false).managed_hooks, "not JSON");
+        fs::write(&list, vec![b' '; MAX_SETTINGS as usize + 1]).unwrap();
+        assert!(!inspect(&l, &p, false).managed_hooks, "too long");
     }
 
     #[test]

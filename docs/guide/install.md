@@ -111,7 +111,7 @@ without sudo, and `--unprotected-source` installs a build of your own from
 your checkout all the same.
 
 `--render DIR` writes the generated files (launchd or systemd unit, managed
-Claude Code settings) to `DIR` without installing anything. Log out and in
+Claude Code settings and MCP servers) to `DIR` without installing anything. Log out and in
 again afterwards, so your account joins group `lonca`.
 
 | | macOS | Linux |
@@ -161,7 +161,8 @@ and the backups stay. Then `lonca doctor`.
 **Uninstall.** The installer leaves the uninstaller beside the binaries'
 directory, root's like them: `sudo /Library/Lonca/uninstall-hardened.sh`
 (Linux: `sudo /opt/lonca/uninstall-hardened.sh`). It removes the
-daemon, the binaries, `daemon.toml` and the managed settings it wrote; the
+daemon, the binaries, `daemon.toml` and the managed settings and MCP
+servers it wrote; the
 stores, backups and imports stay for a later install. `--purge` removes
 them and the daemon's user as well: `lonca backup` first and copy the
 bundle off the machine.

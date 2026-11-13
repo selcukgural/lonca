@@ -38,6 +38,10 @@ const MANAGED: &str = r#"{"allowManagedHooksOnly": true,
   "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "/usr/bin/lonca hook", "onFailure": "block"}]}]},
  "sandbox": {"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "network": {"httpProxyPort": 8471}}}"#;
 
+/// The list of MCP servers beside them, without which the hooks do not hold.
+const MANAGED_MCP: &str =
+    r#"{"mcpServers": {"lonca": {"command": "/usr/bin/lonca", "args": ["mcp"]}}}"#;
+
 pub struct Template {
     _dir: tempfile::TempDir,
     pub root: PathBuf,
@@ -197,6 +201,7 @@ fn build() -> Template {
     let root = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
     std::fs::create_dir_all(root.join("ws")).unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(root.join("managed-settings.json"), MANAGED).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(root.join("managed-mcp.json"), MANAGED_MCP).unwrap_or_else(|e| panic!("{e}"));
     let clock = Arc::new(AtomicI64::new(T0));
     let mut b = Builder {
         svc: open(&root, &clock),

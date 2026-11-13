@@ -36,6 +36,13 @@ fn the_unit_starts_without_a_sandbox_only_when_told() {
     assert!(unit(&["--allow-unsandboxed"]).contains(" --allow-unsandboxed\n"));
 }
 
+/// The program of the first hook in the rendered settings.
+fn hook_program(settings: &std::path::Path) -> String {
+    let s: serde_json::Value = serde_json::from_slice(&std::fs::read(settings).unwrap()).unwrap();
+    let command = s["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str();
+    command.unwrap().split(' ').next().unwrap().to_string()
+}
+
 #[test]
 fn installer_settings_pass_inspection() {
     for script in [
@@ -50,7 +57,26 @@ fn installer_settings_pass_inspection() {
         assert!(ins.managed_hooks, "{script}: {:?}", ins.notes);
         assert!(ins.locked_sandbox, "{script}: {:?}", ins.notes);
         assert!(ins.hook_binary_protected, "{script}: {:?}", ins.notes);
+        // The list of MCP servers is part of it: without the file beside
+        // the settings the same settings do not hold.
+        let list = dir.join("managed-mcp.json");
+        let servers: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&list).unwrap()).unwrap();
+        let server = &servers["mcpServers"]["lonca"];
+        assert_eq!(
+            server["command"],
+            hook_program(&file),
+            "{script}: one program for both"
+        );
+        assert!(server["env"]["LONCA_SOCKET"].is_string(), "{script}");
+        std::fs::remove_file(&list).unwrap();
+        let ins = lonca_daemon::hooks::inspect(locked, &file, false, Some(8471));
+        assert!(!ins.managed_hooks, "{script}: {:?}", ins.notes);
         let text = std::fs::read_to_string(dir.join("managed-settings.json")).unwrap();
+        assert!(
+            text.contains(r#""permissions": { "allow": ["mcp__lonca__*"] }"#),
+            "{script}: Lonca's tools are allowed where no workspace file can be"
+        );
         assert!(
             text.contains("\"httpProxyPort\": 8471"),
             "proxy port matches the daemon default"

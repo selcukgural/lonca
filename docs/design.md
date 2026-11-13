@@ -108,6 +108,7 @@ Amaç, aynı kullanıcı hesabı içinde atlatmayı imkânsız kılmak değil (b
 2. **Hook ayarları agent'ın değiştiremeyeceği yerde durur.**
    - Claude Code'da bunun için managed settings dosyası kullanılır: macOS'ta `/Library/Application Support/ClaudeCode/managed-settings.json`, Linux'ta `/etc/claude-code/managed-settings.json`. Bu dosyadaki anahtarları kullanıcı ve proje ayarları geçersiz kılamaz.
    - Aynı dosyaya `allowManagedHooksOnly: true` yazılır; böylece yalnızca bu dosyadaki hook'lar çalışır.
+   - Yanına `managed-mcp.json` yazılır: Claude Code yalnızca bu dosyadaki MCP sunucularını yükler. İçinde tek sunucu vardır: root'a ait `lonca` programı, tam yoluyla. Çalışma alanındaki `.mcp.json` agent'ın değiştirebileceği bir dosyadır; `lonca` adlı sunucunun araçları dışarıdan sayılmadığı için o adı kimin verdiği önemlidir. Bedeli: bu makinede Claude Code başka MCP sunucusu yüklemez.
    - Belgeler dosyanın root'a ait olmasını zorunlu tutmaz; bunu kurulumumuz sağlar (`root`, 0644). Bu kilit ancak agent sudo kullanamıyorsa anlamlıdır; ayrıntılar §3.3'te.
 3. **PostToolUse değil, PreToolUse.**
    - Engelleyen hook tüm araçları kapsar (matcher `*`): Bash, Read, Edit, Write, WebFetch, WebSearch ve MCP araçları.

@@ -14,6 +14,12 @@ stop_deny = { decision = "block", reason = "{reason}" }
 [claude-code.setup]
 flags = ["--mcp-config", { file = ".mcp.json" }, "--settings", { file = ".claude/settings.local.json" }]
 
+# With a managed-mcp.json Claude Code loads that file's servers only and exits
+# when it is started with --mcp-config; the hooks, the approval of Lonca's
+# tools and LONCA_SOCKET are in the managed settings beside it.
+[claude-code.setup.managed]
+flags = []
+
 # Claude Code makes /tmp/claude-<uid> whatever TMPDIR says, and exits when the
 # sandbox keeps it out of /tmp. Its settings go to $HOME/.claude, the run's own.
 [claude-code.setup.run_env]
@@ -56,6 +62,11 @@ sandbox = [
   { at = "/sandbox/network/httpProxyPort", is = "proxy_port" },
   { at = "/sandbox/excludedCommands", is = "empty" },
 ]
+
+[claude-code.locked.mcp]
+file = "managed-mcp.json"
+servers = "/mcpServers"
+args = ["mcp"]
 
 [claude-code.tools]
 Read = { kind = "read", fields = ["file_path"] }

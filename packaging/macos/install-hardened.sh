@@ -34,6 +34,9 @@
 #   - installs Claude Code managed settings: Lonca hooks for every tool,
 #     managed hooks only, hook failures block, sandbox locked to the Lonca
 #     network proxy
+#   - installs Claude Code's managed MCP servers: Lonca's alone, by its path
+#     here, so no file of a workspace names a server. None of your other MCP
+#     servers load in Claude Code while that file stands
 #
 # It never edits sudoers. Read the printed advice about sudo's credential cache.
 set -eu
@@ -53,6 +56,7 @@ DAEMON_CONFIG=$PREFIX/daemon.toml
 PLIST=/Library/LaunchDaemons/dev.lonca.daemon.plist
 MANAGED_DIR="/Library/Application Support/ClaudeCode"
 MANAGED="$MANAGED_DIR/managed-settings.json"
+MANAGED_MCP="$MANAGED_DIR/managed-mcp.json"
 PROXY_PORT=8471
 LABEL=dev.lonca.daemon
 
@@ -123,6 +127,7 @@ managed_settings() {
 {
   "allowManagedHooksOnly": true,
   "env": { "LONCA_SOCKET": "$SOCKET" },
+  "permissions": { "allow": ["mcp__lonca__*"] },
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "$BIN_DIR/lonca hook", "onFailure": "block" }] }],
     "PreToolUse":  [{ "matcher": "*", "hooks": [{ "type": "command", "command": "$BIN_DIR/lonca hook", "onFailure": "block" }] }],
@@ -140,10 +145,23 @@ managed_settings() {
 EOF
 }
 
+# The only MCP servers Claude Code loads while this file stands: a server a
+# workspace's .mcp.json names would be the agent's to point at any program.
+managed_mcp() {
+    cat <<EOF
+{
+  "mcpServers": {
+    "lonca": { "command": "$BIN_DIR/lonca", "args": ["mcp"], "env": { "LONCA_SOCKET": "$SOCKET" } }
+  }
+}
+EOF
+}
+
 if [ -n "$render" ]; then
     mkdir -p "$render"
     plist "${dev_uid:-501}" > "$render/$LABEL.plist"
     managed_settings > "$render/managed-settings.json"
+    managed_mcp > "$render/managed-mcp.json"
     daemon_toml "${daemon_uid:-0}" > "$render/daemon.toml"
     echo "rendered $render/$LABEL.plist and $render/managed-settings.json"
     exit 0
@@ -283,6 +301,14 @@ else
     managed_settings > "$MANAGED"
     chown root:wheel "$MANAGED"; chmod 0644 "$MANAGED"
 fi
+if [ -e "$MANAGED_MCP" ] && ! grep -q "\"$BIN_DIR/lonca\"" "$MANAGED_MCP"; then
+    managed_mcp > "$MANAGED_MCP.lonca"
+    chown root:wheel "$MANAGED_MCP.lonca"; chmod 0644 "$MANAGED_MCP.lonca"
+    echo "NOTE: $MANAGED_MCP already exists; a session is 'hooks' only when it names Lonca's server alone, as $MANAGED_MCP.lonca does."
+else
+    managed_mcp > "$MANAGED_MCP"
+    chown root:wheel "$MANAGED_MCP"; chmod 0644 "$MANAGED_MCP"
+fi
 
 launchctl bootout system "$PLIST" 2>/dev/null || true
 # The old daemon's socket outlives it: gone, the wait below sees the new one.
@@ -309,6 +335,7 @@ $version $done_word, running as _lonca.
   backups: $BACKUP_DIR (lonca backup; readable by group lonca)
   imports: $IMPORT_DIR (leave Git bundles here)
   hooks:   $MANAGED
+  mcp:     $MANAGED_MCP (Claude Code loads no other MCP server)
 
 Log out and in again (or run 'newgrp lonca') so your account joins group lonca.
 

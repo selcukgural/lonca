@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Hardened mode: Claude Code's MCP servers are the administrator's
+
+**Run the hardened installer again after this upgrade.** Until then
+sessions on a hardened install are `unobserved` and `lonca doctor` says
+`mcp: no managed MCP servers at …`.
+
+The hardened installers now write `managed-mcp.json` beside Claude Code's
+managed settings: the one MCP server Claude Code loads there, `lonca mcp`
+by the path of the root-owned program. Until now the server was named in
+the workspace's `.mcp.json` as `lonca`, found on `PATH`, in a file the
+agent could write. A session is `hooks` or `hooks_sandbox` only where that
+list stands, is root's, and names Lonca's server alone.
+
+What changes for you on a hardened install:
+
+- **No other MCP server loads in Claude Code on that machine**, neither
+  yours nor a project's. That is how Claude Code treats the file, and what
+  stops an agent from adding a server.
+- `lonca session start --harness claude-code` and `lonca harness setup
+  claude-code` write no `.mcp.json` and no `.claude/settings.local.json`,
+  and print no flags: Claude Code exits when it is started with
+  `--mcp-config` there. The approval of Lonca's tools (`mcp__lonca__*`) is
+  in the managed settings.
+- If you keep a `managed-mcp.json` of your own, the installer leaves it
+  and writes `managed-mcp.json.lonca` beside it.
+
+A cooperative install is as it was. For a profile of your own:
+`[harnesses.<name>.locked.mcp]` and `[harnesses.<name>.setup.managed]`
+([Running agents](guide/runners.md)). Not yet tried with a real Claude
+Code on a hardened install.
+
 ### Four small fixes in the command line
 
 - A workspace file with a second hard link was refused, but a link made

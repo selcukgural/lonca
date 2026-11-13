@@ -728,11 +728,11 @@ fails with `git` while the entry stands.
 *human.* `{"session": string, "base": commit}`. What a sandbox for the
 session is built from: `{"scratch": [string], "proxy": "host:port" | null,
 "home": string, "base_known": boolean, "harness": string | null, "setup":
-object | null}`. The scratch roots are the log's, never a workspace file's;
+object | null, "managed": boolean}`. The scratch roots are the log's, never a workspace file's;
 `proxy` is `null` when the daemon runs none; `home` is the daemon's directory,
 which the sandbox closes; `base_known` says whether `base` was ever trunk;
 `harness` is the name the session started with, and `setup` that harness's
-setup in the policy, as `harness.setup` gives it. Errors: `not_found`.
+setup with `managed`, as `harness.setup` gives them. Errors: `not_found`.
 
 ### `human.submit`
 
@@ -1088,10 +1088,13 @@ Not counted against `[sessions] ops_per_minute`.
 
 ### `harness.setup`
 
-*agent.* `{"harness": string}`. Gives `{"setup": object | null}`: the
-`setup` part of the harness's profile from the policy, holes unfilled, or
-`null` for a harness with no profile, which still gets the rules and the MCP
-server. Not logged.
+*agent.* `{"harness": string}`. Gives `{"setup": object | null, "managed":
+boolean}`: the `setup` part of the harness's profile from the policy, holes
+unfilled, or `null` for a harness with no profile, which still gets the
+rules and the MCP server. `managed` says that an administrator's file names
+the harness's MCP servers on the daemon's machine (`locked.mcp` in the
+profile); `setup` then has the profile's `setup.managed` as its `files` and
+`flags`, and no `managed` of its own. Not logged.
 
 ### `security.events`
 
@@ -1312,7 +1315,7 @@ running as the developer: it opens reads and prepares only; every write
 still needs a signature.
 
 - `harness setup <name> [--print] --json`, in a workspace: `{"harness",
-  "known": boolean, "written": [path], "files": {path: text}, "flags":
+  "known": boolean, "managed": boolean, "written": [path], "files": {path: text}, "flags":
   [string], "env": {name: value}, "note": string, "rules": string, "mcp":
   {"command", "args", "cwd", "env"}}`. `--print` writes nothing. A file the
   repository has, a local file or a symlink at a target is refused, and

@@ -33,6 +33,11 @@ if [ -e "$MANAGED" ] && grep -q "$BIN_DIR/lonca hook" "$MANAGED"; then
     rm -f "$MANAGED"
 fi
 rm -f "$MANAGED.lonca"
+MANAGED_MCP=/etc/claude-code/managed-mcp.json
+if [ -e "$MANAGED_MCP" ] && grep -q "\"$BIN_DIR/lonca\"" "$MANAGED_MCP"; then
+    rm -f "$MANAGED_MCP"
+fi
+rm -f "$MANAGED_MCP.lonca"
 rmdir /etc/claude-code 2>/dev/null || true
 rm -rf /opt/lonca
 # Left behind, it would hold every later client to a daemon that is gone.

@@ -46,6 +46,7 @@ Secure Enclave key or a security key and no live session it asks you to run
 | `daemon` | it does not answer | Restart the daemon; its output says why it stopped. |
 | `daemon` | `protocol N, this CLI speaks M` (fail), or another version (warn) | Use the same release for the CLI and the daemon. After an upgrade, restart the daemon. |
 | `hooks` | not locked by managed settings | Cooperative: a warning, sessions count as unobserved. Hardened: a failure, run the installer again. |
+| `hooks` | `mcp: no managed MCP servers at …`, or another `mcp:` line | The settings hold but the list of MCP servers beside them (`managed-mcp.json`) is missing or names more than Lonca's server. An install from before this check has none: run the hardened installer again. One of your own: it must name the one server `lonca`, as the `managed-mcp.json.lonca` the installer left beside it does. |
 | `sandbox` | none found | Install `bubblewrap` (Linux). Without it verification runs unsandboxed; a hardened daemon refuses to start. |
 | `sudo` | runs without a password (hardened only) | An agent running as you could use it: set `Defaults timestamp_timeout=0`, or work from a non-admin account. Sessions count as unobserved until then. |
 | `git` | not on `PATH` | Install git. |

@@ -299,7 +299,7 @@ tools, and the hooks.
 
 | Harness | What setup does |
 |---|---|
-| `claude-code` | Writes `.mcp.json` and `.claude/settings.local.json`. `--print` gives `--mcp-config` and `--settings`. |
+| `claude-code` | Writes `.mcp.json` and `.claude/settings.local.json`. `--print` gives `--mcp-config` and `--settings`. On a hardened install neither: the server and the hooks are in root's files there. |
 | `codex` | Writes nothing: start it with the flags. Codex skips `.codex/` in a directory no person has trusted. |
 | `gemini` | Writes `.gemini/settings.json`; start it with the printed `env`. |
 | `opencode` | Writes `opencode.json`, its rules and a plugin that calls `lonca hook`. Its `execute` tool runs code and taints, so changes need a person. Tested with OpenCode 2.2. |
@@ -355,6 +355,13 @@ The MCP server, in `.mcp.json` of the workspace or via
 ```json
 {"mcpServers": {"lonca": {"command": "lonca", "args": ["mcp"]}}}
 ```
+
+On a hardened install the server is not the workspace's to name: it is in
+`managed-mcp.json` beside the managed settings, with the root-owned
+program's path, and Claude Code loads no other server and exits when it is
+given `--mcp-config`. `lonca harness setup claude-code` then writes nothing
+and prints no flags (`"managed": true` with `--json`), so a runner starts
+`claude` with what the setup gives and nothing of its own for MCP.
 
 Environment both need: `LONCA_SOCKET` (else `$LONCA_HOME/lonca.sock`,
 else `~/.lonca/lonca.sock`). Nothing else: the hook and the MCP server
@@ -473,6 +480,16 @@ sandbox = [
   { at = "/sandbox/proxy_port", is = "proxy_port" },   # where the daemon's proxy listens
   { at = "/sandbox/excluded", is = "empty" },    # missing or an empty list
 ]
+
+# For a harness whose administrator can name every MCP server it loads: the file,
+# beside `file` and in its format, and where its servers are. The hooks count only
+# when it holds one server, `lonca`, with a `command` of `<path>/lonca` (root-owned,
+# like a hook's program) and these `args`. Leave it out for a harness with no such
+# file: its hooks are judged without it.
+[harnesses.acme.locked.mcp]
+file = "managed-servers.toml"
+servers = "/servers"
+args = ["mcp"]
 ```
 
 The answer of `hook.bind` has notes for what did not hold; `lonca doctor` shows the same
@@ -528,6 +545,12 @@ ACME_CACHE = "{tmp}/acme"
 path = ".acme/config.json"
 format = "json"
 content = { server = { command = "lonca", args = ["mcp"], cwd = "{workspace}" } }
+
+# What takes the place of `files` and `flags` on a machine where the file of
+# `locked.mcp` stands: the server is the administrator's there. Leave it out and
+# the setup is the same everywhere.
+[harnesses.acme.setup.managed]
+flags = ["--no-project-servers"]
 ```
 
 `kind` is `read`, `write`, `shell`, `fetch`, `search` or `inert`. `fields`

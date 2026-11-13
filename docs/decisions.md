@@ -5353,6 +5353,60 @@ same answers and errors.
   a commit with a deletion, a file that is no text and a name with a
   space, and finds the commit's tree on trunk.
 
+## Who names Lonca's MCP server
+
+Tools of a server called `lonca` are Lonca's own to the hooks: they do not
+taint. The server was named in the workspace (`.mcp.json`, `command =
+"lonca"`), approved in the workspace (`.claude/settings.local.json`) and
+found on `PATH`, all of it the agent's to write, in hardened mode too,
+where everything else a level rests on is root's.
+
+- **The administrator's list, where a harness has one.** Claude Code reads
+  `managed-mcp.json` beside its managed settings and then loads those
+  servers only: none of a project's `.mcp.json`, of the user's settings or
+  of a plugin, and it exits when started with `--mcp-config`. The hardened
+  installers write it with one server, `<bin>/lonca mcp`, and its `env`
+  (`LONCA_SOCKET`). An allow-list in the managed settings
+  (`allowedMcpServers` with the command) was the other way; it compares a
+  command and its arguments and leaves a server's `env` to the workspace's
+  file, so it was not enough.
+- **Part of the hooks, not a level of its own.** `locked.mcp` in a profile
+  names the file (beside `locked.file`, same format), where its servers
+  are and the arguments. `inspect` holds the hooks (`managed_hooks`) only
+  if the file is there, root's, and has one server, `lonca`, with a
+  `command` of `<path>/lonca` out of a user's reach and those arguments.
+  No new field in `BindChecks` and no log format: what the daemon saw is
+  recorded as before, and "the hooks are the administrator's" now means
+  the server they vouch for is too. Its `env` is not checked: the file is
+  root's, and what an administrator adds there is theirs.
+- **An install from before has no such file** and its sessions are
+  `unobserved` until the installer runs again. Said in the release notes
+  and by `lonca doctor`; a silent `hooks` there is what this closes.
+- **The setup follows the machine.** `setup.managed` in a profile is what
+  takes the place of `files` and `flags` where that file stands; for
+  Claude Code nothing: no `.mcp.json`, no `--mcp-config`, no settings
+  file, as the hooks, the approval (`permissions.allow`, now in the
+  managed settings) and `LONCA_SOCKET` are root's already. The daemon
+  answers `harness.setup` and `human.prepare_isolate` with the setup for
+  its machine and `managed: true`; the CLI needs to know nothing of it.
+  The test is whether the file exists, not whether it holds: a list that
+  is wrong still shuts `--mcp-config` out, and the session's level says
+  the rest.
+- **`lonca mcp` already finds its workspace from the directory it starts
+  in**, so the managed server needs no `LONCA_WORKSPACE`.
+- **The price: no other MCP server in hardened mode.** Others loaded and
+  tainted before. Exclusive control is also what closes the wider form:
+  any stdio server an agent adds to `.mcp.json` and approves in the
+  settings beside it runs outside the sandbox as the developer.
+- **Not done.** Marking a session whose `mcp__lonca__*` event has no
+  `mcp.call` behind it: `lonca mcp` goes on when that call fails, so a
+  rate limit or a reconnect would mark an honest session for good, and a
+  false server that holds the session's token sends the call itself.
+- **Not measured.** With a real Claude Code on a hardened install: that it
+  starts the managed server in the project's directory, that the managed
+  approval is enough, that `lonca run` works with the list in place, and
+  from which Claude Code version on.
+
 ## Open questions (carried from the design)
 
 - Team server: one sequencer per repository works for one machine; a

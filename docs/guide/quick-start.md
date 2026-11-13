@@ -23,7 +23,8 @@ lonca session start --repo demo --agent claude --paths 'src/**' \
 ```
 
 `--harness claude-code` writes the MCP server and the hooks into the
-workspace (`.mcp.json`, `.claude/settings.local.json`); start Claude Code
+workspace (`.mcp.json`, `.claude/settings.local.json`; none on a hardened
+install, where they are root's); start Claude Code
 there and the hook tells the agent Lonca's rules at session start. For other
 harnesses and for runners that start many workers, see
 [Running agents](runners.md#setting-up-a-harness).

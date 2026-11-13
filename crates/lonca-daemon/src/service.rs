@@ -2755,14 +2755,18 @@ impl Service {
         let scratch = s.scope.scratch.clone();
         let harness = s.harness.clone();
         let policy = r.policy().or_fail()?;
-        let profile = harness.as_deref().and_then(|h| policy.config.harness(h));
+        let (setup, managed) = match harness.as_deref() {
+            Some(h) => self.setup_here(&policy.config, h),
+            None => (None, false),
+        };
         Ok(json!({
             "scratch": scratch,
             "proxy": self.settings.proxy,
             "home": self.home.root,
             "base_known": base_known,
             "harness": harness,
-            "setup": profile.map(|p| &p.setup),
+            "setup": setup,
+            "managed": managed,
         }))
     }
 
@@ -4134,7 +4138,27 @@ impl Service {
         let mut guard = self.lock();
         let (repo, _) = Self::agent(&guard, req, self.now())?;
         let policy = Self::repo(&mut guard, &repo)?.policy().or_fail()?;
-        Ok(json!({"setup": policy.config.harness(&h.harness).map(|p| &p.setup)}))
+        let (setup, managed) = self.setup_here(&policy.config, &h.harness);
+        Ok(json!({"setup": setup, "managed": managed}))
+    }
+
+    /// A harness's setup as this machine takes it, and whether an
+    /// administrator's file names its MCP servers here: then the workspace
+    /// gives none (`setup.managed`).
+    fn setup_here(
+        &self,
+        config: &lonca_policy::config::Config,
+        harness: &str,
+    ) -> (Option<lonca_policy::harness::Setup>, bool) {
+        let list = config.locked(harness).and_then(|l| {
+            let named = || l.file_here().map(PathBuf::from);
+            let settings = self.settings.managed_settings.clone().or_else(named)?;
+            l.mcp_file(&settings)
+        });
+        let managed = list.is_some_and(|f| f.exists());
+        let setup = config.harness(harness).map(|p| &p.setup);
+        let setup = setup.map(|s| if managed { s.managed() } else { s.clone() });
+        (setup, managed)
     }
 
     fn hook_bind(&self, req: &Request, b: HookBind, peer: &Peer<'_>) -> Hr {

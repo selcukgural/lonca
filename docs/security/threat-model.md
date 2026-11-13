@@ -114,12 +114,14 @@ extends the remote's copy.
 
 The installers create the daemon's system user, install root-owned binaries,
 write Claude Code's managed settings (hooks only an administrator sets, each
-blocking on failure, its sandbox required, network through Lonca's proxy) and
+blocking on failure, its sandbox required, network through Lonca's proxy)
+and its managed MCP servers (Lonca's alone, by the root-owned program's
+path, which shuts out every server a workspace or the developer names), and
 name the daemon's uid in a root-owned `daemon.toml`. The hook, the MCP server
 and the CLI refuse to give a token to any other process on the socket, so a
 daemon started by an agent gets nothing. The daemon reads the managed
-settings when a session starts and grants `hooks_sandbox` only when they
-hold ([Lonca with Claude Code](../guide/claude-code.md#how-much-is-proven)).
+settings and the MCP list when a session starts and grants `hooks_sandbox`
+only when they hold ([Lonca with Claude Code](../guide/claude-code.md#how-much-is-proven)).
 
 ## Trust boundaries
 
@@ -184,6 +186,15 @@ It does not catch:
   ([decisions](https://github.com/selcukgural/lonca/blob/main/docs/decisions.md#harness-levels)).
   Whether `allowManagedHooksOnly` also blocks hooks given with `--settings`
   is not measured yet.
+- **Lonca's MCP server is named by the administrator.** Tools of a server
+  called `lonca` are taken as Lonca's own and do not taint. In hardened mode
+  that server comes from the root-owned `managed-mcp.json`, and with that
+  file Claude Code loads no server from a workspace's `.mcp.json`, from the
+  developer's settings or from `--mcp-config`. That Claude Code keeps to
+  this (and starts the server in the project's directory) is its documented
+  behaviour, not yet measured on a hardened install. In cooperative mode
+  the server is named in the workspace, by a file the agent can write, like
+  the hooks there: such a session is `unobserved`.
 - **The harness name is a human's word.** The level is read from the
   managed settings of the harness the human named at `session start
   --harness`. The daemon can not see what runs with the token: a person who

@@ -340,6 +340,18 @@ impl Env {
         }
     }
 
+    /// Where Claude Code's administrator names its MCP servers.
+    pub fn managed_mcp_file(&self) -> std::path::PathBuf {
+        let settings = self.settings.managed_settings.as_ref().unwrap();
+        settings.with_file_name("managed-mcp.json")
+    }
+
+    /// Writes that list.
+    pub fn managed_mcp(&self, servers: Value) {
+        let list = json!({"mcpServers": servers});
+        std::fs::write(self.managed_mcp_file(), serde_json::to_vec(&list).unwrap()).unwrap();
+    }
+
     /// Writes managed settings that lock hooks and sandbox, then binds.
     pub fn bind(&mut self, token: &str) {
         let settings = json!({
@@ -355,6 +367,7 @@ impl Env {
             serde_json::to_vec(&settings).unwrap(),
         )
         .unwrap();
+        self.managed_mcp(json!({"lonca": {"command": "/usr/bin/lonca", "args": ["mcp"]}}));
         let r = self.ok("hook.bind", None, Some(token), json!({"harness": "claude-code", "harness_session": "h1", "sudo_without_password": false}));
         assert_eq!(r["level"], "hooks_sandbox", "{r}");
     }

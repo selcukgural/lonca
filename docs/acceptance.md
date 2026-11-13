@@ -141,6 +141,10 @@ visible. Each becomes a criterion when it is automated.
   root on the runner. That the installer refuses files that are not
   root's alone, and that the scripts set their own `PATH`, is held by
   `the_installers_take_nothing_from_the_callers_account` (`cargo test`).
+  That what the installers write for Claude Code gives a session its
+  level, and stops giving it when the list of MCP servers is gone, is
+  held by `installer_settings_pass_inspection`. That Claude Code itself
+  loads only that list is not: it needs the harness on a hardened install.
 - Secure Enclave and security keys: need the hardware (`lonca human keygen
   --secure-enclave`, FIDO2 keys). What the Touch ID dialog says is
   held to what `lonca` prints by `the_helper_says_what_lonca_says` (macOS,

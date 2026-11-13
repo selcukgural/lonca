@@ -45,6 +45,10 @@ writes nothing and gives the `--mcp-config` and `--settings` flags to start
 `claude` with. The settings in full, and the environment they need, are in
 [Running agents](runners.md#claude-code-settings).
 
+On a hardened install neither file is written and there are no flags to pass: the
+MCP server, the hooks and the approval of Lonca's tools are in files only root can
+change (below), and Claude Code exits when it is started with `--mcp-config` there.
+
 ## The tools Claude Code sees
 
 | Tool | What it does |
@@ -82,7 +86,13 @@ one by path (`context.observation` in Cedar, see [Writing policies](policies.md)
   Lonca reads them at `SessionStart`: hooks only an administrator sets
   (`allowManagedHooksOnly`), each with `onFailure: block`, a root-owned `lonca hook`,
   and Claude Code's sandbox enabled, required, with no unsandboxed commands and its
-  network through Lonca's proxy. Then the session is `hooks_sandbox`.
+  network through Lonca's proxy. Beside them the installers write
+  `managed-mcp.json`: the MCP servers Claude Code loads, Lonca's alone, by the path
+  of the root-owned `lonca`. A server named in a workspace's `.mcp.json` is a file
+  the agent can rewrite, so the hooks count only where that list stands and names
+  nothing else. Then the session is `hooks_sandbox`. **No other MCP server loads in
+  Claude Code on that machine**, yours and a project's included: that is Claude
+  Code's rule for the file, and what keeps an agent from adding a server of its own.
   `lonca doctor` says what did not hold. See [Install](install.md) for hardened mode.
 - **Lonca's own sandbox.** `lonca run` holds Claude Code in a sandbox Lonca builds,
   with no hook needed, and the session is `isolated`. See the next section.

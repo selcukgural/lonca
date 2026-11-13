@@ -95,6 +95,13 @@ For Claude Code, Codex and any other built-in profile, with a real daemon:
    model): the stop event must send it back, and the run must reach
    `propose`. `lonca status` must show no `unproposed work` for it.
 
+On a hardened install (Claude Code): `lonca doctor` passes `hooks`, the
+workspace has no `.mcp.json` and `setup` reports no flags, `claude` starts
+and lists Lonca's tools without asking for approval (the server is the one
+of `managed-mcp.json`, started in the workspace), the session binds as
+`hooks_sandbox`, a server added to a `.mcp.json` in the workspace does not
+load, and the same under `lonca run`.
+
 A harness whose profile has moved on gets a new fixture in
 `crates/lonca-policy/tests/harness-setup/`. Write down in the release notes a
 harness that could not be run.

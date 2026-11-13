@@ -147,6 +147,66 @@ fn a_sandbox_on_another_port_is_not_locked_for_lonca() {
     );
 }
 
+/// Tools of a server named `lonca` count as Lonca's own, and a workspace's
+/// file that names it is the agent's to write. So the hooks hold only with
+/// the administrator's list of servers beside the settings, and where that
+/// list stands the workspace is given no server: the harness would refuse it.
+#[test]
+fn the_administrators_mcp_list_is_part_of_the_level_and_of_the_setup() {
+    let mut e = Env::new();
+    e.init(None);
+    let t = e.session("s1", &["src/**"]);
+    let setup = |e: &mut Env| {
+        e.ok(
+            "harness.setup",
+            None,
+            Some(&t),
+            json!({"harness": "claude-code"}),
+        )
+    };
+    let r = setup(&mut e);
+    assert_eq!(r["managed"], false, "{r}");
+    assert_eq!(r["setup"]["files"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(r["setup"]["flags"][0], "--mcp-config", "{r}");
+
+    e.bind(&t);
+    let r = setup(&mut e);
+    assert_eq!(r["managed"], true, "{r}");
+    assert_eq!(r["setup"]["files"], json!([]), "{r}");
+    assert_eq!(r["setup"]["flags"], json!([]), "{r}");
+    assert!(
+        r["setup"]["run_env"]["CLAUDE_CODE_TMPDIR"].is_string(),
+        "{r}"
+    );
+    assert!(r["setup"].get("managed").is_none(), "{r}");
+    // A harness with no such list is set up as everywhere.
+    let r = e.ok(
+        "harness.setup",
+        None,
+        Some(&t),
+        json!({"harness": "gemini"}),
+    );
+    assert_eq!(r["managed"], false, "{r}");
+    assert_eq!(r["setup"]["files"].as_array().unwrap().len(), 1, "{r}");
+
+    // Another server beside Lonca's: the same settings give no level.
+    let lonca = json!({"command": "/usr/bin/lonca", "args": ["mcp"]});
+    e.managed_mcp(json!({"lonca": lonca, "other": {"command": "/usr/bin/true", "args": []}}));
+    let t2 = e.session("s2", &["src/**"]);
+    let r = bind(&mut e, &t2, "claude-code");
+    assert_eq!(r["level"], "unobserved", "{r}");
+    assert!(r["notes"].to_string().contains("mcp: "), "{r}");
+    // A list that does not hold still shuts a workspace's server out.
+    assert_eq!(setup(&mut e)["managed"], true);
+
+    std::fs::remove_file(e.managed_mcp_file()).unwrap();
+    let t3 = e.session("s3", &["src/**"]);
+    let r = bind(&mut e, &t3, "claude-code");
+    assert_eq!(r["level"], "unobserved", "{r}");
+    assert!(r["notes"].to_string().contains("no managed MCP"), "{r}");
+    assert_eq!(setup(&mut e)["managed"], false);
+}
+
 /// A first report that says the machine is open is not taken back by a
 /// second that says it is shut, and the answer is the level that stands.
 #[test]

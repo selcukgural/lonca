@@ -4000,6 +4000,40 @@ fn the_rules_are_one_text_on_every_road() {
     }
 }
 
+/// Where an administrator names Claude Code's MCP servers, the workspace
+/// gets no server, no settings and no flags: Claude Code loads that list
+/// alone and exits when it is started with another.
+#[test]
+fn a_harness_whose_servers_are_the_administrators_gets_nothing_in_the_workspace() {
+    let e = Env::new();
+    let ws = agent_workspace(&e);
+    let list = e.root.join("managed-mcp.json");
+    std::fs::write(&list, r#"{"mcpServers": {}}"#).unwrap();
+    let r = parse(&e.run(&ws, &["harness", "setup", "claude-code", "--json"]));
+    assert_eq!(r["known"], true, "{r}");
+    assert_eq!(r["managed"], true, "{r}");
+    assert_eq!(r["written"], json!([]), "{r}");
+    assert_eq!(r["flags"], json!([]), "{r}");
+    assert!(!ws.join(".mcp.json").exists() && !ws.join(".claude").exists());
+    let said = e.run(&ws, &["harness", "setup", "claude-code"]);
+    assert!(said.contains("the administrator's"), "{said}");
+    assert!(!said.contains("--mcp-config"), "{said}");
+    let printed = e.run(&ws, &["harness", "setup", "claude-code", "--print"]);
+    assert!(!printed.contains("--mcp-config"), "{printed}");
+    // Another harness is set up as everywhere.
+    let r = parse(&e.run(&ws, &["harness", "setup", "gemini", "--json"]));
+    assert_eq!(r["managed"], false, "{r}");
+    assert_eq!(r["written"], json!([".gemini/settings.json"]), "{r}");
+
+    std::fs::remove_file(&list).unwrap();
+    let r = parse(&e.run(&ws, &["harness", "setup", "claude-code", "--json"]));
+    assert_eq!(r["managed"], false, "{r}");
+    assert_eq!(
+        r["written"],
+        json!([".claude/settings.local.json", ".mcp.json"])
+    );
+}
+
 /// What setup writes reaches the harness and never the repository.
 #[test]
 fn a_harness_is_set_up_from_its_profile_and_its_files_are_never_a_change() {

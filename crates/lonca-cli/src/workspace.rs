@@ -286,8 +286,9 @@ impl Workspace {
             }
         }
         let mut out = Out(take);
+        let mut files = wsfs::Reader::new(&self.root);
         for (path, (mode, blob)) in &self.meta.manifest {
-            match wsfs::read(&self.root, path)? {
+            match files.read(path)? {
                 None => out.push(FileChange {
                     path: path.clone(),
                     content_b64: None,
@@ -310,15 +311,18 @@ impl Workspace {
                 }
             }
         }
+        // The walk holds a directory of its own for every level.
+        drop(files);
         let mut found = Vec::new();
         let mut ignored = IgnoreFiles::new(&self.root);
         walk(&self.root, "", &mut ignored, &mut found)?;
+        let mut files = wsfs::Reader::new(&self.root);
         for rel in found {
             let known = [&self.meta.trunk_copies, &self.meta.generated];
             if self.meta.manifest.contains_key(&rel) || known.iter().any(|l| l.contains(&rel)) {
                 continue;
             }
-            let Some(local) = wsfs::read(&self.root, &rel)? else {
+            let Some(local) = files.read(&rel)? else {
                 continue;
             };
             let mode = if local.executable {
@@ -382,11 +386,13 @@ impl Workspace {
         every_file(&self.root, META_DIR, &mut meta)?;
         let own = |p: &String| META_FILES.iter().any(|f| *p == meta_file(f));
         out.extend(meta.into_iter().filter(|p| !own(p)));
+        let mut files = wsfs::Reader::new(&self.root);
         for rel in &found {
             if self.meta.generated.contains(rel) {
                 continue;
             }
-            let same = wsfs::read(&self.root, rel)
+            let same = files
+                .read(rel)
                 .ok()
                 .flatten()
                 .map(|local| GitId::of_blob(&local.bytes));
@@ -1102,6 +1108,76 @@ mod tests {
             (1500, 2000),
         ] {
             assert_eq!(encoded_len(bytes), encoded, "{bytes} bytes");
+        }
+    }
+
+    /// A timing, run by hand: what a workspace's local changes cost by its
+    /// size, with nothing changed and with a file changed in every
+    /// directory (`cargo test --release -p lonca --bin lonca timing --
+    /// --ignored --nocapture`). It asserts only that it found them.
+    #[test]
+    #[ignore = "a timing, run by hand"]
+    fn timing_of_local_changes_by_the_size_of_the_workspace() {
+        use lonca_core::FileMode;
+        println!("files  depth  clean  changed  differs_from   (ms)");
+        for (files, depth) in [
+            (200usize, 3usize),
+            (5_000, 1),
+            (5_000, 3),
+            (5_000, 8),
+            (20_000, 3),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let r = dir.path();
+            let mut manifest = BTreeMap::new();
+            for i in 0..files {
+                let mut path = format!("m{}", i % 50);
+                for d in 1..depth {
+                    path.push_str(&format!("/s{}", (i / 50 + d) % 3));
+                }
+                path.push_str(&format!("/f{i}.rs"));
+                let body = format!("// {i}\n{}", "x".repeat(2000));
+                fs::create_dir_all(r.join(&path).parent().unwrap()).unwrap();
+                fs::write(r.join(&path), &body).unwrap();
+                manifest.insert(path, (FileMode::Regular, GitId::of_blob(body.as_bytes())));
+            }
+            let tree: BTreeMap<String, GitId> = manifest
+                .iter()
+                .map(|(p, (_, b))| (p.clone(), b.clone()))
+                .collect();
+            let meta = Meta {
+                repo: "demo".into(),
+                base: GitId::of_blob(b"base"),
+                session: None,
+                human: None,
+                manifest,
+                submitted: None,
+                scratch_roots: vec![],
+                trunk_copies: vec![],
+                conflict_tag: None,
+                generated: vec![],
+                git: false,
+            };
+            let ws = Workspace {
+                root: r.to_path_buf(),
+                meta,
+            };
+            ws.save().unwrap();
+            let ms = |f: &dyn Fn() -> usize| {
+                let started = std::time::Instant::now();
+                let n = f();
+                (started.elapsed().as_secs_f64() * 1000.0, n)
+            };
+            let (clean, n) = ms(&|| ws.changes().unwrap().len());
+            assert_eq!(n, 0);
+            let (differs, n) = ms(&|| ws.differs_from(&tree).unwrap().len());
+            assert_eq!(n, 0);
+            for i in 0..50 {
+                fs::write(r.join(format!("m{i}/new.rs")), "new").unwrap();
+            }
+            let (changed, n) = ms(&|| ws.changes().unwrap().len());
+            assert_eq!(n, 50);
+            println!("{files:<6} {depth:<6} {clean:<6.0} {changed:<8.0} {differs:.0}");
         }
     }
 }

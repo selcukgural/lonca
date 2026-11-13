@@ -2513,6 +2513,31 @@ file access goes through `wsfs`.
   a symlink or a FIFO. Its `gitignore` matcher is still used. A symlinked ignore
   file counts for nothing.
 - **Names that are not UTF-8 are refused**, not sent under a lossy name.
+- **A scan keeps the directories of the last path open** (#328,
+  `wsfs::Reader`). A read alone opens every directory from the root for
+  its one file; for the files of a workspace that was two thirds of the
+  time, the same directories opened again for every file in them. The
+  scans (`changes`, `local_files`, `differs_from`) go on from the part
+  the next path shares with the last. Every directory held was opened
+  from the one above it with `O_NOFOLLOW`, and the file is opened and
+  checked as before, so nothing is reached through a link that a read
+  alone refuses; with nobody writing meanwhile it says of every path what
+  a read alone says (tests, every path after every other). What differs
+  is when a directory was looked up: one moved or replaced while its
+  files are read is read where it was found for the rest of its files in
+  a row, where a read alone would meet the new one at the next file. So a
+  directory swapped during a scan can show its remaining files as gone,
+  not one of them; neither was ever a picture of one moment, and the
+  next scan is right. At most 16 directories are kept (a path can be
+  deeper than a process has open files; below that the rest is opened
+  per file, as before), and none during the walk for new files, which
+  holds a directory per level itself. Reviewed on its own for what a
+  held directory lets an agent do that a walk from the root does not:
+  nothing found. 5,000 files three deep: 357 ms, now 113; 20,000:
+  1,382 ms, now 421 (`timing_of_local_changes_by_the_size_of_the_workspace`).
+  Left as they are: `Workspace::find` (its manifest is 1.3 ms to read at
+  5,000 files, and reading less would take a manifest that does not
+  parse), writes, and single reads.
 - **`.lonca` is matched with ASCII case folded** everywhere (`is_workspace_metadata`):
   on macOS `.LONCA/session` is `.lonca/session`.
 

@@ -133,15 +133,16 @@ cd fuzz && cargo fuzz run -s none <target> corpus/<target> seeds/<target> -- -ma
 
 ## Timing tests
 
-`crates/{lonca-policy,lonca-symbols,lonca-daemon}/tests/perf.rs`: ignored
-tests that print how long a decision, a parse, a merge or a request takes
-on a large state, file or log. They assert no time and nothing runs them
+`crates/{lonca-policy,lonca-symbols,lonca-daemon,lonca-verify}/tests/perf.rs`:
+ignored tests that print how long a decision, a parse, a merge, a request
+or a verification run takes on a large state, file, log or tree. They assert no time and nothing runs them
 (docs/decisions.md, "Work that is done once").
 
 ```sh
 cargo test --release -p lonca-policy --test perf -- --ignored --nocapture --test-threads=1
 cargo test --release -p lonca-symbols --test perf -- --ignored --nocapture
 cargo test --release -p lonca-daemon --test perf -- --ignored --nocapture   # about a minute
+cargo test --release -p lonca-verify --test perf -- --ignored --nocapture   # 20 s
 ```
 
 - A change made for time or memory changes nothing else: same decisions,
